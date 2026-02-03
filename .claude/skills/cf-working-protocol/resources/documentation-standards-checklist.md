@@ -8,7 +8,7 @@
 
 ## Visual Markers - Essential Set
 
-**Tier 1: Critical Markers (MUST use)**
+### Tier 1: Critical Markers (MUST use)
 
 - **CRITICAL:** System-breaking if ignored, must follow exactly
 - **REQUIRED:** Important for correctness, should not skip
@@ -23,7 +23,7 @@
 **SAFE TO PROCEED:** All checks passed
 ```
 
-**Tier 2: Context Markers (use when applicable)**
+### Tier 2: Context Markers (use when applicable)
 
 - **OPERATION:** Skill operation reference
 - **OPTIONAL:** Enhancement, nice to have

@@ -37,23 +37,27 @@ VALIDATE_COVERAGE_FIRST="false"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)
-            TEST_MODE="$2"
+            export TEST_MODE="$2"
             shift 2
             ;;
         --category)
-            RUNNER_CATEGORY="$2"
+            export RUNNER_CATEGORY="$2"
             shift 2
             ;;
         --verbose|-v)
-            RUNNER_VERBOSE="true"
+            export RUNNER_VERBOSE="true"
             shift
             ;;
         --stop-on-fail)
-            RUNNER_STOP_ON_FAIL="true"
+            export RUNNER_STOP_ON_FAIL="true"
             shift
             ;;
         --dry-run)
-            RUNNER_DRY_RUN="true"
+            export RUNNER_DRY_RUN="true"
+            shift
+            ;;
+        --coverage|--with-coverage)
+            export RUNNER_WITH_COVERAGE="true"
             shift
             ;;
         --report)
@@ -75,6 +79,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --verbose, -v         Verbose output"
             echo "  --stop-on-fail        Stop on first failure"
             echo "  --dry-run             Show what would run"
+            echo "  --coverage            Run with coverage enforcement (fail if below $(get_coverage_threshold fail_under)%)"
             echo "  --report              Generate JSON/text reports"
             echo "  --validate-coverage   Validate test coverage before running"
             echo "  --help, -h            Show this help"

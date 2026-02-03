@@ -23,7 +23,7 @@ Use these prefixes:
 
 Follow conventional commit format:
 
-```
+```text
 type: description (max 50 chars)
 
 - Optional bullet points (max 3)

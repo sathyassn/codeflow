@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+CodeFlow Test Command
+Location: .codeflow/testing/test
+
+Unified test runner with per-file coverage enforcement.
+
+Usage:
+    ./test                                    # Run all tests (standard mode)
+    ./test --mode full                        # Run all tests (full mode)
+    ./test --coverage                         # Run with coverage enforcement
+    ./test path/to/test_file.py               # Run single file
+    ./test path/to/test_file.py --coverage    # Run single file with coverage
+    ./test --file path/to/test_file.py        # Alternative single file syntax
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+# Colors
+RED = "\033[0;31m"
+GREEN = "\033[0;32m"
+YELLOW = "\033[0;33m"
+BLUE = "\033[0;34m"
+BOLD = "\033[1m"
+NC = "\033[0m"
+
+TESTING_ROOT = Path(__file__).parent.resolve()
+CONFIG_FILE = TESTING_ROOT / "test-config.json"
+
+
+def load_config():
+    """Load test configuration."""
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def get_thresholds(config):
+    """Get coverage thresholds from config."""
+    defaults = {"line": 90, "branch": 85, "function": 90, "fail_under": 85}
+    thresholds = config.get("coverage_enforcement", {}).get("thresholds", {})
+    return {**defaults, **thresholds}
+
+
+def get_python():
+    """Get Python interpreter path."""
+    venv_python = TESTING_ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    venv_python = TESTING_ROOT / "venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return "python3"
+
+
+def get_source_file_for_test(test_file: Path) -> Path | None:
+    """Derive the source file being tested from a test file path."""
+    name = test_file.name
+    if not name.startswith("test_"):
+        return None
+
+    # test_validation.py -> validation.py
+    source_name = name[5:]  # Remove "test_" prefix
+
+    # Map test directories to source directories
+    test_rel = test_file.relative_to(TESTING_ROOT)
+    parts = list(test_rel.parts)
+
+    if "scripts" in parts:
+        # scripts/codeflow_py_lib/test_x.py -> ../scripts/codeflow_py_lib/x.py
+        scripts_idx = parts.index("scripts")
+        source_parts = parts[scripts_idx:]
+        source_parts[-1] = source_name
+        source_path = TESTING_ROOT.parent / "scripts" / Path(*source_parts[1:])
+        if source_path.exists():
+            return source_path
+
+    return None
+
+
+def run_pytest(
+    files: list[str],
+    coverage: bool,
+    thresholds: dict,
+    verbose: bool,
+    single_file_mode: bool = False,
+) -> tuple[bool, dict]:
+    """Run pytest with optional coverage."""
+    python = get_python()
+    args = [python, "-m", "pytest"] + files + ["-v", "--tb=short"]
+
+    coverage_data = {}
+
+    if coverage:
+        cov_json = TESTING_ROOT / "coverage_reports" / "coverage.json"
+        cov_source = str(TESTING_ROOT.parent / "scripts")
+
+        # Ensure coverage reports dir exists
+        cov_json.parent.mkdir(parents=True, exist_ok=True)
+
+        args += [
+            f"--cov={cov_source}",
+            "--cov-report=term-missing",
+            f"--cov-report=json:{cov_json}",
+        ]
+
+        # Only enforce overall threshold in multi-file mode
+        # Single-file mode relies on per-file check instead
+        if not single_file_mode:
+            args.append(f"--cov-fail-under={thresholds['fail_under']}")
+
+    if verbose:
+        print(f"{BLUE}[INFO]{NC} Running: {' '.join(args)}")
+
+    result = subprocess.run(args, cwd=str(TESTING_ROOT))
+
+    # Parse coverage JSON if available
+    if coverage:
+        cov_json = TESTING_ROOT / "coverage_reports" / "coverage.json"
+        if cov_json.exists():
+            with open(cov_json) as f:
+                coverage_data = json.load(f)
+
+    return result.returncode == 0, coverage_data
+
+
+def check_per_file_coverage(
+    coverage_data: dict,
+    threshold: int,
+    test_files: list[str],
+    single_file_mode: bool = False,
+) -> tuple[bool, list[str]]:
+    """Check per-file coverage against threshold.
+
+    In single-file mode, only checks coverage for the source file
+    corresponding to the test file being run.
+    """
+    if not coverage_data:
+        return True, []
+
+    files_data = coverage_data.get("files", {})
+    failures = []
+
+    # In single-file mode, determine which source file to check
+    relevant_sources = set()
+    if single_file_mode and len(test_files) == 1:
+        test_path = Path(test_files[0])
+        source_file = get_source_file_for_test(test_path)
+        if source_file:
+            relevant_sources.add(str(source_file))
+
+    for filepath, data in files_data.items():
+        # Skip test files themselves
+        if "/test_" in filepath or filepath.startswith("test_"):
+            continue
+
+        # In single-file mode, only check the relevant source file
+        if single_file_mode and relevant_sources:
+            if not any(filepath.endswith(str(s)) or str(s).endswith(filepath)
+                       for s in relevant_sources):
+                # Also check by filename match
+                if Path(filepath).name not in [Path(s).name for s in relevant_sources]:
+                    continue
+
+        summary = data.get("summary", {})
+        percent = summary.get("percent_covered", 100)
+
+        if percent < threshold:
+            failures.append(f"{filepath}: {percent:.1f}% (required: {threshold}%)")
+
+    return len(failures) == 0, failures
+
+
+def run_shell_test(test_file: str, verbose: bool) -> bool:
+    """Run a shell test file."""
+    if verbose:
+        print(f"{BLUE}[INFO]{NC} Running: {test_file}")
+
+    result = subprocess.run(["bash", test_file], cwd=str(TESTING_ROOT))
+    return result.returncode == 0
+
+
+def discover_tests(mode: str, config: dict) -> list[str]:
+    """Discover test files based on mode."""
+    priorities_for_mode = {
+        "essential": ["CRITICAL"],
+        "standard": ["CRITICAL", "HIGH"],
+        "full": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+    }
+
+    priorities = priorities_for_mode.get(mode, ["CRITICAL", "HIGH"])
+    test_files = []
+
+    priorities_config = config.get("priorities", {})
+    for priority in priorities:
+        files = priorities_config.get(priority, {}).get("files", [])
+        for f in files:
+            full_path = TESTING_ROOT / f
+            if full_path.exists():
+                test_files.append(str(full_path))
+
+    return test_files
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="CodeFlow Test Command",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    ./test                                    Run all tests (standard mode)
+    ./test --mode full                        Run all tests (full mode)
+    ./test --coverage                         Run with coverage enforcement
+    ./test scripts/codeflow_py_lib/test_errors.py              Run single file
+    ./test scripts/codeflow_py_lib/test_errors.py --coverage   Single file + coverage
+    ./test --list                             List available test files
+        """,
+    )
+    parser.add_argument("file", nargs="?", help="Test file to run (optional)")
+    parser.add_argument("--file", "-f", dest="file_opt", help="Test file to run")
+    parser.add_argument("--mode", "-m", choices=["essential", "standard", "full"],
+                        default="standard", help="Test mode (default: standard)")
+    parser.add_argument("--coverage", "-c", action="store_true",
+                        help="Enable coverage enforcement")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--list", "-l", action="store_true", help="List test files")
+    parser.add_argument("--per-file-check", action="store_true", default=True,
+                        help="Enforce per-file coverage threshold (default: True)")
+    parser.add_argument("--no-per-file-check", action="store_false", dest="per_file_check",
+                        help="Disable per-file coverage threshold check")
+
+    args = parser.parse_args()
+
+    config = load_config()
+    thresholds = get_thresholds(config)
+
+    # Determine test file(s)
+    test_file = args.file or args.file_opt
+
+    if args.list:
+        print(f"{BOLD}Test Files (mode: {args.mode}):{NC}")
+        for f in discover_tests(args.mode, config):
+            print(f"  {f}")
+        return 0
+
+    if test_file:
+        # Single file mode
+        test_path = Path(test_file)
+        if not test_path.is_absolute():
+            test_path = TESTING_ROOT / test_file
+
+        if not test_path.exists():
+            print(f"{RED}[ERROR]{NC} Test file not found: {test_path}")
+            return 1
+
+        test_files = [str(test_path)]
+        print(f"{BOLD}Running single test:{NC} {test_path.name}")
+    else:
+        # Discover tests based on mode
+        test_files = discover_tests(args.mode, config)
+        if not test_files:
+            print(f"{YELLOW}[WARN]{NC} No test files found for mode: {args.mode}")
+            return 0
+        print(f"{BOLD}Running tests:{NC} mode={args.mode}, files={len(test_files)}")
+
+    # Determine if single file mode
+    single_file_mode = test_file is not None
+
+    if args.coverage:
+        print(f"{BLUE}[INFO]{NC} Coverage enabled: fail_under={thresholds['fail_under']}%")
+        if args.per_file_check:
+            print(f"{BLUE}[INFO]{NC} Per-file threshold: {thresholds['fail_under']}%")
+
+    # Separate Python and shell tests
+    python_tests = [f for f in test_files if f.endswith(".py")]
+    shell_tests = [f for f in test_files if f.endswith(".sh")]
+
+    all_passed = True
+    coverage_data = {}
+
+    # Run Python tests
+    if python_tests:
+        passed, coverage_data = run_pytest(
+            python_tests, args.coverage, thresholds, args.verbose, single_file_mode
+        )
+        if not passed:
+            all_passed = False
+
+    # Run shell tests
+    for shell_test in shell_tests:
+        if not run_shell_test(shell_test, args.verbose):
+            all_passed = False
+
+    # Per-file coverage check
+    if args.coverage and args.per_file_check and coverage_data:
+        per_file_ok, failures = check_per_file_coverage(
+            coverage_data, thresholds["fail_under"], test_files, single_file_mode
+        )
+        if not per_file_ok:
+            print(f"\n{RED}[ERROR]{NC} Per-file coverage failures:")
+            for failure in failures:
+                print(f"  {RED}✗{NC} {failure}")
+            all_passed = False
+        else:
+            print(f"\n{GREEN}[SUCCESS]{NC} All files meet {thresholds['fail_under']}% coverage threshold")
+
+    # Summary
+    print()
+    if all_passed:
+        print(f"{GREEN}{BOLD}ALL TESTS PASSED{NC}")
+        return 0
+    else:
+        print(f"{RED}{BOLD}TESTS FAILED{NC}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

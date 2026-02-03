@@ -51,8 +51,8 @@ is_safe_path() {
     # Reject absolute paths starting with /
     [[ "$path" != /* ]] || return 1
 
-    # Reject null bytes
-    [[ "$path" != *$'\0'* ]] || return 1
+    # Note: Null byte check removed - shell strings cannot contain null bytes
+    # (strings are null-terminated in C, which bash uses internally)
 
     return 0
 }

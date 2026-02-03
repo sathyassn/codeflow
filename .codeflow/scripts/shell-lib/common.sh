@@ -2,10 +2,16 @@
 # CodeFlow Shell Library: Common Utilities
 # Location: .codeflow/scripts/shell-lib/common.sh
 
+# Source guard to prevent multiple loads
+[[ -n "${_CODEFLOW_COMMON_LOADED:-}" ]] && return 0
+_CODEFLOW_COMMON_LOADED=1
+
 set -euo pipefail
 
 # Version
-readonly CODEFLOW_LIB_VERSION="1.0.0"
+CODEFLOW_LIB_VERSION="1.0.0"
+readonly CODEFLOW_LIB_VERSION
+export CODEFLOW_LIB_VERSION
 
 # ============================================================================
 # PATH UTILITIES
@@ -22,8 +28,10 @@ get_absolute_path() {
     if [[ -d "$path" ]]; then
         (cd "$path" && pwd)
     elif [[ -f "$path" ]]; then
-        local dir=$(dirname "$path")
-        local file=$(basename "$path")
+        local dir
+        dir=$(dirname "$path")
+        local file
+        file=$(basename "$path")
         echo "$(cd "$dir" && pwd)/$file"
     else
         echo "$path"

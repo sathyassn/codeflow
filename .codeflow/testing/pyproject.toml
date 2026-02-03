@@ -1,0 +1,59 @@
+[tool.ruff]
+# Line length of 100 is more practical for modern displays
+line-length = 100
+target-version = "py311"
+
+# Include all Python files
+include = ["*.py"]
+exclude = [
+    ".venv",
+    "__pycache__",
+    ".git",
+]
+
+[tool.ruff.lint]
+# Enable common error checks
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+]
+
+# Ignore certain rules
+ignore = [
+    "E402",  # Module level import not at top of file (conftest.py needs this)
+    "E501",  # Line too long (handled by formatter with 100 char limit)
+]
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with 4 spaces
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["scripts"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["../scripts"]
+omit = [
+    "*/__pycache__/*",
+    "*/test_*.py",
+    ".venv/*",
+]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Type
 
 from .errors import ValidationError
 
-
 # Common patterns
 PATTERNS = {
     "ulid": r"^[0-9A-HJKMNP-TV-Z]{26}$",

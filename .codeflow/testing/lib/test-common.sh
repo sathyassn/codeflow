@@ -8,12 +8,14 @@ set -euo pipefail
 # VERSION
 # ============================================================================
 
+# shellcheck disable=SC2034  # Used by sourcing scripts
 readonly TEST_FRAMEWORK_VERSION="1.0.0"
 
 # ============================================================================
-# COLORS
+# COLORS (exported for use by sourcing scripts)
 # ============================================================================
 
+# shellcheck disable=SC2034  # Colors used by sourcing scripts
 if [[ -t 1 ]]; then
     readonly RED='\033[0;31m'
     readonly GREEN='\033[0;32m'
@@ -47,32 +49,33 @@ export TEST_TOTAL_COUNT=0
 # CATEGORY DEFINITIONS
 # ============================================================================
 
-declare -A CATEGORIES=(
-    # Hook tests
-    ["hooks-pre-tool-use"]="hooks/pre-tool-use"
-    ["hooks-post-tool-use"]="hooks/post-tool-use"
-    ["hooks-session-start"]="hooks/session-start"
-    ["hooks-session-end"]="hooks/session-end"
-    ["hooks-stop"]="hooks/stop"
-    ["hooks-user-prompt"]="hooks/user-prompt-submit"
-    # Script tests
-    ["scripts-db"]="scripts/db"
-    ["scripts-memory"]="scripts/memory"
-    ["scripts-coordination"]="scripts/coordination"
-    ["scripts-lib"]="scripts/py-lib"
-    ["scripts-shell-lib"]="scripts/shell-lib"
-    ["scripts-security"]="scripts/security"
-    ["scripts-state"]="scripts/state"
-    ["scripts-worktree"]="scripts/worktree"
-    ["scripts-health"]="scripts/health"
-    ["scripts-commands"]="scripts/commands"
-    # Cross-component
-    ["consistency"]="consistency"
-    # Autorun
-    ["autorun"]="autorun"
-)
-
-export CATEGORIES
+# Note: Using function-based lookup for bash 3.2 compatibility (macOS default)
+# Associative arrays require bash 4.0+
+get_category_path() {
+    local category="$1"
+    case "$category" in
+        hooks-pre-tool-use)         echo "hooks/pre-tool-use" ;;
+        hooks-post-tool-use)        echo "hooks/post-tool-use" ;;
+        hooks-session-start)        echo "hooks/session-start" ;;
+        hooks-session-end)          echo "hooks/session-end" ;;
+        hooks-stop)                 echo "hooks/stop" ;;
+        hooks-user-prompt)          echo "hooks/user-prompt-submit" ;;
+        scripts-db)                 echo "scripts/db" ;;
+        scripts-memory)             echo "scripts/memory" ;;
+        scripts-coordination)       echo "scripts/coordination" ;;
+        scripts-lib)                echo "scripts/codeflow_py_lib" ;;
+        scripts-codeflow-py-lib)    echo "scripts/codeflow_py_lib" ;;
+        scripts-shell-lib)          echo "scripts/shell-lib" ;;
+        scripts-security)           echo "scripts/security" ;;
+        scripts-state)              echo "scripts/state" ;;
+        scripts-worktree)           echo "scripts/worktree" ;;
+        scripts-health)             echo "scripts/health" ;;
+        scripts-commands)           echo "scripts/commands" ;;
+        consistency)                echo "consistency" ;;
+        autorun)                    echo "autorun" ;;
+        *)                          echo "" ;;
+    esac
+}
 
 # ============================================================================
 # PRIORITY LEVELS
@@ -117,7 +120,7 @@ log_debug() {
 
 get_category_dir() {
     local category="$1"
-    echo "${CATEGORIES[$category]:-}"
+    get_category_path "$category"
 }
 
 get_timestamp() {

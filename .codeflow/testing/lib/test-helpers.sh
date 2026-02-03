@@ -4,7 +4,7 @@
 
 # Requires: test-common.sh, codeflow_shell_lib
 HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$HELPERS_DIR/../../.." && pwd)"
+[[ -z "${REPO_ROOT:-}" ]] && REPO_ROOT="$(cd "$HELPERS_DIR/../../.." && pwd)"
 
 # Source test-common.sh if not already loaded
 [[ -z "${TEST_FRAMEWORK_VERSION:-}" ]] && source "$HELPERS_DIR/test-common.sh"
@@ -286,8 +286,8 @@ assert_hook_blocks() {
     local tool_input="$4"
 
     ((TEST_TOTAL_COUNT++))
-    local output
-    output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
+    local _output  # Captured for potential debugging
+    _output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
     local exit_code=$?
 
     if [[ $exit_code -eq 2 ]]; then
@@ -308,8 +308,8 @@ assert_hook_allows() {
     local tool_input="$4"
 
     ((TEST_TOTAL_COUNT++))
-    local output
-    output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
+    local _output  # Captured for potential debugging
+    _output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then

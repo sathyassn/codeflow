@@ -132,7 +132,7 @@ This provides universal project context for all AI models.
 **Script Standards:**
 
 - Shell: shellcheck compliant, uses `.codeflow/scripts/shell-lib/`
-- Python: flake8 compliant, uses `.codeflow/scripts/py-lib/`
+- Python: flake8/ruff compliant, uses `.codeflow/scripts/codeflow_py_lib/`
 
 ## 7. Security Constraints
 
@@ -163,7 +163,7 @@ codeflow/
 │   └── settings.json           # Permissions and hooks config
 ├── .codeflow/                  # CodeFlow infrastructure
 │   ├── scripts/                # Automation scripts
-│   │   ├── py-lib/             # Python shared library
+│   │   ├── codeflow_py_lib/    # Python shared library
 │   │   └── shell-lib/          # Shell shared library
 │   ├── config/                 # Configuration files
 │   ├── testing/                # Test framework

@@ -74,17 +74,26 @@ def write_jsonl(
 
 def append_jsonl(
     path: Path,
-    event_type: str,
-    data: Dict[str, Any],
+    event_or_type: Any,
+    data: Optional[Dict[str, Any]] = None,
     add_timestamp: bool = True,
     add_id: bool = True,
 ) -> Dict[str, Any]:
     """
     Append single event to JSONL file.
 
+    Can be called as:
+        append_jsonl(path, event_dict)  # Pass complete event dict
+        append_jsonl(path, "event_type", data_dict)  # Pass type and data separately
+
     Returns the complete event that was written.
     """
-    event = {"e": event_type, **data}
+    if isinstance(event_or_type, dict):
+        # Called with (path, event_dict) - new pattern used by scripts
+        event = event_or_type.copy()
+    else:
+        # Called with (path, event_type, data) - original pattern
+        event = {"e": event_or_type, **(data or {})}
 
     if add_timestamp and "ts" not in event:
         event["ts"] = datetime.now(timezone.utc).isoformat()

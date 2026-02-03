@@ -43,7 +43,7 @@
 
 ### Task Decomposition Patterns
 
-**Pattern A: Multi-Domain Search**
+#### Pattern A: Multi-Domain Search
 
 ```text
 "Find all error handling code"
@@ -52,7 +52,7 @@
  - Find error logging calls
 ```
 
-**Pattern B: Multi-Criteria Analysis**
+#### Pattern B: Multi-Criteria Analysis
 
 ```text
 "Review this code for issues"
@@ -61,7 +61,7 @@
  - Code quality analysis
 ```
 
-**Pattern C: Multi-Source Research**
+#### Pattern C: Multi-Source Research
 
 ```text
 "Best practices for OAuth 2.0"
@@ -153,7 +153,7 @@ This investigation revealed N independent targets for deeper analysis:
 Recommend main agent spawn parallel agents for comprehensive coverage.
 ```
 
-3. **Main agent reads recommendation** and decides whether to execute parallel wave
+1. **Main agent reads recommendation** and decides whether to execute parallel wave
 
 **What sub-agents should NOT do:**
 

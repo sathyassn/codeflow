@@ -10,17 +10,23 @@
 # EXIT CODES
 # ============================================================================
 
-# Standard exit codes
-readonly EXIT_SUCCESS=0
-readonly EXIT_GENERAL_ERROR=1
-readonly EXIT_BLOCKED=2          # Hook blocked operation
-readonly EXIT_INVALID_INPUT=3
-readonly EXIT_CONFIG_ERROR=4
-readonly EXIT_DB_ERROR=5
-readonly EXIT_PERMISSION_DENIED=6
-readonly EXIT_NOT_FOUND=7
-readonly EXIT_TIMEOUT=8
-readonly EXIT_DEPENDENCY_ERROR=9
+# Standard exit codes (exported for use by other scripts)
+EXIT_SUCCESS=0
+EXIT_GENERAL_ERROR=1
+EXIT_BLOCKED=2          # Hook blocked operation
+EXIT_INVALID_INPUT=3
+EXIT_CONFIG_ERROR=4
+EXIT_DB_ERROR=5
+EXIT_PERMISSION_DENIED=6
+EXIT_NOT_FOUND=7
+EXIT_TIMEOUT=8
+EXIT_DEPENDENCY_ERROR=9
+readonly EXIT_SUCCESS EXIT_GENERAL_ERROR EXIT_BLOCKED EXIT_INVALID_INPUT
+readonly EXIT_CONFIG_ERROR EXIT_DB_ERROR EXIT_PERMISSION_DENIED EXIT_NOT_FOUND
+readonly EXIT_TIMEOUT EXIT_DEPENDENCY_ERROR
+export EXIT_SUCCESS EXIT_GENERAL_ERROR EXIT_BLOCKED EXIT_INVALID_INPUT
+export EXIT_CONFIG_ERROR EXIT_DB_ERROR EXIT_PERMISSION_DENIED EXIT_NOT_FOUND
+export EXIT_TIMEOUT EXIT_DEPENDENCY_ERROR
 
 # ============================================================================
 # ERROR HANDLING

@@ -174,14 +174,14 @@ fatal: '.git-worktrees/feat-phase-6-1' already exists
 
 **Solutions:**
 
-**Option 1: Remove existing worktree**
+#### Option 1: Remove existing worktree
 
 ```bash
 git worktree remove .git-worktrees/feat-phase-6-1/
 git worktree add .git-worktrees/feat-phase-6-1/ -b feat/phase-6-1
 ```
 
-**Option 2: Use different slug**
+#### Option 2: Use different slug
 
 ```bash
 git worktree add .git-worktrees/feat-phase-6-1a/ -b feat/phase-6-1a
@@ -197,13 +197,13 @@ fatal: a branch named 'feat/phase-6-1' already exists
 
 **Solutions:**
 
-**Option 1: Use existing branch**
+#### Option 1: Use existing branch
 
 ```bash
 git worktree add .git-worktrees/feat-phase-6-1/ feat/phase-6-1
 ```
 
-**Option 2: Delete old branch first**
+#### Option 2: Delete old branch first
 
 ```bash
 git branch -d feat/phase-6-1  # or -D to force

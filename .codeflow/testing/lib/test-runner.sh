@@ -9,6 +9,16 @@ source "$RUNNER_DIR/test-helpers.sh"
 source "$RUNNER_DIR/test-config.sh"
 source "$RUNNER_DIR/test-discovery.sh"
 
+# Detect Python with pytest - prefer venv if available
+TESTING_ROOT="$(cd "${RUNNER_DIR}/.." && pwd)"
+if [[ -x "${TESTING_ROOT}/.venv/bin/python" ]]; then
+    PYTHON="${TESTING_ROOT}/.venv/bin/python"
+elif [[ -x "${TESTING_ROOT}/venv/bin/python" ]]; then
+    PYTHON="${TESTING_ROOT}/venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
 # ============================================================================
 # RUNNER STATE
 # ============================================================================
@@ -21,6 +31,8 @@ RUNNER_START_TIME=""
 RUNNER_STOP_ON_FAIL="${STOP_ON_FAIL:-false}"
 RUNNER_VERBOSE="${VERBOSE:-false}"
 RUNNER_DRY_RUN="${DRY_RUN:-false}"
+RUNNER_WITH_COVERAGE="${WITH_COVERAGE:-false}"
+RUNNER_COVERAGE_FAILED="false"
 
 # ============================================================================
 # SINGLE TEST EXECUTION
@@ -44,7 +56,7 @@ run_single_test() {
     local output=""
 
     if is_python_test "$test_file"; then
-        output=$(python3 -m pytest "$test_file" -v --tb=short 2>&1) || exit_code=$?
+        output=$($PYTHON -m pytest "$test_file" -v --tb=short 2>&1) || exit_code=$?
     else
         output=$("$test_file" 2>&1) || exit_code=$?
     fi
@@ -78,7 +90,8 @@ run_single_test() {
 run_category_tests() {
     local category="$1"
     local mode="${2:-$(get_current_mode)}"
-    local testing_root="${RUNNER_DIR}/.."
+    local testing_root
+    testing_root="$(cd "${RUNNER_DIR}/.." && pwd)"
     local category_dir
     category_dir=$(get_category_dir "$category")
 
@@ -98,14 +111,63 @@ run_category_tests() {
 
     # Check if directory has Python tests
     if [[ -f "$full_path/conftest.py" ]] || ls "$full_path"/test_*.py &>/dev/null 2>&1; then
-        # Run pytest for Python tests
-        if [[ "$RUNNER_DRY_RUN" == "true" ]]; then
-            log_info "[DRY RUN] Would run pytest for $category"
+        # Build list of Python test files to run based on priority
+        local python_tests=()
+        for test_file in "$full_path"/test_*.py; do
+            [[ -f "$test_file" ]] || continue
+            local relative_path="${test_file#$testing_root/}"
+            if should_run_test "$relative_path" "$mode"; then
+                python_tests+=("$test_file")
+            else
+                SKIPPED_TESTS+=("$test_file")
+                if [[ "$RUNNER_VERBOSE" == "true" ]]; then
+                    local priority
+                    priority=$(get_test_priority "$relative_path")
+                    log_info "Skipping (priority $priority): $(basename "$test_file")"
+                fi
+            fi
+        done
+
+        if [[ ${#python_tests[@]} -eq 0 ]]; then
+            log_info "No Python tests to run in $category for mode $mode"
+        elif [[ "$RUNNER_DRY_RUN" == "true" ]]; then
+            log_info "[DRY RUN] Would run pytest for ${#python_tests[@]} files in $category"
+            for t in "${python_tests[@]}"; do
+                echo "  - $(basename "$t")"
+            done
         else
-            log_info "Running pytest for $category..."
-            python3 -m pytest "$full_path" -v --tb=short 2>&1 || {
+            log_info "Running pytest for ${#python_tests[@]} files in $category..."
+            local pytest_output
+            local pytest_args=("-v" "--tb=short")
+
+            # Add coverage flags if coverage is enabled
+            if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
+                local fail_under
+                fail_under=$(get_coverage_threshold fail_under)
+                local cov_source="${TESTING_ROOT}/../scripts"
+                pytest_args+=("--cov=$cov_source" "--cov-report=term-missing" "--cov-fail-under=$fail_under")
+                log_info "Coverage enabled: fail_under=${fail_under}%"
+            fi
+
+            if pytest_output=$($PYTHON -m pytest "${python_tests[@]}" "${pytest_args[@]}" 2>&1); then
+                # Count passed tests from pytest output
+                local passed
+                passed=$(echo "$pytest_output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' || echo 0)
+                for ((i=0; i<passed; i++)); do
+                    PASSED_TESTS+=("pytest-$category-$i")
+                done
+                echo "$pytest_output" | tail -10
+            else
+                # Check if failure was due to coverage threshold
+                if echo "$pytest_output" | grep -q "FAIL Required test coverage"; then
+                    RUNNER_COVERAGE_FAILED="true"
+                    log_error "Coverage below threshold in $category"
+                    echo "$pytest_output" | grep -A2 "TOTAL" | head -5
+                    echo "$pytest_output" | grep "FAIL Required" | head -1
+                fi
                 FAILED_TESTS+=("$category (pytest)")
-            }
+                echo "$pytest_output" | tail -20
+            fi
         fi
     else
         # Run bash tests
@@ -186,6 +248,17 @@ print_runner_summary() {
     echo -e "  ${RED}Failed:${NC}  ${#FAILED_TESTS[@]}"
     echo -e "  ${YELLOW}Skipped:${NC} ${#SKIPPED_TESTS[@]}"
     echo -e "  Duration: ${duration}s"
+
+    # Show coverage status if coverage was enabled
+    if [[ "$RUNNER_WITH_COVERAGE" == "true" ]]; then
+        local threshold
+        threshold=$(get_coverage_threshold fail_under)
+        if [[ "$RUNNER_COVERAGE_FAILED" == "true" ]]; then
+            echo -e "  ${RED}Coverage:${NC} BELOW ${threshold}% threshold"
+        else
+            echo -e "  ${GREEN}Coverage:${NC} ≥${threshold}% (passed)"
+        fi
+    fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     if [[ ${#FAILED_TESTS[@]} -gt 0 ]]; then
@@ -195,7 +268,11 @@ print_runner_summary() {
             echo "  - $(basename "$test")"
         done
         echo ""
-        echo -e "${RED}FAILED${NC}"
+        if [[ "$RUNNER_COVERAGE_FAILED" == "true" ]]; then
+            echo -e "${RED}FAILED (coverage below $(get_coverage_threshold fail_under)%)${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+        fi
     else
         echo ""
         echo -e "${GREEN}ALL TESTS PASSED${NC}"
@@ -210,11 +287,11 @@ parse_runner_options() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --mode)
-                TEST_MODE="$2"
+                export TEST_MODE="$2"
                 shift 2
                 ;;
             --category)
-                RUNNER_CATEGORY="$2"
+                export RUNNER_CATEGORY="$2"
                 shift 2
                 ;;
             --verbose|-v)
@@ -227,6 +304,10 @@ parse_runner_options() {
                 ;;
             --dry-run)
                 RUNNER_DRY_RUN="true"
+                shift
+                ;;
+            --coverage|--with-coverage)
+                RUNNER_WITH_COVERAGE="true"
                 shift
                 ;;
             *)

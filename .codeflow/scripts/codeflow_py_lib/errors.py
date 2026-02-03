@@ -98,3 +98,18 @@ class ScriptError(CodeFlowError):
         if script:
             details["script"] = script
         super().__init__(message, "SCRIPT_ERROR", details)
+
+
+class CRDTError(CodeFlowError):
+    """CRDT operation errors."""
+
+    def __init__(
+        self,
+        message: str,
+        operation: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        details = details or {}
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, "CRDT_ERROR", details)

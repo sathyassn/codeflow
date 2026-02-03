@@ -1,0 +1,13 @@
+{
+  "config": {
+    "extends": "./.markdownlint.json"
+  },
+  "ignores": [
+    "node_modules/**",
+    ".state/**",
+    ".venv/**",
+    "**/.venv/**",
+    ".pytest_cache/**",
+    "**/.pytest_cache/**"
+  ]
+}

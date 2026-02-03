@@ -35,7 +35,7 @@ discover_lib_modules() {
     repo_root=$(get_repo_root)
 
     # Python library modules
-    find "$repo_root/.codeflow/scripts/py-lib/" -type f -name "*.py" \
+    find "$repo_root/.codeflow/scripts/codeflow_py_lib/" -type f -name "*.py" \
         ! -name "__init__.py" \
         -print 2>/dev/null
 
@@ -56,11 +56,11 @@ derive_test_path() {
     local rel_path="${script#$repo_root/}"
 
     case "$rel_path" in
-        .codeflow/scripts/py-lib/*.py)
+        .codeflow/scripts/codeflow_py_lib/*.py)
             # Library modules: validation.py → test_validation.py
             local name
             name=$(basename "$script" .py)
-            echo "$repo_root/.codeflow/testing/scripts/py-lib/test_${name}.py"
+            echo "$repo_root/.codeflow/testing/scripts/codeflow_py_lib/test_${name}.py"
             ;;
         .codeflow/scripts/shell-lib/*.sh)
             # Shell library: common.sh → test-common.sh
@@ -101,25 +101,25 @@ derive_test_path() {
 }
 
 # ============================================================================
-# EXCEPTION HANDLING
+# EXCEPTION HANDLING (Bash 3.2 compatible - no associative arrays)
 # ============================================================================
 
-declare -A COVERAGE_EXCEPTIONS=(
-    # Integration-tested modules
-    [".codeflow/scripts/security/enforcement/checks/*"]="hooks/pre-tool-use/test-cf-pre-tool-use-security.sh"
-)
-
+# Check if a script is excepted from coverage requirements
+# Args: $1 = script path
+# Returns: 0 if excepted, 1 otherwise
 is_excepted() {
     local script="$1"
     local repo_root
     repo_root=$(get_repo_root)
     local rel_path="${script#$repo_root/}"
 
-    for pattern in "${!COVERAGE_EXCEPTIONS[@]}"; do
-        if [[ "$rel_path" == $pattern ]]; then
+    # Integration-tested modules - these are tested via hook tests
+    case "$rel_path" in
+        .codeflow/scripts/security/enforcement/checks/*)
+            # Tested by: hooks/pre-tool-use/test-cf-pre-tool-use-security.sh
             return 0
-        fi
-    done
+            ;;
+    esac
 
     return 1
 }

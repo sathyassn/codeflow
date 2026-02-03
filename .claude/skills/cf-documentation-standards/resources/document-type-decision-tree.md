@@ -2,7 +2,7 @@
 
 **Purpose:** Determine the correct template/standard for new .md files
 
-**MANDATORY: Use this decision tree BEFORE creating any new .md file**
+**MANDATORY:** Use this decision tree BEFORE creating any new .md file
 
 Do NOT guess the document type. Do NOT skip this step.
 

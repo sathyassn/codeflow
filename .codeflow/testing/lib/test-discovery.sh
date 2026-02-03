@@ -21,10 +21,14 @@ discover_tests() {
             discover_tests_in_dir "$testing_root/$category_dir"
         fi
     else
-        # Discover all tests
-        for cat in "${!CATEGORIES[@]}"; do
-            discover_tests_in_dir "$testing_root/${CATEGORIES[$cat]}"
-        done
+        # Discover all tests (bash 3.2 compatible - use list_all_categories)
+        local cat
+        while IFS= read -r cat; do
+            [[ -z "$cat" ]] && continue
+            local cat_path
+            cat_path=$(get_category_path "$cat")
+            [[ -n "$cat_path" ]] && discover_tests_in_dir "$testing_root/$cat_path"
+        done < <(list_all_categories)
     fi
 }
 
@@ -41,15 +45,17 @@ discover_tests_in_dir() {
 }
 
 # ============================================================================
-# PRIORITY EXTRACTION
+# PRIORITY EXTRACTION (Comment-based fallback)
 # ============================================================================
 
-get_test_priority() {
+# Get test priority from file comment (fallback if not in config)
+# The primary get_test_priority function is in test-config.sh and uses JSON config
+get_test_priority_from_comment() {
     local test_file="$1"
     local priority="MEDIUM"  # Default
 
     if [[ -f "$test_file" ]]; then
-        # Look for priority comment
+        # Look for priority comment like: # Priority: HIGH
         local found
         found=$(grep -m1 "^# Priority:" "$test_file" 2>/dev/null | sed 's/^# Priority:[[:space:]]*//')
         if [[ -n "$found" ]]; then
@@ -73,6 +79,7 @@ filter_tests_by_priority() {
 
     for test_file in "${tests[@]}"; do
         local test_priority
+        # Use config-based get_test_priority from test-config.sh (not the comment-based one)
         test_priority=$(get_test_priority "$test_file")
         if [[ " $priorities " == *" $test_priority "* ]]; then
             echo "$test_file"
@@ -89,12 +96,17 @@ get_test_category() {
     local testing_root="${DISCOVERY_DIR}/.."
     local rel_path="${test_file#$testing_root/}"
 
-    for cat in "${!CATEGORIES[@]}"; do
-        if [[ "$rel_path" == "${CATEGORIES[$cat]}/"* ]]; then
+    # Bash 3.2 compatible category detection
+    local cat
+    while IFS= read -r cat; do
+        [[ -z "$cat" ]] && continue
+        local cat_path
+        cat_path=$(get_category_path "$cat")
+        if [[ -n "$cat_path" && "$rel_path" == "$cat_path/"* ]]; then
             echo "$cat"
             return 0
         fi
-    done
+    done < <(list_all_categories)
 
     echo "unknown"
 }
@@ -124,8 +136,25 @@ count_tests() {
     echo "$count"
 }
 
-list_categories() {
-    for cat in "${!CATEGORIES[@]}"; do
-        echo "$cat"
-    done | sort
+# Bash 3.2 compatible: list all known test categories
+list_all_categories() {
+    # These match get_category_path() in test-common.sh
+    echo "hooks-pre-tool-use"
+    echo "hooks-post-tool-use"
+    echo "hooks-session-start"
+    echo "hooks-session-end"
+    echo "hooks-stop"
+    echo "hooks-user-prompt"
+    echo "scripts-db"
+    echo "scripts-memory"
+    echo "scripts-coordination"
+    echo "scripts-lib"
+    echo "scripts-shell-lib"
+    echo "scripts-security"
+    echo "scripts-state"
+    echo "scripts-worktree"
+    echo "scripts-health"
+    echo "scripts-commands"
+    echo "consistency"
+    echo "autorun"
 }

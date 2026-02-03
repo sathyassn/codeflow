@@ -93,17 +93,31 @@ generate_event_id() {
 # ULID PARSING
 # ============================================================================
 
+# Get character index in ULID alphabet (portable version)
+_ulid_char_index() {
+    local char="$1"
+    local i
+    for ((i=0; i<32; i++)); do
+        if [[ "${ULID_ALPHABET:$i:1}" == "$char" ]]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    echo "-1"
+    return 1
+}
+
 # Extract timestamp from ULID (returns milliseconds)
 ulid_timestamp() {
     local ulid="$1"
     local ts_part="${ulid:0:10}"
 
     local result=0
+    local i
     for ((i=0; i<10; i++)); do
         local char="${ts_part:$i:1}"
         local idx
-        idx=$(expr index "$ULID_ALPHABET" "$char")
-        ((idx--))  # Convert to 0-indexed
+        idx=$(_ulid_char_index "$char")
         result=$((result * 32 + idx))
     done
 

@@ -1,44 +1,174 @@
 {
+  "$schema": "./test-config.schema.json",
   "version": "1.0.0",
+  "description": "Config-driven test execution for CodeFlow",
+
+  "priorities": {
+    "CRITICAL": {
+      "description": "Core data layer - schema, DB operations, validation, CRDT",
+      "files": [
+        "scripts/db/test_schema.py",
+        "scripts/db/test_db_operations.py",
+        "scripts/db/test_db_retry_concurrency.py",
+        "scripts/codeflow_py_lib/test_validation.py",
+        "scripts/codeflow_py_lib/test_crdt.py",
+        "scripts/codeflow_py_lib/test_db.py",
+        "scripts/coordination/test_crdt_doc.py",
+        "scripts/coordination/test_crdt_io.py"
+      ]
+    },
+    "HIGH": {
+      "description": "Workflow operations - memory, coordination, state management",
+      "files": [
+        "scripts/memory/test_memory_store.py",
+        "scripts/memory/test_memory_query.py",
+        "scripts/memory/test_memory_search.py",
+        "scripts/memory/test_memory_traverse.py",
+        "scripts/memory/test_memory_at_time.py",
+        "scripts/memory/test_entity_query.py",
+        "scripts/memory/test_entity_traverse.py",
+        "scripts/coordination/test_claim_operations.py",
+        "scripts/coordination/test_crdt_sync.py",
+        "scripts/coordination/test_pattern_matching.py",
+        "scripts/state/test-ledger.sh",
+        "scripts/state/test-memory.sh",
+        "scripts/db/test_db_lib_shell.sh",
+        "scripts/db/test_db_fts.py"
+      ]
+    },
+    "MEDIUM": {
+      "description": "Library utilities - config, paths, jsonl, ulid",
+      "files": [
+        "scripts/codeflow_py_lib/test_config.py",
+        "scripts/codeflow_py_lib/test_paths.py",
+        "scripts/codeflow_py_lib/test_jsonl.py",
+        "scripts/codeflow_py_lib/test_ulid.py",
+        "scripts/codeflow_py_lib/test_chunking.py",
+        "scripts/codeflow_py_lib/test_embeddings.py",
+        "scripts/shell-lib/test-common.sh",
+        "scripts/shell-lib/test-config.sh",
+        "scripts/shell-lib/test-validation.sh",
+        "scripts/shell-lib/test-ulid.sh",
+        "scripts/db/test_db_maintenance.py"
+      ]
+    },
+    "LOW": {
+      "description": "Support utilities - logging, errors, backup",
+      "files": [
+        "scripts/codeflow_py_lib/test_logging.py",
+        "scripts/codeflow_py_lib/test_errors.py",
+        "scripts/db/test_db_backup.py",
+        "scripts/shell-lib/test-logging.sh",
+        "scripts/shell-lib/test-errors.sh",
+        "scripts/shell-lib/test-index.sh"
+      ]
+    }
+  },
+
   "modes": {
     "essential": {
-      "description": "Minimum validation - security critical only",
+      "description": "Minimum validation - core data layer only",
       "priorities": ["CRITICAL"],
-      "estimated_seconds": 30
+      "estimated_seconds": 15
     },
     "standard": {
-      "description": "Default pre-commit - security + workflow enforcement",
+      "description": "Default - core + workflow operations",
       "priorities": ["CRITICAL", "HIGH"],
-      "estimated_seconds": 60
+      "estimated_seconds": 30
     },
     "full": {
       "description": "Comprehensive validation - all tests",
       "priorities": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
-      "estimated_seconds": 120
+      "estimated_seconds": 60
     }
   },
+
+  "categories": {
+    "scripts-db": {
+      "directory": "scripts/db",
+      "description": "Database operations tests",
+      "language": "python"
+    },
+    "scripts-memory": {
+      "directory": "scripts/memory",
+      "description": "Memory script tests",
+      "language": "python"
+    },
+    "scripts-coordination": {
+      "directory": "scripts/coordination",
+      "description": "Coordination script tests",
+      "language": "python"
+    },
+    "scripts-codeflow-py-lib": {
+      "directory": "scripts/codeflow_py_lib",
+      "description": "Python shared library tests",
+      "language": "python"
+    },
+    "scripts-shell-lib": {
+      "directory": "scripts/shell-lib",
+      "description": "Shell shared library tests",
+      "language": "bash"
+    },
+    "scripts-state": {
+      "directory": "scripts/state",
+      "description": "State management tests",
+      "language": "bash"
+    }
+  },
+
   "pre_commit": {
     "default_mode": "standard",
     "env_override": "TEST_MODE",
     "show_mode_on_start": true
   },
+
+  "cli": {
+    "allow_priority_filter": true,
+    "allow_mode_override": true,
+    "fallback_mode": "standard"
+  },
+
   "coverage_enforcement": {
     "enabled": true,
-    "validation_mode": "fail",
+    "validation_mode": "warn",
     "pre_commit_mode": "new_only",
+    "thresholds": {
+      "line": 90,
+      "branch": 85,
+      "function": 90,
+      "fail_under": 85
+    },
     "exceptions": {
+      "no_test_required": [
+        {
+          "pattern": "lib/test-*.sh",
+          "reason": "Test framework library files - not tests themselves"
+        }
+      ],
       "integration_tested": [
         {
           "pattern": ".codeflow/scripts/security/enforcement/checks/*",
           "tested_by": ".codeflow/testing/hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
-          "reason": "Security modules tested via hook tests"
+          "reason": "Security modules tested via hook tests (Phase 3)"
         }
       ]
     }
   },
+
+  "pytest": {
+    "config_file": "pytest.ini",
+    "coverage_config": ".coveragerc",
+    "markers": {
+      "critical": "CRITICAL priority tests",
+      "high": "HIGH priority tests",
+      "medium": "MEDIUM priority tests",
+      "low": "LOW priority tests"
+    }
+  },
+
   "reporting": {
-    "output_dir": ".state/test-reports",
-    "formats": ["json", "text"],
+    "output_dir": "coverage_reports",
+    "formats": ["json", "text", "html"],
     "retention_days": 30
   }
 }

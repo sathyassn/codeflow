@@ -29,7 +29,7 @@ Skills are loaded from `.claude/skills/` and provide specialized capabilities:
 
 ## Directory Structure
 
-```
+```text
 .claude/           # Claude-specific configuration
 .codeflow/         # CodeFlow infrastructure
 .state/            # Runtime state (gitignored)

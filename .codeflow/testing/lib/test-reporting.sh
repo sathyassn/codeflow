@@ -134,8 +134,8 @@ print_category_summary() {
     local status="${GREEN}✓${NC}"
     [[ $failed -gt 0 ]] && status="${RED}✗${NC}"
 
-    printf "  %-25s %s %3d passed, %3d failed, %3d skipped\n" \
-        "$category" "$status" "$passed" "$failed" "$skipped"
+    printf "  %-25s %s %3d/%3d passed, %3d failed, %3d skipped\n" \
+        "$category" "$status" "$passed" "$total" "$failed" "$skipped"
 }
 
 print_mode_info() {

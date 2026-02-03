@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
-from .paths import get_repo_root, get_config_dir
 from .errors import ConfigError
+from .paths import get_config_dir, get_repo_root
 
 
 @dataclass
