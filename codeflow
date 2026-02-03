@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# CodeFlow CLI - Shell placeholder for Go binary
+# This script will be replaced by the Go implementation in Phase 7
+#
+# Usage: codeflow <command> [options]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODEFLOW_VERSION="1.0.0"
+
+# Colors (if terminal supports them)
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    BOLD=''
+    RESET=''
+fi
+
+usage() {
+    cat <<EOF
+${BOLD}CodeFlow${RESET} - AI-native development framework for Claude Code
+
+${BOLD}USAGE:${RESET}
+    codeflow <command> [options]
+
+${BOLD}COMMANDS:${RESET}
+    init          Initialize CodeFlow in current directory
+    doctor        Health check and diagnostics
+    autorun       Autonomous multi-task execution
+    symbols       Manage symbol index
+    work          Work item operations
+    claims        Resource claim management
+
+${BOLD}OPTIONS:${RESET}
+    -h, --help    Show this help message
+    --version     Show version
+
+${BOLD}EXAMPLES:${RESET}
+    codeflow init              # Initialize CodeFlow
+    codeflow doctor            # Run health checks
+    codeflow work list         # List active work items
+
+Run 'codeflow <command> --help' for command-specific help.
+EOF
+}
+
+cmd_init() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/init.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${YELLOW}Note:${RESET} init.sh not yet implemented (Phase 2)"
+        echo "Creating basic directory structure..."
+        mkdir -p .claude/{agents,commands,skills,hooks,memory}
+        mkdir -p .codeflow/{scripts,config,testing}
+        mkdir -p .state/{db,ledger,logs}
+        echo -e "${GREEN}Done.${RESET} Basic structure created."
+    fi
+}
+
+cmd_doctor() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/doctor.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${BOLD}CodeFlow Doctor${RESET}"
+        echo "================"
+        echo ""
+
+        # Check directories
+        echo -e "${BLUE}Checking directories...${RESET}"
+        local dirs=(".claude" ".codeflow" ".state")
+        for dir in "${dirs[@]}"; do
+            if [[ -d "$SCRIPT_DIR/$dir" ]]; then
+                echo -e "  ${GREEN}✓${RESET} $dir"
+            else
+                echo -e "  ${RED}✗${RESET} $dir (missing)"
+            fi
+        done
+
+        # Check key files
+        echo ""
+        echo -e "${BLUE}Checking key files...${RESET}"
+        local files=("PROJECT.md" ".claude/settings.json" ".codeflow/VERSION")
+        for file in "${files[@]}"; do
+            if [[ -f "$SCRIPT_DIR/$file" ]]; then
+                echo -e "  ${GREEN}✓${RESET} $file"
+            else
+                echo -e "  ${YELLOW}○${RESET} $file (not found)"
+            fi
+        done
+
+        # Check tools
+        echo ""
+        echo -e "${BLUE}Checking tools...${RESET}"
+        local tools=("git" "jq" "bash")
+        for tool in "${tools[@]}"; do
+            if command -v "$tool" &>/dev/null; then
+                echo -e "  ${GREEN}✓${RESET} $tool"
+            else
+                echo -e "  ${RED}✗${RESET} $tool (not installed)"
+            fi
+        done
+
+        echo ""
+        echo -e "${GREEN}Doctor check complete.${RESET}"
+    fi
+}
+
+cmd_autorun() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/autorun.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${YELLOW}Note:${RESET} autorun.sh not yet implemented (Phase 7)"
+        echo "Autorun enables autonomous multi-task execution with tmux + worktrees."
+    fi
+}
+
+cmd_symbols() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/symbols.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${YELLOW}Note:${RESET} symbols.sh not yet implemented (Phase 2)"
+        echo "Symbol management for code exploration."
+    fi
+}
+
+cmd_work() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/work.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${YELLOW}Note:${RESET} work.sh not yet implemented (Phase 2)"
+        echo "Work item operations (list, status, etc.)."
+    fi
+}
+
+cmd_claims() {
+    local script="$SCRIPT_DIR/.codeflow/scripts/claims.sh"
+    if [[ -f "$script" ]]; then
+        bash "$script" "$@"
+    else
+        echo -e "${YELLOW}Note:${RESET} claims.sh not yet implemented (Phase 2)"
+        echo "Resource claim management for parallel work."
+    fi
+}
+
+# Main entry point
+main() {
+    case "${1:-}" in
+        init)
+            shift
+            cmd_init "$@"
+            ;;
+        doctor)
+            shift
+            cmd_doctor "$@"
+            ;;
+        autorun)
+            shift
+            cmd_autorun "$@"
+            ;;
+        symbols)
+            shift
+            cmd_symbols "$@"
+            ;;
+        work)
+            shift
+            cmd_work "$@"
+            ;;
+        claims)
+            shift
+            cmd_claims "$@"
+            ;;
+        -h|--help)
+            usage
+            ;;
+        --version)
+            echo "CodeFlow v${CODEFLOW_VERSION}"
+            ;;
+        "")
+            usage
+            ;;
+        *)
+            echo -e "${RED}Error:${RESET} Unknown command '${1}'"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,44 @@
+{
+  "version": "1.0.0",
+  "modes": {
+    "essential": {
+      "description": "Minimum validation - security critical only",
+      "priorities": ["CRITICAL"],
+      "estimated_seconds": 30
+    },
+    "standard": {
+      "description": "Default pre-commit - security + workflow enforcement",
+      "priorities": ["CRITICAL", "HIGH"],
+      "estimated_seconds": 60
+    },
+    "full": {
+      "description": "Comprehensive validation - all tests",
+      "priorities": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+      "estimated_seconds": 120
+    }
+  },
+  "pre_commit": {
+    "default_mode": "standard",
+    "env_override": "TEST_MODE",
+    "show_mode_on_start": true
+  },
+  "coverage_enforcement": {
+    "enabled": true,
+    "validation_mode": "fail",
+    "pre_commit_mode": "new_only",
+    "exceptions": {
+      "integration_tested": [
+        {
+          "pattern": ".codeflow/scripts/security/enforcement/checks/*",
+          "tested_by": ".codeflow/testing/hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
+          "reason": "Security modules tested via hook tests"
+        }
+      ]
+    }
+  },
+  "reporting": {
+    "output_dir": ".state/test-reports",
+    "formats": ["json", "text"],
+    "retention_days": 30
+  }
+}

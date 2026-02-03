@@ -1,0 +1,63 @@
+# Claude Code local settings (personal)
+.claude/settings.local.json
+
+# State files - Untracked (machine-specific, regeneratable)
+# Per V3 spec: coordination/, logs/, runtime/ are untracked
+# Per V3 spec: ledger/, db/schema/, db/queries/, db/scripts/, schemas/ are tracked
+.state/coordination/
+.state/logs/
+.state/runtime/
+.state/db/codeflow.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+.cache/
+tmp/
+
+# Git worktrees (parallel work isolation)
+.git-worktrees/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Test artifacts
+.codeflow/testing/results/
+.codeflow/testing/coverage/

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git branch*)",
+      "Read(**/*)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(chmod 777 *)",
+      "Bash(*password*)",
+      "Bash(*secret*)"
+    ]
+  },
+  "hooks": {
+    "enabled": true,
+    "path": ".claude/hooks"
+  },
+  "model": {
+    "default": "claude-sonnet-4-20250514"
+  }
+}
