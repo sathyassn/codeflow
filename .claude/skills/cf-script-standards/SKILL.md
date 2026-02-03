@@ -2,6 +2,7 @@
 name: cf-script-standards
 description: Shell and Python linting (shellcheck, flake8) and templates.
 context: fork
+agent: cf-general-purpose
 ---
 
 # Script Standards Skill

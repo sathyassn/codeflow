@@ -2,6 +2,7 @@
 name: cf-documentation-standards
 description: Markdown documentation standards: templates and validation.
 context: fork
+agent: cf-general-purpose
 ---
 
 # Documentation Standards Skill
@@ -118,5 +119,5 @@ context: inline|fork
 
 ## Resources
 
-For document types: `resources/document-types.md`
-For lint rules: `resources/lint-rules.md`
+For document types: `resources/document-type-decision-tree.md`
+For lint rules: `resources/lint-rules-quick-ref.md`

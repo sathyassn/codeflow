@@ -2,6 +2,7 @@
 name: cf-git-workflow
 description: Version control: branching, commits, PRs, and worktree management.
 context: fork
+agent: cf-general-purpose
 ---
 
 # Git Workflow Skill
