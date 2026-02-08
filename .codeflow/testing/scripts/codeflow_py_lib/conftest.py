@@ -95,13 +95,14 @@ def mock_jsonl_file(temp_dir, sample_jsonl_data):
 def mock_config(temp_dir):
     """Create mock configuration files."""
     config_dir = temp_dir / ".codeflow" / "config"
-    config_dir.mkdir(parents=True)
+    enforcement_dir = config_dir / "enforcement"
+    enforcement_dir.mkdir(parents=True)
 
     # Create enforcement policy
     policy = {
         "enforcement_level": "warn",
         "protected_patterns": [".env*", "*.key"],
     }
-    (config_dir / "enforcement-policy.json").write_text(json.dumps(policy))
+    (enforcement_dir / "enforcement-policy.json").write_text(json.dumps(policy))
 
     yield config_dir

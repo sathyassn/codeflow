@@ -108,10 +108,88 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $*" >&2
 }
 
+# ============================================================================
+# CROSS-PLATFORM UTILITIES
+# ============================================================================
+# These functions provide portable alternatives to OS-specific commands
+
+# Detect OS type
+get_os_type() {
+    case "$(uname -s)" in
+        Darwin*)    echo "macos" ;;
+        Linux*)     echo "linux" ;;
+        CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
+        *)          echo "unknown" ;;
+    esac
+}
+
+# Portable date conversion from ISO8601 to epoch
+# Usage: iso_to_epoch "2024-01-15T10:30:00Z"
+iso_to_epoch() {
+    local iso_date="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        date -j -f "%Y-%m-%dT%H:%M:%SZ" "$iso_date" +%s 2>/dev/null || echo ""
+    else
+        date -d "$iso_date" +%s 2>/dev/null || echo ""
+    fi
+}
+
+# Portable date conversion from epoch to ISO8601
+# Usage: epoch_to_iso 1705315800
+epoch_to_iso() {
+    local epoch="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        date -r "$epoch" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ""
+    else
+        date -d "@$epoch" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ""
+    fi
+}
+
+# Portable stat for file permissions (returns octal like 644)
+# Usage: get_file_perms "/path/to/file"
+get_file_perms() {
+    local file="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        stat -f '%A' "$file" 2>/dev/null || echo "644"
+    else
+        stat -c '%a' "$file" 2>/dev/null || echo "644"
+    fi
+}
+
+# Portable floating point math (using awk instead of bc)
+# Usage: float_calc "0.95 * 100"
+float_calc() {
+    local expr="$1"
+    local format="${2:-%.0f}"
+    awk "BEGIN {printf \"$format\", $expr}" 2>/dev/null || echo "0"
+}
+
+# Portable sed in-place edit (handles macOS vs GNU sed)
+# Usage: sed_inplace 's/old/new/g' file.txt
+sed_inplace() {
+    local expr="$1"
+    local file="$2"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "$expr" "$file"
+    else
+        sed -i "$expr" "$file"
+    fi
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
 log_debug() {
     if [[ "${DEBUG:-0}" == "1" ]]; then
         echo -e "${GRAY}[DEBUG]${NC} $*" >&2
     fi
+}
+
+log_section() {
+    echo ""
+    echo -e "${BOLD}=== $* ===${NC}"
 }
 
 # ============================================================================

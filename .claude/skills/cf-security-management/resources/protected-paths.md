@@ -4,7 +4,7 @@
 
 ### Tier 1: Core (Highest Protection)
 
-Source: `.codeflow/enforcement-policy.json`
+Source: `.codeflow/config/enforcement/enforcement-policy.json`
 
 System-critical paths requiring staging workflow:
 
@@ -12,12 +12,12 @@ System-critical paths requiring staging workflow:
 .claude/hooks/**
 .claude/settings.json
 .codeflow/scripts/security/**
-.codeflow/enforcement-policy.json
+.codeflow/config/enforcement/enforcement-policy.json
 ```
 
 ### Tier 2: Extended
 
-Source: `.codeflow/protected-extended.list`
+Source: `.codeflow/config/enforcement/protection/protected-extended.list`
 
 User-defined paths requiring elevated protection. Configure by editing the list file.
 

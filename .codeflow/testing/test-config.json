@@ -1,24 +1,26 @@
 {
   "$schema": "./test-config.schema.json",
-  "version": "1.0.0",
-  "description": "Config-driven test execution for CodeFlow",
+  "version": "2.0.0",
+  "description": "Config-driven test execution for CodeFlow - Phase 3 Updated",
 
   "priorities": {
     "CRITICAL": {
-      "description": "Core data layer - schema, DB operations, validation, CRDT",
+      "description": "Core data layer - schema, DB operations, validation, CRDT + consistency checks",
       "files": [
         "scripts/db/test_schema.py",
         "scripts/db/test_db_operations.py",
+        "scripts/db/lib/test_db_operations.py",
         "scripts/db/test_db_retry_concurrency.py",
         "scripts/codeflow_py_lib/test_validation.py",
         "scripts/codeflow_py_lib/test_crdt.py",
         "scripts/codeflow_py_lib/test_db.py",
         "scripts/coordination/test_crdt_doc.py",
-        "scripts/coordination/test_crdt_io.py"
+        "scripts/coordination/test_crdt_io.py",
+        "consistency/test-settings-sync.sh"
       ]
     },
     "HIGH": {
-      "description": "Workflow operations - memory, coordination, state management",
+      "description": "Workflow operations - memory, coordination, state management, security enforcement",
       "files": [
         "scripts/memory/test_memory_store.py",
         "scripts/memory/test_memory_query.py",
@@ -33,11 +35,30 @@
         "scripts/state/test-ledger.sh",
         "scripts/state/test-memory.sh",
         "scripts/db/test_db_lib_shell.sh",
-        "scripts/db/test_db_fts.py"
+        "scripts/db/lib/test-db-lib.sh",
+        "scripts/db/test_db_fts.py",
+        "scripts/security/test-cf-dangerous-commands.sh",
+        "scripts/security/test-cf-privilege-protection.sh",
+        "scripts/security/test-cf-path-protection.sh",
+        "scripts/security/test-cf-branch-file-protection.sh",
+        "scripts/security/test-cf-hook-bypass.sh",
+        "scripts/security/test-cf-pattern-matching.sh",
+        "scripts/security/enforcement/test-cf-file-operations.sh",
+        "scripts/security/enforcement/test-cf-git-protection.sh",
+        "scripts/security/enforcement/test-cf-network-protection.sh",
+        "scripts/security/enforcement/test-cf-tmp-protection.sh",
+        "scripts/security/lib/test-security-lib.sh",
+        "scripts/security/lib/test-bash-file-readers-lib.sh",
+        "scripts/security/sentinel/test-cf-sentinel.sh",
+        "scripts/security/protection/test-cf-protect-resources.sh",
+        "scripts/security/protection/test-cf-protection-common.sh",
+        "scripts/security/protection/test-cf-protection-core.sh",
+        "scripts/security/protection/test-cf-protection-ops.sh",
+        "scripts/security/protection/test-cf-protection-verify.sh"
       ]
     },
     "MEDIUM": {
-      "description": "Library utilities - config, paths, jsonl, ulid",
+      "description": "Library utilities - config, paths, jsonl, ulid, hooks, git, validation",
       "files": [
         "scripts/codeflow_py_lib/test_config.py",
         "scripts/codeflow_py_lib/test_paths.py",
@@ -49,7 +70,54 @@
         "scripts/shell-lib/test-config.sh",
         "scripts/shell-lib/test-validation.sh",
         "scripts/shell-lib/test-ulid.sh",
-        "scripts/db/test_db_maintenance.py"
+        "scripts/db/test_db_maintenance.py",
+        "scripts/security/test-cf-stage-edit.sh",
+        "scripts/security/test-cf-apply-staged-edit.sh",
+        "scripts/security/test-cf-reject-staged-edit.sh",
+        "scripts/security/test-cf-rollback-edit.sh",
+        "scripts/security/test-cf-cleanup-expired.sh",
+        "scripts/security/test-cf-reload-protection.sh",
+        "scripts/security/test-cf-promote-protection.sh",
+        "scripts/security/test-cf-validate-shell.sh",
+        "scripts/security/test-cf-validate-python.sh",
+        "scripts/security/test-cf-validate-json.sh",
+        "scripts/security/test-cf-validate-yaml.sh",
+        "scripts/git-hooks/test-pre-commit.sh",
+        "scripts/git-hooks/test-commit-msg.sh",
+        "scripts/git-hooks/test-prepare-commit-msg.sh",
+        "scripts/git-hooks/test-post-commit.sh",
+        "scripts/git-hooks/test-pre-push.sh",
+        "scripts/worktree/test-cf-worktree-setup.sh",
+        "scripts/worktree/test-cf-worktree-list.sh",
+        "scripts/worktree/test-cf-worktree-status.sh",
+        "scripts/worktree/test-cf-worktree-cleanup.sh",
+        "scripts/settings/test-cf-change-approval-mode.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-bash-sentinel.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-claim-validation.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-edit-write.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-file-sentinel.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-gh-pr.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-grep-sentinel.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-protected-resource.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-read-delegation.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-task-sentinel.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-webfetch.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-instructions.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-logging.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-memory-progress.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-settings-templates.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-skill.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-tmp-workflow.sh",
+        "claude-hooks/session-start/test-cf-session-start-cleanup.sh",
+        "claude-hooks/session-start/test-cf-session-start-instructions.sh",
+        "claude-hooks/session-start/test-cf-session-start-logging.sh",
+        "claude-hooks/session-end/test-cf-session-end-cleanup.sh",
+        "claude-hooks/session-end/test-cf-session-end-logging.sh",
+        "claude-hooks/stop/test-cf-stop-logging.sh",
+        "claude-hooks/stop/test-cf-stop-verify-work.sh",
+        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-context.sh",
+        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh"
       ]
     },
     "LOW": {
@@ -67,27 +135,37 @@
 
   "modes": {
     "essential": {
-      "description": "Minimum validation - core data layer only",
+      "description": "Minimum validation - core data layer + consistency only",
       "priorities": ["CRITICAL"],
-      "estimated_seconds": 15
+      "estimated_seconds": 20
     },
     "standard": {
-      "description": "Default - core + workflow operations",
+      "description": "Default - core + workflow operations + security",
       "priorities": ["CRITICAL", "HIGH"],
-      "estimated_seconds": 30
+      "estimated_seconds": 45
     },
     "full": {
-      "description": "Comprehensive validation - all tests",
+      "description": "Comprehensive validation - all tests including claude hooks",
       "priorities": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
-      "estimated_seconds": 60
+      "estimated_seconds": 90
     }
   },
 
   "categories": {
+    "consistency": {
+      "directory": "consistency",
+      "description": "Cross-cutting consistency tests (settings sync, hooks registration)",
+      "language": "bash"
+    },
     "scripts-db": {
       "directory": "scripts/db",
       "description": "Database operations tests",
       "language": "python"
+    },
+    "scripts-db-lib": {
+      "directory": "scripts/db/lib",
+      "description": "Database shell library tests",
+      "language": "bash"
     },
     "scripts-memory": {
       "directory": "scripts/memory",
@@ -113,13 +191,83 @@
       "directory": "scripts/state",
       "description": "State management tests",
       "language": "bash"
+    },
+    "scripts-security": {
+      "directory": "scripts/security",
+      "description": "Security root-level tests (staging, validation, promotion)",
+      "language": "bash"
+    },
+    "scripts-security-enforcement": {
+      "directory": "scripts/security/enforcement",
+      "description": "Security enforcement module tests",
+      "language": "bash"
+    },
+    "scripts-security-lib": {
+      "directory": "scripts/security/lib",
+      "description": "Security library tests",
+      "language": "bash"
+    },
+    "scripts-security-protection": {
+      "directory": "scripts/security/protection",
+      "description": "OS-level protection tests",
+      "language": "bash"
+    },
+    "scripts-security-sentinel": {
+      "directory": "scripts/security/sentinel",
+      "description": "Sentinel system tests",
+      "language": "bash"
+    },
+    "scripts-settings": {
+      "directory": "scripts/settings",
+      "description": "Settings management tests",
+      "language": "bash"
+    },
+    "scripts-git-hooks": {
+      "directory": "scripts/git-hooks",
+      "description": "Git hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-pre-tool-use": {
+      "directory": "claude-hooks/pre-tool-use",
+      "description": "Claude Code PreToolUse hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-post-tool-use": {
+      "directory": "claude-hooks/post-tool-use",
+      "description": "Claude Code PostToolUse hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-session-start": {
+      "directory": "claude-hooks/session-start",
+      "description": "Claude Code SessionStart hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-session-end": {
+      "directory": "claude-hooks/session-end",
+      "description": "Claude Code SessionEnd hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-stop": {
+      "directory": "claude-hooks/stop",
+      "description": "Claude Code Stop hook tests",
+      "language": "bash"
+    },
+    "claude-hooks-user-prompt-submit": {
+      "directory": "claude-hooks/user-prompt-submit",
+      "description": "Claude Code UserPromptSubmit hook tests",
+      "language": "bash"
     }
   },
 
   "pre_commit": {
-    "default_mode": "standard",
+    "default_mode": "essential",
     "env_override": "TEST_MODE",
-    "show_mode_on_start": true
+    "show_mode_on_start": true,
+    "consistency_check": {
+      "enabled": true,
+      "script": "consistency/test-settings-sync.sh",
+      "fail_fast": true
+    }
   },
 
   "cli": {
@@ -132,12 +280,30 @@
     "enabled": true,
     "validation_mode": "warn",
     "pre_commit_mode": "new_only",
-    "thresholds": {
-      "line": 90,
-      "branch": 85,
-      "function": 90,
-      "fail_under": 85
+
+    "python": {
+      "enabled": true,
+      "enforcement": "line_coverage",
+      "thresholds": {
+        "line": 90,
+        "branch": 85,
+        "function": 90,
+        "fail_under": 85
+      },
+      "notes": "Python coverage is accurate and enforceable via coverage.py"
     },
+
+    "shell": {
+      "enabled": true,
+      "enforcement": "tests_pass",
+      "kcov_tracking": "informational",
+      "notes": "kcov cannot track sourced files accurately. Enforce test pass/fail only.",
+      "thresholds": {
+        "fail_under": 0,
+        "warn_under": 50
+      }
+    },
+
     "exceptions": {
       "no_test_required": [
         {
@@ -147,9 +313,39 @@
       ],
       "integration_tested": [
         {
-          "pattern": ".codeflow/scripts/security/enforcement/checks/*",
-          "tested_by": ".codeflow/testing/hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
-          "reason": "Security modules tested via hook tests (Phase 3)"
+          "pattern": ".codeflow/scripts/security/enforcement/*",
+          "tested_by": "scripts/security/enforcement/test-cf-*.sh",
+          "reason": "Security enforcement modules have dedicated tests (Phase 3)"
+        },
+        {
+          "pattern": ".codeflow/scripts/security/lib/*",
+          "tested_by": "scripts/security/lib/test-*.sh",
+          "reason": "Security library has dedicated tests (Phase 3)"
+        },
+        {
+          "pattern": ".codeflow/scripts/security/protection/*",
+          "tested_by": "scripts/security/protection/test-cf-*.sh",
+          "reason": "Protection scripts have dedicated tests (Phase 3)"
+        },
+        {
+          "pattern": ".claude/hooks/codeflow/**/*.sh",
+          "tested_by": "claude-hooks/**/test-cf-*.sh",
+          "reason": "Claude hooks have dedicated test files (Phase 3)"
+        },
+        {
+          "pattern": ".codeflow/scripts/coordination/cf-crdt-*.py",
+          "tested_by": "scripts/coordination/test_crdt_*.py",
+          "reason": "CRDT scripts tested via integration tests (Phase 2)"
+        },
+        {
+          "pattern": ".codeflow/scripts/coordination/cf-claim-*.py",
+          "tested_by": "scripts/coordination/test_claim_operations.py",
+          "reason": "Claim scripts tested via integration test (Phase 2)"
+        },
+        {
+          "pattern": ".codeflow/scripts/memory/cf-*.py",
+          "tested_by": "scripts/memory/test_memory_*.py",
+          "reason": "Memory scripts tested via integration tests (Phase 2)"
         }
       ]
     }

@@ -1,0 +1,10 @@
+# Extended Protected Paths
+# Location: .codeflow/config/enforcement/protection/extended.list
+#
+# These paths are protected in addition to the core paths defined in policy.json.
+# One path pattern per line. Comments start with #.
+# Supports glob patterns (*, **).
+
+# Example entries (uncomment and modify as needed):
+# project/sensitive/**
+# .secrets/**

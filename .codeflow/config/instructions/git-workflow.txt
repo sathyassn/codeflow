@@ -1,0 +1,3 @@
+🔒 Git operations require skill invocation. Protected branch? Skill('git-workflow', args='create-feature-branch name=...').
+Commit? Skill('memory-management', args='complete-work ...') THEN Skill('git-workflow', args='create-commit').
+Network (push/PR/pull)? Skill('security-management', args='sandbox-check') THEN Skill('git-workflow', args='...'). L1 enforced.

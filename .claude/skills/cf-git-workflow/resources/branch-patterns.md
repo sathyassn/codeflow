@@ -25,7 +25,7 @@
 - `release`, `experiment`, and `wip` are branch-only (not valid commit types)
 - All others are valid for both branches and commits
 
-**See:** `scripts/security/enforcement/enforcement-policy.json` for authoritative list (git_format.branch_types)
+**See:** `.codeflow/config/enforcement/enforcement-policy.json` for authoritative list (git_format.branch_types)
 
 ## Protected Patterns
 

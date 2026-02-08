@@ -1,0 +1,108 @@
+name: Prevent Force Push
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  check-force-push:
+    name: Detect Force Push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to check ancestry
+
+      - name: Check for force push
+        run: |
+          #!/bin/bash
+          set -e
+
+          # Colors for output
+          RED='\033[0;31m'
+          GREEN='\033[0;32m'
+          YELLOW='\033[1;33m'
+          BLUE='\033[0;34m'
+          NC='\033[0m' # No Color
+
+          # Get push information from GitHub event
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          BRANCH="${{ github.ref_name }}"
+
+          echo -e "${BLUE}=======================================================${NC}"
+          echo -e "${BLUE}  Force Push Protection Check${NC}"
+          echo -e "${BLUE}=======================================================${NC}"
+          echo ""
+          echo "Branch: $BRANCH"
+          echo "Before: $BEFORE"
+          echo "After:  $AFTER"
+          echo ""
+
+          # Check if this is initial push to branch
+          if [ "$BEFORE" == "0000000000000000000000000000000000000000" ]; then
+            echo -e "${GREEN}Initial push to branch - allowed${NC}"
+            echo ""
+            exit 0
+          fi
+
+          # Check if AFTER is ancestor of BEFORE (fast-forward)
+          # Fast-forward: BEFORE is ancestor of AFTER
+          if git merge-base --is-ancestor "$BEFORE" "$AFTER"; then
+            echo -e "${GREEN}Fast-forward push - allowed${NC}"
+            echo ""
+            echo "The commit $BEFORE is an ancestor of $AFTER"
+            echo "This is a normal (non-force) push."
+            echo ""
+            exit 0
+          else
+            echo -e "${RED}=======================================================${NC}"
+            echo -e "${RED}  FORCE PUSH DETECTED${NC}"
+            echo -e "${RED}=======================================================${NC}"
+            echo ""
+            echo -e "${RED}The commit $BEFORE is NOT an ancestor of $AFTER${NC}"
+            echo "This indicates a non-fast-forward (force) push."
+            echo ""
+            echo -e "${YELLOW}Why this is blocked:${NC}"
+            echo "  - Rewrites public history"
+            echo "  - Breaks other developers' local branches"
+            echo "  - Causes data loss"
+            echo "  - Violates PR-only workflow"
+            echo ""
+            echo -e "${YELLOW}What happened:${NC}"
+            echo "  Someone force pushed to '$BRANCH' branch."
+            echo "  This overwrote commits that other users may have pulled."
+            echo ""
+            echo -e "${YELLOW}How to fix:${NC}"
+            echo "  1. Contact repository maintainer immediately"
+            echo "  2. Restore previous state if possible:"
+            echo "     git push origin $BEFORE:refs/heads/$BRANCH"
+            echo "  3. Use PR workflow for all changes to '$BRANCH'"
+            echo ""
+            echo -e "${YELLOW}For future changes:${NC}"
+            echo "  1. Create feature branch: git checkout -b feat/your-feature"
+            echo "  2. Push feature branch: git push origin feat/your-feature"
+            echo "  3. Create pull request on GitHub"
+            echo "  4. Merge via PR after review"
+            echo ""
+            exit 1
+          fi
+
+      - name: Validation passed
+        if: success()
+        run: |
+          echo "Push validation passed - no force push detected"
+
+      - name: Validation failed
+        if: failure()
+        run: |
+          echo "Force push detected - workflow failed"
+          echo ""
+          echo "This failure indicates a force push occurred to a protected branch."
+          echo "Contact the repository maintainer for assistance."
+          echo ""
+          exit 1

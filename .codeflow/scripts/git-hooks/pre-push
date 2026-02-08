@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Purpose:   Git pre-push hook for CodeFlow
+# Usage:     Symlink or copy to .git/hooks/pre-push
+# Platform:  macOS/Linux
+#
+# This hook:
+#   - Prevents force pushes to protected branches
+#   - Validates branch naming before push
+#   - Runs final checks before pushing
+#
+# Exit codes:
+#   - 0: Push allowed
+#   - 1: Push blocked
+
+set -euo pipefail
+
+# =============================================================================
+# SETUP
+# =============================================================================
+
+# shellcheck disable=SC2034  # REPO_ROOT reserved for future use
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# Remote and URL are passed as arguments by git
+# shellcheck disable=SC2034  # Standard git hook arguments
+REMOTE="$1"
+# shellcheck disable=SC2034  # Standard git hook arguments
+URL="$2"
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Protected branches
+PROTECTED_BRANCHES=(
+    "main"
+    "master"
+    "production"
+)
+
+# Valid branch prefixes
+VALID_PREFIXES=(
+    "feat/"
+    "fix/"
+    "docs/"
+    "refactor/"
+    "test/"
+    "chore/"
+    "plan/"
+    "experiment/"
+    "release/"
+    "hotfix/"
+)
+
+# =============================================================================
+# FORCE PUSH DETECTION
+# =============================================================================
+
+# Read stdin for push information
+# shellcheck disable=SC2034  # local_ref used implicitly by git protocol
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Skip if deleting branch
+    if [[ "$local_sha" == "0000000000000000000000000000000000000000" ]]; then
+        continue
+    fi
+
+    # Extract branch name from ref
+    BRANCH="${remote_ref#refs/heads/}"
+
+    # Check if pushing to protected branch
+    for protected in "${PROTECTED_BRANCHES[@]}"; do
+        if [[ "$BRANCH" == "$protected" ]]; then
+            # Check if this is a force push by looking at command line
+            # This is a heuristic - force pushes modify history
+            if [[ "$remote_sha" != "0000000000000000000000000000000000000000" ]]; then
+                # Check if local_sha is descendant of remote_sha
+                if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+                    echo -e "${RED}ERROR: Force push to protected branch '$BRANCH' detected!${NC}"
+                    echo ""
+                    echo "Force pushing to $BRANCH is not allowed."
+                    echo "This would rewrite history on a protected branch."
+                    echo ""
+                    echo "If you need to update this branch, create a PR instead."
+                    exit 1
+                fi
+            fi
+
+            echo -e "${YELLOW}Warning: Pushing directly to protected branch '$BRANCH'.${NC}"
+            echo "Consider using a PR for better code review."
+        fi
+    done
+done
+
+# =============================================================================
+# BRANCH NAME VALIDATION
+# =============================================================================
+
+CURRENT_BRANCH=$(git branch --show-current)
+
+# Skip validation for main/master
+if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
+    echo -e "${GREEN}Pre-push checks passed!${NC}"
+    exit 0
+fi
+
+# Validate branch name against prefixes
+VALID_NAME=0
+for prefix in "${VALID_PREFIXES[@]}"; do
+    if [[ "$CURRENT_BRANCH" == "$prefix"* ]]; then
+        VALID_NAME=1
+        break
+    fi
+done
+
+if [[ $VALID_NAME -eq 0 ]]; then
+    echo -e "${YELLOW}Warning: Branch name '$CURRENT_BRANCH' doesn't follow naming convention.${NC}"
+    echo ""
+    echo "Recommended prefixes:"
+    printf '  - %s\n' "${VALID_PREFIXES[@]}"
+    echo ""
+    # Don't block, just warn
+fi
+
+# =============================================================================
+# SUCCESS
+# =============================================================================
+
+echo -e "${GREEN}Pre-push checks passed!${NC}"
+exit 0

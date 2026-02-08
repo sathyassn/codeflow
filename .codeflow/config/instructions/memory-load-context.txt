@@ -1,0 +1,1 @@
+🔒 MUST Skill('memory-management', args='load-work-context domain=...') before work. ⛔ FORBIDDEN: Raw grep on memory files.

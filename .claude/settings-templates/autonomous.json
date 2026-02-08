@@ -1,0 +1,498 @@
+{
+  "_template": "autonomous",
+  "_version": "1.1.0",
+  "_description": "Local autonomy with network oversight - auto-approve local ops, ask for network git.",
+  "_use_case": "Experienced developers, routine work, trusted local context",
+  "_path_syntax": {
+    "note": "Claude Code uses different path prefixes for pattern matching",
+    "/path": "Relative to settings file location (project root) - RECOMMENDED",
+    "./path": "Relative to current working directory - backward compatibility",
+    "//path": "Absolute filesystem path",
+    "~/path": "Relative to home directory",
+    "best_practice": "Use /path (settings-relative) for project files. Do NOT duplicate with ./path.",
+    "warning": "JSON does NOT support comments. Do NOT use strings like '// comment' in allow/deny arrays - they are treated as permission patterns, not comments",
+    "sync_reminder": "When updating, also sync: settings.json, settings.local.json, other templates"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "input=$(cat); model=$(echo \"$input\" | jq -r '.model.display_name'); model_id=$(echo \"$input\" | jq -r '.model.id'); ver=$(echo \"$input\" | jq -r '.version'); style=$(echo \"$input\" | jq -r '.output_style.name // \"default\"'); cwd=$(echo \"$input\" | jq -r '.workspace.current_dir'); branch=$(git -C \"$cwd\" branch --show-current 2>/dev/null); inp=$(echo \"$input\" | jq -r '.context_window.current_usage.input_tokens // 0'); cr=$(echo \"$input\" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0'); cc=$(echo \"$input\" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0'); cs=$(echo \"$input\" | jq -r '.context_window.context_window_size // 200000'); out=$(echo \"$input\" | jq -r '.context_window.current_usage.output_tokens // 0'); tot=$((inp + cr + cc + out)); pct=$((tot * 100 / cs)); printf \"\\033[2;36m%s\\033[0m \\033[2;90m(%s)\\033[0m \\033[2;90m|\\033[0m \\033[2;36mv\\033[0m\\033[2;37m%s\\033[0m \\033[2;90m|\\033[0m \\033[2;36m%s\\033[0m \\033[2;90m|\\033[0m \\033[2;34m%s\\033[0m\" \"$model\" \"$model_id\" \"$ver\" \"$style\" \"$(basename \"$cwd\")\"; [ -n \"$branch\" ] && printf \" \\033[2;90m(\\033[0m\\033[2;35m%s\\033[0m\\033[2;90m)\\033[0m\" \"$branch\"; if [ $pct -lt 50 ]; then col=32; elif [ $pct -lt 80 ]; then col=33; else col=31; fi; printf \" \\033[2;90m|\\033[0m \\033[2;%dmctx:%dk/%dk (%d%%)\\033[0m\\n\" \"$col\" \"$((tot/1000))\" \"$((cs/1000))\" \"$pct\""
+  },
+  "_web_fetch_config": {
+    "_note": "WebFetch hook reads this config. Local settings override project settings.",
+    "approvalMode": "autonomous",
+    "untrustedAction": "ask"
+  },
+  "_verify_work_config": {
+    "_note": "Stop hook reads this config for verify-work enforcement.",
+    "maxRetries": 1
+  },
+  "_read_delegation_config": {
+    "_note": "Read delegation hook configuration. Local settings override project settings.",
+    "enabled": true,
+    "thresholdRules": [
+      {
+        "pattern": "**/*",
+        "maxLines": 50
+      }
+    ],
+    "alwaysBlockEnabled": true,
+    "alwaysBlockPatterns": [
+      ".claude/memory/**",
+      "docs/**"
+    ],
+    "allowedPaths": [
+      ".claude/CLAUDE.md",
+      "PROJECT.md",
+      ".claude/settings.json",
+      ".claude/settings.local.json"
+    ],
+    "delegationTarget": "cf-general-purpose"
+  },
+  "_plugins_note": {
+    "_note": "Plugin config. IDENTICAL across all templates (like hooks).",
+    "behavior": "OVERRIDE - settings.local.json enabledPlugins REPLACES settings.json",
+    "warning": "If customizing plugins locally, copy ALL project plugins first",
+    "lsp_requirement": "LSP plugins require: export ENABLE_LSP_TOOL=1 in shell profile"
+  },
+  "enabledPlugins": {
+    "pyright-lsp@claude-plugins-official": true
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(gh pr create:*)"
+    ],
+    "allow": [
+      "Read(/**)",
+      "Glob(/**)",
+      "Grep(/**)",
+
+      "Edit(/**)",
+      "Edit(//tmp/claude/**)",
+      "Write(/**)",
+      "Write(//tmp/claude/**)",
+
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git merge:*)",
+      "Bash(git mv:*)",
+      "Bash(git rebase:*)",
+      "Bash(git show:*)",
+      "Bash(git stash:*)",
+      "Bash(git status:*)",
+      "Bash(git switch:*)",
+      "Bash(git tag:*)",
+
+      "Bash(ls:*)",
+      "Bash(pwd:*)",
+      "Bash(which:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(file:*)",
+      "Bash(echo:*)",
+
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(pip:*)",
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "Bash(./scripts:*)",
+      "Bash(./.codeflow/scripts:*)",
+
+      "Skill",
+      "SlashCommand",
+      "Task",
+      "TodoRead",
+      "TodoWrite",
+      "WebSearch",
+      "NotebookEdit",
+      "mcp__ide__getDiagnostics",
+      "mcp__ide__executeCode"
+    ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(su:*)",
+      "Bash(doas:*)",
+      "Bash(pkexec:*)",
+
+      "Bash(bash -c:*)",
+      "Bash(sh -c:*)",
+      "Bash(/bin/bash -c:*)",
+      "Bash(/bin/sh -c:*)",
+      "Bash(/usr/bin/bash -c:*)",
+      "Bash(/usr/bin/sh -c:*)",
+      "Bash(eval :*)",
+      "Bash(eval$:*)",
+      "Bash(source:*)",
+      "Bash(.:*)",
+
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf /*:*)",
+      "Bash(rm -rf ~/*:*)",
+      "Bash(chmod -R 777 /:*)",
+      "Bash(chmod -R 777 ~:*)",
+      "Bash(chmod 777 /:*)",
+      "Bash(mkfs:*)",
+      "Bash(dd if=/dev/zero:*)",
+
+      "Bash(nc:*)",
+      "Bash(ncat:*)",
+      "Bash(netcat:*)",
+      "Bash(telnet:*)",
+
+      "Bash(git config core.hooksPath:*)",
+      "Bash(git config --global core.hooksPath:*)",
+      "Bash(git config --local core.hooksPath:*)",
+      "Bash(git config --unset core.hooksPath:*)",
+
+      "Read(/**/.env)",
+      "Read(/**/.env.*)",
+      "Read(/**/*.key)",
+      "Read(/**/*.pem)",
+      "Read(/**/*.p12)",
+      "Read(/**/*.pfx)",
+      "Read(/**/*credentials*)",
+      "Read(/**/*secret*)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.password-store/**)",
+      "Read(~/.config/gh/*)",
+
+      "Bash(rm /.claude/settings.json:*)",
+      "Bash(rm -f /.claude/settings.json:*)",
+      "Bash(rm -r /.claude/settings.json:*)",
+      "Bash(rm -rf /.claude/settings.json:*)",
+      "Bash(rm /.claude/settings.local.json:*)",
+      "Bash(rm -f /.claude/settings.local.json:*)",
+      "Bash(rm -r /.claude/settings.local.json:*)",
+      "Bash(rm -rf /.claude/settings.local.json:*)",
+      "Bash(rm -rf /.claude:*)",
+      "Bash(rm -r /.claude:*)",
+      "Bash(rm /.codeflow/scripts:*)",
+      "Bash(rm -r /.codeflow/scripts:*)",
+      "Bash(rm -rf /.codeflow/scripts:*)",
+      "Bash(rm -f /.codeflow/scripts:*)",
+      "Bash(rm /.claude/hooks:*)",
+      "Bash(rm -r /.claude/hooks:*)",
+      "Bash(rm -rf /.claude/hooks:*)",
+      "Bash(rm -f /.claude/hooks:*)",
+      "Bash(rm /.github/workflows:*)",
+      "Bash(rm -r /.github/workflows:*)",
+      "Bash(rm -rf /.github/workflows:*)",
+      "Bash(rm -f /.github/workflows:*)",
+      "Bash(rm -rf /.github:*)",
+      "Bash(rm -r /.github:*)",
+      "Bash(rm /.codeflow/config:*)",
+      "Bash(rm -r /.codeflow/config:*)",
+      "Bash(rm -rf /.codeflow/config:*)",
+      "Bash(rm -f /.codeflow/config:*)",
+      "Bash(rm /.codeflow/scripts/security:*)",
+      "Bash(rm -r /.codeflow/scripts/security:*)",
+      "Bash(rm -rf /.codeflow/scripts/security:*)",
+      "Bash(rm -f /.codeflow/scripts/security:*)",
+
+      "Bash(mv /.claude/settings.json:*)",
+      "Bash(mv /.claude/settings.local.json:*)",
+      "Bash(mv /.claude/hooks:*)",
+      "Bash(mv /.codeflow/scripts:*)",
+      "Bash(mv /.github/workflows:*)",
+      "Bash(mv /.github:*)",
+      "Bash(mv /.codeflow/config:*)",
+      "Bash(mv /.codeflow/scripts/security:*)",
+
+      "Bash(git rm /.claude/settings.json:*)",
+      "Bash(git rm /.claude/settings.local.json:*)",
+      "Bash(git rm /.codeflow/scripts:*)",
+      "Bash(git rm /.claude/hooks:*)",
+      "Bash(git rm /.github/workflows:*)",
+      "Bash(git rm /.codeflow/config:*)",
+      "Bash(git rm /.codeflow/scripts/security:*)",
+      "Bash(git rm -r /.codeflow/scripts:*)",
+      "Bash(git rm -r /.claude/hooks:*)",
+      "Bash(git rm -r /.github/workflows:*)",
+      "Bash(git rm -r /.codeflow/config:*)",
+      "Bash(git rm -r /.codeflow/scripts/security:*)",
+      "Bash(git rm -rf:*)",
+      "Bash(git rm --cached /.claude/settings.json:*)",
+      "Bash(git rm --cached /.claude/settings.local.json:*)",
+
+      "Bash(unlink /.claude/settings.json:*)",
+      "Bash(unlink /.claude/settings.local.json:*)",
+      "Bash(rmdir /.codeflow/scripts:*)",
+      "Bash(rmdir /.claude/hooks:*)",
+      "Bash(rmdir /.github/workflows:*)",
+      "Bash(rmdir /.github:*)",
+      "Bash(rmdir /.codeflow/config:*)",
+      "Bash(rmdir /.codeflow/scripts/security:*)",
+
+      "Bash(truncate /.claude/settings.json:*)",
+      "Bash(truncate /.claude/settings.local.json:*)",
+      "Bash(truncate /.codeflow/scripts:*)",
+      "Bash(truncate /.claude/hooks:*)",
+      "Bash(truncate /.github/workflows:*)",
+      "Bash(truncate /.codeflow/config:*)",
+      "Bash(truncate /.codeflow/scripts/security:*)",
+
+      "Bash(cat /dev/null > /.claude/settings.json:*)",
+      "Bash(echo > /.claude/settings.json:*)",
+      "Bash(> /.claude/settings.json:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat .claude/skills/cf-working-protocol/SKILL.md && echo '\n\nCRITICAL: The above file defines cognitive procedures you MUST apply to EVERY request. These are mandatory behavioral directives, not optional reference material.'",
+            "timeout": 2
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
+            "timeout": 2
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-logging.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-context.sh",
+            "timeout": 2
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-logging.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
+            "timeout": 1
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh",
+            "timeout": 1
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
+            "timeout": 1
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-webfetch.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Grep|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-instructions.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh",
+            "timeout": 1
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-tmp-workflow.sh",
+            "timeout": 1
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/stop/cf-stop-logging.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/session-end/cf-session-end-logging.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

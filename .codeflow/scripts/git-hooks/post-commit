@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Purpose:   Git post-commit hook for CodeFlow
+# Usage:     Symlink or copy to .git/hooks/post-commit
+# Platform:  macOS/Linux
+#
+# This hook:
+#   - Logs commit events
+#   - Updates commit statistics
+#   - Provides commit confirmation
+#
+# Exit codes:
+#   - 0: Always succeeds (logging should not block)
+
+set -euo pipefail
+
+# =============================================================================
+# SETUP
+# =============================================================================
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+LOG_DIR="$REPO_ROOT/.state/logs/git"
+
+# Colors for output
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# =============================================================================
+# COMMIT INFO
+# =============================================================================
+
+COMMIT_HASH=$(git rev-parse HEAD)
+COMMIT_SHORT=$(git rev-parse --short HEAD)
+COMMIT_MSG=$(git log -1 --pretty=%s)
+COMMIT_AUTHOR=$(git log -1 --pretty=%an)
+BRANCH=$(git branch --show-current)
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="$LOG_DIR/commits-$LOG_DATE.jsonl"
+
+if command -v jq &>/dev/null; then
+    LOG_ENTRY=$(jq -nc \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+        --arg hash "$COMMIT_HASH" \
+        --arg short "$COMMIT_SHORT" \
+        --arg message "$COMMIT_MSG" \
+        --arg author "$COMMIT_AUTHOR" \
+        --arg branch "$BRANCH" \
+        '{ts: $ts, event: "commit", hash: $hash, short_hash: $short, message: $message, author: $author, branch: $branch}')
+
+    echo "$LOG_ENTRY" >> "$LOG_FILE" 2>/dev/null || true
+fi
+
+# =============================================================================
+# USER FEEDBACK
+# =============================================================================
+
+echo ""
+echo -e "${GREEN}✓ Commit created: $COMMIT_SHORT${NC}"
+echo "  Branch: $BRANCH"
+echo "  Message: $COMMIT_MSG"
+echo ""
+
+# =============================================================================
+# SUCCESS
+# =============================================================================
+
+exit 0

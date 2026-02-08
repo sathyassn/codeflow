@@ -224,27 +224,59 @@ _CONFIG_COV_FUNCTION=90
 _CONFIG_COV_FAIL_UNDER=90
 _CONFIG_COV_ENABLED="true"
 
+# Language-specific coverage settings
+_CONFIG_PYTHON_COV_ENABLED="true"
+_CONFIG_PYTHON_COV_ENFORCEMENT="line_coverage"
+_CONFIG_PYTHON_COV_FAIL_UNDER=85
+
+_CONFIG_SHELL_COV_ENABLED="true"
+_CONFIG_SHELL_COV_ENFORCEMENT="tests_pass"
+_CONFIG_SHELL_COV_TRACKING="informational"
+
 # Load coverage thresholds from config
 load_coverage_config() {
     if [[ -f "$TEST_CONFIG_FILE" ]] && command -v jq &>/dev/null; then
         local line branch func fail_under enabled
 
-        line=$(jq -r '.coverage_enforcement.thresholds.line // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
+        # Legacy unified thresholds (for backwards compatibility)
+        line=$(jq -r '.coverage_enforcement.thresholds.line // .coverage_enforcement.python.thresholds.line // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$line" && "$line" != "null" ]] && _CONFIG_COV_LINE="$line"
 
-        branch=$(jq -r '.coverage_enforcement.thresholds.branch // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
+        branch=$(jq -r '.coverage_enforcement.thresholds.branch // .coverage_enforcement.python.thresholds.branch // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$branch" && "$branch" != "null" ]] && _CONFIG_COV_BRANCH="$branch"
 
-        func=$(jq -r '.coverage_enforcement.thresholds.function // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
+        func=$(jq -r '.coverage_enforcement.thresholds.function // .coverage_enforcement.python.thresholds.function // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$func" && "$func" != "null" ]] && _CONFIG_COV_FUNCTION="$func"
 
-        fail_under=$(jq -r '.coverage_enforcement.thresholds.fail_under // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
+        fail_under=$(jq -r '.coverage_enforcement.thresholds.fail_under // .coverage_enforcement.python.thresholds.fail_under // 90' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$fail_under" && "$fail_under" != "null" ]] && _CONFIG_COV_FAIL_UNDER="$fail_under"
 
         enabled=$(jq -r '.coverage_enforcement.enabled // true' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$enabled" && "$enabled" != "null" ]] && _CONFIG_COV_ENABLED="$enabled"
 
-        log_debug "Loaded coverage thresholds: line=$_CONFIG_COV_LINE, branch=$_CONFIG_COV_BRANCH, fail_under=$_CONFIG_COV_FAIL_UNDER"
+        # Python-specific settings
+        local py_enabled py_enforcement py_fail
+        py_enabled=$(jq -r '.coverage_enforcement.python.enabled // true' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$py_enabled" && "$py_enabled" != "null" ]] && _CONFIG_PYTHON_COV_ENABLED="$py_enabled"
+
+        py_enforcement=$(jq -r '.coverage_enforcement.python.enforcement // "line_coverage"' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$py_enforcement" && "$py_enforcement" != "null" ]] && _CONFIG_PYTHON_COV_ENFORCEMENT="$py_enforcement"
+
+        py_fail=$(jq -r '.coverage_enforcement.python.thresholds.fail_under // 85' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$py_fail" && "$py_fail" != "null" ]] && _CONFIG_PYTHON_COV_FAIL_UNDER="$py_fail"
+
+        # Shell-specific settings
+        local sh_enabled sh_enforcement sh_tracking
+        sh_enabled=$(jq -r '.coverage_enforcement.shell.enabled // true' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$sh_enabled" && "$sh_enabled" != "null" ]] && _CONFIG_SHELL_COV_ENABLED="$sh_enabled"
+
+        sh_enforcement=$(jq -r '.coverage_enforcement.shell.enforcement // "tests_pass"' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$sh_enforcement" && "$sh_enforcement" != "null" ]] && _CONFIG_SHELL_COV_ENFORCEMENT="$sh_enforcement"
+
+        sh_tracking=$(jq -r '.coverage_enforcement.shell.kcov_tracking // "informational"' "$TEST_CONFIG_FILE" 2>/dev/null)
+        [[ -n "$sh_tracking" && "$sh_tracking" != "null" ]] && _CONFIG_SHELL_COV_TRACKING="$sh_tracking"
+
+        log_debug "Loaded coverage config: python=$_CONFIG_PYTHON_COV_ENFORCEMENT@$_CONFIG_PYTHON_COV_FAIL_UNDER%, shell=$_CONFIG_SHELL_COV_ENFORCEMENT"
     fi
 }
 
@@ -268,17 +300,134 @@ is_coverage_enabled() {
 }
 
 # ============================================================================
+# LANGUAGE-SPECIFIC COVERAGE FUNCTIONS
+# ============================================================================
+
+# Get Python coverage threshold
+# Returns: fail_under threshold for Python
+get_python_coverage_threshold() {
+    echo "$_CONFIG_PYTHON_COV_FAIL_UNDER"
+}
+
+# Get Python coverage enforcement mode
+# Returns: "line_coverage" or "tests_pass"
+get_python_coverage_enforcement() {
+    echo "$_CONFIG_PYTHON_COV_ENFORCEMENT"
+}
+
+# Check if Python coverage is enabled
+is_python_coverage_enabled() {
+    [[ "$_CONFIG_PYTHON_COV_ENABLED" == "true" ]]
+}
+
+# Get shell coverage enforcement mode
+# Returns: "tests_pass" or "line_coverage"
+get_shell_coverage_enforcement() {
+    echo "$_CONFIG_SHELL_COV_ENFORCEMENT"
+}
+
+# Get shell kcov tracking mode
+# Returns: "informational" or "enforced"
+get_shell_kcov_tracking() {
+    echo "$_CONFIG_SHELL_COV_TRACKING"
+}
+
+# Check if shell coverage is enabled
+is_shell_coverage_enabled() {
+    [[ "$_CONFIG_SHELL_COV_ENABLED" == "true" ]]
+}
+
+# Check if coverage is enforced for a specific language
+# Args: $1 = language ("python" or "shell")
+# Returns: 0 if enforced with line coverage, 1 if tests_pass only or disabled
+is_coverage_enforced_for_language() {
+    local lang="$1"
+    case "$lang" in
+        python)
+            is_python_coverage_enabled && [[ "$(get_python_coverage_enforcement)" == "line_coverage" ]]
+            ;;
+        shell|bash)
+            # Shell uses tests_pass by default (kcov limitation)
+            is_shell_coverage_enabled && [[ "$(get_shell_coverage_enforcement)" == "line_coverage" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
 # CATEGORY LISTING
 # ============================================================================
 
 list_categories() {
-    # These match the categories in test-config.json
-    echo "scripts-db"
-    echo "scripts-memory"
-    echo "scripts-coordination"
-    echo "scripts-codeflow-py-lib"
-    echo "scripts-shell-lib"
-    echo "scripts-state"
+    # Read categories from test-config.json
+    if [[ -f "$TEST_CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        jq -r '.categories | keys[]' "$TEST_CONFIG_FILE" 2>/dev/null | sort
+    else
+        # Fallback to hardcoded defaults
+        echo "claude-hooks-post-tool-use"
+        echo "claude-hooks-pre-tool-use"
+        echo "claude-hooks-session-end"
+        echo "claude-hooks-session-start"
+        echo "claude-hooks-stop"
+        echo "claude-hooks-user-prompt-submit"
+        echo "consistency"
+        echo "scripts-codeflow-py-lib"
+        echo "scripts-coordination"
+        echo "scripts-db"
+        echo "scripts-db-lib"
+        echo "scripts-git-hooks"
+        echo "scripts-memory"
+        echo "scripts-security"
+        echo "scripts-security-enforcement"
+        echo "scripts-security-lib"
+        echo "scripts-security-protection"
+        echo "scripts-security-sentinel"
+        echo "scripts-settings"
+        echo "scripts-shell-lib"
+        echo "scripts-state"
+    fi
+}
+
+# Get category directory from config
+get_category_dir() {
+    local category="$1"
+
+    if [[ -f "$TEST_CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        local dir
+        dir=$(jq -r --arg cat "$category" '.categories[$cat].directory // empty' "$TEST_CONFIG_FILE" 2>/dev/null)
+        if [[ -n "$dir" && "$dir" != "null" ]]; then
+            echo "$dir"
+            return 0
+        fi
+    fi
+
+    # Fallback mapping for common categories
+    case "$category" in
+        scripts-db)                    echo "scripts/db" ;;
+        scripts-db-lib)                echo "scripts/db/lib" ;;
+        scripts-memory)                echo "scripts/memory" ;;
+        scripts-coordination)          echo "scripts/coordination" ;;
+        scripts-codeflow-py-lib)       echo "scripts/codeflow_py_lib" ;;
+        scripts-shell-lib)             echo "scripts/shell-lib" ;;
+        scripts-state)                 echo "scripts/state" ;;
+        scripts-security)              echo "scripts/security" ;;
+        scripts-security-enforcement)  echo "scripts/security/enforcement" ;;
+        scripts-security-lib)          echo "scripts/security/lib" ;;
+        scripts-security-protection)   echo "scripts/security/protection" ;;
+        scripts-security-sentinel)     echo "scripts/security/sentinel" ;;
+        scripts-settings)              echo "scripts/settings" ;;
+        scripts-git-hooks)             echo "scripts/git-hooks" ;;
+        consistency)                   echo "consistency" ;;
+        claude-hooks-pre-tool-use)     echo "claude-hooks/pre-tool-use" ;;
+        claude-hooks-post-tool-use)    echo "claude-hooks/post-tool-use" ;;
+        claude-hooks-session-start)    echo "claude-hooks/session-start" ;;
+        claude-hooks-session-end)      echo "claude-hooks/session-end" ;;
+        claude-hooks-stop)             echo "claude-hooks/stop" ;;
+        claude-hooks-user-prompt-submit) echo "claude-hooks/user-prompt-submit" ;;
+        *)                             echo "" ;;
+    esac
 }
 
 # ============================================================================

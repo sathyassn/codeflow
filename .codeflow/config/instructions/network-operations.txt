@@ -1,0 +1,2 @@
+⛔ Network operation requires: Bash({ command: "...", dangerouslyDisableSandbox: true }).
+Reference: Skill('git-workflow', args='create-pull-request') or Skill('security-management', args='sandbox-check').

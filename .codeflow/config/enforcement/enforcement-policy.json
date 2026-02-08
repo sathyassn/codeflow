@@ -1,0 +1,705 @@
+{
+  "version": "1.4.0",
+  "description": "CodeFlow security enforcement configuration",
+
+  "edit_write": {
+    "description": "Configuration for Edit/Write pre-tool-use validation",
+    "blocked_directories": [
+      ".git",
+      "node_modules",
+      "__pycache__",
+      ".venv",
+      "venv",
+      ".tox",
+      ".nox",
+      "dist",
+      "build",
+      ".eggs"
+    ],
+    "allowed_tmp_prefixes": [
+      "/tmp/claude/",
+      "/tmp/"
+    ],
+    "dangerous_extensions": {
+      "binary": ["exe", "dll", "so", "dylib", "bin", "o", "a"],
+      "credential": ["pem", "key", "crt", "p12", "pfx", "keystore", "jks"],
+      "archive": ["zip", "tar", "gz", "rar", "7z"]
+    },
+    "warn_on_dangerous": true,
+    "block_binary_writes": false
+  },
+
+  "enforcement_levels": {
+    "L0_KERNEL": {
+      "description": "Absolute blocks via settings.json deny list",
+      "configurable": false,
+      "examples": ["rm -rf /", "sudo", "chmod 777 /"]
+    },
+    "L1_SENTINEL": {
+      "description": "Skill enforcement via hooks",
+      "configurable": true,
+      "enabled": true,
+      "examples": ["git commit requires cf-git-workflow", "protected edits require cf-security-management"]
+    },
+    "L2_STOP": {
+      "description": "End-of-session verification",
+      "configurable": true,
+      "enabled": true,
+      "examples": ["PCV marker required", "task completion check"]
+    },
+    "L3_ADVISORY": {
+      "description": "Guidance via instructions",
+      "configurable": true,
+      "enabled": true,
+      "examples": ["memory progress reminders", "documentation hints"]
+    }
+  },
+
+  "settings_templates": {
+    "directory": ".claude/settings-templates",
+    "verification": {
+      "hooks_must_match": true,
+      "version_must_match": true,
+      "note": "All templates must have identical hooks section and _version"
+    },
+    "copy_mappings": [
+      {
+        "template": "strict.json",
+        "destination": ".claude/settings.json",
+        "purpose": "Project settings (committed to git)"
+      },
+      {
+        "template": "autonomous.json",
+        "destination": ".claude/settings.local.json",
+        "purpose": "Local settings (gitignored)"
+      }
+    ],
+    "note": "Used by post-tool-use-settings-templates.sh for active verification"
+  },
+
+  "thresholds": {
+    "post_tool_use": {
+      "memory_progress": {
+        "threshold": 3,
+        "tracked_tools": ["Edit", "Write"],
+        "exclude_patterns": [".claude/memory/"],
+        "note": "Triggers memory progress reminder after N substantive tool operations"
+      }
+    }
+  },
+
+  "sentinel": {
+    "directory": "/tmp/claude/managed/sentinels",
+    "default_ttl": 600
+  },
+
+  "skills": {
+    "git-workflow": {
+      "operations": {
+        "create-commit": {
+          "tool": "Bash",
+          "pattern": "^git commit",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "cross_skill_prerequisite": {
+            "skill": "memory-management",
+            "operation": "complete-work",
+            "reason": "Memory sync required before commit - ensures session log captures work"
+          },
+          "note": "Extended TTL (10min) for review, memory sync, pre-commit tests."
+        },
+        "create-pull-request": {
+          "tool": "Bash",
+          "pattern": "^git push|^gh pr create",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Extended TTL (10min) for commit review, diff analysis, push, and PR creation"
+        },
+        "sync-remote": {
+          "tool": "Bash",
+          "pattern": "^git\\s+(pull|fetch|clone)",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Guards git pull/fetch/clone - requires skill invocation before network ops"
+        },
+        "create-feature-branch": {
+          "tool": "Bash",
+          "pattern": "^git checkout -b|^git switch -c",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "cross_skill_prerequisite": {
+            "skill": "memory-management",
+            "operation": "begin-work",
+            "reason": "Work tracking required before branch creation"
+          },
+          "note": "Requires memory-management begin-work to ensure work tracking"
+        },
+        "create-worktree": {
+          "tool": "Bash",
+          "pattern": "^git worktree add",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "post_script": ".codeflow/scripts/worktree/setup.sh"
+        },
+        "update-worktree-status": {
+          "tool": "Bash",
+          "pattern": ".codeflow/scripts/worktree/status\\.sh",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "cleanup-worktrees": {
+          "tool": "Bash",
+          "pattern": "^git worktree remove|^git worktree prune",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "block-hard-reset": {
+          "tool": "Bash",
+          "pattern": "^git reset --hard|^git reset [^-]*--hard",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "block": true,
+          "note": "Block hard reset - destructive operation. Agent should ask user first."
+        },
+        "block-protected-branch-delete": {
+          "tool": "Bash",
+          "pattern": "^git branch -[dD].*\\b(main|master)\\b",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "block": true,
+          "note": "Block deletion of main/master branches."
+        }
+      }
+    },
+    "security-management": {
+      "operations": {
+        "sandbox-check": {
+          "tool": "Bash",
+          "pattern": "dangerouslyDisableSandbox",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "check_json_param": true,
+          "note": "Extended TTL to account for context fork overhead"
+        }
+      }
+    },
+    "documentation-standards": {
+      "exclude_patterns": ["^\\.claude/memory/"],
+      "operations": {
+        "apply-standard": {
+          "tool": "Write",
+          "pattern": "\\.md$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "new_file_only": true,
+          "note": "L1 sentinel for creating markdown files"
+        },
+        "lint-file": {
+          "tool": "Edit",
+          "pattern": "\\.md$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "L1 sentinel for editing markdown files"
+        }
+      }
+    },
+    "script-standards": {
+      "operations": {
+        "apply-shell-standards": {
+          "tool": "Write",
+          "pattern": "\\.sh$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "new_file_only": true
+        },
+        "apply-python-standards": {
+          "tool": "Write",
+          "pattern": "\\.py$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "new_file_only": true
+        },
+        "lint-shell": {
+          "tool": "Edit",
+          "pattern": "\\.sh$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "L1 sentinel for editing shell scripts"
+        },
+        "lint-python": {
+          "tool": "Edit",
+          "pattern": "\\.py$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "L1 sentinel for editing Python scripts"
+        }
+      }
+    },
+    "model-orchestrator": {
+      "operations": {
+        "spawn-session": {
+          "tool": "Bash",
+          "pattern": "^tmux new-session|^tmux new ",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "terminate-session": {
+          "tool": "Bash",
+          "pattern": "^tmux kill-session|^tmux kill-server",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "execute-with-model": {
+          "tool": "Bash",
+          "pattern": "^(codex|gemini)\\s",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Validates scope conflict before model execution"
+        },
+        "execute-multi-model": {
+          "tool": "Bash",
+          "pattern": "(codex|gemini).*(codex|gemini)",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "send-task": {
+          "tool": "Bash",
+          "pattern": "^tmux send-keys",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "orchestrate-parallel": {
+          "tool": "Bash",
+          "pattern": "tmux.*&&.*tmux|tmux.*;.*tmux",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        }
+      }
+    },
+    "code-exploration": {
+      "operations": {
+        "find-symbol-definition": {
+          "tool": "Grep",
+          "pattern": "\\.py$",
+          "content_pattern": "^(def |class |import |from .* import)",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "find-symbol-references": {
+          "tool": "Grep",
+          "pattern": "\\.py$",
+          "content_pattern": "[A-Z][a-z]+[A-Z]|[a-z_]+\\(",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        }
+      }
+    },
+    "memory-management": {
+      "operations": {
+        "search-related-work": {
+          "tool": "Grep",
+          "pattern": "\\.claude/memory/(general-work|planning|development|documentation)",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Search-related-work - triggers on domain directories only"
+        },
+        "begin-work": {
+          "tool": "Write",
+          "pattern": "\\.claude/memory/[^/]+/work-agreement(-.*)?\\.md$",
+          "enforcement": "PreToolUse",
+          "prerequisite": "search-related-work",
+          "new_file_only": true,
+          "ttl": 600,
+          "note": "Requires search-related-work sentinel before creating work-agreement"
+        },
+        "memory-folder-create": {
+          "tool": "Bash",
+          "pattern": "mkdir.*\\.claude/memory/[^/]+/[^/]+",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "memory-folder-delete": {
+          "tool": "Bash",
+          "pattern": "rm.*-r.*\\.claude/memory/[^/]+/[^/]+[^/]*$",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "work-agreement-direct-edit": {
+          "tool": "Edit",
+          "pattern": "\\.claude/memory/[^/]+/work-agreement(-.*)?\\.md$",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Direct edit blocked - use record-work-progress"
+        },
+        "complete-work": {
+          "tool": "Bash",
+          "pattern": "(rm|mv).*work-agreement(-.*)?\\.md",
+          "enforcement": "PreToolUse",
+          "ttl": 600
+        },
+        "manage-memory-lifecycle": {
+          "tool": "Bash",
+          "pattern": "rm -r.*\\.claude/memory/",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Extended TTL for context fork overhead"
+        }
+      }
+    }
+  },
+
+  "scope_enforcement": {
+    "enabled": true,
+    "note": "File scope checking for active work registry - prevents parallel work conflicts",
+    "edit_write": {
+      "validation_script": ".codeflow/scripts/state/scope-check.sh",
+      "args": ["$TOOL_NAME", "$FILE_PATH"],
+      "on_violation": "block",
+      "outputs": {
+        "ALLOW": "Proceed with operation",
+        "ALLOW:expanded": "Scope was expanded, proceed with warning",
+        "BLOCK:*": "Block operation, show reason after colon"
+      }
+    }
+  },
+
+  "stop_hooks": {
+    "working-protocol": {
+      "verify-work": {
+        "output_pattern": "complete|done|finished",
+        "required_marker": "🔍",
+        "required_text": "verify-work",
+        "tier_patterns": {
+          "tier_1": "TIER 1",
+          "tier_2": "TIER 2",
+          "tier_3": "TIER 3"
+        },
+        "tier_2_required_sections": ["ARTIFACTS:", "VERIFICATION:"],
+        "tier_3_required_sections": ["ARTIFACTS:", "VERIFICATION:", "ADVERSARIAL:"],
+        "hook_types": ["Stop", "SubagentStop"],
+        "fallback": {
+          "max_retries_default": 2,
+          "config_key": "_verify_work_config.maxRetries"
+        }
+      }
+    },
+    "model-orchestrator": {
+      "review-output": {
+        "output_pattern": "codex.*output|gemini.*result",
+        "required_marker": "reviewed output",
+        "hook_types": ["Stop", "SubagentStop"]
+      }
+    }
+  },
+
+  "protected_paths": {
+    "core": [
+      {
+        "id": "settings",
+        "pattern": ".claude/settings.json",
+        "reason": "Settings require template workflow",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "settings_local",
+        "pattern": ".claude/settings.local.json",
+        "reason": "Settings require template workflow",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "claude_hooks",
+        "pattern": ".claude/hooks",
+        "reason": "Hook modifications are protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "codeflow_scripts_security",
+        "pattern": ".codeflow/scripts/security",
+        "reason": "Security scripts are protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "codeflow_config",
+        "pattern": ".codeflow/config",
+        "reason": "Configuration files are protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "github_workflows",
+        "pattern": ".github/workflows",
+        "reason": "CI workflows are protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "github_dir",
+        "pattern": ".github",
+        "reason": "GitHub config is protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Bash"],
+        "note": "Bash-only: blocks dangerous ops, Edit/Write checked via .github/workflows"
+      },
+      {
+        "id": "git_hooks",
+        "pattern": ".git/hooks",
+        "reason": "Git hooks are protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Bash"],
+        "note": "Bash-only: .git/ is not editable via Edit/Write tools"
+      },
+      {
+        "id": "codeflow_testing",
+        "pattern": ".codeflow/testing/test-config.json",
+        "reason": "Test priorities configuration is protected",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      }
+    ],
+    "extended_list": ".codeflow/config/enforcement/protection/protected-extended.list",
+    "adhoc_list": ".codeflow/config/enforcement/protection/protected-adhoc.list",
+    "managed_tmp": {
+      "allow_prefix": "/tmp/claude/managed/",
+      "protected_folders": [
+        "/tmp/claude/managed",
+        "/tmp/claude/managed/protected-edits",
+        "/tmp/claude/managed/state"
+      ],
+      "state_folder": "/tmp/claude/managed/state",
+      "state_protection": "block_delete_only"
+    }
+  },
+
+  "network_operations": {
+    "_note": "Commands that REQUIRE dangerouslyDisableSandbox: true - hook BLOCKS without it",
+    "git_network": {
+      "patterns": [
+        "^git\\s+(push|pull|fetch|clone)",
+        "^git\\s+remote\\s+update",
+        "^git\\s+ls-remote"
+      ],
+      "block_message": "BLOCKED: Git network operation requires sandbox bypass",
+      "skill_reference": "Skill('cf-git-workflow', args='sync-remote')",
+      "security_reference": "Skill('cf-security-management', args='sandbox-check')"
+    },
+    "github_cli": {
+      "patterns": ["^gh\\s+(pr|issue|release|api|workflow|run|repo|gist)\\s"],
+      "block_message": "BLOCKED: GitHub CLI requires sandbox bypass",
+      "skill_reference": "Skill('cf-git-workflow', args='create-pull-request')",
+      "security_reference": "Skill('cf-security-management', args='sandbox-check')"
+    }
+  },
+
+  "protected_resources": {
+    "critical": [
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".claude/CLAUDE.md"
+    ],
+    "high": [
+      ".claude/hooks/codeflow/**",
+      ".claude/settings-templates/**",
+      ".codeflow/config/**",
+      ".codeflow/scripts/security/**"
+    ],
+    "moderate": [
+      "project/mission.md",
+      "project/tech-stack/**",
+      ".github/workflows/**"
+    ]
+  },
+
+  "protected_branches": ["main", "master", "release/*", "production"],
+
+  "security": {
+    "dangerous_file_commands": ["rm", "unlink", "mv", "shred", "truncate"],
+    "permission_commands": ["chmod", "chown"],
+    "indirect_write_commands": ["cp", "rsync", "scp", "install", "tee", "ln"],
+    "privilege_escalation_commands": ["sudo", "su", "doas", "pkexec", "runuser"],
+    "script_bypass_commands": ["bash -c", "sh -c", "eval", "source"],
+    "hook_bypass_patterns": ["--no-verify", "-n", "SKIP_HOOKS", "GIT_SKIP_HOOKS", "HUSKY=0"]
+  },
+
+  "git_format": {
+    "protected_branches": ["main", "master"],
+    "commit_types": [
+      "feat", "fix", "bugfix", "hotfix", "docs", "refactor", "test",
+      "chore", "style", "perf", "build", "ci", "revert", "merge", "plan", "refine"
+    ],
+    "branch_types": [
+      "feature", "feat", "fix", "bugfix", "hotfix", "release", "docs",
+      "refactor", "test", "chore", "perf", "style", "build", "ci",
+      "revert", "plan", "merge", "experiment", "wip", "refine"
+    ],
+    "ai_attribution_patterns": [
+      "Claude", "Anthropic", "@anthropic.com", "claude.ai", "claude code",
+      "ChatGPT", "OpenAI", "GPT-3", "GPT-4", "GPT-4o", "o1-preview", "o1-mini",
+      "Codex", "@openai.com", "Gemini", "Google AI", "Bard", "@google.com",
+      "Copilot", "GitHub Copilot", "@github.com", "Cursor", "Codeium", "Tabnine",
+      "CodeWhisperer", "Amazon CodeWhisperer", "Sourcegraph Cody", "Replit AI",
+      "Windsurf", "Aider", "Generated with", "Generated by", "AI-generated",
+      "AI generated", "Co-Authored-By: AI", "Co-Authored-By: Claude",
+      "Co-Authored-By: ChatGPT", "Co-Authored-By: Copilot",
+      "🤖", "🔮", "✨ Generated"
+    ],
+    "subject": {
+      "max_length": 50,
+      "require_lowercase_type": true,
+      "forbid_trailing_period": true
+    },
+    "body": {
+      "format": "bullets_only",
+      "max_bullets": 3,
+      "line_max_length": 72
+    },
+    "pr": {
+      "required_sections": ["## Summary", "## Testing"],
+      "require_body_flag": true
+    }
+  },
+
+  "branch_protection": {
+    "enabled": true,
+    "note": "Blocks file-writing Bash operations on protected branches (main, master)",
+    "safe_prefixes": ["/tmp/claude/", "/tmp/"],
+    "blocked_operations": {
+      "redirect": {
+        "description": "File redirects (>, >>)",
+        "examples": ["echo x > file", "cat data >> file"]
+      },
+      "sed_inplace": {
+        "description": "In-place file edits",
+        "examples": ["sed -i '' 's/a/b/' file"]
+      },
+      "touch": {
+        "description": "File creation via touch",
+        "examples": ["touch newfile.txt"]
+      },
+      "tee": {
+        "description": "Piped file writes",
+        "examples": ["echo x | tee file"]
+      }
+    }
+  },
+
+  "stop_verification": {
+    "require_pcv_marker": true,
+    "tier_requirements": {
+      "1": ["verify-work", "TIER"],
+      "2": ["verify-work", "TIER", "ARTIFACTS", "VERIFICATION"],
+      "3": ["verify-work", "TIER", "ARTIFACTS", "VERIFICATION", "ADVERSARIAL"]
+    },
+    "require_task_completion": true,
+    "max_retries": 3,
+    "autorun_llm_model": "haiku",
+    "autorun_llm_timeout_ms": 30000,
+    "autorun_approval_threshold": 0.8,
+    "autorun_retry_on_low_confidence": true,
+    "autorun_escalate_tier_3": true
+  },
+
+  "logging": {
+    "session_start": {
+      "enabled": true,
+      "log_directory": ".state/logs/sessions",
+      "capture_metadata": true,
+      "rotation": {
+        "max_age_days": 30,
+        "max_logs": 100,
+        "max_size_mb": 100
+      }
+    },
+    "post_tool_use": {
+      "enabled": true,
+      "log_directory": ".state/logs/sessions",
+      "max_result_size": 2000,
+      "redact_sensitive": true,
+      "tools_to_log": ["Edit", "Write", "Bash", "Read", "Grep"]
+    },
+    "security": {
+      "enabled": true,
+      "log_directory": ".state/logs/security",
+      "retention_days": 30
+    }
+  },
+
+  "network": {
+    "always_block_domains": {
+      "enabled": true,
+      "note": "Block internal/local network access by default. Developers can add localhost to the appropriate .list file in .codeflow/config/enforcement/trusted-domains/, or set enabled=false here.",
+      "patterns": [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "*.local",
+        "internal.*",
+        "*.internal",
+        "*.corp",
+        "*.corp.*",
+        "*.lan",
+        "*.home",
+        "*.private"
+      ],
+      "private_ip_ranges": [
+        "169.254.*",
+        "10.*",
+        "172.16.*", "172.17.*", "172.18.*", "172.19.*",
+        "172.20.*", "172.21.*", "172.22.*", "172.23.*",
+        "172.24.*", "172.25.*", "172.26.*", "172.27.*",
+        "172.28.*", "172.29.*", "172.30.*", "172.31.*",
+        "192.168.*"
+      ]
+    }
+  },
+
+  "read_delegation": {
+    "enabled": true,
+    "delegation_target": "Explore",
+    "allowed_paths": [
+      ".claude/CLAUDE.md",
+      ".claude/settings.json",
+      "README.md",
+      "package.json",
+      "Cargo.toml",
+      "pyproject.toml",
+      "go.mod"
+    ],
+    "always_block_patterns": [
+      ".claude/memory/**",
+      ".codeflow/state/**",
+      "*.jsonl",
+      "*.db",
+      "*.sqlite",
+      "*.log"
+    ],
+    "threshold_rules": {
+      "md": 500,
+      "txt": 500,
+      "ts": 300,
+      "tsx": 300,
+      "js": 300,
+      "jsx": 300,
+      "py": 300,
+      "sh": 200,
+      "json": 200,
+      "yaml": 200,
+      "yml": 200,
+      "toml": 200,
+      "default": 400
+    }
+  }
+}

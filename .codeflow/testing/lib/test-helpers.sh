@@ -22,13 +22,13 @@ assert_exit_code() {
     local description="${2:-Command exit code check}"
     local actual=$?
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ $actual -eq $expected ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (expected $expected, got $actual)"
         return 1
     fi
@@ -38,13 +38,13 @@ assert_success() {
     local cmd="$1"
     local description="${2:-Command should succeed}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if eval "$cmd" >/dev/null 2>&1; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description"
         return 1
     fi
@@ -54,13 +54,13 @@ assert_fails() {
     local cmd="$1"
     local description="${2:-Command should fail}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if ! eval "$cmd" >/dev/null 2>&1; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description"
         return 1
     fi
@@ -75,13 +75,13 @@ assert_equals() {
     local actual="$2"
     local description="${3:-Values should be equal}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ "$expected" == "$actual" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description"
         echo -e "    Expected: '$expected'"
         echo -e "    Actual:   '$actual'"
@@ -94,13 +94,13 @@ assert_not_equals() {
     local actual="$2"
     local description="${3:-Values should not be equal}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ "$unexpected" != "$actual" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (got '$actual')"
         return 1
     fi
@@ -111,13 +111,13 @@ assert_contains() {
     local needle="$2"
     local description="${3:-String should contain}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ "$haystack" == *"$needle"* ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description ('$needle' not found)"
         return 1
     fi
@@ -128,13 +128,13 @@ assert_not_contains() {
     local needle="$2"
     local description="${3:-String should not contain}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ "$haystack" != *"$needle"* ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description ('$needle' was found)"
         return 1
     fi
@@ -145,13 +145,13 @@ assert_matches() {
     local pattern="$2"
     local description="${3:-String should match pattern}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ "$string" =~ $pattern ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (pattern '$pattern' didn't match)"
         return 1
     fi
@@ -161,13 +161,13 @@ assert_empty() {
     local value="$1"
     local description="${2:-Value should be empty}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ -z "$value" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (got '$value')"
         return 1
     fi
@@ -177,13 +177,13 @@ assert_not_empty() {
     local value="$1"
     local description="${2:-Value should not be empty}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ -n "$value" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (value was empty)"
         return 1
     fi
@@ -197,13 +197,13 @@ assert_file_exists() {
     local file="$1"
     local description="${2:-File should exist}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ -f "$file" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description ($file)"
         return 1
     fi
@@ -213,13 +213,13 @@ assert_file_not_exists() {
     local file="$1"
     local description="${2:-File should not exist}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ ! -f "$file" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description ($file exists)"
         return 1
     fi
@@ -229,13 +229,13 @@ assert_dir_exists() {
     local dir="$1"
     local description="${2:-Directory should exist}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ -d "$dir" ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description ($dir)"
         return 1
     fi
@@ -246,13 +246,13 @@ assert_file_contains() {
     local pattern="$2"
     local description="${3:-File should contain pattern}"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     if [[ -f "$file" ]] && grep -q "$pattern" "$file" 2>/dev/null; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description"
         return 1
     fi
@@ -285,17 +285,17 @@ assert_hook_blocks() {
     local tool_name="$3"
     local tool_input="$4"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     local _output  # Captured for potential debugging
     _output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
     local exit_code=$?
 
     if [[ $exit_code -eq 2 ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description (blocked)"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (expected block, got exit $exit_code)"
         return 1
     fi
@@ -307,17 +307,17 @@ assert_hook_allows() {
     local tool_name="$3"
     local tool_input="$4"
 
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_TOTAL_COUNT++)) || true
     local _output  # Captured for potential debugging
     _output=$(run_hook_test "$hook_path" "$tool_name" "$tool_input")
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
-        ((TEST_PASS_COUNT++))
+        ((TEST_PASS_COUNT++)) || true
         echo -e "  ${GREEN}✓${NC} $description (allowed)"
         return 0
     else
-        ((TEST_FAIL_COUNT++))
+        ((TEST_FAIL_COUNT++)) || true
         echo -e "  ${RED}✗${NC} $description (expected allow, got exit $exit_code)"
         return 1
     fi
@@ -357,23 +357,24 @@ create_test_file() {
 
 test_pass() {
     local description="$1"
-    ((TEST_PASS_COUNT++))
-    ((TEST_TOTAL_COUNT++))
+    # Use || true to avoid set -e exit when incrementing from 0
+    ((TEST_PASS_COUNT++)) || true || true
+    ((TEST_TOTAL_COUNT++)) || true || true
     echo -e "  ${GREEN}✓${NC} $description"
 }
 
 test_fail() {
     local description="$1"
-    ((TEST_FAIL_COUNT++))
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_FAIL_COUNT++)) || true || true
+    ((TEST_TOTAL_COUNT++)) || true || true
     echo -e "  ${RED}✗${NC} $description"
 }
 
 test_skip() {
     local description="$1"
     local reason="${2:-}"
-    ((TEST_SKIP_COUNT++))
-    ((TEST_TOTAL_COUNT++))
+    ((TEST_SKIP_COUNT++)) || true
+    ((TEST_TOTAL_COUNT++)) || true || true
     echo -e "  ${YELLOW}○${NC} $description${reason:+ (}${reason}${reason:+)}"
 }
 

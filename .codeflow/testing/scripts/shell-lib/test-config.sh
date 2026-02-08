@@ -65,7 +65,7 @@ test_get_config_path() {
     test_section "get_config_path"
 
     local path
-    path=$(get_config_path "enforcement-policy.json")
+    path=$(get_config_path "enforcement/enforcement-policy.json")
 
     # Should contain config filename
     if [[ "$path" == *"enforcement-policy.json" ]]; then
@@ -115,8 +115,8 @@ EOF
     local result
 
     # Test reading existing value (use actual config if exists)
-    if [[ -f "$original_root/.codeflow/config/enforcement-policy.json" ]]; then
-        result=$(config_get_json "enforcement-policy.json" ".enforcement_level" "default")
+    if [[ -f "$original_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
+        result=$(config_get_json "enforcement/enforcement-policy.json" ".enforcement_level" "default")
         assert_not_empty "$result" "config_get_json reads existing config"
     else
         test_skip "config_get_json" "No enforcement-policy.json found"
@@ -138,8 +138,8 @@ test_config_has_json() {
     repo_root=$(find_repo_root)
 
     # Test with actual config if exists
-    if [[ -f "$repo_root/.codeflow/config/enforcement-policy.json" ]]; then
-        if config_has_json "enforcement-policy.json" ".enforcement_level"; then
+    if [[ -f "$repo_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
+        if config_has_json "enforcement/enforcement-policy.json" ".enforcement_levels"; then
             test_pass "config_has_json finds existing key"
         else
             test_fail "config_has_json should find existing key"
@@ -149,7 +149,7 @@ test_config_has_json() {
     fi
 
     # Test missing key
-    if config_has_json "enforcement-policy.json" ".nonexistent_key_xyz"; then
+    if config_has_json "enforcement/enforcement-policy.json" ".nonexistent_key_xyz"; then
         test_fail "config_has_json should not find missing key"
     else
         test_pass "config_has_json returns false for missing key"
@@ -240,7 +240,7 @@ test_get_enforcement_policy() {
     local repo_root
     repo_root=$(find_repo_root)
 
-    if [[ -f "$repo_root/.codeflow/config/enforcement-policy.json" ]]; then
+    if [[ -f "$repo_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
         local level
         level=$(get_enforcement_policy "enforcement_level" "unknown")
         assert_not_empty "$level" "get_enforcement_policy returns value"

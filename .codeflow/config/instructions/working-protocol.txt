@@ -1,0 +1,3 @@
+🔒 MUST APPLY working-protocol operations: 🤖 meta-awareness, 🧠 think-and-act (PAC-5), ⚖️ decide, 📝 respond-organized, 📚 research-quality, 🔍 verify-work, 🔀 parallelize-work.
+verify-work: EVERY response (Stop hook BLOCKS). parallelize-work: 2+ independent sub-tasks → spawn agents.
+READ skill for tier/format. ⛔ FORBIDDEN: Memory-based execution, skipping parallelization check.

@@ -1,0 +1,9 @@
+# Ad-hoc Protected Paths
+# Location: .codeflow/config/enforcement/protection/adhoc.list
+#
+# Temporary or session-specific protected paths.
+# These can be added/removed during development as needed.
+# One path pattern per line. Comments start with #.
+
+# Example entries (uncomment and modify as needed):
+# temp-sensitive-file.json

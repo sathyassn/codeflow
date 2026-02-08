@@ -1,0 +1,2 @@
+🔒 BEFORE git commit: MUST Skill('memory-management', args='complete-work domain=... summary="..."').
+L1 enforced: commit blocked without complete-work. Stage memory files after.

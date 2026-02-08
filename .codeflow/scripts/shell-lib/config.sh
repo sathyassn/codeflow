@@ -124,7 +124,7 @@ load_env_file() {
 get_enforcement_policy() {
     local key="$1"
     local default="${2:-}"
-    config_get_json "enforcement-policy.json" ".$key" "$default"
+    config_get_json "enforcement/enforcement-policy.json" ".$key" "$default"
 }
 
 # Get work graph config

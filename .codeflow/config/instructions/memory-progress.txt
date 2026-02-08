@@ -1,0 +1,2 @@
+Decision/milestone/progress this turn? 🔒 MUST Skill('memory-management', args='record-work-progress type=... content="..."').
+Valid types: decision (Tier 2/3), milestone, progress, finding. ⛔ FORBIDDEN: "I'll record it later."

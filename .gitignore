@@ -8,6 +8,7 @@
 .state/logs/
 .state/runtime/
 .state/db/codeflow.db
+.state/backups/
 
 # Node.js
 node_modules/
@@ -61,3 +62,4 @@ build/
 # Test artifacts
 .codeflow/testing/results/
 .codeflow/testing/coverage/
+.codeflow/testing/coverage_reports/

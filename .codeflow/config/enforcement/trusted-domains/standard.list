@@ -1,0 +1,50 @@
+# Trusted Domains - Standard Mode
+# Core software development domains only
+# Version: 1.1.0
+# Last Updated: 2025-12-16
+#
+# Selection criteria:
+# - Official documentation sites
+# - Major code hosting platforms
+# - Essential package registries
+# - Trusted Q&A communities
+#
+# ============================================================
+# BEST PRACTICES FOR ADDING DOMAINS
+# ============================================================
+# 1. Use BASE DOMAINS for subdomain coverage:
+#    ✓ anthropic.com     → allows docs.anthropic.com, api.anthropic.com, etc.
+#    ✗ www.anthropic.com → only allows www, NOT other subdomains
+#
+# 2. Use SPECIFIC SUBDOMAINS for limited access:
+#    ✓ developer.mozilla.org → only MDN, not all of mozilla.org
+#    ✓ docs.python.org       → only docs, not all of python.org
+#
+# 3. NEVER include paths (they don't work):
+#    ✗ aws.amazon.com/blogs  → Invalid! Use: aws.amazon.com
+#
+# 4. See README.md for full documentation
+# ============================================================
+#
+# Format: One domain per line (comments start with #)
+# Note: Base domains auto-match all subdomains (e.g., anthropic.com matches console.anthropic.com)
+
+# Anthropic / Claude (base domains - auto-matches all subdomains)
+# Covers: console, api, docs, support, trust, status, privacy, www, etc.
+anthropic.com
+claude.ai
+claude.com
+
+# Documentation
+developer.mozilla.org
+
+# Code Hosting
+github.com
+raw.githubusercontent.com
+
+# Package Registries
+npmjs.com
+pypi.org
+
+# Q&A / Community
+stackoverflow.com

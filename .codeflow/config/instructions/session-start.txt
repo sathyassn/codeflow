@@ -1,0 +1,5 @@
+🔒 SESSION START: 1. Review CLAUDE.md (routing, skills, memory). 2. Quick check: Skill('memory-management', args='detect-active-work').
+Active work? Offer: 1.Resume(/wf-resume) 2.Fresh. No active? "Ready for new task." WAIT for user.
+⛔ FORBIDDEN: Auto-loading context, skipping quick check, acting without CLAUDE.md.
+
+🔒 MUST Skill('memory-management', args='load-work-context domain=...') before work. ⛔ FORBIDDEN: Raw grep on memory files.

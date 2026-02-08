@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Purpose:   Git commit-msg hook for CodeFlow
+# Usage:     Symlink or copy to .git/hooks/commit-msg
+# Platform:  macOS/Linux
+#
+# This hook:
+#   - Validates commit message format
+#   - Enforces conventional commits
+#   - Checks for required elements
+#
+# Conventional commit format:
+#   type(scope): description
+#
+# Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build
+#
+# Exit codes:
+#   - 0: Commit message valid
+#   - 1: Commit message invalid
+
+set -euo pipefail
+
+# =============================================================================
+# SETUP
+# =============================================================================
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Valid commit types
+VALID_TYPES=(
+    "feat"      # New feature
+    "fix"       # Bug fix
+    "docs"      # Documentation
+    "style"     # Formatting, missing semicolons, etc.
+    "refactor"  # Code refactoring
+    "test"      # Adding tests
+    "chore"     # Maintenance
+    "perf"      # Performance improvement
+    "ci"        # CI/CD changes
+    "build"     # Build system changes
+    "revert"    # Reverting changes
+)
+
+# Build regex pattern for types
+TYPE_PATTERN=$(IFS='|'; echo "${VALID_TYPES[*]}")
+
+# =============================================================================
+# SKIP CONDITIONS
+# =============================================================================
+
+# Skip validation for merge commits
+if [[ "$COMMIT_MSG" =~ ^Merge ]]; then
+    exit 0
+fi
+
+# Skip validation for revert commits
+if [[ "$COMMIT_MSG" =~ ^Revert ]]; then
+    exit 0
+fi
+
+# Skip validation for fixup/squash commits
+if [[ "$COMMIT_MSG" =~ ^(fixup|squash)! ]]; then
+    exit 0
+fi
+
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
+# Check conventional commit format
+# Pattern: type(scope): description OR type: description
+CONVENTIONAL_PATTERN="^($TYPE_PATTERN)(\([a-z0-9-]+\))?:[[:space:]].+"
+
+if [[ ! "$COMMIT_MSG" =~ $CONVENTIONAL_PATTERN ]]; then
+    echo -e "${RED}ERROR: Commit message does not follow conventional commit format.${NC}"
+    echo ""
+    echo "Expected format: type(scope): description"
+    echo "Or: type: description"
+    echo ""
+    echo "Valid types: ${VALID_TYPES[*]}"
+    echo ""
+    echo "Examples:"
+    echo "  feat: add user authentication"
+    echo "  fix(api): resolve null pointer exception"
+    echo "  docs: update README with setup instructions"
+    echo ""
+    echo "Your commit message:"
+    echo "  $COMMIT_MSG"
+    echo ""
+    exit 1
+fi
+
+# Check minimum description length (at least 10 characters after type:)
+DESCRIPTION="${COMMIT_MSG#*: }"
+if [[ ${#DESCRIPTION} -lt 10 ]]; then
+    echo -e "${RED}ERROR: Commit description is too short (minimum 10 characters).${NC}"
+    echo ""
+    echo "Description: $DESCRIPTION"
+    echo "Length: ${#DESCRIPTION} characters"
+    echo ""
+    exit 1
+fi
+
+# Check maximum subject line length (50 characters)
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1)
+if [[ ${#FIRST_LINE} -gt 50 ]]; then
+    echo -e "${RED}ERROR: Commit subject line is too long (maximum 50 characters).${NC}"
+    echo ""
+    echo "Subject: $FIRST_LINE"
+    echo "Length: ${#FIRST_LINE} characters"
+    echo ""
+    exit 1
+fi
+
+# Check for trailing period (not recommended)
+if [[ "$FIRST_LINE" =~ \\.$ ]]; then
+    echo -e "${RED}Warning: Commit subject should not end with a period.${NC}"
+    # Don't block, just warn
+fi
+
+# =============================================================================
+# SUCCESS
+# =============================================================================
+
+echo -e "${GREEN}✓ Commit message is valid${NC}"
+exit 0

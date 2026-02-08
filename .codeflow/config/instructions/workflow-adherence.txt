@@ -1,0 +1,1 @@
+🔒 MUST follow CLAUDE.md: Section 4 (routing), Section 5 (skills), Section 7 (memory). ⛔ FORBIDDEN: Improvising workflows, skipping skill invocation.
