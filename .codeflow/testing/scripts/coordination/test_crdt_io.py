@@ -3,7 +3,7 @@ test_crdt_io.py - Tests for CRDT load/save operations.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import codeflow_py_lib.crdt as crdt_module
 from codeflow_py_lib.crdt import (
@@ -159,7 +159,7 @@ class TestRebuildFromJsonl:
         """Should apply renew events."""
         # Create JSONL with renew event
         ledger_path = temp_dir / "sessions.jsonl"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_expires = (now + timedelta(hours=2)).isoformat() + "Z"
 
         events = [

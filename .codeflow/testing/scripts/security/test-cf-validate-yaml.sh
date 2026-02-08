@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-validate-yaml.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-yaml.sh"
 
 # Test counter
 TESTS_PASSED=0
@@ -17,7 +17,7 @@ TESTS_FAILED=0
 
 # Cleanup
 cleanup() {
-    rm -f /tmp/test-validate-*.yaml /tmp/test-validate-*.yml 2>/dev/null || true
+    rm -f /tmp/claude/test-validate-*.yaml /tmp/claude/test-validate-*.yml 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -71,7 +71,7 @@ if python3 -c "import yaml" 2>/dev/null || command -v yq &>/dev/null; then
     HAS_YAML_VALIDATOR=true
 fi
 
-cat > /tmp/test-validate-valid.yaml <<'EOF'
+cat > /tmp/claude/test-validate-valid.yaml <<'EOF'
 name: test
 version: 1.0.0
 features:
@@ -84,7 +84,7 @@ config:
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/test-validate-valid.yaml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-valid.yaml 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: Valid YAML passes"
         ((TESTS_PASSED++)) || true
@@ -100,14 +100,14 @@ fi
 # ============================================================================
 # Test 5: Invalid YAML (syntax error)
 # ============================================================================
-cat > /tmp/test-validate-invalid.yaml <<'EOF'
+cat > /tmp/claude/test-validate-invalid.yaml <<'EOF'
 name: test
   invalid indentation here
     broken: true
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    if ! "$SCRIPT" /tmp/test-validate-invalid.yaml 2>/dev/null; then
+    if ! "$SCRIPT" /tmp/claude/test-validate-invalid.yaml 2>/dev/null; then
         echo "PASS: Invalid YAML fails"
         ((TESTS_PASSED++)) || true
     else
@@ -122,10 +122,10 @@ fi
 # ============================================================================
 # Test 6: Empty YAML (valid)
 # ============================================================================
-echo "---" > /tmp/test-validate-empty.yaml
+echo "---" > /tmp/claude/test-validate-empty.yaml
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/test-validate-empty.yaml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-empty.yaml 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: Empty YAML is valid"
         ((TESTS_PASSED++)) || true
@@ -141,14 +141,14 @@ fi
 # ============================================================================
 # Test 7: YAML list (valid)
 # ============================================================================
-cat > /tmp/test-validate-list.yaml <<'EOF'
+cat > /tmp/claude/test-validate-list.yaml <<'EOF'
 - item1
 - item2
 - item3
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/test-validate-list.yaml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-list.yaml 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: YAML list is valid"
         ((TESTS_PASSED++)) || true
@@ -164,12 +164,12 @@ fi
 # ============================================================================
 # Test 8: .yml extension
 # ============================================================================
-cat > /tmp/test-validate-ext.yml <<'EOF'
+cat > /tmp/claude/test-validate-ext.yml <<'EOF'
 key: value
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/test-validate-ext.yml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-ext.yml 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: .yml extension works"
         ((TESTS_PASSED++)) || true

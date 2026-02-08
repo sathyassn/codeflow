@@ -55,6 +55,18 @@ if [[ -f "$SENTINEL_LIB" ]]; then
 fi
 
 # =============================================================================
+# V4: PATHFLOW MODE CHECK
+# =============================================================================
+# In agent-teams mode, use PathFlow sentinels (session-scoped, no TTL)
+# instead of skill sentinels (TTL 600s)
+
+PATHFLOW_MODE="false"
+if declare -f is_agent_teams_active &>/dev/null && is_agent_teams_active; then
+    PATHFLOW_MODE="true"
+    PATHFLOW_SENTINEL_DIR="$REPO_ROOT/.state/sentinels"
+fi
+
+# =============================================================================
 # INPUT PARSING
 # =============================================================================
 
@@ -138,6 +150,16 @@ fi
 # =============================================================================
 # SENTINEL VALIDATION (config-driven)
 # =============================================================================
+
+# V4: In PathFlow mode, check PathFlow sentinels instead of skill sentinels
+if [[ "$PATHFLOW_MODE" == "true" ]]; then
+    # PathFlow sentinels authorize all operations after PF-3
+    if ls "$PATHFLOW_SENTINEL_DIR"/pathflow:pf-3-* &>/dev/null 2>&1; then
+        exit 0  # PF-3 complete, all bash operations authorized
+    fi
+    # If no PF-3 sentinel but pathflow active, fall through to existing checks
+    # This allows pre-PF-3 operations that don't require sentinels
+fi
 
 # Check if command matches a protected pattern from config
 # Uses sentinel_find_skill_for_command() which reads from enforcement-policy.json

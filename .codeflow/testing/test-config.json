@@ -16,7 +16,9 @@
         "scripts/codeflow_py_lib/test_db.py",
         "scripts/coordination/test_crdt_doc.py",
         "scripts/coordination/test_crdt_io.py",
-        "consistency/test-settings-sync.sh"
+        "scripts/db/test_v4_schema.sh",
+        "consistency/test-settings-sync.sh",
+        "consistency/test-config-consistency.sh"
       ]
     },
     "HIGH": {
@@ -103,6 +105,8 @@
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-task-sentinel.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-webfetch.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-pathflow-gate.sh",
+        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-team-guard.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-instructions.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-logging.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-memory-progress.sh",
@@ -128,7 +132,8 @@
         "scripts/db/test_db_backup.py",
         "scripts/shell-lib/test-logging.sh",
         "scripts/shell-lib/test-errors.sh",
-        "scripts/shell-lib/test-index.sh"
+        "scripts/shell-lib/test-index.sh",
+        "lib/test-test-coverage.sh"
       ]
     }
   },

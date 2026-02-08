@@ -31,7 +31,15 @@ from codeflow_py_lib import (
 
 logger = get_logger(__name__)
 
-VALID_EVENT_TYPES = ("progress", "decision", "milestone", "blocker")
+VALID_EVENT_TYPES = (
+    "progress",
+    "decision",
+    "milestone",
+    "blocker",
+    "stage_transition",
+    "stage_complete",
+    "rework_limit",
+)
 VALID_DOMAINS = ("planning", "development", "review", "qa", "ops", "documentation")
 VALID_MEMORY_TYPES = ("episodic", "semantic", "procedural")
 

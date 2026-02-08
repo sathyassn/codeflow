@@ -14,7 +14,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -63,7 +63,7 @@ def main():
         save_coordination(doc)
 
         # Write to JSONL (rebuild authority)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         ledger_path = get_state_dir() / "ledger" / "sessions.jsonl"
         append_jsonl(
             ledger_path,

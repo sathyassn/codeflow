@@ -426,6 +426,33 @@ fi
 cleanup_test_artifacts
 
 echo ""
+echo "--- V4: PathFlow Cleanup ---"
+
+# Test 44: Hook contains pathflow-active cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "pathflow-active" "$HOOK"; then
+    pass "Has pathflow-active cleanup"
+else
+    fail "Should have pathflow-active cleanup"
+fi
+
+# Test 45: Hook contains PathFlow sentinel cleanup (rm -f pathflow:*)
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'pathflow:\*' "$HOOK" || grep -q 'pathflow:' "$HOOK"; then
+    pass "Has PathFlow sentinel cleanup"
+else
+    fail "Should have PathFlow sentinel cleanup (pathflow:*)"
+fi
+
+# Test 46: Hook has PATHFLOW CLEANUP section
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "PATHFLOW CLEANUP" "$HOOK"; then
+    pass "Has PATHFLOW CLEANUP section"
+else
+    fail "Should have PATHFLOW CLEANUP section"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

@@ -70,8 +70,10 @@ def traverse_relationships(
         conditions.append("target_entity_id = :entity_id")
 
     if relation_types:
-        type_list = ",".join(f"'{t}'" for t in relation_types)
-        conditions = [f"({' OR '.join(conditions)}) AND relation_type IN ({type_list})"]
+        type_placeholders = ",".join(f":rtype_{i}" for i in range(len(relation_types)))
+        for i, rtype in enumerate(relation_types):
+            params[f"rtype_{i}"] = rtype
+        conditions = [f"({' OR '.join(conditions)}) AND relation_type IN ({type_placeholders})"]
 
     where_clause = " OR ".join(conditions) if len(conditions) > 1 else conditions[0]
 

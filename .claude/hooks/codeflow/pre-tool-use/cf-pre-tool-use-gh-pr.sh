@@ -117,10 +117,54 @@ EOF
 }
 
 # ============================================
+# EXTRACT BODY CONTENT (inline or from file)
+# ============================================
+
+BODY_CONTENT=""
+HAS_BODY_FLAG=false
+
+# Check for --body-file or -F (file-based body)
+BODY_FILE_PATH=""
+if [[ "$COMMAND" =~ --body-file[[:space:]]+\"([^\"]+)\" ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ --body-file[[:space:]]+\'([^\']+)\' ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ --body-file[[:space:]]+([^[:space:]]+) ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ -F[[:space:]]+\"([^\"]+)\" ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ -F[[:space:]]+\'([^\']+)\' ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ -F[[:space:]]+([^[:space:]]+) ]]; then
+    BODY_FILE_PATH="${BASH_REMATCH[1]}"
+fi
+
+if [[ -n "$BODY_FILE_PATH" ]]; then
+    HAS_BODY_FLAG=true
+    if [[ -f "$BODY_FILE_PATH" ]]; then
+        BODY_CONTENT=$(cat "$BODY_FILE_PATH" 2>/dev/null || true)
+    fi
+    # If file doesn't exist or can't be read, allow through (don't block on missing file)
+fi
+
+# Check for --body or -b (inline body)
+if echo "$COMMAND" | grep -qE "\-\-body|\-b[[:space:]]"; then
+    HAS_BODY_FLAG=true
+    # Extract inline body for checks
+    if [[ "$COMMAND" =~ --body[[:space:]]+\"([^\"]+)\" ]]; then
+        BODY_CONTENT="${BASH_REMATCH[1]}"
+    elif [[ "$COMMAND" =~ --body[[:space:]]+\'\(([^\']+)\)\' ]]; then
+        BODY_CONTENT="${BASH_REMATCH[1]}"
+    elif [[ "$COMMAND" =~ -b[[:space:]]+\"([^\"]+)\" ]]; then
+        BODY_CONTENT="${BASH_REMATCH[1]}"
+    fi
+fi
+
+# ============================================
 # CHECK 1: BLOCK INTERACTIVE MODE (no --body)
 # ============================================
 
-if [[ "$REQUIRE_BODY" == "true" ]] && ! echo "$COMMAND" | grep -qE "\-\-body|\-b[[:space:]]"; then
+if [[ "$REQUIRE_BODY" == "true" ]] && [[ "$HAS_BODY_FLAG" == "false" ]]; then
     if declare -f log_security_event &>/dev/null; then
         log_security_event "blocked" "pr_no_body" "Bash" "$COMMAND" "Interactive PR mode"
     fi
@@ -135,7 +179,26 @@ fi
 # CHECK 2: AI ATTRIBUTION (BLOCK)
 # ============================================
 
-if echo "$COMMAND" | grep -qEi "$AI_PATTERN"; then
+# Build check string from title + body content only (not raw command with file paths)
+AI_CHECK_STRING=""
+
+# Extract title value for AI check
+if [[ "$COMMAND" =~ --title[[:space:]]+\"([^\"]+)\" ]]; then
+    AI_CHECK_STRING="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ --title[[:space:]]+\'([^\']+)\' ]]; then
+    AI_CHECK_STRING="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ -t[[:space:]]+\"([^\"]+)\" ]]; then
+    AI_CHECK_STRING="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ -t[[:space:]]+\'([^\']+)\' ]]; then
+    AI_CHECK_STRING="${BASH_REMATCH[1]}"
+fi
+
+# Append body content
+if [[ -n "$BODY_CONTENT" ]]; then
+    AI_CHECK_STRING="${AI_CHECK_STRING} ${BODY_CONTENT}"
+fi
+
+if [[ -n "$AI_CHECK_STRING" ]] && echo "$AI_CHECK_STRING" | grep -qEi "$AI_PATTERN"; then
     if declare -f log_security_event &>/dev/null; then
         log_security_event "blocked" "pr_ai_attribution" "Bash" "$COMMAND" "AI attribution detected"
     fi
@@ -150,18 +213,28 @@ fi
 # CHECK 3: REQUIRED SECTIONS (from config)
 # ============================================
 
-for section in "${REQUIRED_SECTIONS[@]}"; do
-    if ! echo "$COMMAND" | grep -qF "$section"; then
-        if declare -f log_security_event &>/dev/null; then
-            log_security_event "blocked" "pr_missing_section" "Bash" "$COMMAND" "Missing: $section"
-        fi
-        cat >&2 <<EOF
+# Check body content (inline or from file) for required sections
+CHECK_CONTENT="$BODY_CONTENT"
+# Fallback: if no body content extracted yet and no body-file was used, check full command
+if [[ -z "$CHECK_CONTENT" ]] && [[ -z "$BODY_FILE_PATH" ]]; then
+    CHECK_CONTENT="$COMMAND"
+fi
+
+# Only check sections if we have content to check (skip if body-file was unreadable)
+if [[ -n "$CHECK_CONTENT" ]]; then
+    for section in "${REQUIRED_SECTIONS[@]}"; do
+        if ! echo "$CHECK_CONTENT" | grep -qF "$section"; then
+            if declare -f log_security_event &>/dev/null; then
+                log_security_event "blocked" "pr_missing_section" "Bash" "$COMMAND" "Missing: $section"
+            fi
+            cat >&2 <<EOF
 BLOCKED: Missing required section: $section
 EOF
-        print_skill_block
-        exit 2
-    fi
-done
+            print_skill_block
+            exit 2
+        fi
+    done
+fi
 
 # ============================================
 # CHECK 4: TITLE FORMAT (conventional commit)
@@ -198,8 +271,8 @@ EOF
         exit 2
     fi
 
-    # Check title has conventional commit prefix with colon-space
-    if ! echo "$TITLE" | grep -qE "^(${VALID_TYPES}): "; then
+    # Check title has conventional commit prefix with optional scope and colon-space
+    if ! echo "$TITLE" | grep -qE "^(${VALID_TYPES})(\([a-z0-9-]+\))?: "; then
         if declare -f log_security_event &>/dev/null; then
             log_security_event "blocked" "pr_title_format" "Bash" "$TITLE" "Invalid format"
         fi

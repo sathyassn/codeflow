@@ -16,7 +16,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -77,7 +77,7 @@ def main():
             "source": str(jsonl_path),
             "claims_rebuilt": len(doc.claims),
             "token_counter": doc._token_counter,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
         # Count by status

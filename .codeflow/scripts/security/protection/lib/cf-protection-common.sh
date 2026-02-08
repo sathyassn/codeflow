@@ -61,6 +61,8 @@ CORE_PATHS=(
     ".claude/settings.local.json"
     ".claude/settings-templates"
     ".codeflow/scripts/security"
+    ".codeflow/scripts/git-hooks"
+    ".codeflow/scripts/shell-lib"
     ".codeflow/config/enforcement"
     ".github/workflows"
 )

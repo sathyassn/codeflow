@@ -505,6 +505,33 @@ else
 fi
 
 echo ""
+echo "--- V4: PathFlow Sentinel ---"
+
+# Test 57: Hook contains create_pathflow_sentinel function
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "create_pathflow_sentinel" "$HOOK"; then
+    pass "Has create_pathflow_sentinel function"
+else
+    fail "Should have create_pathflow_sentinel function"
+fi
+
+# Test 58: Hook contains IS_PATHFLOW_MODE or pathflow-active check
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "IS_PATHFLOW_MODE" "$HOOK" || grep -q "pathflow-active" "$HOOK"; then
+    pass "Has PathFlow mode detection"
+else
+    fail "Should have PathFlow mode detection"
+fi
+
+# Test 59: Hook has PathFlow sentinel type "pathflow"
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '"pathflow"' "$HOOK"; then
+    pass "Has PathFlow sentinel type"
+else
+    fail "Should have PathFlow sentinel type"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

@@ -131,6 +131,7 @@ run_shell_coverage() {
         mkdir -p "$SHELL_COVERAGE_DIR"
 
         local test_dirs=(
+            "consistency"
             "scripts/state"
             "scripts/shell-lib"
             "scripts/security"

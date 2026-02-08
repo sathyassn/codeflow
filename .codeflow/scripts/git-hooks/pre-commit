@@ -238,6 +238,47 @@ if [[ -n "$JSON_FILES" ]] && command -v jq &>/dev/null; then
 fi
 
 # =============================================================================
+# STAGED SCRIPT COVERAGE CHECK (Config-driven)
+# =============================================================================
+# Uses .codeflow/testing/lib/test-coverage.sh library
+# Config: .codeflow/testing/test-config.json -> coverage_enforcement section
+#   - enabled: true/false
+#   - pre_commit_mode: "none" | "new_only" | "all"
+#   - validation_mode: "disabled" | "audit" | "warn" | "fail"
+#
+# The library function reads all config values internally.
+# Pre-commit just sources the library and calls the function.
+
+COVERAGE_LIB="$REPO_ROOT/.codeflow/testing/lib/test-coverage.sh"
+
+if [[ -f "$COVERAGE_LIB" ]]; then
+    echo "Running staged script coverage check..."
+
+    # Prevent test-coverage.sh from re-sourcing test-common.sh
+    # (would clash with our existing color vars and set -euo pipefail)
+    export TEST_FRAMEWORK_VERSION="${TEST_FRAMEWORK_VERSION:-precommit}"
+
+    # Provide get_repo_root if not already defined (needed by coverage lib)
+    if ! declare -f get_repo_root &>/dev/null; then
+        get_repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
+    fi
+
+    # shellcheck source=../../testing/lib/test-coverage.sh
+    source "$COVERAGE_LIB"
+
+    if ! validate_staged_coverage; then
+        echo -e "${RED}${BOLD}❌ STAGED SCRIPT COVERAGE CHECK FAILED${NC}" >&2
+        echo "" >&2
+        echo "New scripts must have corresponding test files registered in test-config.json." >&2
+        echo "Create the test file or add an exception to .codeflow/testing/test-config.json" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Staged script coverage check passed${NC}"
+else
+    echo -e "${YELLOW}⚠ Coverage library not found, skipping staged coverage check${NC}"
+fi
+
+# =============================================================================
 # SUCCESS
 # =============================================================================
 

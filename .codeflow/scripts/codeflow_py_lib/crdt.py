@@ -7,7 +7,7 @@ Falls back to JSON if Loro is not available.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -85,7 +85,7 @@ class CoordinationDoc:
             "fencing_token": fencing_token,
             "expires_at": expires_at,
             "status": "active",
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         self._claims[claim_id] = claim
         return claim
@@ -128,7 +128,7 @@ class CoordinationDoc:
         Returns:
             List of active claims matching the pattern
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         return [
             claim
             for claim in self._claims.values()

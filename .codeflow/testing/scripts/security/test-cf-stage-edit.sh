@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-stage-edit.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
 STAGING_DIR="/tmp/claude/managed/protected-edits"
 
 # Test counter
@@ -19,7 +19,7 @@ TESTS_FAILED=0
 # Cleanup
 cleanup() {
     rm -rf "$STAGING_DIR" 2>/dev/null || true
-    rm -f /tmp/test-stage-*.txt 2>/dev/null || true
+    rm -f /tmp/claude/test-stage-*.txt 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -82,8 +82,8 @@ fi
 # ============================================================================
 # Test 5: File not found
 # ============================================================================
-echo "content" > /tmp/test-stage-content.txt
-OUTPUT=$("$SCRIPT" "/nonexistent/file" "/tmp/test-stage-content.txt" 2>&1 || true)
+echo "content" > /tmp/claude/test-stage-content.txt
+OUTPUT=$("$SCRIPT" "/nonexistent/file" "/tmp/claude/test-stage-content.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "not found"; then
     echo "PASS: Errors on nonexistent original file"
     ((TESTS_PASSED++)) || true
@@ -99,10 +99,10 @@ echo ""
 echo "--- Staging functionality ---"
 
 # Create test files
-echo "original content" > /tmp/test-stage-original.txt
-echo "new content" > /tmp/test-stage-new.txt
+echo "original content" > /tmp/claude/test-stage-original.txt
+echo "new content" > /tmp/claude/test-stage-new.txt
 
-OUTPUT=$("$SCRIPT" "/tmp/test-stage-original.txt" "/tmp/test-stage-new.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "/tmp/claude/test-stage-original.txt" "/tmp/claude/test-stage-new.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "staged successfully"; then
     echo "PASS: Staging succeeds"
     ((TESTS_PASSED++)) || true
@@ -114,7 +114,7 @@ fi
 # ============================================================================
 # Test 7: Staged files created
 # ============================================================================
-SAFE_NAME=$(echo "/tmp/test-stage-original.txt" | sed 's/[\/]/_/g')
+SAFE_NAME=$(echo "/tmp/claude/test-stage-original.txt" | sed 's/[\/]/_/g')
 
 if [[ -f "$STAGING_DIR/${SAFE_NAME}.staged" ]]; then
     echo "PASS: Staged file created"
@@ -143,7 +143,7 @@ fi
 # ============================================================================
 # Test 8: Duplicate staging blocked
 # ============================================================================
-OUTPUT=$("$SCRIPT" "/tmp/test-stage-original.txt" "/tmp/test-stage-new.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "/tmp/claude/test-stage-original.txt" "/tmp/claude/test-stage-new.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "already exists"; then
     echo "PASS: Blocks duplicate staging"
     ((TESTS_PASSED++)) || true

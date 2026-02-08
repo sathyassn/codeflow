@@ -90,6 +90,32 @@ except ImportError:
                 conn.commit()
                 return cursor.rowcount
 
+        def get_value(
+            self, query: str, params: Optional[Dict[str, Any]] = None,
+            default: Any = None
+        ) -> Any:
+            """Execute query and return single value."""
+            results = self.execute_query(query, params)
+            if results and results[0]:
+                first_key = list(results[0].keys())[0]
+                return results[0][first_key]
+            return default
+
+        def table_exists(self, table: str) -> bool:
+            """Check if table exists in database."""
+            count = self.get_value(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=:name",
+                {"name": table}, 0,
+            )
+            return count > 0
+
+        def row_exists(self, table: str, conditions: Dict[str, Any]) -> bool:
+            """Check if a row exists matching conditions."""
+            where_clauses = [f"{col} = :{col}" for col in conditions.keys()]
+            query = f"SELECT 1 FROM {table} WHERE {' AND '.join(where_clauses)} LIMIT 1"
+            results = self.execute_query(query, conditions)
+            return len(results) > 0
+
     _db_ops: Optional[DatabaseOperations] = None
 
     def get_db(config: Optional[DatabaseConfig] = None) -> DatabaseOperations:

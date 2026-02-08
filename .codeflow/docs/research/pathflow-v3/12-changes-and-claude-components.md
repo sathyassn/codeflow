@@ -25,7 +25,7 @@
 |----------|:-----:|:--------:|:-------:|
 | PathFlow phases | 7 phases (PF-1 to PF-7) | - | 9-node outer shell |
 | Work stages | WS-DEV, WS-REV, WS-QA, WS-WORK | - | WS-DEPLOY |
-| Sentinels | PathFlow sentinels (session-scoped) | Existing skill sentinels preserved | Many skill sentinels redundant in team mode |
+| Sentinels | PathFlow sentinels (session-scoped) | Existing skill sentinels preserved | Many skill sentinels redundant in agent-teams mode |
 | Agent definitions | 8 new .md files | - | - |
 | Hooks | 2 new (pathflow-gate, team-guard) | 2 modified (stop, post-tool-use) | 1 removed (verify-work in current form) |
 | Settings | New matchers | Existing matchers updated | Over-engineered config layers |
@@ -106,7 +106,7 @@ ALTER TABLE active_work ADD COLUMN team_name TEXT DEFAULT NULL;
 
 ### Mode Detection Flag
 
-A runtime state file at `/tmp/claude/managed/state/pathflow-active` created during PF-1 and removed during PF-7/SessionEnd. Used by all hooks to determine team vs non-team mode. Contains session metadata (session ID, timestamp, team name).
+A runtime state file at `/tmp/claude/managed/state/pathflow-active` created during PF-1 and removed during PF-7/SessionEnd. Used by all hooks to determine team vs standalone mode. Contains session metadata (session ID, timestamp, team name).
 
 ---
 
@@ -118,15 +118,15 @@ Sections added to support PathFlow orchestration. See [Section 12.5](#125-claude
 
 ### Stop Hook (cf-stop-verify-work.sh)
 
-The verify-work Stop hook's PCV checking behavior is dropped entirely in team mode. In team mode, work verification is handled by the WS-REV stage during PF-4, not by a self-check at session end. The stop hook itself remains for logging purposes, but the PCV checking behavior is removed when team mode is active.
+The verify-work Stop hook's PCV checking behavior is dropped entirely in agent-teams mode. In agent-teams mode, work verification is handled by the WS-REV stage during PF-4, not by a self-check at session end. The stop hook itself remains for logging purposes, but the PCV checking behavior is removed when agent-teams mode is active.
 
 Mode detection uses the `/tmp/claude/managed/state/pathflow-active` flag (not team config file).
 
 ```
 Before: Stop hook checks for PCV marker in last message (always)
 After:  Stop hook checks pathflow-active flag at start:
-        - Flag present (team mode): PCV check skipped entirely (WS-REV handles verification)
-        - Flag absent (non-team mode): PCV check runs as before (unchanged behavior)
+        - Flag present (agent-teams mode): PCV check skipped entirely (WS-REV handles verification)
+        - Flag absent (standalone mode): PCV check runs as before (unchanged behavior)
 ```
 
 ### PostToolUse Hook
@@ -153,7 +153,7 @@ Purely additive changes (new columns with NULL defaults). No existing columns mo
 
 ### Verify-Work as Stop Hook
 
-**Removed**: The `cf-stop-verify-work.sh` hook's PCV checking behavior in team mode.
+**Removed**: The `cf-stop-verify-work.sh` hook's PCV checking behavior in agent-teams mode.
 
 **Reason**: The WS-REV (Review) stage provides better verification than a stop-time self-check. Review happens earlier (during PF-4, not at session end), uses a separate agent (not self-review), and can trigger rework (not advisory-only). See [08-enforcement-model.md](08-enforcement-model.md), Section 8.8.
 
@@ -285,7 +285,7 @@ The lead decides team composition based on the work at hand.
 | Type | PreToolUse |
 | Matcher | Edit, Write, Bash |
 | Purpose | Check PathFlow sentinels before allowing operations |
-| Behavior | Block if required sentinel missing (team mode); fall back to skill sentinels (non-team) |
+| Behavior | Block if required sentinel missing (agent-teams mode); fall back to skill sentinels (standalone) |
 
 ### Modified Hook: PostToolUse (TaskUpdate handling)
 
@@ -301,7 +301,7 @@ The lead decides team composition based on the work at hand.
 |----------|-------|
 | Change | Add mode detection check at the start |
 | Logic | If `/tmp/claude/managed/state/pathflow-active` exists, skip PCV check entirely (WS-REV handles verification during PF-4) |
-| Non-team mode | Unchanged behavior (PCV check remains) |
+| Standalone mode | Unchanged behavior (PCV check remains) |
 
 ### Hook Priority Summary
 
@@ -321,14 +321,14 @@ PostToolUse hooks:
 
 Stop hooks:
   1. cf-stop-logging.sh                    (session logging)
-  2. cf-stop-verify-work.sh                (MODIFIED: skip in team mode)
+  2. cf-stop-verify-work.sh                (MODIFIED: skip in agent-teams mode)
 ```
 
 ### Scripts Requiring Mode-Awareness Updates
 
-These existing scripts need to be updated to check the `/tmp/claude/managed/state/pathflow-active` flag and branch behavior based on team vs non-team mode:
+These existing scripts need to be updated to check the `/tmp/claude/managed/state/pathflow-active` flag and branch behavior based on team vs standalone mode:
 
-| Script | Current Behavior | Team Mode Change |
+| Script | Current Behavior | Agent-Teams Mode Change |
 |--------|-----------------|------------------|
 | `cf-post-tool-use-skill.sh` | Creates skill sentinels | Also create PathFlow sentinels on phase markers |
 | `cf-pre-tool-use-bash-sentinel.sh` | Checks skill sentinels | Check PathFlow sentinels instead |
@@ -340,7 +340,7 @@ These existing scripts need to be updated to check the `/tmp/claude/managed/stat
 | `cf-sentinel.sh` (library) | Supports skill sentinels | Support both PathFlow and skill sentinel types |
 | `security-lib.sh` | Sentinel helpers | Mode-aware sentinel checking |
 | `cf-post-tool-use-memory-progress.sh` | References sentinels | PathFlow sentinel awareness |
-| `cf-stop-verify-work.sh` | PCV check always | Skip PCV in team mode |
+| `cf-stop-verify-work.sh` | PCV check always | Skip PCV in agent-teams mode |
 
 ### New Hook: Teammate Cleanup Guard (cf-pre-tool-use-team-guard.sh)
 
@@ -353,7 +353,7 @@ A PreToolUse hook matching `Teammate` calls intercepts `Teammate(operation="clea
 | Matcher | `Teammate` (the Claude Code tool for team management) |
 | Purpose | Block the `Teammate` tool's `cleanup` operation during active PathFlow sessions |
 | Logic | Parse tool input JSON from stdin; if `operation == "cleanup"` AND `pathflow-active` flag exists, exit 2 (BLOCK) |
-| Non-team mode | Pass through (no flag file present, so no PathFlow session to protect) |
+| Standalone mode | Pass through (no flag file present, so no PathFlow session to protect) |
 
 **Settings.json matcher**:
 
@@ -535,7 +535,7 @@ Skills remain as the canonical SOPs. They are NOT deprecated or replaced.
 |   (.claude/skills)|          |  (.claude/agents) |
 +-------------------+          +-------------------+
 | Canonical SOPs    |--------->| Load at Spawn     |
-| Non-team mode     |          | Team mode          |
+| Standalone mode     |          | Agent-teams mode          |
 | User-invokable    |          | Reference on Demand|
 | Slash commands    |          | Teammate identity  |
 +-------------------+          +-------------------+
@@ -549,16 +549,16 @@ Skills remain as the canonical SOPs. They are NOT deprecated or replaced.
 | Reference on Demand | Skills referenced by the agent definition but read only when a specific procedure is needed |
 | Behavioral / Cross-Cutting | Skills that apply broadly across agents (e.g., documentation standards, script standards) |
 
-**Routing in team vs non-team mode**:
+**Routing in team vs standalone mode**:
 
-| Action | Team Mode | Non-Team Mode |
+| Action | Agent-Teams Mode | Standalone Mode |
 |--------|-----------|---------------|
 | `/cf-commit` | Lead tells cf-gitops | Skill invoked directly |
 | `/cf-plan` | Lead assigns cf-planner | Skill invoked directly |
 | `/cf-develop` | Lead assigns cf-developer | Skill invoked directly |
 | `/cf-review` | Lead assigns cf-reviewer | Skill invoked directly |
 
-Skills provide backward compatibility for sessions that don't use Agent Teams. Agent definitions provide the team-mode equivalent with added identity, constraints, and communication protocols.
+Skills provide backward compatibility for sessions that don't use Agent Teams. Agent definitions provide the agent-teams-mode equivalent with added identity, constraints, and communication protocols.
 
 ---
 

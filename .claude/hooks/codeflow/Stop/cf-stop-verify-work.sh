@@ -195,6 +195,17 @@ check_tier_requirements() {
 }
 
 # =============================================================================
+# V4: PATHFLOW MODE - PCV BYPASS
+# =============================================================================
+# In agent-teams mode, WS-REV stage replaces PCV verification.
+# The cf-reviewer teammate provides quality assurance instead of self-verification.
+
+PATHFLOW_ACTIVE="/tmp/claude/managed/state/pathflow-active"
+if [[ -f "$PATHFLOW_ACTIVE" ]]; then
+    exit 0
+fi
+
+# =============================================================================
 # VERIFICATION EXECUTION
 # =============================================================================
 

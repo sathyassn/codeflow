@@ -1,6 +1,6 @@
 -- CodeFlow Database Schema
--- Version: 1.0.0
--- Generated from v3 specification
+-- Version: 1.1.0
+-- Generated from v3 specification; V4 PathFlow and Agent Teams columns
 --
 -- This schema defines all 37 tables for the Knowledge Layer plus 3 FTS virtual tables.
 -- Rebuild authority: .state/ledger/*.jsonl files
@@ -176,6 +176,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
+    stage TEXT DEFAULT NULL
+        CHECK(stage IS NULL OR stage IN ('dev', 'work', 'review', 'qa', 'done')),
+    stage_status TEXT DEFAULT NULL
+        CHECK(stage_status IS NULL OR stage_status IN ('pending', 'in_progress', 'complete', 'failed')),
+    stage_history TEXT DEFAULT '[]',    -- JSON array of stage transition records
     FOREIGN KEY (area_type) REFERENCES area_types(code),
     FOREIGN KEY (work_type) REFERENCES work_types(code),
     FOREIGN KEY (domain) REFERENCES domains(code),
@@ -193,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_in_progress ON tasks(status, assignee_id)
     WHERE status = 'in_progress';
 CREATE INDEX IF NOT EXISTS idx_tasks_autorun ON tasks(epic_id, status, autorun_eligible)
     WHERE autorun_eligible = TRUE AND status = 'todo';
+CREATE INDEX IF NOT EXISTS idx_tasks_stage ON tasks(stage, stage_status);
 
 -- Task dependencies
 CREATE TABLE IF NOT EXISTS task_dependencies (
@@ -227,7 +233,8 @@ CREATE INDEX IF NOT EXISTS idx_acceptance_criteria_met ON acceptance_criteria(ep
 CREATE TABLE IF NOT EXISTS memory_events (
     id TEXT PRIMARY KEY,               -- memory-{ulid}
     event_type TEXT NOT NULL
-        CHECK(event_type IN ('progress', 'decision', 'milestone', 'blocker')),
+        CHECK(event_type IN ('progress', 'decision', 'milestone', 'blocker',
+                             'stage_transition', 'stage_complete', 'rework_limit')),
     domain TEXT NOT NULL
         CHECK(domain IN ('planning', 'development', 'review', 'qa', 'ops', 'documentation')),
     work_id TEXT,                      -- Reference to active_work.id
@@ -443,6 +450,9 @@ CREATE TABLE IF NOT EXISTS active_work (
     deliverables TEXT,                 -- JSON array
     agent TEXT,
     session_id TEXT,
+    current_stage TEXT DEFAULT NULL
+        CHECK(current_stage IS NULL OR current_stage IN ('dev', 'work', 'review', 'qa')),
+    team_name TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -451,6 +461,8 @@ CREATE INDEX IF NOT EXISTS idx_active_work_status ON active_work(status);
 CREATE INDEX IF NOT EXISTS idx_active_work_task ON active_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_active_work_branch ON active_work(branch);
 CREATE INDEX IF NOT EXISTS idx_active_work_session ON active_work(session_id);
+CREATE INDEX IF NOT EXISTS idx_active_work_stage ON active_work(current_stage);
+CREATE INDEX IF NOT EXISTS idx_active_work_team ON active_work(team_name);
 
 -- Work claims
 CREATE TABLE IF NOT EXISTS work_claims (

@@ -13,7 +13,7 @@
 - [4.5 Decision Tree Pattern for Tech-Stack Selection](#45-decision-tree-pattern-for-tech-stack-selection)
 - [4.6 Skill-to-Agent Mapping](#46-skill-to-agent-mapping)
 - [4.7 cf-working-protocol Trimming](#47-cf-working-protocol-trimming)
-- [4.8 Routing: Team Mode vs Non-Team Mode](#48-routing-team-mode-vs-non-team-mode)
+- [4.8 Routing: Agent-Teams Mode vs Standalone Mode](#48-routing-agent-teams-mode-vs-standalone-mode)
 - [4.9 Complete Skill Disposition Table](#49-complete-skill-disposition-table)
 
 ---
@@ -23,11 +23,11 @@
 Skills remain in `.claude/skills/`. They are preserved as:
 
 1. **Canonical SOPs** -- the authoritative source for operational procedures
-2. **Non-team-mode invocation** -- when running without Agent Teams, skills work as before (forked to cf-general-purpose sub-agent)
+2. **Non-agent-teams-mode invocation** -- when running without Agent Teams, skills work as before (forked to cf-general-purpose sub-agent)
 3. **Content source** -- agent definition files embed or reference skill operations
 4. **User-invokable commands** -- `/cf-commit`, `/cf-plan`, etc. still work via the Skill tool
 
-Agent definitions (`.claude/agents/cf-*.md`) are a NEW artifact that sits alongside skills. In team mode, the agent definition is what a teammate actually loads. In non-team mode, the skill is invoked normally.
+Agent definitions (`.claude/agents/cf-*.md`) are a NEW artifact that sits alongside skills. In agent-teams mode, the agent definition is what a teammate actually loads. In standalone mode, the skill is invoked normally.
 
 ---
 
@@ -292,11 +292,11 @@ The trimmed cf-working-protocol focuses on cognitive procedures only: how the le
 
 ---
 
-## 4.8 Routing: Team Mode vs Non-Team Mode
+## 4.8 Routing: Agent-Teams Mode vs Standalone Mode
 
 Skills and agent definitions coexist. The routing depends on whether a team is active:
 
-| User Action | Team Mode | Non-Team Mode |
+| User Action | Agent-Teams Mode | Standalone Mode |
 |------------|-----------|---------------|
 | `/cf-commit` | Lead tells cf-gitops to commit | Fork to cf-general-purpose with cf-git-workflow skill |
 | `/cf-plan` | Lead assigns to cf-planner | Fork to cf-general-purpose with cf-task-management skill |
@@ -304,7 +304,7 @@ Skills and agent definitions coexist. The routing depends on whether a team is a
 | `/cf-review` | Lead assigns to cf-reviewer | Fork to cf-general-purpose with review context |
 | `/cf-test` | Lead assigns to cf-qa | Fork to cf-general-purpose with testing skill |
 
-In team mode, slash commands become orchestration directives: the lead interprets the command and routes it to the appropriate teammate. In non-team mode, the existing skill invocation via cf-general-purpose sub-agent continues to work.
+In agent-teams mode, slash commands become orchestration directives: the lead interprets the command and routes it to the appropriate teammate. In standalone mode, the existing skill invocation via cf-general-purpose sub-agent continues to work.
 
 This dual-mode routing ensures backward compatibility. Nothing breaks for users who do not enable Agent Teams.
 

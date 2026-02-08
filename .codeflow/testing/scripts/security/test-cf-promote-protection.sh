@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-promote-protection.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/protection/cf-promote-protection.sh"
 EXTENDED_LIST="$REPO_ROOT/.codeflow/config/enforcement/protection/protected-extended.list"
 ADHOC_LIST="$REPO_ROOT/.codeflow/config/enforcement/protection/protected-adhoc.list"
 

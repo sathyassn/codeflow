@@ -43,6 +43,17 @@ if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
 fi
 
 # =============================================================================
+# V4: AGENT-TEAMS MODE BYPASS
+# =============================================================================
+# In agent-teams mode, claim validation is handled by the team coordination
+# system (task ownership via TaskUpdate). Skip local claims check.
+
+if declare -f is_agent_teams_active &>/dev/null && is_agent_teams_active; then
+    # Agent-teams mode: team task ownership replaces local claim validation
+    exit 0
+fi
+
+# =============================================================================
 # PARSE INPUT
 # =============================================================================
 

@@ -2,7 +2,7 @@
 test_crdt_sync.py - Tests for CRDT sync operations.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import codeflow_py_lib.paths as paths_module
 from codeflow_py_lib.crdt import (
@@ -23,7 +23,7 @@ class TestSyncCrdtToDb:
 
         # Create CRDT with claims
         doc = CoordinationDoc()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
         doc._claims = {
             "claim-001": {
@@ -77,7 +77,7 @@ class TestSyncCrdtToDb:
         (state_dir / "coordination").mkdir(parents=True)
         monkeypatch.setattr(paths_module, "get_state_dir", lambda: state_dir)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Insert existing claim in DB
@@ -147,7 +147,7 @@ class TestSyncDbToCrdt:
         doc = CoordinationDoc()
         save_coordination(doc)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Insert claim in DB
@@ -205,7 +205,7 @@ class TestBidirectionalSync:
         (state_dir / "coordination").mkdir(parents=True)
         monkeypatch.setattr(paths_module, "get_state_dir", lambda: state_dir)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Create CRDT with one claim

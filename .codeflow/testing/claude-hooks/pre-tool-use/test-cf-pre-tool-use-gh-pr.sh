@@ -389,6 +389,70 @@ else
     fail "Should allow ci: prefix"
 fi
 
+# Test 44: Allows bugfix: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bugfix: resolve edge case\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows bugfix: prefix"
+else
+    fail "Should allow bugfix: prefix"
+fi
+
+# Test 45: Allows hotfix: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"hotfix: critical patch\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows hotfix: prefix"
+else
+    fail "Should allow hotfix: prefix"
+fi
+
+# Test 46: Allows style: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"style: fix formatting\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows style: prefix"
+else
+    fail "Should allow style: prefix"
+fi
+
+# Test 47: Allows build: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"build: update makefile\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows build: prefix"
+else
+    fail "Should allow build: prefix"
+fi
+
+# Test 48: Allows revert: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"revert: undo bad change\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows revert: prefix"
+else
+    fail "Should allow revert: prefix"
+fi
+
+# Test 49: Allows merge: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"merge: combine branches\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows merge: prefix"
+else
+    fail "Should allow merge: prefix"
+fi
+
+# Test 50: Allows plan: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"plan: design new feature\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows plan: prefix"
+else
+    fail "Should allow plan: prefix"
+fi
+
+# Test 51: Allows refine: prefix
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"refine: polish workflow\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows refine: prefix"
+else
+    fail "Should allow refine: prefix"
+fi
+
 echo ""
 echo "--- Title Length Limits ---"
 
@@ -561,6 +625,136 @@ if grep -q 'while IFS= read -r' "$HOOK" && grep -q 'REQUIRED_SECTIONS' "$HOOK"; 
     pass "Has bash 3.2+ compatible required_sections loading"
 else
     fail "Should have bash 3.2+ compatible array loading"
+fi
+
+echo ""
+echo "--- Scoped Title Format ---"
+
+# Test 65: Allows feat(api): scoped title
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat(api): add endpoint\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows feat(api): scoped title"
+else
+    fail "Should allow feat(api): scoped title"
+fi
+
+# Test 66: Allows fix(auth): scoped title
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"fix(auth): resolve login bug\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows fix(auth): scoped title"
+else
+    fail "Should allow fix(auth): scoped title"
+fi
+
+# Test 67: Allows docs(readme): scoped title
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"docs(readme): update usage\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows docs(readme): scoped title"
+else
+    fail "Should allow docs(readme): scoped title"
+fi
+
+# Test 68: Allows chore(deps-2): hyphenated scope with number
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"chore(deps-2): bump versions\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows hyphenated scope with number"
+else
+    fail "Should allow hyphenated scope with number"
+fi
+
+# Test 69: Still allows non-scoped titles
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: plain title\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Still allows non-scoped titles"
+else
+    fail "Should still allow non-scoped titles"
+fi
+
+echo ""
+echo "--- Body File Support (--body-file / -F) ---"
+
+# Test 70: Allows --body-file flag (satisfies body requirement)
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows --body-file flag (satisfies body requirement)"
+else
+    fail "Should allow --body-file flag"
+fi
+
+# Test 71: Allows -F flag (satisfies body requirement)
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" -F /tmp/claude/pr-body.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows -F flag (satisfies body requirement)"
+else
+    fail "Should allow -F flag"
+fi
+
+# Test 72: --body-file with AI attribution in file content
+BODY_FILE="/tmp/claude/test-pr-ai-body.md"
+mkdir -p /tmp/claude
+printf '## Summary\nGenerated with Claude\n## Testing\ntest' > "$BODY_FILE"
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]] && [[ "$result" == *"AI attribution"* ]]; then
+    pass "Blocks AI attribution in --body-file content"
+else
+    fail "Should block AI attribution found in --body-file content"
+fi
+
+# Test 73: --body-file with missing required sections
+printf 'Just some text without sections' > "$BODY_FILE"
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]] && [[ "$result" == *"Missing required section"* ]]; then
+    pass "Blocks --body-file with missing required sections"
+else
+    fail "Should block --body-file with missing required sections"
+fi
+
+# Test 74: --body-file with valid content passes
+printf '## Summary\nGood content\n## Testing\nAll tests pass' > "$BODY_FILE"
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows --body-file with valid content"
+else
+    fail "Should allow --body-file with valid content"
+fi
+
+# Test 75: --body-file with nonexistent file allows through
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/nonexistent-file.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows --body-file with nonexistent file (graceful)"
+else
+    fail "Should allow --body-file with nonexistent file"
+fi
+
+# Test 76: -F with AI attribution in file content
+printf '## Summary\nChatGPT wrote this\n## Testing\ntest' > "$BODY_FILE"
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" -F $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks AI attribution via -F flag"
+else
+    fail "Should block AI attribution via -F flag"
+fi
+
+# Clean up temp file
+rm -f "$BODY_FILE"
+
+echo ""
+echo "--- File Path Exclusion from AI Check ---"
+
+# Test 77: File path containing 'Claude' does NOT trigger AI check
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "File path with claude does not false-positive AI check"
+else
+    fail "Should not false-positive on /tmp/claude/ in file path"
+fi
+
+# Test 78: Path with Anthropic does not false-positive
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /home/Anthropic/docs/body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "File path with Anthropic does not false-positive AI check"
+else
+    fail "Should not false-positive on Anthropic in file path"
 fi
 
 echo ""

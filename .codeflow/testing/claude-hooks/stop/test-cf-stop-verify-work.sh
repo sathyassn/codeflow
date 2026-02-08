@@ -500,6 +500,27 @@ else
 fi
 
 echo ""
+echo "--- V4: PathFlow PCV Bypass ---"
+
+# Test 56: Hook contains pathflow-active check
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "pathflow-active" "$HOOK"; then
+    pass "Has pathflow-active check for V4 PCV bypass"
+else
+    fail "Should have pathflow-active check for V4 PCV bypass"
+fi
+
+# Test 57: Exits 0 when pathflow-active flag exists (PCV bypass)
+TESTS_RUN=$((TESTS_RUN + 1))
+# The hook checks /tmp/claude/managed/state/pathflow-active directly
+# We test by checking the code path exists
+if grep -q 'PATHFLOW_ACTIVE=' "$HOOK" && grep -A2 'PATHFLOW_ACTIVE' "$HOOK" | grep -q 'exit 0'; then
+    pass "Has PCV bypass exit 0 for PathFlow mode"
+else
+    fail "Should bypass PCV (exit 0) in PathFlow mode"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

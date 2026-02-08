@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-reload-protection.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/protection/cf-reload-protection.sh"
 
 # Test counter
 TESTS_PASSED=0

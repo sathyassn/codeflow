@@ -64,4 +64,36 @@ Check for active work (grep Status: active), present options to user, wait for c
 EOF
 fi
 
+# =============================================================================
+# V4: PATHFLOW CONTEXT LOADING
+# =============================================================================
+# When PathFlow is active, output additional context about current phase and team
+
+PATHFLOW_ACTIVE="/tmp/claude/managed/state/pathflow-active"
+if [[ -f "$PATHFLOW_ACTIVE" ]]; then
+    echo ""
+    echo "PATHFLOW SESSION ACTIVE"
+    echo "======================"
+
+    # Check completed phases by looking at sentinels
+    SENTINEL_DIR="$REPO_ROOT/.state/sentinels"
+    if [[ -d "$SENTINEL_DIR" ]]; then
+        COMPLETED_PHASES=""
+        for phase_file in "$SENTINEL_DIR"/pathflow:pf-*; do
+            [[ -f "$phase_file" ]] || continue
+            phase_name=$(basename "$phase_file")
+            COMPLETED_PHASES="${COMPLETED_PHASES}  - ${phase_name}\n"
+        done
+
+        if [[ -n "$COMPLETED_PHASES" ]]; then
+            echo "Completed phases:"
+            echo -e "$COMPLETED_PHASES"
+        fi
+    fi
+
+    echo "Mode: agent-teams"
+    echo "PCV: bypassed (WS-REV provides quality assurance)"
+    echo ""
+fi
+
 exit 0

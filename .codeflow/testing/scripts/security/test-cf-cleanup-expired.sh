@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-cleanup-expired.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-cleanup-expired.sh"
 STAGING_DIR="/tmp/claude/managed/protected-edits"
 
 # Test counter

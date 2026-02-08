@@ -150,6 +150,10 @@ fi
 # =============================================================================
 # REGISTER WORKTREE
 # =============================================================================
+# NOTE: Currently registers in .state/worktrees.yaml (YAML-based, V3 approach).
+# Phase 4 will add SQLite registration to the 'worktrees' and 'active_work'
+# tables via the begin-work lifecycle flow. The DB schema already supports this
+# (schema.sql: worktrees table with work_id FK to active_work).
 
 echo "Registering worktree in .state/worktrees.yaml..."
 

@@ -43,12 +43,19 @@ export REPO_ROOT
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
+ENFORCEMENT_DIR="$REPO_ROOT/.codeflow/scripts/security/enforcement"
 
 # Source security library for logging
 if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
     export REPO_ROOT LIB_DIR
     # shellcheck source=/dev/null
     source "$LIB_DIR/security-lib.sh"
+fi
+
+# Source pattern matching for matches_extended_glob()
+if [[ -f "$ENFORCEMENT_DIR/cf-pattern-matching.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$ENFORCEMENT_DIR/cf-pattern-matching.sh"
 fi
 
 # =============================================================================
@@ -108,12 +115,14 @@ HIGH_PATHS=(
     ".claude/hooks/codeflow/*"
     ".codeflow/config/*"
     ".codeflow/scripts/security/*"
+    ".codeflow/scripts/git-hooks/*"
+    ".codeflow/scripts/shell-lib/*"
+    ".github/workflows/*"
 )
 
 MODERATE_PATHS=(
     "project/mission.md"
     "project/tech-stack/*"
-    ".github/workflows/*"
 )
 
 # Load from config if available
@@ -138,17 +147,32 @@ fi
 # PATTERN MATCHING FUNCTIONS
 # =============================================================================
 
-# Check if path matches a glob pattern
+# Check if path matches a glob pattern (supports ** recursive globs)
 matches_pattern() {
     local path="$1"
     local pattern="$2"
 
-    # Convert glob to regex
-    local regex="${pattern//\*/.*}"
-    regex="${regex//\?/.}"
+    # Use matches_extended_glob from cf-pattern-matching.sh if available
+    if declare -f matches_extended_glob &>/dev/null; then
+        matches_extended_glob "$path" "$pattern"
+        return $?
+    fi
 
-    if [[ "$path" =~ ^$regex$ ]]; then
-        return 0
+    # Fallback: handle ** and * separately
+    if [[ "$pattern" == *"**"* ]]; then
+        local regex="$pattern"
+        regex="${regex//./\\.}"
+        regex="${regex//\*\*/___DOUBLESTAR___}"
+        regex="${regex//\*/[^/]*}"
+        regex="${regex//___DOUBLESTAR___/.*}"
+        if [[ "$path" =~ ^$regex$ ]]; then
+            return 0
+        fi
+    else
+        # shellcheck disable=SC2053
+        if [[ "$path" == $pattern ]]; then
+            return 0
+        fi
     fi
     return 1
 }

@@ -9,8 +9,8 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-reject-staged-edit.sh"
-STAGE_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-stage-edit.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-reject-staged-edit.sh"
+STAGE_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
 STAGING_DIR="/tmp/claude/managed/protected-edits"
 
 # Test counter
@@ -20,7 +20,7 @@ TESTS_FAILED=0
 # Cleanup
 cleanup() {
     rm -rf "$STAGING_DIR" 2>/dev/null || true
-    rm -f /tmp/test-reject-*.txt 2>/dev/null || true
+    rm -f /tmp/claude/test-reject-*.txt 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -99,11 +99,11 @@ echo ""
 echo "--- Rejection functionality ---"
 
 # Create and stage a test file
-echo "original content" > /tmp/test-reject-original.txt
-echo "new content" > /tmp/test-reject-new.txt
-"$STAGE_SCRIPT" "/tmp/test-reject-original.txt" "/tmp/test-reject-new.txt" >/dev/null 2>&1
+echo "original content" > /tmp/claude/test-reject-original.txt
+echo "new content" > /tmp/claude/test-reject-new.txt
+"$STAGE_SCRIPT" "/tmp/claude/test-reject-original.txt" "/tmp/claude/test-reject-new.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" "/tmp/test-reject-original.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "/tmp/claude/test-reject-original.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "rejected\|cleaned"; then
     echo "PASS: Rejection succeeds"
     ((TESTS_PASSED++)) || true
@@ -115,7 +115,7 @@ fi
 # ============================================================================
 # Test 7: Staged files cleaned up
 # ============================================================================
-SAFE_NAME=$(echo "/tmp/test-reject-original.txt" | sed 's/[\/]/_/g')
+SAFE_NAME=$(echo "/tmp/claude/test-reject-original.txt" | sed 's/[\/]/_/g')
 
 if [[ ! -f "$STAGING_DIR/${SAFE_NAME}.staged" ]]; then
     echo "PASS: Staged files cleaned up after rejection"
@@ -128,7 +128,7 @@ fi
 # ============================================================================
 # Test 8: Original file unchanged
 # ============================================================================
-if grep -q "original content" /tmp/test-reject-original.txt; then
+if grep -q "original content" /tmp/claude/test-reject-original.txt; then
     echo "PASS: Original file unchanged"
     ((TESTS_PASSED++)) || true
 else
@@ -139,11 +139,11 @@ fi
 # ============================================================================
 # Test 9: Rejection with reason
 # ============================================================================
-echo "original2" > /tmp/test-reject-original2.txt
-echo "new2" > /tmp/test-reject-new2.txt
-"$STAGE_SCRIPT" "/tmp/test-reject-original2.txt" "/tmp/test-reject-new2.txt" >/dev/null 2>&1
+echo "original2" > /tmp/claude/test-reject-original2.txt
+echo "new2" > /tmp/claude/test-reject-new2.txt
+"$STAGE_SCRIPT" "/tmp/claude/test-reject-original2.txt" "/tmp/claude/test-reject-new2.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" -r "Test rejection reason" "/tmp/test-reject-original2.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" -r "Test rejection reason" "/tmp/claude/test-reject-original2.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "rejected\|reason"; then
     echo "PASS: Rejection with reason works"
     ((TESTS_PASSED++)) || true

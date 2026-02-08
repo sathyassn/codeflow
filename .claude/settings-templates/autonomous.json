@@ -48,6 +48,11 @@
     ],
     "delegationTarget": "cf-general-purpose"
   },
+  "_codeflow": {
+    "agent_teams": "auto",
+    "_agent_teams_values": "auto | always | never",
+    "_agent_teams_description": "Agent-teams mode: auto (detect from context), always (force agent-teams mode), never (standalone mode)"
+  },
   "_plugins_note": {
     "_note": "Plugin config. IDENTICAL across all templates (like hooks).",
     "behavior": "OVERRIDE - settings.local.json enabledPlugins REPLACES settings.json",
@@ -60,6 +65,9 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "permissions": {
     "defaultMode": "bypassPermissions",
@@ -313,7 +321,7 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
-            "timeout": 1
+            "timeout": 3
           },
           {
             "type": "command",
@@ -333,7 +341,7 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
-            "timeout": 1
+            "timeout": 2
           },
           {
             "type": "command",
@@ -384,6 +392,26 @@
             "type": "command",
             "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh",
             "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Teammate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh",
+            "timeout": 2
           }
         ]
       }

@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-validate-python.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-python.sh"
 
 # Test counter
 TESTS_PASSED=0
@@ -17,7 +17,7 @@ TESTS_FAILED=0
 
 # Cleanup
 cleanup() {
-    rm -f /tmp/test-validate-*.py 2>/dev/null || true
+    rm -f /tmp/claude/test-validate-*.py 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -65,7 +65,7 @@ fi
 echo ""
 echo "--- Validation functionality ---"
 
-cat > /tmp/test-validate-valid.py <<'EOF'
+cat > /tmp/claude/test-validate-valid.py <<'EOF'
 #!/usr/bin/env python3
 """A valid Python script."""
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     hello()
 EOF
 
-OUTPUT=$("$SCRIPT" /tmp/test-validate-valid.py 2>&1 || true)
+OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-valid.py 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "PASS"; then
     echo "PASS: Valid script passes"
     ((TESTS_PASSED++)) || true
@@ -89,14 +89,14 @@ fi
 # ============================================================================
 # Test 5: Invalid Python script (syntax error)
 # ============================================================================
-cat > /tmp/test-validate-invalid.py <<'EOF'
+cat > /tmp/claude/test-validate-invalid.py <<'EOF'
 #!/usr/bin/env python3
 def broken(
     # Missing closing parenthesis
     print("broken")
 EOF
 
-if ! "$SCRIPT" /tmp/test-validate-invalid.py 2>/dev/null; then
+if ! "$SCRIPT" /tmp/claude/test-validate-invalid.py 2>/dev/null; then
     echo "PASS: Invalid script fails"
     ((TESTS_PASSED++)) || true
 else
@@ -107,7 +107,7 @@ fi
 # ============================================================================
 # Test 6: Quiet mode
 # ============================================================================
-OUTPUT=$("$SCRIPT" --quiet /tmp/test-validate-valid.py 2>&1 || true)
+OUTPUT=$("$SCRIPT" --quiet /tmp/claude/test-validate-valid.py 2>&1 || true)
 if [[ -z "$OUTPUT" ]]; then
     echo "PASS: Quiet mode suppresses output"
     ((TESTS_PASSED++)) || true
@@ -131,13 +131,13 @@ fi
 # ============================================================================
 # Test 8: Simple valid script
 # ============================================================================
-cat > /tmp/test-validate-simple.py <<'EOF'
+cat > /tmp/claude/test-validate-simple.py <<'EOF'
 x = 1
 y = 2
 print(x + y)
 EOF
 
-OUTPUT=$("$SCRIPT" /tmp/test-validate-simple.py 2>&1 || true)
+OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-simple.py 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "PASS"; then
     echo "PASS: Simple script passes"
     ((TESTS_PASSED++)) || true

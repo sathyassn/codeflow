@@ -1,6 +1,6 @@
 # Part 8: Enforcement Model
 
-> The three-mechanism model: Instructions (flow logic) + Tasks (visibility) + Hooks (enforcement). Sentinel system, TaskUpdate interception, verify-work team-mode bypass, team cleanup guard, and graceful degradation.
+> The three-mechanism model: Instructions (flow logic) + Tasks (visibility) + Hooks (enforcement). Sentinel system, TaskUpdate interception, verify-work agent-teams-mode bypass, team cleanup guard, and graceful degradation.
 
 ---
 
@@ -16,7 +16,7 @@
 - [8.6 The PathFlow Gate Hook](#86-the-pathflow-gate-hook)
   - [8.6.1 Team Cleanup Guard](#861-team-cleanup-guard)
 - [8.7 TaskUpdate Interception](#87-taskupdate-interception)
-- [8.8 Verify-Work in Team Mode](#88-verify-work-in-team-mode)
+- [8.8 Verify-Work in Agent-Teams Mode](#88-verify-work-in-agent-teams-mode)
 - [8.9 Graceful Degradation](#89-graceful-degradation)
 - [8.10 Defense-in-Depth Summary](#810-defense-in-depth-summary)
 - [8.11 Scripts Requiring Mode-Awareness Updates](#811-scripts-requiring-mode-awareness-updates)
@@ -98,7 +98,7 @@ Two types of sentinels coexist in CodeFlow. They serve different purposes and op
 | No expiry              |     | Expire after timeout   |
 | Created on phase       |     | Created on skill       |
 |   marker completion    |     |   invocation           |
-| Used in team sessions  |     | Used in non-team       |
+| Used in team sessions  |     | Used in standalone       |
 | Checked by pathflow-   |     |   sessions (backward   |
 |   gate hook            |     |   compatibility)       |
 | Fewer needed (phases   |     | Granular per-skill     |
@@ -115,19 +115,19 @@ Two types of sentinels coexist in CodeFlow. They serve different purposes and op
 | Session type | Team sessions | Non-team sessions |
 | Quantity needed | ~3-5 for full session | ~8-12 per workflow |
 
-**Key simplification**: In team mode, `pathflow:pf-3` (work classified and registered) implicitly covers what multiple skill sentinels would check. If PF-3 completed, work IS registered, work IS classified. No need for separate `ensure-work-registered` and `classify-work` sentinels.
+**Key simplification**: In agent-teams mode, `pathflow:pf-3` (work classified and registered) implicitly covers what multiple skill sentinels would check. If PF-3 completed, work IS registered, work IS classified. No need for separate `ensure-work-registered` and `classify-work` sentinels.
 
 ### 8.3.1 Mode Detection Mechanism
 
-Hooks need a reliable way to determine whether the current session is running in team mode (PathFlow active) or non-team mode (skill sentinels only). The mechanism uses an explicit state flag file.
+Hooks need a reliable way to determine whether the current session is running in agent-teams mode (PathFlow active) or standalone mode (skill sentinels only). The mechanism uses an explicit state flag file.
 
 **Detection logic**:
 
 ```
 if [ -f "/tmp/claude/managed/state/pathflow-active" ]; then
-    # Team mode: use PathFlow sentinels
+    # Agent-teams mode: use PathFlow sentinels
 else
-    # Non-team mode: use skill sentinels (backward compatible)
+    # Standalone mode: use skill sentinels (backward compatible)
 fi
 ```
 
@@ -152,7 +152,7 @@ created_at=2026-02-07T14:00:00Z
 
 | Alternative | Problem |
 |-------------|---------|
-| Check `~/.claude/teams/*/config.json` | Fragile -- team config may persist after a session ends, causing false positives in subsequent non-team sessions |
+| Check `~/.claude/teams/*/config.json` | Fragile -- team config may persist after a session ends, causing false positives in subsequent standalone sessions |
 | Environment variable | Shell state does not persist between Bash tool calls in Claude Code |
 | Check TaskList for phase markers | Expensive (requires API call), racy, and phase markers may not exist yet at session start |
 | Explicit state flag file (chosen) | Created/destroyed by PathFlow lifecycle, accurately reflects current session state, located in `/tmp/claude/managed/state/` which is session-scoped and cleaned up automatically |
@@ -164,12 +164,12 @@ The explicit state flag is the most reliable approach because it is directly tie
 In any given session, one sentinel type is PRIMARY and the other is either absent or ignored.
 
 ```
-Team Mode (pathflow-active exists):
+Agent-Teams Mode (pathflow-active exists):
   PathFlow sentinels = PRIMARY (created and checked)
   Skill sentinels    = CREATED (backward compat) but NOT checked
   Gate hook uses     = pathflow_active() -> PathFlow sentinel checks
 
-Non-Team Mode (pathflow-active absent):
+Standalone Mode (pathflow-active absent):
   PathFlow sentinels = DO NOT EXIST
   Skill sentinels    = PRIMARY (created and checked)
   Gate hook uses     = skill sentinel checks (existing behavior)
@@ -177,8 +177,8 @@ Non-Team Mode (pathflow-active absent):
 
 **Rules**:
 
-1. **Team mode**: PathFlow sentinels are the authority. Skill sentinels are still created by existing hooks (backward compatibility) but the gate hook does NOT check them. This avoids TTL-expiry false negatives during long team sessions.
-2. **Non-team mode**: Skill sentinels are the authority. PathFlow sentinels are never created because no PathFlow lifecycle runs. Existing hook behavior is completely unchanged.
+1. **Agent-teams mode**: PathFlow sentinels are the authority. Skill sentinels are still created by existing hooks (backward compatibility) but the gate hook does NOT check them. This avoids TTL-expiry false negatives during long team sessions.
+2. **Standalone mode**: Skill sentinels are the authority. PathFlow sentinels are never created because no PathFlow lifecycle runs. Existing hook behavior is completely unchanged.
 3. **Storage**: Both types stored in `.state/sentinels/` with different prefixes (`pathflow:` vs skill name).
 4. **Cleanup**: SessionEnd cleanup removes BOTH types regardless of mode, ensuring a clean slate.
 
@@ -226,9 +226,9 @@ Team Lead calls:                                    |  PostToolUse     |
 
 ## 8.5 Which Sentinels Are Needed
 
-In team mode, PathFlow sentinels replace many individual skill sentinels. Here are the sentinels that actually matter:
+In agent-teams mode, PathFlow sentinels replace many individual skill sentinels. Here are the sentinels that actually matter:
 
-### PathFlow Sentinels (Team Mode)
+### PathFlow Sentinels (Agent-Teams Mode)
 
 | Sentinel | Created When | Checked Before | Purpose |
 |----------|-------------|----------------|---------|
@@ -273,11 +273,11 @@ A new PreToolUse hook (`cf-pre-tool-use-pathflow-gate.sh`) enforces that certain
 on PreToolUse(tool, input):
   if tool in [Edit, Write]:
     if pathflow_active():
-      # Team mode: check PathFlow sentinel
+      # Agent-teams mode: check PathFlow sentinel
       if not sentinel_exists("pathflow:pf-3"):
         BLOCK: "Work must be classified (PF-3) before editing files."
     else:
-      # Non-team mode: fall back to skill sentinel check
+      # Standalone mode: fall back to skill sentinel check
       check_skill_sentinel("cf-task-management:ensure-work-registered")
 
 function pathflow_active():
@@ -337,9 +337,9 @@ Beyond sentinel checks, the enforcement model can intercept `TaskUpdate` calls t
 
 ---
 
-## 8.8 Verify-Work in Team Mode
+## 8.8 Verify-Work in Agent-Teams Mode
 
-In PathFlow v3 team mode, the `cf-stop-verify-work.sh` Stop hook's PCV (Post-Completion Verification) behavior is **bypassed**. The hook file itself remains, but when the `pathflow-active` flag exists, it skips PCV checking entirely -- the WS-REV (Review) work stage replaces that function. In non-team mode (no `pathflow-active` flag), the hook continues to check for PCV markers as before.
+In PathFlow v3 agent-teams mode, the `cf-stop-verify-work.sh` Stop hook's PCV (Post-Completion Verification) behavior is **bypassed**. The hook file itself remains, but when the `pathflow-active` flag exists, it skips PCV checking entirely -- the WS-REV (Review) work stage replaces that function. In standalone mode (no `pathflow-active` flag), the hook continues to check for PCV markers as before.
 
 ### What verify-work Did
 
@@ -469,30 +469,30 @@ Layer 3: HOOKS
 
 ## 8.11 Scripts Requiring Mode-Awareness Updates
 
-The following existing scripts must be made mode-aware: they need to check the `pathflow-active` flag (see [Section 8.3.1](#831-mode-detection-mechanism)) and behave differently in team vs non-team mode.
+The following existing scripts must be made mode-aware: they need to check the `pathflow-active` flag (see [Section 8.3.1](#831-mode-detection-mechanism)) and behave differently in team vs standalone mode.
 
 ### Hooks Needing Updates
 
-| Hook | Path | Current Behavior | Team Mode Change |
+| Hook | Path | Current Behavior | Agent-Teams Mode Change |
 |------|------|-----------------|------------------|
-| Post-tool-use skill sentinel | `.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh` | Creates sentinels after skill invocation | In team mode: also create PathFlow sentinels when phase markers complete |
-| Pre-tool-use bash sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh` | Checks sentinels before bash commands | In team mode: check PathFlow sentinels instead of/in addition to skill sentinels |
-| Pre-tool-use file sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh` | Checks sentinels for file operations | In team mode: check PathFlow sentinels |
-| Pre-tool-use task sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh` | Checks task context | In team mode: check PathFlow phase markers |
-| Pre-tool-use grep sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh` | Grep sentinel checks | In team mode: may need PathFlow awareness |
+| Post-tool-use skill sentinel | `.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh` | Creates sentinels after skill invocation | In agent-teams mode: also create PathFlow sentinels when phase markers complete |
+| Pre-tool-use bash sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh` | Checks sentinels before bash commands | In agent-teams mode: check PathFlow sentinels instead of/in addition to skill sentinels |
+| Pre-tool-use file sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh` | Checks sentinels for file operations | In agent-teams mode: check PathFlow sentinels |
+| Pre-tool-use task sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh` | Checks task context | In agent-teams mode: check PathFlow phase markers |
+| Pre-tool-use grep sentinel | `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh` | Grep sentinel checks | In agent-teams mode: may need PathFlow awareness |
 | Session start cleanup | `.claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh` | Sentinel cleanup at session start | Must clean both PathFlow and skill sentinels |
 | Session end cleanup | `.claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh` | Sentinel cleanup at session end | Must clean both sentinel types AND remove the `pathflow-active` flag |
 
 ### Security Scripts Needing Updates
 
-| Script | Path | Team Mode Change |
+| Script | Path | Agent-Teams Mode Change |
 |--------|------|------------------|
 | Core sentinel library | `.codeflow/scripts/security/sentinel/cf-sentinel.sh` | Needs to support both PathFlow and skill sentinel types (create, check, remove) |
 | Security helper library | `.codeflow/scripts/security/lib/security-lib.sh` | Sentinel helper functions need mode-aware sentinel checking via `pathflow_active()` |
 
 ### Post-Tool-Use Hooks
 
-| Hook | Path | Team Mode Change |
+| Hook | Path | Agent-Teams Mode Change |
 |------|------|------------------|
 | Memory/progress hook | `.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh` | References sentinels; may need PathFlow sentinel awareness for progress tracking |
 
@@ -505,10 +505,10 @@ All scripts listed above should follow the same mode-detection pattern:
 source "${CODEFLOW_ROOT}/.codeflow/scripts/security/lib/security-lib.sh"
 
 if pathflow_active; then
-    # Team mode: use PathFlow sentinels
+    # Agent-teams mode: use PathFlow sentinels
     check_pathflow_sentinel "pathflow:pf-3"
 else
-    # Non-team mode: use skill sentinels (existing behavior)
+    # Standalone mode: use skill sentinels (existing behavior)
     check_skill_sentinel "cf-task-management:ensure-work-registered"
 fi
 ```

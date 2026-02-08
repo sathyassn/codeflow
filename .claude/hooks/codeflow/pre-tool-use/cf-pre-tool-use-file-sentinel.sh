@@ -69,6 +69,21 @@ if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
 fi
 
 # =============================================================================
+# V4: PATHFLOW MODE CHECK
+# =============================================================================
+
+if declare -f is_agent_teams_active &>/dev/null && is_agent_teams_active; then
+    # In agent-teams mode, check PathFlow sentinel for write authorization
+    PATHFLOW_SENTINEL_DIR="$REPO_ROOT/.state/sentinels"
+    if ls "$PATHFLOW_SENTINEL_DIR"/pathflow:pf-3-* &>/dev/null 2>&1; then
+        # PF-3 complete: file operations authorized by PathFlow
+        exit 0
+    fi
+    # PF-3 not complete: fall through to existing sentinel checks
+    # (which will likely block since no skill sentinels in PathFlow mode)
+fi
+
+# =============================================================================
 # INPUT PARSING
 # =============================================================================
 

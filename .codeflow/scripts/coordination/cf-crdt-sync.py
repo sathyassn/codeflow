@@ -15,7 +15,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -168,7 +168,7 @@ def main():
             stats["crdt_to_db"] = crdt_stats
 
         stats["success"] = True
-        stats["timestamp"] = datetime.utcnow().isoformat() + "Z"
+        stats["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         if args.json:
             print(json.dumps(stats, indent=2))

@@ -46,6 +46,13 @@ export REPO_ROOT
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
+LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
+if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
+    export LIB_DIR
+    # shellcheck source=/dev/null
+    source "$LIB_DIR/security-lib.sh"
+fi
+
 # Read sentinel directory from config
 SENTINEL_DIR="/tmp/claude/managed/sentinels"
 if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
@@ -78,6 +85,11 @@ fi
 if [[ -d "$SENTINEL_DIR" ]]; then
     find "$SENTINEL_DIR" -name "*.json" -type f -mmin "+$((SENTINEL_TTL / 60))" -delete 2>/dev/null || true
 fi
+
+# V4: Preserve PathFlow sentinels (session-scoped, stored in .state/sentinels/)
+# PathFlow sentinels are NOT in the /tmp/claude/managed/sentinels/ directory
+# They persist across session restarts within the same PathFlow session
+# Cleanup of PathFlow sentinels is handled by cf-session-end-cleanup.sh
 
 # =============================================================================
 # SESSION METADATA

@@ -181,6 +181,119 @@ class TestMemoryStoreEventTypes:
         )
         assert results[0]["event_type"] == "blocker"
 
+    def test_stage_transition_event_type(self, mock_db_ops):
+        """Should accept V4 stage_transition event type."""
+        with mock_db_ops.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_events (id, event_type, domain, data)
+                VALUES (?, ?, ?, ?)
+            """,
+                (
+                    "mem-5",
+                    "stage_transition",
+                    "development",
+                    '{"from_stage": "dev", "to_stage": "review"}',
+                ),
+            )
+            conn.commit()
+
+        results = mock_db_ops.execute_query(
+            "SELECT * FROM memory_events WHERE id = 'mem-5'"
+        )
+        assert results[0]["event_type"] == "stage_transition"
+
+    def test_stage_complete_event_type(self, mock_db_ops):
+        """Should accept V4 stage_complete event type."""
+        with mock_db_ops.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_events (id, event_type, domain, data)
+                VALUES (?, ?, ?, ?)
+            """,
+                (
+                    "mem-6",
+                    "stage_complete",
+                    "development",
+                    '{"stage": "review", "verdict": "approved"}',
+                ),
+            )
+            conn.commit()
+
+        results = mock_db_ops.execute_query(
+            "SELECT * FROM memory_events WHERE id = 'mem-6'"
+        )
+        assert results[0]["event_type"] == "stage_complete"
+
+    def test_rework_limit_event_type(self, mock_db_ops):
+        """Should accept V4 rework_limit event type."""
+        with mock_db_ops.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_events (id, event_type, domain, data)
+                VALUES (?, ?, ?, ?)
+            """,
+                (
+                    "mem-7",
+                    "rework_limit",
+                    "development",
+                    '{"task_id": "TSK-001", "iterations": 3}',
+                ),
+            )
+            conn.commit()
+
+        results = mock_db_ops.execute_query(
+            "SELECT * FROM memory_events WHERE id = 'mem-7'"
+        )
+        assert results[0]["event_type"] == "rework_limit"
+
+
+class TestMemoryStoreV4EventTypeCLI:
+    """Tests for V4 event types via CLI validation."""
+
+    def test_cli_accepts_stage_transition(self, run_script):
+        """Should accept stage_transition via CLI --event-type."""
+        result = run_script(
+            SCRIPT_PATH,
+            "--event-type",
+            "stage_transition",
+            "--domain",
+            "development",
+            "--content",
+            "Transition from dev to review",
+        )
+        # May fail due to DB not being available, but should NOT fail on arg validation
+        if result.returncode != 0:
+            assert "invalid choice" not in result.stderr.lower()
+
+    def test_cli_accepts_stage_complete(self, run_script):
+        """Should accept stage_complete via CLI --event-type."""
+        result = run_script(
+            SCRIPT_PATH,
+            "--event-type",
+            "stage_complete",
+            "--domain",
+            "development",
+            "--content",
+            "Review stage complete",
+        )
+        if result.returncode != 0:
+            assert "invalid choice" not in result.stderr.lower()
+
+    def test_cli_accepts_rework_limit(self, run_script):
+        """Should accept rework_limit via CLI --event-type."""
+        result = run_script(
+            SCRIPT_PATH,
+            "--event-type",
+            "rework_limit",
+            "--domain",
+            "development",
+            "--content",
+            "Rework limit reached",
+        )
+        if result.returncode != 0:
+            assert "invalid choice" not in result.stderr.lower()
+
 
 class TestMemoryStoreDomains:
     """Tests for different domains."""

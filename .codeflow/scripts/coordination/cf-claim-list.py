@@ -15,7 +15,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -59,7 +59,7 @@ def main():
 
     try:
         doc = load_coordination()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         claims = []
         for claim_id, claim in doc.claims.items():

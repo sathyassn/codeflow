@@ -105,8 +105,8 @@ _logger: Optional[CodeFlowLogger] = None
 
 
 def get_logger(name: str = "codeflow") -> CodeFlowLogger:
-    """Get or create module-level logger."""
+    """Get or create logger for the given name."""
     global _logger
-    if _logger is None:
+    if _logger is None or _logger.name != name:
         _logger = setup_logging(name)
     return _logger

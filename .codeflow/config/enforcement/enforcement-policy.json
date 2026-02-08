@@ -461,9 +461,17 @@
         "note": "Bash-only: .git/ is not editable via Edit/Write tools"
       },
       {
-        "id": "codeflow_testing",
-        "pattern": ".codeflow/testing/test-config.json",
-        "reason": "Test priorities configuration is protected",
+        "id": "codeflow_git_hooks",
+        "pattern": ".codeflow/scripts/git-hooks",
+        "reason": "Git hooks enforce commit format and branch protection",
+        "skill": "security-management",
+        "operation": "handle-protected-resource",
+        "tools": ["Edit", "Write", "Bash"]
+      },
+      {
+        "id": "codeflow_shell_lib",
+        "pattern": ".codeflow/scripts/shell-lib",
+        "reason": "Foundation libraries define config paths and exit codes used by all hooks",
         "skill": "security-management",
         "operation": "handle-protected-resource",
         "tools": ["Edit", "Write", "Bash"]
@@ -513,12 +521,14 @@
       ".claude/hooks/codeflow/**",
       ".claude/settings-templates/**",
       ".codeflow/config/**",
-      ".codeflow/scripts/security/**"
+      ".codeflow/scripts/security/**",
+      ".codeflow/scripts/git-hooks/**",
+      ".codeflow/scripts/shell-lib/**",
+      ".github/workflows/**"
     ],
     "moderate": [
       "project/mission.md",
-      "project/tech-stack/**",
-      ".github/workflows/**"
+      "project/tech-stack/**"
     ]
   },
 
@@ -543,6 +553,12 @@
       "feature", "feat", "fix", "bugfix", "hotfix", "release", "docs",
       "refactor", "test", "chore", "perf", "style", "build", "ci",
       "revert", "plan", "merge", "experiment", "wip", "refine"
+    ],
+    "branch_prefixes": [
+      "feat/", "fix/", "docs/", "refactor/", "test/", "chore/",
+      "plan/", "experiment/", "release/", "hotfix/", "bugfix/",
+      "feature/", "perf/", "style/", "build/", "ci/", "revert/",
+      "merge/", "wip/", "refine/"
     ],
     "ai_attribution_patterns": [
       "Claude", "Anthropic", "@anthropic.com", "claude.ai", "claude code",

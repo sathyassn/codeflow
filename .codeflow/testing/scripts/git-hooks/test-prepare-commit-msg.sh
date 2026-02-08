@@ -10,11 +10,14 @@ set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
 HOOK="$REPO_ROOT/.codeflow/scripts/git-hooks/prepare-commit-msg"
-TEMP_MSG="/tmp/test-prepare-commit-msg-$$"
+TEMP_MSG="/tmp/claude/test-prepare-commit-msg-$$"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+# Ensure temp directory exists
+mkdir -p /tmp/claude
 
 # Cleanup (called via trap)
 # shellcheck disable=SC2329  # Invoked indirectly via trap
@@ -97,14 +100,56 @@ else
 fi
 
 # ============================================================================
-# Test 3: Skip conditions
+# Test 3: Skip conditions (pattern checks)
 # ============================================================================
 echo ""
-echo "--- Skip conditions ---"
+echo "--- Skip conditions (pattern) ---"
 
 check_pattern 'COMMIT_SOURCE.*message' "Should check for message source"
 check_pattern 'COMMIT_SOURCE.*merge' "Should check for merge source"
 check_pattern 'COMMIT_SOURCE.*commit' "Should check for commit source (amend)"
+
+# ============================================================================
+# Test 3b: Skip conditions (functional)
+# ============================================================================
+echo ""
+echo "--- Skip conditions (functional) ---"
+
+# Source "message": Should skip template generation (message already provided via -m)
+echo "" > "$TEMP_MSG"
+bash "$HOOK" "$TEMP_MSG" "message" 2>/dev/null || true
+MSG_CONTENT=$(cat "$TEMP_MSG")
+if [[ -z "$MSG_CONTENT" ]] || [[ ${#MSG_CONTENT} -le 1 ]]; then
+    echo "PASS: source=message skips template generation"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: source=message should skip template generation (got: '$MSG_CONTENT')"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Source "merge": Should skip template generation
+echo "" > "$TEMP_MSG"
+bash "$HOOK" "$TEMP_MSG" "merge" 2>/dev/null || true
+MERGE_CONTENT=$(cat "$TEMP_MSG")
+if [[ -z "$MERGE_CONTENT" ]] || [[ ${#MERGE_CONTENT} -le 1 ]]; then
+    echo "PASS: source=merge skips template generation"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: source=merge should skip template generation (got: '$MERGE_CONTENT')"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Source "commit": Should skip template generation (amend)
+echo "" > "$TEMP_MSG"
+bash "$HOOK" "$TEMP_MSG" "commit" 2>/dev/null || true
+COMMIT_CONTENT=$(cat "$TEMP_MSG")
+if [[ -z "$COMMIT_CONTENT" ]] || [[ ${#COMMIT_CONTENT} -le 1 ]]; then
+    echo "PASS: source=commit skips template generation"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: source=commit should skip template generation (got: '$COMMIT_CONTENT')"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
 
 # ============================================================================
 # Test 4: Branch detection

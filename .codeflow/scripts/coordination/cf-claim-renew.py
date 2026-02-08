@@ -15,7 +15,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -83,7 +83,7 @@ def main():
             return 1
 
         # Renew the claim
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_expires = now + timedelta(seconds=args.ttl)
         claim["expires_at"] = new_expires.isoformat() + "Z"
         save_coordination(doc)

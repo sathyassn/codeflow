@@ -14,6 +14,8 @@
 #   - log_sentinel: Log sentinel operation event
 #   - log_network: Log network activity event
 #   - get_flags_portion: Extract git commit flags before -m
+#   - is_agent_teams_active: Check if agent-teams mode is active (flag file)
+#   - get_agent_teams_setting: Read agent_teams setting from settings.json
 #   - is_path_targeted: Check if path appears with proper boundaries
 #   - glob_to_regex: Convert glob pattern to regex
 #   - is_glob_path_targeted: Check if command targets a glob pattern
@@ -46,6 +48,37 @@ readonly CF_DATE
 
 # Session ID (set by environment or generate)
 readonly CF_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+
+# =============================================================================
+# MODE DETECTION
+# =============================================================================
+
+# Check if agent-teams mode is active
+# Returns 0 if active, 1 if not
+# Detection: Checks for pathflow-active flag file (runtime indicator)
+# The flag is created at PF-1 (session start) and removed at PF-7/session-end
+is_agent_teams_active() {
+    local flag_file="/tmp/claude/managed/state/pathflow-active"
+    [[ -f "$flag_file" ]]
+}
+
+# Check the agent_teams setting from settings.json
+# Returns: "auto", "always", "never", or "" if not set
+# This reads the _codeflow.agent_teams value from project settings
+get_agent_teams_setting() {
+    local settings_file="${REPO_ROOT}/.claude/settings.json"
+
+    if [[ ! -f "$settings_file" ]]; then
+        echo ""
+        return
+    fi
+
+    if command -v jq &>/dev/null; then
+        jq -r '._codeflow.agent_teams // ""' "$settings_file" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
 
 # =============================================================================
 # AUDIT LOGGING FUNCTIONS (Dual-Write Pattern)

@@ -55,6 +55,22 @@ if [[ -d "$SENTINEL_DIR" ]]; then
 fi
 
 # =============================================================================
+# V4: PATHFLOW CLEANUP
+# =============================================================================
+
+# Remove pathflow-active flag file
+PATHFLOW_ACTIVE="/tmp/claude/managed/state/pathflow-active"
+if [[ -f "$PATHFLOW_ACTIVE" ]]; then
+    rm -f "$PATHFLOW_ACTIVE" 2>/dev/null || true
+fi
+
+# Remove PathFlow sentinels (session-scoped, stored in .state/sentinels/)
+PATHFLOW_SENTINEL_DIR="$REPO_ROOT/.state/sentinels"
+if [[ -d "$PATHFLOW_SENTINEL_DIR" ]]; then
+    rm -f "$PATHFLOW_SENTINEL_DIR"/pathflow:* 2>/dev/null || true
+fi
+
+# =============================================================================
 # STATE FILE CLEANUP
 # =============================================================================
 

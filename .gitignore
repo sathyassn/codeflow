@@ -8,6 +8,9 @@
 .state/logs/
 .state/runtime/
 .state/db/codeflow.db
+.state/db/codeflow.db-shm
+.state/db/codeflow.db-wal
+.state/db/codeflow.db-journal
 .state/backups/
 
 # Node.js

@@ -522,6 +522,25 @@ fi
 cleanup_test_artifacts
 
 echo ""
+echo "--- V4: PathFlow Sentinel Preservation ---"
+
+# Test 55: Hook contains V4 PathFlow comment about preserving sentinels
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "Preserve PathFlow sentinels" "$HOOK"; then
+    pass "Has V4 PathFlow sentinel preservation comment"
+else
+    fail "Should have V4 PathFlow sentinel preservation comment"
+fi
+
+# Test 56: Hook does NOT clean .state/sentinels/ directory
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'rm.*\.state/sentinels' "$HOOK"; then
+    fail "Should NOT clean .state/sentinels/ directory (PathFlow sentinels live there)"
+else
+    pass "Does not clean .state/sentinels/ directory"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

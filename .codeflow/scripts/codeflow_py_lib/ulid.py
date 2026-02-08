@@ -13,7 +13,7 @@ ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 DECODING = {c: i for i, c in enumerate(ENCODING)}
 
 
-def generate_ulid(timestamp_ms: int = None) -> str:
+def generate_ulid(timestamp_ms: "int | None" = None) -> str:
     """
     Generate a new ULID.
 

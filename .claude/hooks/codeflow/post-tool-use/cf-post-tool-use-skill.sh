@@ -93,6 +93,30 @@ extract_operation() {
     echo "$args" | awk '{print $1}' | tr -d "'\""
 }
 
+# V4: Create PathFlow sentinel (session-scoped, no TTL)
+create_pathflow_sentinel() {
+    local skill="$1"
+    local operation="$2"
+
+    local sentinel_dir="$REPO_ROOT/.state/sentinels"
+    mkdir -p "$sentinel_dir" 2>/dev/null || true
+
+    local sentinel_file="$sentinel_dir/pathflow:${operation}"
+
+    if command -v jq &>/dev/null; then
+        jq -nc \
+            --arg skill "$skill" \
+            --arg operation "$operation" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+            --arg session_id "$SESSION_ID" \
+            --arg type "pathflow" \
+            '{skill: $skill, operation: $operation, created_at: $created_at, session_id: $session_id, type: $type, ttl: "none"}' \
+            > "$sentinel_file" 2>/dev/null || true
+    fi
+
+    echo "$sentinel_file"
+}
+
 create_skill_sentinel() {
     local skill="$1"
     local operation="$2"
@@ -165,17 +189,33 @@ if [[ "$TOOL_RESULT" == *"error"* ]] || [[ "$TOOL_RESULT" == *"BLOCKED"* ]]; the
     SKILL_SUCCESS="false"
 fi
 
+# V4: Check if in PathFlow mode
+PATHFLOW_ACTIVE="/tmp/claude/managed/state/pathflow-active"
+IS_PATHFLOW_MODE="false"
+if [[ -f "$PATHFLOW_ACTIVE" ]]; then
+    IS_PATHFLOW_MODE="true"
+fi
+
 # Only create sentinel if skill succeeded
 if [[ "$SKILL_SUCCESS" == "true" ]] && [[ -n "$SKILL_ARGS" ]]; then
     OPERATION=$(extract_operation "$SKILL_ARGS")
 
     if [[ -n "$OPERATION" ]]; then
-        SENTINEL_FILE=$(create_skill_sentinel "$SKILL_BASE" "$OPERATION" 2>/dev/null || echo "")
+        # V4: Create PathFlow sentinel in agent-teams mode
+        if [[ "$IS_PATHFLOW_MODE" == "true" ]]; then
+            SENTINEL_FILE=$(create_pathflow_sentinel "$SKILL_BASE" "$OPERATION" 2>/dev/null || echo "")
+            if [[ -n "$SENTINEL_FILE" ]]; then
+                TTL=0  # No TTL for PathFlow sentinels
+                log_sentinel_creation "$SKILL_BASE" "$OPERATION" "$SENTINEL_FILE" "$TTL"
+            fi
+        else
+            SENTINEL_FILE=$(create_skill_sentinel "$SKILL_BASE" "$OPERATION" 2>/dev/null || echo "")
 
-        if [[ -n "$SENTINEL_FILE" ]]; then
-            # Get TTL for logging
-            TTL=$(sentinel_get_operation_ttl "$SKILL_BASE" "$OPERATION" 2>/dev/null || echo "600")
-            log_sentinel_creation "$SKILL_BASE" "$OPERATION" "$SENTINEL_FILE" "$TTL"
+            if [[ -n "$SENTINEL_FILE" ]]; then
+                # Get TTL for logging
+                TTL=$(sentinel_get_operation_ttl "$SKILL_BASE" "$OPERATION" 2>/dev/null || echo "600")
+                log_sentinel_creation "$SKILL_BASE" "$OPERATION" "$SENTINEL_FILE" "$TTL"
+            fi
         fi
     fi
 fi

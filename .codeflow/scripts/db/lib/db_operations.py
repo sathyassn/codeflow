@@ -20,7 +20,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
@@ -92,7 +92,7 @@ class DatabaseOperations:
             details: Additional details
             duration_ms: Optional duration in milliseconds
         """
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
 
         log_entry = {
@@ -320,6 +320,24 @@ class DatabaseOperations:
             return results[0][first_key]
         return default
 
+    @staticmethod
+    def _validate_identifier(name: str) -> str:
+        """Validate a SQL identifier (table/column name) to prevent injection.
+
+        Args:
+            name: Identifier to validate
+
+        Returns:
+            The validated identifier
+
+        Raises:
+            ValueError: If identifier contains unsafe characters
+        """
+        import re
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+        return name
+
     def row_exists(
         self,
         table: str,
@@ -334,7 +352,8 @@ class DatabaseOperations:
         Returns:
             True if row exists
         """
-        where_clauses = [f"{col} = :{col}" for col in conditions.keys()]
+        table = self._validate_identifier(table)
+        where_clauses = [f"{self._validate_identifier(col)} = :{col}" for col in conditions.keys()]
         query = f"SELECT 1 FROM {table} WHERE {' AND '.join(where_clauses)} LIMIT 1"
         results = self.execute_query(query, conditions)
         return len(results) > 0
@@ -364,6 +383,7 @@ class DatabaseOperations:
         Returns:
             Number of rows
         """
+        table = self._validate_identifier(table)
         return self.get_value(f"SELECT COUNT(*) FROM {table}", default=0)
 
     # =========================================================================
@@ -464,6 +484,7 @@ class DatabaseOperations:
         Args:
             fts_table: Name of FTS5 virtual table
         """
+        fts_table = self._validate_identifier(fts_table)
         start_time = time.time()
         with self.connection() as conn:
             conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
@@ -476,6 +497,7 @@ class DatabaseOperations:
         Args:
             fts_table: Name of FTS5 virtual table
         """
+        fts_table = self._validate_identifier(fts_table)
         start_time = time.time()
         with self.connection() as conn:
             conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('optimize')")

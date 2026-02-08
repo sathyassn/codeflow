@@ -380,7 +380,122 @@ test_version_consistency() {
     return 0
 }
 
-# TEST 5: Structural validation of templates
+# TEST 5: env section consistency across templates
+test_env_consistency() {
+    test_section "Env Section Consistency (MANDATORY)"
+
+    local templates=("$STRICT_TEMPLATE" "$STANDARD_TEMPLATE" "$AUTONOMOUS_TEMPLATE" "$PERMISSIVE_TEMPLATE")
+    local template_names=("strict.json" "standard.json" "autonomous.json" "permissive.json")
+
+    # Get env from strict (reference)
+    local strict_env
+    strict_env=$(jq -S '.env // empty' "$STRICT_TEMPLATE" 2>/dev/null)
+
+    if [[ -z "$strict_env" ]]; then
+        test_fail "strict.json MUST have env section" "env section is missing"
+        return 1
+    fi
+    test_pass "strict.json has env section (reference)"
+
+    # Compare all templates against strict
+    local failed=false
+    for i in "${!templates[@]}"; do
+        local template_env
+        template_env=$(jq -S '.env // empty' "${templates[$i]}" 2>/dev/null)
+
+        if [[ "$template_env" != "$strict_env" ]]; then
+            test_fail "${template_names[$i]} env MUST match strict.json" "env sections differ"
+            failed=true
+        else
+            test_pass "${template_names[$i]} env matches strict.json"
+        fi
+    done
+
+    if [[ "$failed" == "true" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# TEST 6: _codeflow section present across templates
+test_codeflow_section() {
+    test_section "_codeflow Section Presence"
+
+    local templates=("$STRICT_TEMPLATE" "$STANDARD_TEMPLATE" "$AUTONOMOUS_TEMPLATE" "$PERMISSIVE_TEMPLATE")
+    local template_names=("strict.json" "standard.json" "autonomous.json" "permissive.json")
+
+    local failed=false
+    for i in "${!templates[@]}"; do
+        local codeflow_section
+        codeflow_section=$(jq '._codeflow // empty' "${templates[$i]}" 2>/dev/null)
+
+        if [[ -z "$codeflow_section" ]]; then
+            test_fail "${template_names[$i]} MUST have _codeflow section" "_codeflow section is missing"
+            failed=true
+        else
+            # Check agent_teams key exists
+            local agent_teams
+            agent_teams=$(jq -r '._codeflow.agent_teams // empty' "${templates[$i]}" 2>/dev/null)
+            if [[ -z "$agent_teams" ]]; then
+                test_fail "${template_names[$i]} _codeflow MUST have agent_teams key" "agent_teams is missing"
+                failed=true
+            else
+                test_pass "${template_names[$i]} has _codeflow.agent_teams: $agent_teams"
+            fi
+        fi
+    done
+
+    if [[ "$failed" == "true" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# TEST 7: Settings entries reference files that exist on disk (reverse orphan check)
+test_settings_reference_existing_files() {
+    test_section "Settings Reference Existing Files"
+
+    # Get all .sh hook paths from strict.json
+    local hook_paths
+    hook_paths=$(jq -r '.. | objects | select(.command?) | .command // empty' "$STRICT_TEMPLATE" 2>/dev/null | \
+        grep '\.sh' | sed 's|.*bash ||' | sort -u)
+
+    if [[ -z "$hook_paths" ]]; then
+        test_skip "Settings reference check" "No hook paths found in template"
+        return 0
+    fi
+
+    local failed=false
+    local found_count=0
+    local missing_count=0
+
+    while IFS= read -r hook_path; do
+        if [[ -f "$REPO_ROOT/$hook_path" ]]; then
+            test_pass "File exists: $(basename "$hook_path")"
+            ((found_count++)) || true
+        else
+            test_fail "Referenced file MUST exist: $hook_path" "File not found on disk"
+            ((missing_count++)) || true
+            failed=true
+        fi
+    done <<< "$hook_paths"
+
+    echo ""
+    echo "  Found: $found_count, Missing: $missing_count"
+
+    if [[ "$failed" == "true" ]]; then
+        echo "" >&2
+        echo "Settings templates reference hook files that do not exist on disk." >&2
+        echo "Either create the files or remove the references." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# TEST 8: Structural validation of templates
 test_structural_validation() {
     test_section "Structural Validation"
 
@@ -504,6 +619,9 @@ main() {
     test_settings_match_templates || ((failed++)) || true
     test_hook_scripts_registered || ((failed++)) || true
     test_version_consistency || ((failed++)) || true
+    test_env_consistency || ((failed++)) || true
+    test_codeflow_section || ((failed++)) || true
+    test_settings_reference_existing_files || ((failed++)) || true
     test_structural_validation || ((failed++)) || true
 
     # Print summary

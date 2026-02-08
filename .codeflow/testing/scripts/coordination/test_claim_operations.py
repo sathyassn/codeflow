@@ -2,7 +2,7 @@
 test_claim_operations.py - Tests for claim acquire, release, renew, check, list.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import codeflow_py_lib.paths as paths_module
 from codeflow_py_lib.crdt import CoordinationDoc, save_coordination
@@ -23,7 +23,7 @@ class TestClaimAcquireBasic:
         save_coordination(doc)
 
         # Simulate claim acquisition in database
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
         with mock_db_ops.connection() as conn:
             conn.execute(
@@ -53,7 +53,7 @@ class TestClaimAcquireBasic:
 
     def test_acquire_with_exclusive_mode(self, mock_db_ops):
         """Should default to exclusive mode."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
         with mock_db_ops.connection() as conn:
             conn.execute(
@@ -80,7 +80,7 @@ class TestClaimAcquireBasic:
 
     def test_acquire_with_shared_mode(self, mock_db_ops):
         """Should support shared mode."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
         with mock_db_ops.connection() as conn:
             conn.execute(
@@ -112,7 +112,7 @@ class TestClaimConflictDetection:
 
     def test_detects_exclusive_conflict(self, mock_db_ops):
         """Should detect conflict with existing exclusive claim."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Create existing exclusive claim
@@ -148,7 +148,7 @@ class TestClaimConflictDetection:
 
     def test_shared_claims_no_conflict(self, mock_db_ops):
         """Should allow multiple shared claims."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Create two shared claims for same pattern
@@ -195,7 +195,7 @@ class TestClaimConflictDetection:
 
     def test_expired_claim_no_conflict(self, mock_db_ops):
         """Should not conflict with expired claims."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expired = now - timedelta(seconds=600)
 
         # Create expired claim
@@ -235,7 +235,7 @@ class TestClaimRelease:
 
     def test_release_updates_status(self, mock_db_ops):
         """Should update claim status to released."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         # Create claim
@@ -277,7 +277,7 @@ class TestClaimRenew:
 
     def test_renew_updates_expiration(self, mock_db_ops):
         """Should update expiration time."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         old_expires = now + timedelta(seconds=300)
         new_expires = now + timedelta(seconds=900)
 
@@ -320,7 +320,7 @@ class TestClaimCheck:
 
     def test_check_finds_active_claim(self, mock_db_ops):
         """Should find active claims for pattern."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:
@@ -354,7 +354,7 @@ class TestClaimCheck:
 
     def test_check_excludes_released(self, mock_db_ops):
         """Should exclude released claims."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:
@@ -392,7 +392,7 @@ class TestClaimList:
 
     def test_list_all_claims(self, mock_db_ops):
         """Should list all claims."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:
@@ -435,7 +435,7 @@ class TestClaimList:
 
     def test_list_filter_by_owner(self, mock_db_ops):
         """Should filter by owner ID."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:
@@ -482,7 +482,7 @@ class TestClaimList:
 
     def test_list_filter_by_status(self, mock_db_ops):
         """Should filter by status."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:
@@ -527,7 +527,7 @@ class TestClaimList:
 
     def test_list_filter_by_work_id(self, mock_db_ops):
         """Should filter by work ID."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
 
         with mock_db_ops.connection() as conn:

@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator
 
@@ -118,7 +118,7 @@ def sample_claim() -> Dict[str, Any]:
     Returns:
         Dictionary containing sample claim fields.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=600)
     return {
         "id": "claim-test-001",
@@ -146,7 +146,7 @@ def mock_coordination_doc(temp_dir: Path) -> Any:
     from codeflow_py_lib.crdt import CoordinationDoc
 
     doc = CoordinationDoc()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=600)
 
     # Add some sample claims
@@ -190,7 +190,7 @@ def mock_jsonl_ledger(mock_state_dir: Path) -> Path:
         Path to the created JSONL ledger file.
     """
     ledger_path = mock_state_dir / "ledger" / "sessions.jsonl"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=600)
 
     events = [

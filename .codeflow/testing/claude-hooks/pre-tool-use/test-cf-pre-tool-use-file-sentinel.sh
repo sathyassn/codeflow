@@ -477,6 +477,30 @@ fi
 cleanup_test_sentinels
 
 echo ""
+echo "--- V4: PathFlow Mode-Awareness ---"
+
+# Test 51: Hook contains is_agent_teams_active reference
+if grep -q "is_agent_teams_active" "$HOOK"; then
+    pass "Hook contains is_agent_teams_active reference"
+else
+    fail "Should contain is_agent_teams_active reference"
+fi
+
+# Test 52: Hook contains V4 PathFlow section
+if grep -q "V4: PATHFLOW MODE CHECK" "$HOOK"; then
+    pass "Hook contains V4 PathFlow section"
+else
+    fail "Should contain V4 PathFlow section"
+fi
+
+# Test 53: Hook has PathFlow sentinel check
+if grep -q "PATHFLOW_SENTINEL_DIR" "$HOOK" && grep -q "pathflow:pf-3" "$HOOK"; then
+    pass "Hook has PathFlow sentinel check"
+else
+    fail "Should have PathFlow sentinel check"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Passed: $TESTS_PASSED"
 echo "Failed: $TESTS_FAILED"

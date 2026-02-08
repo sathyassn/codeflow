@@ -14,7 +14,7 @@
 - [10.6 Autorun Phase Traversal](#106-autorun-phase-traversal)
 - [10.7 The Haiku Review Check](#107-the-haiku-review-check)
 - [10.8 Rework Limits and Stage Timeouts](#108-rework-limits-and-stage-timeouts)
-- [10.9 Read Delegation in Team Mode](#109-read-delegation-in-team-mode)
+- [10.9 Read Delegation in Agent-Teams Mode](#109-read-delegation-in-agent-teams-mode)
 - [10.10 Session Properties Summary](#1010-session-properties-summary)
 - [10.11 Team Lifecycle Within a Session](#1011-team-lifecycle-within-a-session)
 
@@ -316,31 +316,31 @@ If any single stage (DEV, REV, QA) exceeds its timeout:
 
 ---
 
-## 10.9 Read Delegation in Team Mode
+## 10.9 Read Delegation in Agent-Teams Mode
 
-The existing read-delegation hook (`cf-pre-tool-use-read-delegation.sh`) suggests delegating file reads to sub-agents to save main context. In team mode, this behavior needs adjustment.
+The existing read-delegation hook (`cf-pre-tool-use-read-delegation.sh`) suggests delegating file reads to sub-agents to save main context. In agent-teams mode, this behavior needs adjustment.
 
-**The problem**: In team mode, teammates ARE the sub-agents. If cf-developer reads a file, it should NOT be told to spawn another sub-agent to read it -- cf-developer is already a separate context from the lead.
+**The problem**: In agent-teams mode, teammates ARE the sub-agents. If cf-developer reads a file, it should NOT be told to spawn another sub-agent to read it -- cf-developer is already a separate context from the lead.
 
-**The solution**: Read delegation is conditionally disabled in team mode.
+**The solution**: Read delegation is conditionally disabled in agent-teams mode.
 
 **Detection logic**:
 
 ```
 on PreToolUse(Read, file_path):
   if pathflow_active():
-    # Team mode: teammates handle their own reads
+    # Agent-teams mode: teammates handle their own reads
     # No delegation needed
     ALLOW (no advisory message)
   else:
-    # Non-team mode: suggest delegation to sub-agent
+    # Standalone mode: suggest delegation to sub-agent
     # (existing behavior)
     ADVISE: "Consider delegating this read to a sub-agent"
 ```
 
-**Team mode detection**: The hook checks for `/tmp/claude/managed/state/pathflow-active` flag. If the flag exists, the hook assumes team mode and skips the delegation advisory.
+**Agent-teams mode detection**: The hook checks for `/tmp/claude/managed/state/pathflow-active` flag. If the flag exists, the hook assumes agent-teams mode and skips the delegation advisory.
 
-**Why not disable entirely?** The lead itself should still consider delegation for large file reads. But in practice, the lead rarely reads files directly in team mode -- it delegates work to teammates. The conditional disabling prevents noisy advisories to teammates.
+**Why not disable entirely?** The lead itself should still consider delegation for large file reads. But in practice, the lead rarely reads files directly in agent-teams mode -- it delegates work to teammates. The conditional disabling prevents noisy advisories to teammates.
 
 ---
 
@@ -437,7 +437,7 @@ on PreToolUse(Teammate, params):
 
 The hook matches `Teammate` tool calls and blocks any `cleanup` operation while the `/tmp/claude/managed/state/pathflow-active` flag exists. PF-7 is responsible for removing this flag before calling cleanup. This follows the three-mechanism enforcement model: instructions tell the lead not to dissolve the team, task dependencies prevent premature PF-7 execution, and the hook provides a hard block as a last line of defense. All three mechanisms must agree before team dissolution can proceed.
 
-**Note**: In team mode, the verify-work Stop hook's PCV checking is dropped entirely -- work verification is handled by the WS-REV stage during PF-4 instead of a self-check at session end. See [08-enforcement-model.md](08-enforcement-model.md), Section 8.8.
+**Note**: In agent-teams mode, the verify-work Stop hook's PCV checking is dropped entirely -- work verification is handled by the WS-REV stage during PF-4 instead of a self-check at session end. See [08-enforcement-model.md](08-enforcement-model.md), Section 8.8.
 
 ---
 

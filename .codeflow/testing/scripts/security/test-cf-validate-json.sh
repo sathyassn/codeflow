@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-validate-json.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-json.sh"
 
 # Test counter
 TESTS_PASSED=0
@@ -17,7 +17,7 @@ TESTS_FAILED=0
 
 # Cleanup
 cleanup() {
-    rm -f /tmp/test-validate-*.json 2>/dev/null || true
+    rm -f /tmp/claude/test-validate-*.json 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -65,9 +65,9 @@ fi
 echo ""
 echo "--- Validation functionality ---"
 
-echo '{"name": "test", "value": 42}' > /tmp/test-validate-valid.json
+echo '{"name": "test", "value": 42}' > /tmp/claude/test-validate-valid.json
 
-if "$SCRIPT" /tmp/test-validate-valid.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" /tmp/claude/test-validate-valid.json 2>&1 | grep -q "PASS"; then
     echo "PASS: Valid JSON passes"
     ((TESTS_PASSED++)) || true
 else
@@ -78,9 +78,9 @@ fi
 # ============================================================================
 # Test 5: Invalid JSON (syntax error)
 # ============================================================================
-echo '{"name": "test", "value": }' > /tmp/test-validate-invalid.json
+echo '{"name": "test", "value": }' > /tmp/claude/test-validate-invalid.json
 
-if ! "$SCRIPT" /tmp/test-validate-invalid.json 2>/dev/null; then
+if ! "$SCRIPT" /tmp/claude/test-validate-invalid.json 2>/dev/null; then
     echo "PASS: Invalid JSON fails"
     ((TESTS_PASSED++)) || true
 else
@@ -91,9 +91,9 @@ fi
 # ============================================================================
 # Test 6: Empty JSON object (valid)
 # ============================================================================
-echo '{}' > /tmp/test-validate-empty.json
+echo '{}' > /tmp/claude/test-validate-empty.json
 
-if "$SCRIPT" /tmp/test-validate-empty.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" /tmp/claude/test-validate-empty.json 2>&1 | grep -q "PASS"; then
     echo "PASS: Empty object is valid"
     ((TESTS_PASSED++)) || true
 else
@@ -104,9 +104,9 @@ fi
 # ============================================================================
 # Test 7: JSON array (valid)
 # ============================================================================
-echo '[1, 2, 3]' > /tmp/test-validate-array.json
+echo '[1, 2, 3]' > /tmp/claude/test-validate-array.json
 
-if "$SCRIPT" /tmp/test-validate-array.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" /tmp/claude/test-validate-array.json 2>&1 | grep -q "PASS"; then
     echo "PASS: JSON array is valid"
     ((TESTS_PASSED++)) || true
 else
@@ -117,7 +117,7 @@ fi
 # ============================================================================
 # Test 8: Pretty print option
 # ============================================================================
-if "$SCRIPT" --pretty /tmp/test-validate-valid.json 2>&1 | grep -q "name"; then
+if "$SCRIPT" --pretty /tmp/claude/test-validate-valid.json 2>&1 | grep -q "name"; then
     echo "PASS: Pretty print works"
     ((TESTS_PASSED++)) || true
 else

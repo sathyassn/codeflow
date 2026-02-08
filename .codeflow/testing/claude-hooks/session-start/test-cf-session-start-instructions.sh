@@ -442,6 +442,33 @@ else
 fi
 
 echo ""
+echo "--- V4: PathFlow Context Loading ---"
+
+# Test 47: Hook contains PATHFLOW SESSION ACTIVE text
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "PATHFLOW SESSION ACTIVE" "$HOOK"; then
+    pass "Has PATHFLOW SESSION ACTIVE text"
+else
+    fail "Should have PATHFLOW SESSION ACTIVE text"
+fi
+
+# Test 48: Hook checks for pathflow-active flag
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "pathflow-active" "$HOOK"; then
+    pass "Checks for pathflow-active flag"
+else
+    fail "Should check for pathflow-active flag"
+fi
+
+# Test 49: Hook reads .state/sentinels/ for phase info
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '\.state/sentinels' "$HOOK"; then
+    pass "Reads .state/sentinels/ for phase info"
+else
+    fail "Should read .state/sentinels/ for phase info"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

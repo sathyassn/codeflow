@@ -9,7 +9,7 @@ set -euo pipefail
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/cf-validate-shell.sh"
+SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-shell.sh"
 
 # Test counter
 TESTS_PASSED=0
@@ -17,7 +17,7 @@ TESTS_FAILED=0
 
 # Cleanup
 cleanup() {
-    rm -f /tmp/test-validate-*.sh 2>/dev/null || true
+    rm -f /tmp/claude/test-validate-*.sh 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -65,14 +65,14 @@ fi
 echo ""
 echo "--- Validation functionality ---"
 
-cat > /tmp/test-validate-valid.sh <<'EOF'
+cat > /tmp/claude/test-validate-valid.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "Hello, World!"
 EOF
 
 # Test valid script
-OUTPUT=$("$SCRIPT" /tmp/test-validate-valid.sh 2>&1 || true)
+OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-valid.sh 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "PASS"; then
     echo "PASS: Valid script passes"
     ((TESTS_PASSED++)) || true
@@ -84,14 +84,14 @@ fi
 # ============================================================================
 # Test 5: Invalid shell script (syntax error)
 # ============================================================================
-cat > /tmp/test-validate-invalid.sh <<'EOF'
+cat > /tmp/claude/test-validate-invalid.sh <<'EOF'
 #!/usr/bin/env bash
 if [[ true ]  # Missing closing bracket
 echo "broken"
 fi
 EOF
 
-if ! "$SCRIPT" /tmp/test-validate-invalid.sh 2>/dev/null; then
+if ! "$SCRIPT" /tmp/claude/test-validate-invalid.sh 2>/dev/null; then
     echo "PASS: Invalid script fails"
     ((TESTS_PASSED++)) || true
 else
@@ -102,12 +102,12 @@ fi
 # ============================================================================
 # Test 6: Quiet mode
 # ============================================================================
-if "$SCRIPT" --quiet /tmp/test-validate-valid.sh 2>&1 | grep -qv "."; then
+if "$SCRIPT" --quiet /tmp/claude/test-validate-valid.sh 2>&1 | grep -qv "."; then
     echo "PASS: Quiet mode suppresses output"
     ((TESTS_PASSED++)) || true
 else
     # If output is empty, it passed
-    if [[ -z "$("$SCRIPT" --quiet /tmp/test-validate-valid.sh 2>&1)" ]]; then
+    if [[ -z "$("$SCRIPT" --quiet /tmp/claude/test-validate-valid.sh 2>&1)" ]]; then
         echo "PASS: Quiet mode suppresses output"
         ((TESTS_PASSED++)) || true
     else

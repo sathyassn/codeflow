@@ -2,7 +2,7 @@
 test_crdt_doc.py - Tests for CoordinationDoc CRDT class.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from codeflow_py_lib.crdt import CoordinationDoc
 
@@ -82,7 +82,7 @@ class TestCoordinationDocAddClaim:
     def test_add_claim_with_expiration(self):
         """Should set expiration time."""
         doc = CoordinationDoc()
-        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat() + "Z"
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat() + "Z"
 
         claim = doc.add_claim(
             claim_id="claim-001",
@@ -154,7 +154,7 @@ class TestCoordinationDocRenewClaim:
             pattern="file:src/*.ts",
             owner_id="agent-001",
         )
-        new_expires = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
+        new_expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat() + "Z"
 
         result = doc.renew_claim("claim-001", new_expires)
 
@@ -191,7 +191,7 @@ class TestCoordinationDocGetActiveClaims:
     def test_get_active_claims_for_pattern(self):
         """Should return active claims matching pattern."""
         doc = CoordinationDoc()
-        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat() + "Z"
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat() + "Z"
 
         doc.add_claim(
             claim_id="claim-001",
@@ -215,7 +215,7 @@ class TestCoordinationDocGetActiveClaims:
     def test_excludes_released_claims(self):
         """Should exclude released claims."""
         doc = CoordinationDoc()
-        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat() + "Z"
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat() + "Z"
 
         doc.add_claim(
             claim_id="claim-001",
@@ -234,7 +234,7 @@ class TestCoordinationDocGetActiveClaims:
         """Should exclude expired claims."""
         doc = CoordinationDoc()
         # Expired timestamp
-        expired = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat() + "Z"
 
         doc.add_claim(
             claim_id="claim-001",

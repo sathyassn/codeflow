@@ -229,6 +229,38 @@ else
     fail "Should show HIGH tier in message"
 fi
 
+# Test 24b: Blocks Edit to .codeflow/scripts/git-hooks files (NEW)
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks Edit to .codeflow/scripts/git-hooks files"
+else
+    fail "Should block Edit to git-hooks files"
+fi
+
+# Test 24c: Blocks Edit to .codeflow/scripts/shell-lib files (NEW)
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/shell-lib/config.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks Edit to .codeflow/scripts/shell-lib files"
+else
+    fail "Should block Edit to shell-lib files"
+fi
+
+# Test 24d: Blocks Edit to .github/workflows (elevated to HIGH)
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks Edit to .github/workflows (elevated to HIGH)"
+else
+    fail "Should block Edit to .github/workflows (now HIGH tier)"
+fi
+
+# Test 24e: .github/workflows block message shows HIGH tier (not moderate)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" 2>&1 || true)
+if [[ "$HOOK_OUTPUT" == *"HIGH"* ]]; then
+    pass ".github/workflows block message shows HIGH tier"
+else
+    fail ".github/workflows should show HIGH tier in message"
+fi
+
 echo ""
 echo "--- Moderate Protection Tier (warn but allow) ---"
 
@@ -240,12 +272,12 @@ else
     fail "Should allow Edit to project/mission.md (moderate tier)"
 fi
 
-# Test 26: Allows Edit to .github/workflows (with warning)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+# Test 26: project/tech-stack still in moderate tier (warn but allow)
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/tech-stack/overview.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Allows Edit to .github/workflows"
+    pass "Allows Edit to project/tech-stack (moderate tier)"
 else
-    fail "Should allow Edit to .github/workflows (moderate tier)"
+    fail "Should allow Edit to project/tech-stack (moderate tier)"
 fi
 
 # Test 27: Moderate tier shows warning message
@@ -388,6 +420,29 @@ if grep -q '\*' "$HOOK" && grep -q "regex" "$HOOK"; then
     pass "Supports glob patterns with wildcard"
 else
     fail "Should support glob patterns"
+fi
+
+# Test 44b: ** glob matches deeply nested files (fixed bug: ** was becoming .*.*)
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/hooks/codeflow/pre-tool-use/deeply/nested/test.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]]; then
+    pass "** glob matches deeply nested paths"
+else
+    fail "** glob should match deeply nested paths (was broken: ** became .*.*)"
+fi
+
+# Test 44c: ** glob matches single-level files
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]]; then
+    pass "** glob matches single-level files under protected dir"
+else
+    fail "** glob should match single-level files under protected dir"
+fi
+
+# Test 44d: Sources matches_extended_glob or has correct fallback
+if grep -q "matches_extended_glob" "$HOOK"; then
+    pass "Uses matches_extended_glob for proper ** handling"
+else
+    fail "Should use matches_extended_glob for ** handling"
 fi
 
 echo ""

@@ -14,6 +14,7 @@ Exit Codes:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -72,8 +73,6 @@ def traverse_by_work_id(db, work_id: str, depth: int = 1) -> dict:
                     # Look for references to other work IDs
                     data_str = json.dumps(mem["data"])
                     # Simple pattern matching for work IDs
-                    import re
-
                     related_ids = re.findall(r"(TSK-[A-Z0-9]+|EPC-[A-Z0-9]+)", data_str)
                     for rid in related_ids:
                         if rid not in visited:

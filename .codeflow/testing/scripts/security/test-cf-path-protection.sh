@@ -60,9 +60,9 @@ echo ""
 echo "Test 1: Block redirect to settings.json"
 test_blocks_command "echo test > .claude/settings.json" "Should block redirect to settings.json"
 
-# Test 2: Block modification of CLAUDE.md
-echo "Test 2: Block modification of CLAUDE.md"
-test_blocks_command "echo test >> .claude/CLAUDE.md" "Should block append to CLAUDE.md"
+# Test 2: Allow modification of CLAUDE.md (intentionally NOT protected)
+echo "Test 2: Allow modification of CLAUDE.md"
+test_allows_command "echo test >> .claude/CLAUDE.md" "Should allow append to CLAUDE.md"
 
 # Test 3: Block rm on protected hooks
 echo "Test 3: Block rm on protected hooks"
@@ -160,9 +160,9 @@ test_allows_command "cat .claude/settings.json 2>&1" "Should allow fd redirect"
 echo "Test 26: Allow read from protected paths"
 test_allows_command "cat .claude/CLAUDE.md" "Should allow reading protected files"
 
-# Test 27: Block cp overwrite to CLAUDE.md
-echo "Test 27: Block cp to CLAUDE.md"
-test_blocks_command "cp /tmp/evil.txt .claude/CLAUDE.md" "Should block cp to CLAUDE.md"
+# Test 27: Allow cp to CLAUDE.md (intentionally NOT protected)
+echo "Test 27: Allow cp to CLAUDE.md"
+test_allows_command "cp /tmp/evil.txt .claude/CLAUDE.md" "Should allow cp to CLAUDE.md"
 
 # Test 28: Block operations on quoted paths
 echo "Test 28: Block operations on quoted paths"

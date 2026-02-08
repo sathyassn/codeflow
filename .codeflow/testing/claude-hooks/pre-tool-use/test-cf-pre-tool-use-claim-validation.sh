@@ -391,6 +391,30 @@ else
 fi
 
 echo ""
+echo "--- V4: Agent-Teams Mode-Awareness ---"
+
+# Test 31: Hook contains is_agent_teams_active reference
+if grep -q "is_agent_teams_active" "$HOOK"; then
+    pass "Hook contains is_agent_teams_active reference"
+else
+    fail "Should contain is_agent_teams_active reference"
+fi
+
+# Test 32: Hook contains V4 agent-teams mode section
+if grep -q "V4: AGENT-TEAMS MODE BYPASS" "$HOOK"; then
+    pass "Hook contains V4 agent-teams mode section"
+else
+    fail "Should contain V4 agent-teams mode section"
+fi
+
+# Test 33: In agent-teams mode, hook exits 0 (bypass claims)
+if grep -A2 "is_agent_teams_active" "$HOOK" | grep -q "exit 0"; then
+    pass "In agent-teams mode, hook exits 0 (bypass claims)"
+else
+    fail "Should exit 0 in agent-teams mode to bypass claims"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Passed: $TESTS_PASSED"
 echo "Failed: $TESTS_FAILED"

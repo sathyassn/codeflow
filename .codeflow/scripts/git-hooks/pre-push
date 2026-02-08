@@ -18,8 +18,8 @@ set -euo pipefail
 # SETUP
 # =============================================================================
 
-# shellcheck disable=SC2034  # REPO_ROOT reserved for future use
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CONFIG_FILE="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
 # Colors for output
 RED='\033[0;31m'
@@ -34,29 +34,45 @@ REMOTE="$1"
 URL="$2"
 
 # =============================================================================
-# CONFIGURATION
+# CONFIGURATION (Config-driven with hardcoded fallbacks)
 # =============================================================================
 
-# Protected branches
-PROTECTED_BRANCHES=(
-    "main"
-    "master"
-    "production"
-)
+# Default fallbacks (used if config unavailable)
+DEFAULT_PROTECTED_BRANCHES="main master production"
+DEFAULT_VALID_PREFIXES="feat/ fix/ docs/ refactor/ test/ chore/ plan/ experiment/ release/ hotfix/"
 
-# Valid branch prefixes
-VALID_PREFIXES=(
-    "feat/"
-    "fix/"
-    "docs/"
-    "refactor/"
-    "test/"
-    "chore/"
-    "plan/"
-    "experiment/"
-    "release/"
-    "hotfix/"
-)
+# Load from config or use defaults
+if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+    # Load protected branches from config
+    PB_RAW=$(jq -r '.protected_branches // empty | .[]' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$PB_RAW" ]]; then
+        PROTECTED_BRANCHES=()
+        while IFS= read -r branch; do
+            [[ -n "$branch" ]] && PROTECTED_BRANCHES+=("$branch")
+        done <<< "$PB_RAW"
+    else
+        # shellcheck disable=SC2206  # Word splitting intentional for default list
+        PROTECTED_BRANCHES=($DEFAULT_PROTECTED_BRANCHES)
+    fi
+
+    # Load valid branch prefixes from config (branch_types + "/")
+    VP_RAW=$(jq -r '.git_format.branch_prefixes // empty | .[]' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$VP_RAW" ]]; then
+        VALID_PREFIXES=()
+        while IFS= read -r prefix; do
+            [[ -n "$prefix" ]] && VALID_PREFIXES+=("$prefix")
+        done <<< "$VP_RAW"
+    else
+        # shellcheck disable=SC2206  # Word splitting intentional for default list
+        VALID_PREFIXES=($DEFAULT_VALID_PREFIXES)
+    fi
+else
+    # Fallback to defaults
+    # shellcheck disable=SC2206  # Word splitting intentional for default list
+    PROTECTED_BRANCHES=($DEFAULT_PROTECTED_BRANCHES)
+    # shellcheck disable=SC2206  # Word splitting intentional for default list
+    VALID_PREFIXES=($DEFAULT_VALID_PREFIXES)
+fi
 
 # =============================================================================
 # FORCE PUSH DETECTION

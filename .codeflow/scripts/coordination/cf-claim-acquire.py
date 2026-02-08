@@ -15,7 +15,7 @@ Exit Codes:
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add codeflow_py_lib to path
@@ -77,7 +77,7 @@ def main():
         doc = load_coordination()
 
         # Check for conflicts
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for claim_id, claim in doc.claims.items():
             if claim["pattern"] == args.pattern and claim["status"] == "active":
                 # Check if claim is still valid (not expired)

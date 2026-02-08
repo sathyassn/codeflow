@@ -329,7 +329,8 @@ assert_hook_allows() {
 
 setup_test_dir() {
     local prefix="${1:-test}"
-    TEST_DIR=$(mktemp -d "/tmp/codeflow-test-${prefix}-XXXXXX")
+    local tmp_base="${TMPDIR:-/tmp}"
+    TEST_DIR=$(mktemp -d "${tmp_base}/codeflow-test-${prefix}-XXXXXX")
     export TEST_DIR
     echo "$TEST_DIR"
 }

@@ -62,7 +62,7 @@ validate_file_path() {
     local path="$1"
     local message="${2:-Invalid file path}"
 
-    is_safe_path "$path" || die "$message: path traversal detected" $EXIT_INVALID_INPUT
+    is_safe_path "$path" || die "$message: path traversal detected" "$EXIT_INVALID_INPUT"
 }
 
 # ============================================================================
@@ -156,7 +156,7 @@ validate_json_file() {
     assert_file_exists "$file"
 
     if command_exists jq; then
-        jq -e . "$file" &>/dev/null || die "$message: $file" $EXIT_INVALID_INPUT
+        jq -e . "$file" &>/dev/null || die "$message: $file" "$EXIT_INVALID_INPUT"
     fi
 }
 
