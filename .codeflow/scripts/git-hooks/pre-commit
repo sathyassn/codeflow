@@ -40,15 +40,29 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Branch types (config-driven with fallback)
+# Configuration (config-driven with fallback)
 CONFIG_FILE="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 DEFAULT_BRANCH_TYPES="feature|feat|fix|bugfix|hotfix|release|docs|refactor|test|chore|perf|style|build|ci|revert|plan|merge|experiment|wip|refine"
+DEFAULT_PROTECTED_BRANCHES="main master release/* production"
 
 if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
     TYPES_ARRAY=$(jq -r '.git_format.branch_types // empty | join("|")' "$CONFIG_FILE" 2>/dev/null)
     VALID_BRANCH_TYPES="${TYPES_ARRAY:-$DEFAULT_BRANCH_TYPES}"
+
+    PB_RAW=$(jq -r '.protected_branches // empty | .[]' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$PB_RAW" ]]; then
+        PROTECTED_BRANCHES=()
+        while IFS= read -r branch; do
+            [[ -n "$branch" ]] && PROTECTED_BRANCHES+=("$branch")
+        done <<< "$PB_RAW"
+    else
+        # shellcheck disable=SC2206  # Word splitting intentional for default list
+        PROTECTED_BRANCHES=($DEFAULT_PROTECTED_BRANCHES)
+    fi
 else
     VALID_BRANCH_TYPES="$DEFAULT_BRANCH_TYPES"
+    # shellcheck disable=SC2206  # Word splitting intentional for default list
+    PROTECTED_BRANCHES=($DEFAULT_PROTECTED_BRANCHES)
 fi
 
 # =============================================================================
@@ -59,15 +73,21 @@ fi
 
 CURRENT_BRANCH=$(git branch --show-current)
 
-if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
-    echo -e "${RED}${BOLD}❌ BRANCH PROTECTION: Direct commits to $CURRENT_BRANCH FORBIDDEN${NC}" >&2
-    echo "" >&2
-    echo -e "${YELLOW}🔒 MUST: Use Skill('cf-git-workflow', args='create-feature-branch')${NC}" >&2
-    echo "⛔ Do NOT commit directly to main/master." >&2
-    exit 1
-fi
+for protected in "${PROTECTED_BRANCHES[@]}"; do
+    # Support wildcard patterns (e.g. release/*)
+    # shellcheck disable=SC2254  # Wildcard matching intentional
+    case "$CURRENT_BRANCH" in
+        $protected)
+            echo -e "${RED}${BOLD}❌ BRANCH PROTECTION: Direct commits to $CURRENT_BRANCH FORBIDDEN${NC}" >&2
+            echo "" >&2
+            echo -e "${YELLOW}🔒 MUST: Use Skill('cf-git-workflow', args='create-feature-branch')${NC}" >&2
+            echo "⛔ Do NOT commit directly to protected branches." >&2
+            exit 1
+            ;;
+    esac
+done
 
-echo -e "${GREEN}✓ Branch protection: Not on main/master${NC}"
+echo -e "${GREEN}✓ Branch protection: Not on a protected branch${NC}"
 
 # =============================================================================
 # BRANCH NAME VALIDATION

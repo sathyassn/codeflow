@@ -349,15 +349,15 @@ test_prepush_with_output \
     "my-random-branch"
 
 # ============================================================================
-# Behavioral Test 8: Normal push to protected branch (not force, should ALLOW with warning)
+# Behavioral Test 8: Normal push to protected branch (not force, should BLOCK)
 # ============================================================================
 echo ""
-echo "--- Normal (non-force) push to protected branch (behavioral) ---"
+echo "--- Direct push to protected branch (behavioral) ---"
 
 test_prepush_with_output \
-    "Should warn on direct push to main (non-force)" \
-    0 \
-    "Consider using a PR" \
+    "Should block direct push to main (non-force)" \
+    1 \
+    "Direct push" \
     "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
     "origin" \
     "https://github.com/test/repo.git" \
@@ -380,15 +380,15 @@ test_prepush \
     "feat/new-branch"
 
 # ============================================================================
-# Behavioral Test 10: Push from main branch (skips branch name validation)
+# Behavioral Test 10: Push from main to main (should BLOCK - protected branch)
 # ============================================================================
 echo ""
-echo "--- Push from main skips branch validation (behavioral) ---"
+echo "--- Push from main to protected branch (behavioral) ---"
 
 test_prepush_with_output \
-    "Should skip branch name validation when on main" \
-    0 \
-    "Pre-push checks passed" \
+    "Should block push from main to main (protected)" \
+    1 \
+    "Direct push" \
     "refs/heads/main $FAKE_LOCAL refs/heads/main $ZERO_SHA" \
     "origin" \
     "https://github.com/test/repo.git" \
@@ -396,12 +396,12 @@ test_prepush_with_output \
     "main"
 
 # ============================================================================
-# Behavioral Test 11: Push from master branch (skips branch name validation)
+# Behavioral Test 11: Push from master to master (should BLOCK - protected branch)
 # ============================================================================
 test_prepush_with_output \
-    "Should skip branch name validation when on master" \
-    0 \
-    "Pre-push checks passed" \
+    "Should block push from master to master (protected)" \
+    1 \
+    "Direct push" \
     "refs/heads/master $FAKE_LOCAL refs/heads/master $ZERO_SHA" \
     "origin" \
     "https://github.com/test/repo.git" \
@@ -414,7 +414,7 @@ test_prepush_with_output \
 echo ""
 echo "--- Valid prefix branches (behavioral) ---"
 
-for prefix in feat fix docs refactor test chore plan experiment release hotfix; do
+for prefix in feat fix docs refactor test chore plan experiment release hotfix bugfix feature perf style build ci revert merge wip refine; do
     test_prepush \
         "Should allow push to ${prefix}/something" \
         0 \

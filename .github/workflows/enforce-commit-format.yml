@@ -18,6 +18,7 @@ on:
     branches:
       - main
       - "feat/**"
+      - "feature/**"
       - "fix/**"
       - "bugfix/**"
       - "hotfix/**"
@@ -203,8 +204,9 @@ jobs:
             # 4. No trailing period on subject
             # -----------------------------------------------------------
             if echo "$SUBJECT" | grep -qE '\.$'; then
-              echo -e "${YELLOW}WARNING: Subject should not end with a period${NC}"
+              echo -e "${RED}ERROR: Subject should not end with a period${NC}"
               echo ""
+              COMMIT_VALID=false
             fi
 
             # -----------------------------------------------------------

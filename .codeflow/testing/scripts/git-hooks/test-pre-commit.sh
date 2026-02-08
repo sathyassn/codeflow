@@ -643,12 +643,40 @@ else
 fi
 
 echo ""
+echo "--- Branch protection: BLOCKS commit on production ---"
+
+setup_temp_repo "main"
+git -C "$TEMP_REPO" branch -m main production 2>/dev/null
+echo "test" > "$TEMP_REPO/test.txt"
+git -C "$TEMP_REPO" add test.txt
+
+set +e
+(cd "$TEMP_REPO" && bash "$HOOK") >/dev/null 2>&1
+exit_code=$?
+set -e
+
+if [[ $exit_code -eq 1 ]]; then
+    pass "Blocks commit on production branch (exit 1)"
+else
+    fail "Should block commit on production branch (expected exit 1, got $exit_code)"
+fi
+
+echo ""
 echo "--- Config-driven: reads branch_types from enforcement-policy.json ---"
 
 if grep -q "CONFIG_FILE" "$HOOK" && grep -q "branch_types" "$HOOK"; then
     pass "Hook reads branch_types from config"
 else
     fail "Hook should read branch_types from config"
+fi
+
+echo ""
+echo "--- Config-driven: reads protected_branches from enforcement-policy.json ---"
+
+if grep -q "protected_branches" "$HOOK" && grep -q "DEFAULT_PROTECTED_BRANCHES" "$HOOK"; then
+    pass "Hook reads protected_branches from config with fallback"
+else
+    fail "Hook should read protected_branches from config"
 fi
 
 echo ""

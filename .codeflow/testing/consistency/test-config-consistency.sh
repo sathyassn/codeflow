@@ -246,7 +246,7 @@ if [[ -f "$PRE_PUSH_HOOK" ]]; then
     MISSING_PROTECTED=""
     while IFS= read -r branch; do
         [[ -z "$branch" ]] && continue
-        if ! echo "$PRE_PUSH_PROTECTED" | grep -qx "$branch"; then
+        if ! echo "$PRE_PUSH_PROTECTED" | grep -qxF "$branch"; then
             MISSING_PROTECTED="${MISSING_PROTECTED} $branch"
         fi
     done <<< "$CONFIG_GIT_PROTECTED"
@@ -264,7 +264,7 @@ if [[ -f "$PRE_PUSH_HOOK" ]]; then
     MISSING_ROOT=""
     while IFS= read -r branch; do
         [[ -z "$branch" ]] && continue
-        if ! echo "$PRE_PUSH_PROTECTED" | grep -qx "$branch"; then
+        if ! echo "$PRE_PUSH_PROTECTED" | grep -qxF "$branch"; then
             MISSING_ROOT="${MISSING_ROOT} $branch"
         fi
     done <<< "$CONFIG_ROOT_PROTECTED"

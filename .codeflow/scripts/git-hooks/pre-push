@@ -38,8 +38,8 @@ URL="$2"
 # =============================================================================
 
 # Default fallbacks (used if config unavailable)
-DEFAULT_PROTECTED_BRANCHES="main master production"
-DEFAULT_VALID_PREFIXES="feat/ fix/ docs/ refactor/ test/ chore/ plan/ experiment/ release/ hotfix/"
+DEFAULT_PROTECTED_BRANCHES="main master release/* production"
+DEFAULT_VALID_PREFIXES="feat/ fix/ docs/ refactor/ test/ chore/ plan/ experiment/ release/ hotfix/ bugfix/ feature/ perf/ style/ build/ ci/ revert/ merge/ wip/ refine/"
 
 # Load from config or use defaults
 if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
@@ -107,8 +107,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                 fi
             fi
 
-            echo -e "${YELLOW}Warning: Pushing directly to protected branch '$BRANCH'.${NC}"
-            echo "Consider using a PR for better code review."
+            echo -e "${RED}ERROR: Direct push to protected branch '$BRANCH' blocked!${NC}"
+            echo ""
+            echo "Direct pushes to protected branches are not allowed."
+            echo "Use a feature branch and create a PR instead."
+            exit 1
         fi
     done
 done

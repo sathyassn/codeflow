@@ -544,7 +544,7 @@
   },
 
   "git_format": {
-    "protected_branches": ["main", "master"],
+    "protected_branches": ["main", "master", "release/*", "production"],
     "commit_types": [
       "feat", "fix", "bugfix", "hotfix", "docs", "refactor", "test",
       "chore", "style", "perf", "build", "ci", "revert", "merge", "plan", "refine"
