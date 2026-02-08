@@ -7,7 +7,7 @@
 #   - commit_types: 16 types
 #   - subject.max_length: 50
 #   - body.format: bullets_only, max_bullets: 3, line_max_length: 72
-#   - ai_attribution_patterns: 41 patterns
+#   - ai_attribution_patterns: 41 patterns (BLOCKED, not required)
 #
 # If you update enforcement-policy.json git_format, update this workflow to match.
 
@@ -107,7 +107,8 @@ jobs:
           HEAD="${{ steps.commit-range.outputs.head }}"
 
           if [ "$BASE" == "0000000000000000000000000000000000000000" ]; then
-            COMMITS=$(git rev-list --no-merges "$HEAD")
+            # New branch push: only check commits not on main
+            COMMITS=$(git rev-list --no-merges "origin/main..$HEAD" 2>/dev/null || git rev-list --no-merges "$HEAD")
           else
             COMMITS=$(git rev-list --no-merges "$BASE..$HEAD")
           fi
@@ -277,10 +278,10 @@ jobs:
               fi
             done
 
-            if [ "$HAS_ATTRIBUTION" != true ]; then
-              echo -e "${RED}ERROR: Missing AI attribution${NC}"
-              echo "  Commit messages must include AI attribution"
-              echo "  Example: Co-Authored-By: Claude <noreply@anthropic.com>"
+            if [ "$HAS_ATTRIBUTION" == true ]; then
+              echo -e "${RED}ERROR: AI attribution detected${NC}"
+              echo "  Commit messages must NOT include AI model names or attribution"
+              echo "  Remove any AI-related patterns from the commit message"
               echo ""
               COMMIT_VALID=false
             fi
@@ -310,7 +311,7 @@ jobs:
             echo "  Valid types: ${ALLOWED_TYPES[*]}"
             echo "  Max subject length: $MAX_SUBJECT_LENGTH characters"
             echo "  Body: bullet format (- or *), max $MAX_BODY_BULLETS bullets, $MAX_BODY_LINE_LENGTH-char lines"
-            echo "  AI attribution required (e.g. Co-Authored-By: Claude <noreply@anthropic.com>)"
+            echo "  AI attribution blocked (no AI model names or Co-Authored-By patterns)"
             echo ""
             exit 1
           fi
