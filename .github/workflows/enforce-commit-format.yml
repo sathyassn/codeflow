@@ -57,8 +57,10 @@ jobs:
             echo "base=${{ github.event.pull_request.base.sha }}" >> $GITHUB_OUTPUT
             echo "head=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
           else
-            echo "base=${{ github.event.before }}" >> $GITHUB_OUTPUT
-            echo "head=${{ github.event.after }}" >> $GITHUB_OUTPUT
+            # For push events: always validate all branch commits vs main
+            MERGE_BASE=$(git merge-base origin/main "${{ github.sha }}" 2>/dev/null || echo "")
+            echo "base=${MERGE_BASE}" >> $GITHUB_OUTPUT
+            echo "head=${{ github.sha }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Validate commit messages
@@ -106,9 +108,9 @@ jobs:
           BASE="${{ steps.commit-range.outputs.base }}"
           HEAD="${{ steps.commit-range.outputs.head }}"
 
-          if [ "$BASE" == "0000000000000000000000000000000000000000" ]; then
-            # New branch push: only check commits not on main
-            COMMITS=$(git rev-list --no-merges "origin/main..$HEAD" 2>/dev/null || git rev-list --no-merges "$HEAD")
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            # No valid base (push to main or unreachable SHA): check all commits
+            COMMITS=$(git rev-list --no-merges "$HEAD")
           else
             COMMITS=$(git rev-list --no-merges "$BASE..$HEAD")
           fi
