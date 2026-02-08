@@ -2,13 +2,13 @@
 # Purpose:   Test cf-protect-resources.sh main orchestrator script
 # Location:  .codeflow/testing/scripts/security/protection/test-cf-protect-resources.sh
 # Usage:     ./test-cf-protect-resources.sh
-# Version:   1.1.0
+# Version:   2.0.0
 #
 # Tests the main protection script commands.
 #
 # Coverage Requirements:
 #   - Script existence
-#   - All commands validated
+#   - All commands validated (protect, unprotect, status, verify, list, extend)
 #   - Help text complete
 #   - Root requirement checks
 
@@ -95,25 +95,36 @@ test_help_command() {
     fi
 }
 
-test_help_shows_enable() {
-    test_start "Help shows enable command"
+test_help_shows_protect() {
+    test_start "Help shows protect command"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "enable"; then
+    if echo "$output" | grep -qi "protect"; then
         test_pass
     else
-        test_fail "Enable not documented"
+        test_fail "Protect not documented"
     fi
 }
 
-test_help_shows_disable() {
-    test_start "Help shows disable command"
+test_help_shows_unprotect() {
+    test_start "Help shows unprotect command"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "disable"; then
+    if echo "$output" | grep -qi "unprotect"; then
         test_pass
     else
-        test_fail "Disable not documented"
+        test_fail "Unprotect not documented"
+    fi
+}
+
+test_help_shows_extend() {
+    test_start "Help shows extend command"
+    local output
+    output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
+    if echo "$output" | grep -qi "extend"; then
+        test_pass
+    else
+        test_fail "Extend not documented"
     fi
 }
 
@@ -147,7 +158,7 @@ test_list_command() {
     test_start "List command works"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Protected Paths"; then
+    if echo "$output" | grep -qi "Protection Lists"; then
         test_pass
     else
         test_fail "List output missing header"
@@ -162,6 +173,28 @@ test_list_shows_core() {
         test_pass
     else
         test_fail "Core section missing"
+    fi
+}
+
+test_list_shows_extended() {
+    test_start "List shows Extended section"
+    local output
+    output=$(bash "$SCRIPT_PATH" list 2>&1)
+    if echo "$output" | grep -qi "Extended"; then
+        test_pass
+    else
+        test_fail "Extended section missing"
+    fi
+}
+
+test_list_shows_adhoc() {
+    test_start "List shows Ad-hoc section"
+    local output
+    output=$(bash "$SCRIPT_PATH" list 2>&1)
+    if echo "$output" | grep -qi "Ad-hoc"; then
+        test_pass
+    else
+        test_fail "Ad-hoc section missing"
     fi
 }
 
@@ -218,66 +251,87 @@ test_invalid_command() {
 }
 
 # =============================================================================
+# TESTS: PROTECT REQUIRES TARGET
+# =============================================================================
+
+test_protect_requires_target() {
+    test_start "Protect requires explicit target"
+    if [[ $EUID -eq 0 ]]; then
+        test_skip "Running as root"
+        return
+    fi
+    local output
+    output=$(bash "$SCRIPT_PATH" protect 2>&1 || true)
+    # Should show error about missing target (runs as non-root, so may
+    # get root error first — either root or missing-target is valid)
+    if echo "$output" | grep -qi "root\|sudo\|missing target"; then
+        test_pass
+    else
+        test_fail "Protect without target not caught"
+    fi
+}
+
+# =============================================================================
 # TESTS: ROOT REQUIREMENTS
 # =============================================================================
 
-test_enable_requires_root() {
-    test_start "Enable requires root"
+test_protect_requires_root() {
+    test_start "Protect requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$SCRIPT_PATH" enable 2>&1 || true)
+    output=$(bash "$SCRIPT_PATH" protect all 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo"; then
         test_pass
     else
-        test_fail "Enable did not require root"
+        test_fail "Protect did not require root"
     fi
 }
 
-test_disable_requires_root() {
-    test_start "Disable requires root"
+test_protect_core_requires_root() {
+    test_start "Protect core requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$SCRIPT_PATH" disable 2>&1 || true)
+    output=$(bash "$SCRIPT_PATH" protect core 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo"; then
         test_pass
     else
-        test_fail "Disable did not require root"
+        test_fail "Protect core did not require root"
     fi
 }
 
-test_add_requires_root() {
-    test_start "Add requires root"
+test_unprotect_requires_root() {
+    test_start "Unprotect requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$SCRIPT_PATH" add test.txt 2>&1 || true)
+    output=$(bash "$SCRIPT_PATH" unprotect all 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo"; then
         test_pass
     else
-        test_fail "Add did not require root"
+        test_fail "Unprotect did not require root"
     fi
 }
 
-test_remove_requires_root() {
-    test_start "Remove requires root"
+test_extend_requires_root() {
+    test_start "Extend requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$SCRIPT_PATH" remove test.txt 2>&1 || true)
+    output=$(bash "$SCRIPT_PATH" extend add test.txt 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo"; then
         test_pass
     else
-        test_fail "Remove did not require root"
+        test_fail "Extend did not require root"
     fi
 }
 
@@ -293,6 +347,95 @@ test_verify_requires_root() {
         test_pass
     else
         test_fail "Verify did not require root"
+    fi
+}
+
+test_status_no_root() {
+    test_start "Status does NOT require root"
+    local output
+    output=$(bash "$SCRIPT_PATH" status 2>&1)
+    if echo "$output" | grep -qi "Protection Status"; then
+        test_pass
+    else
+        test_fail "Status should work without root"
+    fi
+}
+
+test_list_no_root() {
+    test_start "List does NOT require root"
+    local output
+    output=$(bash "$SCRIPT_PATH" list 2>&1)
+    if echo "$output" | grep -qi "Protection Lists"; then
+        test_pass
+    else
+        test_fail "List should work without root"
+    fi
+}
+
+# =============================================================================
+# TESTS: PATTERN CHECKS (script content validation)
+# =============================================================================
+
+test_has_protect_command() {
+    test_start "Script handles protect command"
+    if grep -q "cmd_protect" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "cmd_protect not found"
+    fi
+}
+
+test_has_unprotect_command() {
+    test_start "Script handles unprotect command"
+    if grep -q "cmd_unprotect" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "cmd_unprotect not found"
+    fi
+}
+
+test_has_extend_command() {
+    test_start "Script handles extend command"
+    if grep -q "cmd_extend" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "cmd_extend not found"
+    fi
+}
+
+test_has_list_command() {
+    test_start "Script handles list command"
+    if grep -q "cmd_list" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "cmd_list not found"
+    fi
+}
+
+test_has_confirmation_prompt() {
+    test_start "Script has confirmation prompts"
+    if grep -q "read -rp" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "No confirmation prompts found"
+    fi
+}
+
+test_has_reprotect_reminder() {
+    test_start "Script has re-protect reminder"
+    if grep -qi "re-protect\|protect all" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Re-protect reminder missing"
+    fi
+}
+
+test_no_v3_references() {
+    test_start "Script has no V3 references"
+    if grep -qi "v3\|version 3" "$SCRIPT_PATH"; then
+        test_fail "V3 reference found"
+    else
+        test_pass
     fi
 }
 
@@ -315,8 +458,9 @@ main() {
     echo ""
     echo "Help Command:"
     test_help_command
-    test_help_shows_enable
-    test_help_shows_disable
+    test_help_shows_protect
+    test_help_shows_unprotect
+    test_help_shows_extend
     test_help_shows_examples
     test_h_flag
 
@@ -325,6 +469,8 @@ main() {
     echo "List Command:"
     test_list_command
     test_list_shows_core
+    test_list_shows_extended
+    test_list_shows_adhoc
     test_list_includes_hooks
 
     # Status command tests
@@ -337,15 +483,29 @@ main() {
     echo ""
     echo "Invalid Commands:"
     test_invalid_command
+    test_protect_requires_target
 
     # Root requirement tests
     echo ""
     echo "Root Requirements:"
-    test_enable_requires_root
-    test_disable_requires_root
-    test_add_requires_root
-    test_remove_requires_root
+    test_protect_requires_root
+    test_protect_core_requires_root
+    test_unprotect_requires_root
+    test_extend_requires_root
     test_verify_requires_root
+    test_status_no_root
+    test_list_no_root
+
+    # Pattern checks
+    echo ""
+    echo "Pattern Checks:"
+    test_has_protect_command
+    test_has_unprotect_command
+    test_has_extend_command
+    test_has_list_command
+    test_has_confirmation_prompt
+    test_has_reprotect_reminder
+    test_no_v3_references
 
     # Summary
     echo ""

@@ -2,7 +2,7 @@
 # Purpose:   Test cf-change-approval-mode.sh script
 # Location:  .codeflow/testing/scripts/settings/test-cf-change-approval-mode.sh
 # Usage:     ./test-cf-change-approval-mode.sh
-# Version:   1.1.0
+# Version:   2.0.0
 #
 # Tests the approval mode switching script.
 #
@@ -11,6 +11,10 @@
 #   - All modes validated
 #   - Template verification
 #   - Error handling
+#   - Status command
+#   - Protection check
+#   - Behavior summary
+#   - No V3 references
 
 set -euo pipefail
 
@@ -148,6 +152,50 @@ test_help_shows_modes() {
     fi
 }
 
+test_help_shows_status_option() {
+    test_start "Help shows --status option"
+    local output
+    output=$(bash "$SCRIPT_PATH" --help 2>&1 || true)
+    if echo "$output" | grep -q "\-\-status"; then
+        test_pass
+    else
+        test_fail "--status not documented"
+    fi
+}
+
+test_help_shows_workflow() {
+    test_start "Help shows workflow steps"
+    local output
+    output=$(bash "$SCRIPT_PATH" --help 2>&1 || true)
+    if echo "$output" | grep -qi "workflow"; then
+        test_pass
+    else
+        test_fail "Workflow steps missing"
+    fi
+}
+
+test_help_shows_current_mode() {
+    test_start "Help shows current mode"
+    local output
+    output=$(bash "$SCRIPT_PATH" --help 2>&1 || true)
+    if echo "$output" | grep -qi "current mode"; then
+        test_pass
+    else
+        test_fail "Current mode not shown in help"
+    fi
+}
+
+test_help_shows_security_note() {
+    test_start "Help shows security note"
+    local output
+    output=$(bash "$SCRIPT_PATH" --help 2>&1 || true)
+    if echo "$output" | grep -qi "security.*enforced\|L0.*blocks"; then
+        test_pass
+    else
+        test_fail "Security note missing"
+    fi
+}
+
 test_h_flag() {
     test_start "-h flag works"
     local output
@@ -196,6 +244,65 @@ test_l_flag() {
         test_pass
     else
         test_fail "-l not working"
+    fi
+}
+
+# =============================================================================
+# TESTS: STATUS COMMAND
+# =============================================================================
+
+test_status_command() {
+    test_start "Status command works"
+    local output
+    output=$(bash "$SCRIPT_PATH" --status 2>&1)
+    if echo "$output" | grep -qi "approval modes\|project default\|effective"; then
+        test_pass
+    else
+        test_fail "Status output missing expected content"
+    fi
+}
+
+test_status_shows_project() {
+    test_start "Status shows project default"
+    local output
+    output=$(bash "$SCRIPT_PATH" --status 2>&1)
+    if echo "$output" | grep -qi "project default"; then
+        test_pass
+    else
+        test_fail "Project default not shown"
+    fi
+}
+
+test_status_shows_local() {
+    test_start "Status shows local override"
+    local output
+    output=$(bash "$SCRIPT_PATH" --status 2>&1)
+    if echo "$output" | grep -qi "local override"; then
+        test_pass
+    else
+        test_fail "Local override not shown"
+    fi
+}
+
+test_status_shows_effective() {
+    test_start "Status shows effective mode"
+    local output
+    output=$(bash "$SCRIPT_PATH" --status 2>&1)
+    if echo "$output" | grep -qi "effective mode"; then
+        test_pass
+    else
+        test_fail "Effective mode not shown"
+    fi
+}
+
+test_s_flag() {
+    test_start "-s flag works"
+    local output
+    output=$(bash "$SCRIPT_PATH" -s 2>&1)
+    if echo "$output" | grep -qi "approval modes\|project default\|effective"; then
+        test_pass
+    else
+        test_fail "-s not working"
     fi
 }
 
@@ -312,6 +419,73 @@ test_templates_have_template_id() {
 }
 
 # =============================================================================
+# TESTS: PATTERN CHECKS (script content validation)
+# =============================================================================
+
+test_has_protection_check() {
+    test_start "Script has protection check"
+    if grep -q "check_protection" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Protection check not found"
+    fi
+}
+
+test_has_behavior_summary() {
+    test_start "Script has behavior summary"
+    if grep -q "show_behavior_summary" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Behavior summary not found"
+    fi
+}
+
+test_has_reprotect_reminder() {
+    test_start "Script has re-protect reminder"
+    if grep -qi "re-protect\|protect.*settings.local" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Re-protect reminder not found"
+    fi
+}
+
+test_has_mode_detection_fallback() {
+    test_start "Script has mode detection fallback"
+    if grep -q "get_mode_from_file" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Mode detection fallback not found"
+    fi
+}
+
+test_has_backup() {
+    test_start "Script has backup mechanism"
+    if grep -q "backup_settings" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "Backup mechanism not found"
+    fi
+}
+
+test_no_v3_references() {
+    test_start "Script has no V3 references"
+    if grep -qi "v3\|version 3" "$SCRIPT_PATH"; then
+        test_fail "V3 reference found"
+    else
+        test_pass
+    fi
+}
+
+test_references_protect_script() {
+    test_start "Script references cf-protect-resources.sh"
+    if grep -q "cf-protect-resources" "$SCRIPT_PATH"; then
+        test_pass
+    else
+        test_fail "No reference to cf-protect-resources.sh"
+    fi
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -339,6 +513,10 @@ main() {
     echo "Help Command:"
     test_help_command
     test_help_shows_modes
+    test_help_shows_status_option
+    test_help_shows_workflow
+    test_help_shows_current_mode
+    test_help_shows_security_note
     test_h_flag
 
     # List command tests
@@ -347,6 +525,15 @@ main() {
     test_list_command
     test_list_shows_all_modes
     test_l_flag
+
+    # Status command tests
+    echo ""
+    echo "Status Command:"
+    test_status_command
+    test_status_shows_project
+    test_status_shows_local
+    test_status_shows_effective
+    test_s_flag
 
     # Input validation tests
     echo ""
@@ -367,6 +554,17 @@ main() {
     echo "Template Validation:"
     test_templates_valid_json
     test_templates_have_template_id
+
+    # Pattern checks
+    echo ""
+    echo "Pattern Checks:"
+    test_has_protection_check
+    test_has_behavior_summary
+    test_has_reprotect_reminder
+    test_has_mode_detection_fallback
+    test_has_backup
+    test_no_v3_references
+    test_references_protect_script
 
     # Summary
     echo ""

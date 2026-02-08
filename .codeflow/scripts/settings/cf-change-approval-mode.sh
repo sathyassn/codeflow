@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# Purpose:   Change CodeFlow V3 approval mode by applying settings templates
+# Purpose:   Change CodeFlow approval mode by applying settings templates
 # Location:  .codeflow/scripts/settings/cf-change-approval-mode.sh
 # Usage:     ./cf-change-approval-mode.sh <mode> [--force]
-# Version:   1.0.0
+# Version:   2.0.0
+#
+# Changelog:
+#   2.0.0 - Added --status option, protection check, behavior summary
+#         - Added re-protect reminder, mode detection fallback
+#         - Added _use_case display, workflow steps in help
+#         - Removed version references from output
+#   1.0.0 - Initial release
 #
 # Modes:
 #   strict      - Maximum safety, human approval required for most operations
@@ -12,9 +19,9 @@
 #
 # This script:
 #   1. Validates the requested mode exists as a template
-#   2. Backs up current settings.local.json (if exists)
-#   3. Copies the template to settings.local.json
-#   4. Preserves any custom _meta or environment-specific settings
+#   2. Checks if settings file is protected (immutable)
+#   3. Backs up current settings.local.json (if exists)
+#   4. Copies the template to settings.local.json
 #
 # Settings Templates Location:
 #   .claude/settings-templates/{mode}.json
@@ -22,10 +29,18 @@
 # Target Settings File:
 #   .claude/settings.local.json
 #
+# Security:
+#   This script does NOT modify .claude/settings.json (project default).
+#   It only modifies .claude/settings.local.json (user override).
+#   Both files are protected by cf-protect-resources.sh and must be
+#   unprotected first. Security rules (L0 blocks) are always enforced
+#   regardless of approval mode.
+#
 # Examples:
 #   ./cf-change-approval-mode.sh strict         # Switch to strict mode
 #   ./cf-change-approval-mode.sh autonomous     # Switch to autonomous mode
 #   ./cf-change-approval-mode.sh --list         # List available modes
+#   ./cf-change-approval-mode.sh --status       # Show current mode status
 
 set -euo pipefail
 
@@ -38,8 +53,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 # Paths
 TEMPLATES_DIR="$PROJECT_ROOT/.claude/settings-templates"
+PROJECT_SETTINGS="$PROJECT_ROOT/.claude/settings.json"
 SETTINGS_LOCAL="$PROJECT_ROOT/.claude/settings.local.json"
 BACKUP_DIR="$PROJECT_ROOT/.state/backups/settings"
+PROTECT_SCRIPT="$PROJECT_ROOT/.codeflow/scripts/security/protection/cf-protect-resources.sh"
 
 # Valid modes (must match template filenames)
 VALID_MODES=("strict" "standard" "autonomous" "permissive")
@@ -87,20 +104,159 @@ is_valid_mode() {
     return 1
 }
 
-# Get current mode from settings
-get_current_mode() {
-    if [[ ! -f "$SETTINGS_LOCAL" ]]; then
+# Get mode from a specific settings file
+get_mode_from_file() {
+    local file="$1"
+
+    if [[ ! -f "$file" ]]; then
         echo "none"
         return
     fi
 
-    if command -v jq &>/dev/null; then
-        local mode
-        mode=$(jq -r '._template // "unknown"' "$SETTINGS_LOCAL" 2>/dev/null)
-        echo "${mode:-unknown}"
+    if ! command -v jq &>/dev/null; then
+        echo "unknown"
+        return
+    fi
+
+    # Read the _template field if it exists
+    local template
+    template=$(jq -r '._template // "unknown"' "$file" 2>/dev/null)
+    if [[ "$template" != "unknown" && "$template" != "null" ]]; then
+        echo "$template"
+        return
+    fi
+
+    # Fallback: detect from defaultMode + allow list
+    local default_mode
+    default_mode=$(jq -r '.permissions.defaultMode // "unknown"' "$file" 2>/dev/null)
+    local allow_count
+    allow_count=$(jq '.permissions.allow | length' "$file" 2>/dev/null || echo "0")
+
+    if [[ "$default_mode" == "askPermissions" ]]; then
+        if [[ "$allow_count" -lt 30 ]]; then
+            echo "strict (detected)"
+        else
+            echo "standard (detected)"
+        fi
+    elif [[ "$default_mode" == "bypassPermissions" ]]; then
+        if jq -e '.permissions.allow | index("Bash(git push:*)")' "$file" >/dev/null 2>&1; then
+            echo "permissive (detected)"
+        else
+            echo "autonomous (detected)"
+        fi
     else
         echo "unknown"
     fi
+}
+
+# Get effective current mode
+get_current_mode() {
+    local local_mode
+    local_mode=$(get_mode_from_file "$SETTINGS_LOCAL")
+
+    if [[ "$local_mode" != "none" ]]; then
+        echo "$local_mode"
+    else
+        local project_mode
+        project_mode=$(get_mode_from_file "$PROJECT_SETTINGS")
+        if [[ "$project_mode" != "none" ]]; then
+            echo "$project_mode (project default)"
+        else
+            echo "none"
+        fi
+    fi
+}
+
+# Check if file is protected (immutable)
+check_protection() {
+    if [[ ! -f "$SETTINGS_LOCAL" ]]; then
+        return 1  # Doesn't exist, not protected
+    fi
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: check for uchg (user immutable) flag
+        if stat -f "%Sf" "$SETTINGS_LOCAL" 2>/dev/null | grep -q "uchg"; then
+            return 0  # Protected
+        fi
+    else
+        # Linux: check immutable attribute
+        if lsattr "$SETTINGS_LOCAL" 2>/dev/null | grep -q "i"; then
+            return 0  # Protected
+        fi
+    fi
+    return 1  # Not protected
+}
+
+# Show mode status (project vs local vs effective)
+show_mode_status() {
+    local project_mode
+    local local_mode
+
+    project_mode=$(get_mode_from_file "$PROJECT_SETTINGS")
+    local_mode=$(get_mode_from_file "$SETTINGS_LOCAL")
+
+    echo ""
+    echo -e "${BLUE}Current approval modes:${NC}"
+    echo ""
+    echo -e "  ${CYAN}Project default${NC} (.claude/settings.json):"
+    if [[ "$project_mode" == "none" ]]; then
+        echo -e "    ${YELLOW}Not configured${NC}"
+    else
+        echo -e "    ${GREEN}$project_mode${NC}"
+    fi
+    echo ""
+    echo -e "  ${CYAN}Local override${NC} (.claude/settings.local.json):"
+    if [[ "$local_mode" == "none" ]]; then
+        echo -e "    ${YELLOW}Not set${NC} (using project default)"
+    else
+        echo -e "    ${GREEN}$local_mode${NC}"
+    fi
+    echo ""
+    echo -e "  ${CYAN}Effective mode${NC} (what Claude uses):"
+    if [[ "$local_mode" != "none" ]]; then
+        echo -e "    ${GREEN}$local_mode${NC} (from local override)"
+    elif [[ "$project_mode" != "none" ]]; then
+        echo -e "    ${GREEN}$project_mode${NC} (from project default)"
+    else
+        echo -e "    ${YELLOW}Claude Code defaults${NC}"
+    fi
+    echo ""
+}
+
+# Show behavior summary for a mode
+show_behavior_summary() {
+    local mode="$1"
+
+    echo ""
+    echo -e "${BLUE}Behavior summary:${NC}"
+    case "$mode" in
+        strict)
+            echo "  Read/search:         Auto"
+            echo "  Edit/Write:          Ask"
+            echo "  Git add/commit/push: Ask"
+            echo "  npm/pip/yarn:        Ask"
+            echo "  All other ops:       Ask"
+            ;;
+        standard)
+            echo "  Read/Edit/Write:     Auto"
+            echo "  Git add/checkout:    Auto"
+            echo "  npm/pip/yarn:        Auto"
+            echo "  Git commit/push:     Ask"
+            echo "  Delete (rm):         Ask"
+            echo "  gh pr create:        Ask"
+            ;;
+        autonomous)
+            echo "  All file operations: Auto"
+            echo "  Git commit:          Auto"
+            echo "  Delete (rm):         Auto"
+            echo "  Git push/pull:       Ask"
+            echo "  gh pr create:        Ask"
+            ;;
+        permissive)
+            echo "  All operations:      Auto"
+            echo "  Only L0 security blocks apply"
+            ;;
+    esac
 }
 
 # List available modes
@@ -109,7 +265,7 @@ list_modes() {
     current_mode=$(get_current_mode)
 
     echo ""
-    echo "Available Approval Modes"
+    echo -e "${BLUE}Available Approval Modes${NC}"
     echo "========================"
     echo ""
 
@@ -124,20 +280,27 @@ list_modes() {
         if [[ -f "$template" ]]; then
             echo -e "  ${CYAN}$mode${NC}$marker"
 
-            # Show description if jq available
+            # Show description and use_case if jq available
             if command -v jq &>/dev/null; then
                 local desc
                 desc=$(jq -r '._description // empty' "$template" 2>/dev/null)
                 if [[ -n "$desc" ]]; then
                     echo "    $desc"
                 fi
+
+                local use_case
+                use_case=$(jq -r '._use_case // empty' "$template" 2>/dev/null)
+                if [[ -n "$use_case" ]]; then
+                    echo -e "    ${CYAN}Use case:${NC} $use_case"
+                fi
             fi
+            echo ""
         else
             echo -e "  ${YELLOW}$mode${NC} (template missing)"
+            echo ""
         fi
     done
 
-    echo ""
     echo "Usage: $0 <mode>"
     echo ""
 }
@@ -179,6 +342,23 @@ apply_template() {
         return 0
     fi
 
+    # Check if file is protected
+    if check_protection; then
+        log_warn "settings.local.json is protected (immutable)"
+        echo ""
+        echo "To change the approval mode, first unprotect the file:"
+        echo ""
+        echo -e "  ${CYAN}Option 1: Unprotect just this file${NC}"
+        echo "  sudo $PROTECT_SCRIPT unprotect .claude/settings.local.json"
+        echo ""
+        echo -e "  ${CYAN}Option 2: Unprotect all (then re-protect after)${NC}"
+        echo "  sudo $PROTECT_SCRIPT unprotect all"
+        echo ""
+        echo "Then run this script again:"
+        echo "  $0 $mode"
+        return 1
+    fi
+
     # Backup existing settings
     backup_settings
 
@@ -217,6 +397,15 @@ apply_template() {
         echo "  Hooks configured: $hooks_count"
     fi
 
+    # Show behavior summary
+    show_behavior_summary "$mode"
+
+    # Re-protect reminder
+    echo ""
+    log_warn "Remember to re-protect the file:"
+    echo "  sudo $PROTECT_SCRIPT protect .claude/settings.local.json"
+    echo "  # or: sudo $PROTECT_SCRIPT protect all"
+
     return 0
 }
 
@@ -225,10 +414,10 @@ apply_template() {
 # =============================================================================
 
 show_usage() {
-    cat << 'EOF'
-CodeFlow V3 Approval Mode Switcher
+    cat << EOF
+CodeFlow Approval Mode Switcher
 
-Usage: ./cf-change-approval-mode.sh <mode> [options]
+Usage: $0 <mode> [options]
 
 Modes:
   strict        Maximum safety, human approval required for most operations
@@ -238,18 +427,34 @@ Modes:
 
 Options:
   --list        List available modes and their descriptions
+  --status      Show current mode status (project vs local)
   --force       Reapply mode even if already set
   --help        Show this help message
 
 Examples:
-  ./cf-change-approval-mode.sh strict         # Switch to strict mode
-  ./cf-change-approval-mode.sh autonomous     # Switch to autonomous mode
-  ./cf-change-approval-mode.sh --list         # List available modes
+  $0 strict         # Switch to strict mode
+  $0 autonomous     # Switch to autonomous mode
+  $0 --list         # List available modes
+  $0 --status       # Show which settings file is active
+
+Workflow:
+  1. Unprotect: sudo $PROTECT_SCRIPT unprotect .claude/settings.local.json
+  2. Change:    $0 standard
+  3. Protect:   sudo $PROTECT_SCRIPT protect .claude/settings.local.json
+
+  Or use 'all' to unprotect/protect everything:
+  sudo $PROTECT_SCRIPT unprotect all
+  $0 standard
+  sudo $PROTECT_SCRIPT protect all
 
 Notes:
   - Current settings are backed up before changes
   - Templates are in .claude/settings-templates/
   - Settings are applied to .claude/settings.local.json
+  - Approval modes only affect workflow ergonomics (ask vs auto-approve)
+  - Security rules (L0 blocks) are always enforced regardless of mode
+
+Current mode: $(get_current_mode)
 EOF
 }
 
@@ -266,6 +471,10 @@ main() {
         case "$1" in
             --list|-l)
                 list_modes
+                exit 0
+                ;;
+            --status|-s)
+                show_mode_status
                 exit 0
                 ;;
             --force|-f)

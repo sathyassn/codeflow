@@ -2,7 +2,7 @@
 # Purpose:   Test cf-protection-ops.sh library through main script
 # Location:  .codeflow/testing/scripts/security/protection/test-cf-protection-ops.sh
 # Usage:     ./test-cf-protection-ops.sh
-# Version:   1.1.0
+# Version:   2.0.0
 #
 # Tests the ops library indirectly. Full protection tests require root.
 #
@@ -135,14 +135,14 @@ test_has_linux_handling() {
 # TESTS: FUNCTIONAL (via main script)
 # =============================================================================
 
-test_enable_requires_root() {
-    test_start "Enable requires root"
+test_protect_requires_root() {
+    test_start "Protect requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$MAIN_SCRIPT" enable 2>&1 || true)
+    output=$(bash "$MAIN_SCRIPT" protect all 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo\|privilege"; then
         test_pass
     else
@@ -150,14 +150,14 @@ test_enable_requires_root() {
     fi
 }
 
-test_disable_requires_root() {
-    test_start "Disable requires root"
+test_unprotect_requires_root() {
+    test_start "Unprotect requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$MAIN_SCRIPT" disable 2>&1 || true)
+    output=$(bash "$MAIN_SCRIPT" unprotect all 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo\|privilege"; then
         test_pass
     else
@@ -165,14 +165,14 @@ test_disable_requires_root() {
     fi
 }
 
-test_add_requires_root() {
-    test_start "Add requires root"
+test_extend_requires_root() {
+    test_start "Extend requires root"
     if [[ $EUID -eq 0 ]]; then
         test_skip "Running as root"
         return
     fi
     local output
-    output=$(bash "$MAIN_SCRIPT" add test.txt 2>&1 || true)
+    output=$(bash "$MAIN_SCRIPT" extend add test.txt 2>&1 || true)
     if echo "$output" | grep -qi "root\|sudo\|privilege"; then
         test_pass
     else
@@ -207,9 +207,9 @@ main() {
     # Functional tests
     echo ""
     echo "Functional (root required):"
-    test_enable_requires_root
-    test_disable_requires_root
-    test_add_requires_root
+    test_protect_requires_root
+    test_unprotect_requires_root
+    test_extend_requires_root
 
     # Summary
     echo ""
