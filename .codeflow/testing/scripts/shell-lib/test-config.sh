@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_NAME
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 readonly SCRIPT_VERSION
 TESTING_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly TESTING_DIR
@@ -39,6 +39,35 @@ EOF
 # Source test framework
 source "$TESTING_DIR/lib/test-common.sh"
 source "$TESTING_DIR/lib/test-helpers.sh"
+
+# ============================================================================
+# HELPERS: Mock repo root override
+# ============================================================================
+
+# Override find_repo_root to point to a test directory for isolated tests.
+# Call restore_repo_root after the test to restore original behavior.
+_REAL_REPO_ROOT=""
+_MOCK_REPO_ROOT=""
+
+override_repo_root() {
+    _MOCK_REPO_ROOT="$1"
+    # shellcheck disable=SC2218  # find_repo_root defined in sourced common.sh
+    _REAL_REPO_ROOT=$(find_repo_root)
+    # shellcheck disable=SC2317  # Function called indirectly by config functions
+    find_repo_root() { echo "$_MOCK_REPO_ROOT"; }
+    export -f find_repo_root
+}
+
+restore_repo_root() {
+    local saved="$_REAL_REPO_ROOT"
+    # shellcheck disable=SC2317  # Function called indirectly by config functions
+    find_repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
+    export -f find_repo_root
+    _REAL_REPO_ROOT=""
+    _MOCK_REPO_ROOT=""
+    # Also reset CODEFLOW_ROOT to match
+    export CODEFLOW_ROOT="${saved}"
+}
 
 # ============================================================================
 # TEST: Configuration Paths
@@ -80,6 +109,13 @@ test_get_config_path() {
     else
         test_fail "get_config_path should return absolute path: $path"
     fi
+
+    # Should contain .codeflow/config in the middle
+    if [[ "$path" == *"/.codeflow/config/"* ]]; then
+        test_pass "get_config_path includes config directory"
+    else
+        test_fail "get_config_path should include .codeflow/config/: $path"
+    fi
 }
 
 # ============================================================================
@@ -91,41 +127,74 @@ test_config_get_json() {
 
     setup_test_dir "config-json"
 
-    # Create mock config directory
-    local mock_config_dir="$TEST_DIR/.codeflow/config"
-    mkdir -p "$mock_config_dir"
+    # Create mock config structure
+    mkdir -p "$TEST_DIR/.codeflow/config"
 
-    # Create test JSON config
-    cat > "$mock_config_dir/test-config.json" << 'EOF'
+    cat > "$TEST_DIR/.codeflow/config/test-config.json" << 'EOF'
 {
     "string_value": "hello",
     "number_value": 42,
     "bool_value": true,
     "nested": {
-        "inner": "value"
+        "inner": "deep_value"
     }
 }
 EOF
 
-    # Override find_repo_root for this test
-    local original_root
-    original_root=$(find_repo_root)
+    override_repo_root "$TEST_DIR"
 
-    # Save original function and override
     local result
 
-    # Test reading existing value (use actual config if exists)
-    if [[ -f "$original_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
-        result=$(config_get_json "enforcement/enforcement-policy.json" ".enforcement_level" "default")
-        assert_not_empty "$result" "config_get_json reads existing config"
-    else
-        test_skip "config_get_json" "No enforcement-policy.json found"
-    fi
+    # Test reading string value
+    result=$(config_get_json "test-config.json" ".string_value" "")
+    assert_equals "hello" "$result" "config_get_json reads string value"
+
+    # Test reading number value
+    result=$(config_get_json "test-config.json" ".number_value" "")
+    assert_equals "42" "$result" "config_get_json reads number value"
+
+    # Test reading boolean value
+    result=$(config_get_json "test-config.json" ".bool_value" "")
+    assert_equals "true" "$result" "config_get_json reads boolean value"
+
+    # Test reading nested value
+    result=$(config_get_json "test-config.json" ".nested.inner" "")
+    assert_equals "deep_value" "$result" "config_get_json reads nested value"
 
     # Test default value for missing key
-    result=$(config_get_json "nonexistent.json" ".missing" "fallback")
-    assert_equals "fallback" "$result" "config_get_json returns default for missing file"
+    result=$(config_get_json "test-config.json" ".missing_key" "fallback")
+    assert_equals "fallback" "$result" "config_get_json returns default for missing key"
 
+    # Test default value for missing file
+    result=$(config_get_json "nonexistent.json" ".key" "file_fallback")
+    assert_equals "file_fallback" "$result" "config_get_json returns default for missing file"
+
+    restore_repo_root
+    teardown_test_dir
+}
+
+test_config_get_json_subdirectory() {
+    test_section "config_get_json: subdirectory path"
+
+    setup_test_dir "config-json-subdir"
+
+    # Create mock config structure with subdirectory (like enforcement/)
+    mkdir -p "$TEST_DIR/.codeflow/config/enforcement"
+
+    cat > "$TEST_DIR/.codeflow/config/enforcement/policy.json" << 'EOF'
+{
+    "level": "strict",
+    "enabled": true
+}
+EOF
+
+    override_repo_root "$TEST_DIR"
+
+    local result
+    result=$(config_get_json "enforcement/policy.json" ".level" "default")
+    assert_equals "strict" "$result" "config_get_json reads from subdirectory"
+
+    restore_repo_root
     teardown_test_dir
 }
 
@@ -134,27 +203,49 @@ test_config_has_json() {
 
     setup_test_dir "config-has"
 
-    local repo_root
-    repo_root=$(find_repo_root)
+    # Create mock config
+    mkdir -p "$TEST_DIR/.codeflow/config"
 
-    # Test with actual config if exists
-    if [[ -f "$repo_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
-        if config_has_json "enforcement/enforcement-policy.json" ".enforcement_levels"; then
-            test_pass "config_has_json finds existing key"
-        else
-            test_fail "config_has_json should find existing key"
-        fi
+    cat > "$TEST_DIR/.codeflow/config/has-test.json" << 'EOF'
+{
+    "existing_key": "value",
+    "nested": {
+        "deep_key": true
+    }
+}
+EOF
+
+    override_repo_root "$TEST_DIR"
+
+    # Test existing top-level key
+    if config_has_json "has-test.json" ".existing_key"; then
+        test_pass "config_has_json finds existing key"
     else
-        test_skip "config_has_json" "No enforcement-policy.json found"
+        test_fail "config_has_json should find existing key"
+    fi
+
+    # Test existing nested key
+    if config_has_json "has-test.json" ".nested.deep_key"; then
+        test_pass "config_has_json finds nested key"
+    else
+        test_fail "config_has_json should find nested key"
     fi
 
     # Test missing key
-    if config_has_json "enforcement/enforcement-policy.json" ".nonexistent_key_xyz"; then
+    if config_has_json "has-test.json" ".nonexistent_key"; then
         test_fail "config_has_json should not find missing key"
     else
         test_pass "config_has_json returns false for missing key"
     fi
 
+    # Test missing file
+    if config_has_json "nonexistent.json" ".any_key"; then
+        test_fail "config_has_json should not find key in missing file"
+    else
+        test_pass "config_has_json returns false for missing file"
+    fi
+
+    restore_repo_root
     teardown_test_dir
 }
 
@@ -169,21 +260,52 @@ test_config_get_yaml() {
     local result
     result=$(config_get_yaml "nonexistent.yaml" ".key" "default_value")
     assert_equals "default_value" "$result" "config_get_yaml returns default for missing file"
+}
 
-    # Test with actual work-graph.yaml if exists
-    local repo_root
-    repo_root=$(find_repo_root)
+test_config_get_yaml_with_file() {
+    test_section "config_get_yaml: with file"
 
-    if [[ -f "$repo_root/.codeflow/config/work-graph.yaml" ]]; then
-        result=$(config_get_yaml "work-graph.yaml" ".version" "")
-        if [[ -n "$result" ]]; then
-            test_pass "config_get_yaml reads YAML config"
-        else
-            test_skip "config_get_yaml" "Could not read version from work-graph.yaml"
-        fi
+    setup_test_dir "config-yaml"
+
+    mkdir -p "$TEST_DIR/.codeflow/config"
+
+    cat > "$TEST_DIR/.codeflow/config/test-config.yaml" << 'EOF'
+version: "1.0"
+settings:
+  name: test-project
+  enabled: true
+EOF
+
+    override_repo_root "$TEST_DIR"
+
+    local result
+
+    # Test reading top-level value (yq or python3 fallback)
+    result=$(config_get_yaml "test-config.yaml" ".version" "unknown")
+    if [[ "$result" == "1.0" ]]; then
+        test_pass "config_get_yaml reads top-level YAML value"
+    elif [[ "$result" == "unknown" ]]; then
+        test_skip "config_get_yaml" "Neither yq nor python3+yaml available"
     else
-        test_skip "config_get_yaml" "No work-graph.yaml found"
+        test_fail "config_get_yaml unexpected value: $result (expected 1.0)"
     fi
+
+    # Test reading nested value
+    result=$(config_get_yaml "test-config.yaml" ".settings.name" "unknown")
+    if [[ "$result" == "test-project" ]]; then
+        test_pass "config_get_yaml reads nested YAML value"
+    elif [[ "$result" == "unknown" ]]; then
+        test_skip "config_get_yaml nested" "Neither yq nor python3+yaml available"
+    else
+        test_fail "config_get_yaml unexpected nested value: $result (expected test-project)"
+    fi
+
+    # Test default for missing key
+    result=$(config_get_yaml "test-config.yaml" ".nonexistent" "yaml_fallback")
+    assert_equals "yaml_fallback" "$result" "config_get_yaml returns default for missing key"
+
+    restore_repo_root
+    teardown_test_dir
 }
 
 # ============================================================================
@@ -230,6 +352,23 @@ test_load_env_file_nonexistent() {
     fi
 }
 
+test_load_env_file_with_equals_in_value() {
+    test_section "load_env_file: values with equals sign"
+
+    setup_test_dir "env-equals"
+
+    cat > "$TEST_DIR/.env" << 'EOF'
+CONNECTION_STRING=host=localhost;port=5432
+EOF
+
+    load_env_file "$TEST_DIR/.env"
+
+    assert_equals "host=localhost;port=5432" "${CONNECTION_STRING:-}" "Value with equals sign preserved"
+
+    unset CONNECTION_STRING
+    teardown_test_dir
+}
+
 # ============================================================================
 # TEST: Common Configurations
 # ============================================================================
@@ -237,26 +376,37 @@ test_load_env_file_nonexistent() {
 test_get_enforcement_policy() {
     test_section "get_enforcement_policy"
 
-    local repo_root
-    repo_root=$(find_repo_root)
+    setup_test_dir "enforcement"
 
-    if [[ -f "$repo_root/.codeflow/config/enforcement/enforcement-policy.json" ]]; then
-        local level
-        level=$(get_enforcement_policy "enforcement_level" "unknown")
-        assert_not_empty "$level" "get_enforcement_policy returns value"
+    mkdir -p "$TEST_DIR/.codeflow/config/enforcement"
 
-        # Should be one of the valid levels
-        if [[ "$level" == "strict" || "$level" == "warn" || "$level" == "permissive" || "$level" == "unknown" ]]; then
-            test_pass "Enforcement level is valid: $level"
-        else
-            test_fail "Unknown enforcement level: $level"
-        fi
-    else
-        # Test default value
-        local result
-        result=$(get_enforcement_policy "nonexistent" "default_policy")
-        assert_equals "default_policy" "$result" "get_enforcement_policy returns default"
-    fi
+    cat > "$TEST_DIR/.codeflow/config/enforcement/enforcement-policy.json" << 'EOF'
+{
+    "enforcement_level": "strict",
+    "sentinel": {
+        "default_ttl": 600
+    }
+}
+EOF
+
+    override_repo_root "$TEST_DIR"
+
+    local level
+    level=$(get_enforcement_policy "enforcement_level" "unknown")
+    assert_equals "strict" "$level" "get_enforcement_policy reads enforcement level"
+
+    # Test nested key
+    local ttl
+    ttl=$(get_enforcement_policy "sentinel.default_ttl" "0")
+    assert_equals "600" "$ttl" "get_enforcement_policy reads nested key"
+
+    # Test default for missing key
+    local missing
+    missing=$(get_enforcement_policy "nonexistent" "default_policy")
+    assert_equals "default_policy" "$missing" "get_enforcement_policy returns default for missing key"
+
+    restore_repo_root
+    teardown_test_dir
 }
 
 test_get_work_graph_config() {
@@ -270,12 +420,90 @@ test_get_work_graph_config() {
 test_is_feature_enabled() {
     test_section "is_feature_enabled"
 
-    # Test non-existent feature (should default to false)
-    if is_feature_enabled "nonexistent_feature_xyz"; then
+    setup_test_dir "feature-flags"
+
+    mkdir -p "$TEST_DIR/.codeflow/config/enforcement"
+
+    cat > "$TEST_DIR/.codeflow/config/enforcement/enforcement-policy.json" << 'EOF'
+{
+    "feature_alpha": "true",
+    "feature_beta": "false",
+    "feature_gamma": "enabled"
+}
+EOF
+
+    override_repo_root "$TEST_DIR"
+
+    # Test enabled feature
+    if is_feature_enabled "feature_alpha"; then
+        test_pass "is_feature_enabled returns true for 'true' value"
+    else
+        test_fail "is_feature_enabled should return true for feature_alpha"
+    fi
+
+    # Test disabled feature
+    if is_feature_enabled "feature_beta"; then
+        test_fail "is_feature_enabled should return false for 'false' value"
+    else
+        test_pass "is_feature_enabled returns false for 'false' value"
+    fi
+
+    # Test non-boolean feature (should be false)
+    if is_feature_enabled "feature_gamma"; then
+        test_fail "is_feature_enabled should return false for non-'true' value"
+    else
+        test_pass "is_feature_enabled returns false for non-'true' value"
+    fi
+
+    # Test nonexistent feature (should default to false)
+    if is_feature_enabled "nonexistent_feature"; then
         test_fail "Nonexistent feature should not be enabled"
     else
         test_pass "Nonexistent feature is not enabled"
     fi
+
+    restore_repo_root
+    teardown_test_dir
+}
+
+# ============================================================================
+# TEST: jq dependency handling
+# ============================================================================
+
+test_jq_missing_fallback() {
+    test_section "jq missing fallback"
+
+    setup_test_dir "no-jq"
+
+    mkdir -p "$TEST_DIR/.codeflow/config"
+    echo '{"key": "value"}' > "$TEST_DIR/.codeflow/config/test.json"
+
+    override_repo_root "$TEST_DIR"
+
+    # Temporarily override command_exists to simulate missing jq
+    local _orig_command_exists
+    _orig_command_exists=$(declare -f command_exists)
+
+    # shellcheck disable=SC2317  # Function called indirectly
+    command_exists() {
+        [[ "$1" != "jq" ]] && command -v "$1" &>/dev/null
+    }
+
+    local result
+    result=$(config_get_json "test.json" ".key" "jq_missing_default")
+    assert_equals "jq_missing_default" "$result" "config_get_json returns default when jq missing"
+
+    if config_has_json "test.json" ".key"; then
+        test_fail "config_has_json should return false when jq missing"
+    else
+        test_pass "config_has_json returns false when jq missing"
+    fi
+
+    # Restore command_exists
+    eval "$_orig_command_exists"
+
+    restore_repo_root
+    teardown_test_dir
 }
 
 # ============================================================================
@@ -315,19 +543,25 @@ main() {
 
     # JSON configuration
     test_config_get_json
+    test_config_get_json_subdirectory
     test_config_has_json
 
     # YAML configuration
     test_config_get_yaml
+    test_config_get_yaml_with_file
 
     # Environment configuration
     test_load_env_file
     test_load_env_file_nonexistent
+    test_load_env_file_with_equals_in_value
 
     # Common configurations
     test_get_enforcement_policy
     test_get_work_graph_config
     test_is_feature_enabled
+
+    # Dependency handling
+    test_jq_missing_fallback
 
     print_test_summary
 

@@ -98,7 +98,98 @@ else
 fi
 
 # ============================================================================
-# Test 7: Shellcheck passes
+# Test 7: Invalid option returns error
+# ============================================================================
+OUTPUT=$("$SCRIPT" --invalid 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "error\|unknown"; then
+    echo "PASS: Invalid option shows error"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Invalid option should show error"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# ============================================================================
+# Test 8: Cache JSON is valid (if jq available)
+# ============================================================================
+if command -v jq &>/dev/null; then
+    if jq empty /tmp/claude/managed/protection-cache.json 2>/dev/null; then
+        echo "PASS: Cache file is valid JSON"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "FAIL: Cache file should be valid JSON"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+else
+    echo "SKIP: jq not available"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+fi
+
+# ============================================================================
+# Test 9: Cache contains expected keys
+# ============================================================================
+if command -v jq &>/dev/null; then
+    KEYS=$(jq -r 'keys[]' /tmp/claude/managed/protection-cache.json 2>/dev/null | sort | tr '\n' ',')
+    if [[ "$KEYS" == *"critical"* ]] && [[ "$KEYS" == *"high"* ]] && [[ "$KEYS" == *"moderate"* ]] && [[ "$KEYS" == *"updated_at"* ]]; then
+        echo "PASS: Cache has expected keys"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "FAIL: Cache missing expected keys (got: $KEYS)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+else
+    echo "SKIP: jq not available"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+fi
+
+# ============================================================================
+# Test 10: List mode exits cleanly (exit 0)
+# ============================================================================
+if "$SCRIPT" --list >/dev/null 2>&1; then
+    echo "PASS: List mode exits 0"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: List mode should exit 0"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# ============================================================================
+# Test 11: Reload exits cleanly (exit 0)
+# ============================================================================
+if "$SCRIPT" >/dev/null 2>&1; then
+    echo "PASS: Reload mode exits 0"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Reload mode should exit 0"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# ============================================================================
+# Test 12: Validate reports 0 patterns for comment-only list files
+# ============================================================================
+OUTPUT=$("$SCRIPT" --validate 2>&1 || true)
+if echo "$OUTPUT" | grep -q "(0 patterns)"; then
+    echo "PASS: Validate counts only non-comment patterns"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Validate should report 0 for comment-only files"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# ============================================================================
+# Test 13: List mode shows all three tiers from policy
+# ============================================================================
+OUTPUT=$("$SCRIPT" --list 2>&1 || true)
+if echo "$OUTPUT" | grep -q "Critical" && echo "$OUTPUT" | grep -q "High" && echo "$OUTPUT" | grep -q "Moderate"; then
+    echo "PASS: List mode shows all three tiers"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: List mode should show Critical, High, Moderate tiers"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# ============================================================================
+# Test 14: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

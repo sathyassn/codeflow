@@ -26,6 +26,26 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # =============================================================================
 # EARLY EXIT FOR NON-EDIT/WRITE TOOLS
 # =============================================================================
@@ -40,13 +60,13 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 SENTINEL_LIB="$REPO_ROOT/.codeflow/scripts/security/sentinel/cf-sentinel.sh"
-SENTINEL_DIR="/tmp/claude/managed/sentinels"
+SENTINEL_DIR="$REPO_ROOT/.state/sentinels/skill/$CODEFLOW_SESSION_ID"
 
 # Source security library for logging
 if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
@@ -65,17 +85,19 @@ fi
 
 # Read sentinel config
 if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
-    SENTINEL_DIR=$(jq -r '.sentinel.directory // "/tmp/claude/managed/sentinels"' "$CONFIG" 2>/dev/null) || true
+    _sd=$(jq -r '.sentinel.directory // ".state/sentinels/skill"' "$CONFIG" 2>/dev/null) || true
+    if [[ -n "$_sd" ]] && [[ "$_sd" != /* ]]; then _sd="$REPO_ROOT/$_sd"; fi
+    SENTINEL_DIR="${_sd}/$CODEFLOW_SESSION_ID"
 fi
 
 # =============================================================================
 # V4: PATHFLOW MODE CHECK
 # =============================================================================
 
-if declare -f is_agent_teams_active &>/dev/null && is_agent_teams_active; then
+if declare -f is_pathflow_active &>/dev/null && is_pathflow_active; then
     # In agent-teams mode, check PathFlow sentinel for write authorization
-    PATHFLOW_SENTINEL_DIR="$REPO_ROOT/.state/sentinels"
-    if ls "$PATHFLOW_SENTINEL_DIR"/pathflow:pf-3-* &>/dev/null 2>&1; then
+    PATHFLOW_SENTINEL_DIR="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
+    if ls "$PATHFLOW_SENTINEL_DIR"/pathflow-pf-3-* &>/dev/null 2>&1; then
         # PF-3 complete: file operations authorized by PathFlow
         exit 0
     fi
@@ -210,7 +232,7 @@ get_file_type() {
         *-runbook.md) echo "Runbook document" ;;
         *.sh) echo "Shell script" ;;
         *.py) echo "Python script" ;;
-        epics/*) echo "Epic/Task document" ;;
+        project-management/epics/*) echo "Epic/Task document" ;;
         *.md) echo "Markdown document" ;;
         *) echo "File" ;;
     esac

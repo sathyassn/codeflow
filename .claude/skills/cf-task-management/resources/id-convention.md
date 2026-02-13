@@ -1,6 +1,27 @@
 # ID Convention Reference
 
-## Epic ID Format
+## Dual-ID System
+
+Every epic and task has two identifiers:
+
+| ID Type | Format | Purpose | Example |
+|---------|--------|---------|---------|
+| **ULID PK** (`id`) | `epic-{ulid}` / `task-{ulid}` | Database primary key, FK references, joins | `epic-01JQ3KM7V8...`, `task-01JQ3KN2X9...` |
+| **Format ID** (`format_id`) | `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` / `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` | User-facing display, filenames, commits, branches | `FRT-EPC-FEAT-AUTH-001`, `BKD-TSK-FIX-API-023` |
+
+### Usage Rules
+
+| Context | Use Which | Why |
+|---------|-----------|-----|
+| Database FK references | ULID PK (`id`) | Immutable, globally unique |
+| `epic_id` / `task_id` columns in tables | ULID PK | Foreign key integrity |
+| active-task.json `task_id`, `epic_id` | ULID PK | Internal state references |
+| User-facing display | Format ID (`format_id`) | Human-readable |
+| Filenames and paths | Format ID | Navigable, meaningful |
+| Commit messages and branches | Format ID | Human context in git history |
+| API responses | Both | Include `id` (ULID PK) and `format_id` |
+
+## Format ID: Epic
 
 ```text
 {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}
@@ -16,13 +37,13 @@
 | DOMAIN | Project-configured or GENL | AUTH |
 | NNN | Zero-padded sequence number | 001 |
 
-### Example Epic IDs
+### Examples
 
 - `FRT-EPC-FEAT-AUTH-001` - Frontend feature epic for auth domain
 - `BKD-EPC-FIX-API-003` - Backend fix epic for API domain
 - `INF-EPC-CICD-GENL-001` - Infrastructure CI/CD epic (general)
 
-## Task ID Format
+## Format ID: Task
 
 ```text
 {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
@@ -38,7 +59,7 @@
 | DOMAIN | Project-configured or GENL | API |
 | NNN | Zero-padded sequence number | 012 |
 
-### Example Task IDs
+### Examples
 
 - `BKD-TSK-FEAT-API-012` - Backend feature task for API domain
 - `FRT-TSK-FIX-UI-005` - Frontend fix task for UI domain
@@ -55,10 +76,28 @@
 
 **Do not construct IDs manually.** Always use the appropriate operation:
 
-- Epic IDs: `cf-db-operations:epic-create` generates the ID
-- Task IDs: `cf-db-operations:task-create` generates the ID
+- **ULID PK** (`id`): Generated automatically — `epic-{ulid}` or `task-{ulid}`
+- **Format ID** (`format_id`): Generated automatically — `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` or `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}`
+
+Both are produced by:
+
+- Epic: `cf-db-operations:epic-create` generates both `id` and `format_id`
+- Task: `cf-db-operations:task-create` generates both `id` and `format_id`
 
 These operations use `.codeflow/scripts/db/generate-id.sh` internally.
+
+## Area-to-Folder Mapping
+
+When resolving area codes to filesystem paths, use this mapping:
+
+| Area Code | Folder Name | Path Example |
+|-----------|-------------||--------------|
+| FRT | frontend/ | project-management/epics/frontend/ |
+| BKD | backend/ | project-management/epics/backend/ |
+| INF | infrastructure/ | project-management/epics/infrastructure/ |
+| SHR | shared/ | project-management/epics/shared/ |
+| DOC | documentation/ | project-management/epics/documentation/ |
+| XCUT | cross-cutting/ | project-management/epics/cross-cutting/ |
 
 ## Validation
 

@@ -52,19 +52,20 @@ documented kcov behavior, not a bug in our tests.
 
 | Category | Scripts | With Tests | Missing Tests | Coverage |
 |----------|---------|------------|---------------|----------|
-| Shell Scripts (.codeflow/scripts) | 28 | 28 | 0 | 100% |
+| Shell Scripts (.codeflow/scripts) | 27 | 27 | 0 | 100% |
 | Claude Hooks (.claude/hooks) | 26 | 26 | 0 | 100% |
 | Git Hooks (.codeflow/scripts/git-hooks) | 5 | 5 | 0 | 100% |
-| Python Scripts (.codeflow/scripts) | 27 | 26 | 1 | 96% |
-| **Total** | **86** | **85** | **1** | **99%** |
+| Python Scripts (.codeflow/scripts) | 18 | 17 | 1 | 94% |
+| **Total** | **76** | **75** | **1** | **99%** |
 
 ---
 
 ## Detailed Coverage
 
-### 1. Shell Scripts in `.codeflow/scripts/` (28/28 covered)
+### 1. Shell Scripts in `.codeflow/scripts/` (27/27 covered)
 
-#### shell-lib/ (8 files)
+#### shell-lib/ (7 files)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | config.sh | .codeflow/testing/scripts/shell-lib/test-config.sh | ✅ |
@@ -76,17 +77,14 @@ documented kcov behavior, not a bug in our tests.
 | validation.sh | .codeflow/testing/scripts/shell-lib/test-validation.sh | ✅ |
 
 #### state/ (2 files)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | ledger.sh | .codeflow/testing/scripts/state/test-ledger.sh | ✅ |
 | memory.sh | .codeflow/testing/scripts/state/test-memory.sh | ✅ |
 
-#### db/lib/ (1 file)
-| Script | Test File | Status |
-|--------|-----------|--------|
-| db-lib.sh | .codeflow/testing/scripts/db/lib/test-db-lib.sh | ✅ |
-
 #### security/ (11 files)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | cf-stage-edit.sh | .codeflow/testing/scripts/security/test-cf-stage-edit.sh | ✅ |
@@ -102,11 +100,13 @@ documented kcov behavior, not a bug in our tests.
 | cf-validate-python.sh | .codeflow/testing/scripts/security/test-cf-validate-python.sh | ✅ |
 
 #### security/lib/ (1 file)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | security-lib.sh | .codeflow/testing/scripts/security/lib/test-security-lib.sh | ✅ |
 
 #### security/enforcement/ (6 files)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | cf-dangerous-commands.sh | .codeflow/testing/scripts/security/test-cf-dangerous-commands.sh | ✅ |
@@ -121,6 +121,7 @@ documented kcov behavior, not a bug in our tests.
 ### 2. Claude Hooks in `.claude/hooks/codeflow/` (26/26 covered)
 
 #### pre-tool-use/ (11 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-pre-tool-use-security.sh | .codeflow/testing/claude-hooks/pre-tool-use/test-cf-pre-tool-use-security.sh | ✅ |
@@ -136,6 +137,7 @@ documented kcov behavior, not a bug in our tests.
 | cf-pre-tool-use-task.sh | .codeflow/testing/claude-hooks/pre-tool-use/test-cf-pre-tool-use-task.sh | ✅ |
 
 #### post-tool-use/ (6 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-post-tool-use-logging.sh | .codeflow/testing/claude-hooks/post-tool-use/test-cf-post-tool-use-logging.sh | ✅ |
@@ -146,18 +148,21 @@ documented kcov behavior, not a bug in our tests.
 | cf-post-tool-use-skill.sh | .codeflow/testing/claude-hooks/post-tool-use/test-cf-post-tool-use-skill.sh | ✅ |
 
 #### session-start/ (2 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-session-start-init.sh | .codeflow/testing/claude-hooks/session-start/test-cf-session-start-init.sh | ✅ |
 | cf-session-start-logging.sh | .codeflow/testing/claude-hooks/session-start/test-cf-session-start-logging.sh | ✅ |
 
 #### session-end/ (2 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-session-end-cleanup.sh | .codeflow/testing/claude-hooks/session-end/test-cf-session-end-cleanup.sh | ✅ |
 | cf-session-end-logging.sh | .codeflow/testing/claude-hooks/session-end/test-cf-session-end-logging.sh | ✅ |
 
 #### stop/ (3 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-stop-task-check.sh | .codeflow/testing/claude-hooks/stop/test-cf-stop-task-check.sh | ✅ |
@@ -165,6 +170,7 @@ documented kcov behavior, not a bug in our tests.
 | cf-stop-verify-work.sh | .codeflow/testing/claude-hooks/stop/test-cf-stop-verify-work.sh | ✅ |
 
 #### user-prompt-submit/ (2 files)
+
 | Hook | Test File | Status |
 |------|-----------|--------|
 | cf-user-prompt-submit-logging.sh | .codeflow/testing/claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh | ✅ |
@@ -184,17 +190,15 @@ documented kcov behavior, not a bug in our tests.
 
 ---
 
-### 4. Python Scripts in `.codeflow/scripts/` (26/27 covered)
+### 4. Python Scripts in `.codeflow/scripts/` (17/18 covered)
 
-#### codeflow_py_lib/ (12 files, 11 with tests)
+#### codeflow_py_lib/ (9 files, 8 with tests)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
-| __init__.py | (no test needed - re-exports only) | ⚠️ |
-| chunking.py | .codeflow/testing/scripts/codeflow_py_lib/test_chunking.py | ✅ |
+| `__init__.py` | (no test needed - re-exports only) | ⚠️ |
 | config.py | .codeflow/testing/scripts/codeflow_py_lib/test_config.py | ✅ |
 | crdt.py | .codeflow/testing/scripts/codeflow_py_lib/test_crdt.py | ✅ |
-| db.py | .codeflow/testing/scripts/codeflow_py_lib/test_db.py | ✅ |
-| embeddings.py | .codeflow/testing/scripts/codeflow_py_lib/test_embeddings.py | ✅ |
 | errors.py | .codeflow/testing/scripts/codeflow_py_lib/test_errors.py | ✅ |
 | jsonl.py | .codeflow/testing/scripts/codeflow_py_lib/test_jsonl.py | ✅ |
 | logging.py | .codeflow/testing/scripts/codeflow_py_lib/test_logging.py | ✅ |
@@ -202,7 +206,8 @@ documented kcov behavior, not a bug in our tests.
 | ulid.py | .codeflow/testing/scripts/codeflow_py_lib/test_ulid.py | ✅ |
 | validation.py | .codeflow/testing/scripts/codeflow_py_lib/test_validation.py | ✅ |
 
-#### coordination/ (7 files)
+#### coordination/ (6 files)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
 | cf-claim-acquire.py | .codeflow/testing/scripts/coordination/test_claim_operations.py | ✅ |
@@ -211,23 +216,12 @@ documented kcov behavior, not a bug in our tests.
 | cf-claim-release.py | .codeflow/testing/scripts/coordination/test_claim_operations.py | ✅ |
 | cf-claim-renew.py | .codeflow/testing/scripts/coordination/test_claim_operations.py | ✅ |
 | cf-crdt-rebuild.py | .codeflow/testing/scripts/coordination/test_crdt_sync.py | ✅ |
-| cf-crdt-sync.py | .codeflow/testing/scripts/coordination/test_crdt_sync.py | ✅ |
 
-#### db/lib/ (1 file)
+#### memory/ (1 file)
+
 | Script | Test File | Status |
 |--------|-----------|--------|
-| db_operations.py | .codeflow/testing/scripts/db/test_db_operations.py | ✅ |
-
-#### memory/ (7 files)
-| Script | Test File | Status |
-|--------|-----------|--------|
-| cf-entity-query.py | .codeflow/testing/scripts/memory/test_entity_query.py | ✅ |
-| cf-entity-traverse.py | .codeflow/testing/scripts/memory/test_entity_traverse.py | ✅ |
-| cf-memory-at-time.py | .codeflow/testing/scripts/memory/test_memory_at_time.py | ✅ |
-| cf-memory-query.py | .codeflow/testing/scripts/memory/test_memory_query.py | ✅ |
-| cf-memory-search.py | .codeflow/testing/scripts/memory/test_memory_search.py | ✅ |
 | cf-memory-store.py | .codeflow/testing/scripts/memory/test_memory_store.py | ✅ |
-| cf-memory-traverse.py | .codeflow/testing/scripts/memory/test_memory_traverse.py | ✅ |
 
 ---
 
@@ -235,13 +229,14 @@ documented kcov behavior, not a bug in our tests.
 
 | Script | Location | Reason |
 |--------|----------|--------|
-| __init__.py | .codeflow/scripts/codeflow_py_lib/__init__.py | Re-export only file (no logic to test) |
+| `__init__.py` | `.codeflow/scripts/codeflow_py_lib/__init__.py` | Re-export only file (no logic to test) |
 
 ---
 
 ## Files Excluded from Audit
 
 The following were excluded per user request:
+
 - `node_modules/` - External dependencies
 - `.venv/` - Python virtual environment
 - `.git/hooks/*.sample` - Git sample hooks (not project code)
@@ -250,39 +245,29 @@ The following were excluded per user request:
 
 ---
 
----
-
 ## Actual Line Coverage (Python)
 
-### codeflow_py_lib (Direct Tests) - 94.4% Overall
+### codeflow_py_lib (Direct Tests) - 94.1% Overall
 
 | Module | Statements | Missed | Branch | Coverage |
 |--------|------------|--------|--------|----------|
-| __init__.py | 13 | 0 | 0 | 100.0% |
-| chunking.py | 80 | 3 | 24 | 95.2% |
+| `__init__.py` | 13 | 0 | 0 | 100.0% |
 | config.py | 61 | 2 | 18 | 97.5% |
 | crdt.py | 129 | 13 | 30 | 89.9% |
 | db.py | 57 | 1 | 4 | 96.7% |
-| embeddings.py | 84 | 2 | 24 | 97.2% |
 | errors.py | 44 | 0 | 12 | 100.0% |
 | jsonl.py | 62 | 0 | 34 | 100.0% |
 | logging.py | 48 | 8 | 12 | 78.3% |
 | paths.py | 41 | 3 | 8 | 91.8% |
 | ulid.py | 40 | 3 | 12 | 90.4% |
 | validation.py | 33 | 0 | 20 | 100.0% |
-| **TOTAL** | **692** | **35** | **198** | **94.4%** |
-
-### db_operations.py - 90.4% Coverage
-
-| Module | Statements | Missed | Branch | Coverage |
-|--------|------------|--------|--------|----------|
-| db_operations.py | 232 | 18 | 28 | 90.4% |
+| **TOTAL** | **528** | **30** | **150** | **94.1%** |
 
 ---
 
 ## Notes
 
-1. **__init__.py Exception**: The `__init__.py` in `codeflow_py_lib/` is a re-export file that doesn't contain testable logic. This is standard Python practice and doesn't require a dedicated test file.
+1. **`__init__.py` Exception**: The `__init__.py` in `codeflow_py_lib/` is a re-export file that doesn't contain testable logic. This is standard Python practice and doesn't require a dedicated test file.
 
 2. **Shared Test Files**: Some Python scripts share test files (e.g., all claim operations tested in `test_claim_operations.py`). This is acceptable as they test related functionality.
 
@@ -295,13 +280,14 @@ The following were excluded per user request:
    - See: `.codeflow/docs/system-dependencies.md` for detailed setup
 
 4. **Python Coverage Command**:
+
    ```bash
    cd .codeflow/testing
    PYTHONPATH=../scripts .venv/bin/python -m pytest scripts/codeflow_py_lib/ \
      --cov=codeflow_py_lib --cov-report=term-missing
    ```
 
-5. **Coverage Status**: Python line coverage at **94.4%** exceeds 85% target.
+5. **Coverage Status**: Python line coverage at **94.1%** exceeds 85% target.
 
 ---
 
@@ -350,6 +336,7 @@ Generated: 2026-02-04 (Updated)
 **kcov cannot track coverage for sourced scripts.** This is documented kcov behavior.
 
 Example: When `test-ledger.sh` runs:
+
 ```bash
 source "$REPO_ROOT/.codeflow/scripts/state/ledger.sh"  # kcov tracks this line
 init_ledger  # Function call - kcov does NOT track the function body

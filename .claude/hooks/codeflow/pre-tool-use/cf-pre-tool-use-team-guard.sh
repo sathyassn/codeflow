@@ -8,8 +8,8 @@
 #   - Blocks Teammate tool cleanup operation while PathFlow is active
 #   - Only applies to Teammate tool with operation="cleanup"
 #   - If not Teammate tool or not cleanup operation, allows through
-#   - If cleanup but no pathflow-active flag, allows cleanup
-#   - If cleanup AND pathflow-active exists, blocks with exit 2
+#   - If cleanup but PathFlow not active, allows cleanup
+#   - If cleanup AND PathFlow active, blocks with exit 2
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
@@ -21,6 +21,26 @@ set -euo pipefail
 
 # shellcheck disable=SC2034
 VERSION="1.0.0"
+
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
 
 # =============================================================================
 # EARLY EXIT: CHECK TOOL NAME
@@ -57,28 +77,26 @@ fi
 # PATHFLOW FLAG CHECK
 # =============================================================================
 
-# Allow overriding the flag path for testing
-PATHFLOW_FLAG="${PATHFLOW_FLAG_FILE:-/tmp/claude/managed/state/pathflow-active}"
-
-if [[ ! -f "$PATHFLOW_FLAG" ]]; then
-    # Not in PathFlow mode - allow cleanup
-    exit 0
-fi
-
-# =============================================================================
-# SETUP (only needed when blocking)
-# =============================================================================
-
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
-# Security library for logging
+# Source security library (provides is_pathflow_active via context-lib.sh)
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
     export LIB_DIR
     # shellcheck source=/dev/null
     source "$LIB_DIR/security-lib.sh"
+fi
+
+# Allow overriding for testing via PATHFLOW_FLAG_FILE env var
+if [[ -n "${PATHFLOW_FLAG_FILE:-}" ]]; then
+    if [[ ! -f "$PATHFLOW_FLAG_FILE" ]]; then
+        exit 0
+    fi
+elif ! is_pathflow_active 2>/dev/null; then
+    # Not in PathFlow mode - allow cleanup
+    exit 0
 fi
 
 # =============================================================================

@@ -22,7 +22,7 @@ This file provides instructions for AI tools other than Claude Code (e.g., Copil
 | `.codeflow/` | CodeFlow infrastructure (scripts, config, testing) |
 | `.state/` | Runtime state (database, logs, coordination) |
 | `project/` | Project knowledge base |
-| `epics/` | Work items (epics and tasks) |
+| `project-management/` | Project management (epics, tracking) |
 
 ## Coding Standards
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Purpose:   File operation security checks (Sections 8-10)
+# Purpose:   File operation security checks (Sections 9-10)
 # Location:  .codeflow/scripts/security/enforcement/cf-file-operations.sh
 # Usage:     source "cf-file-operations.sh" (from main hook)
 #
 # This module handles:
-#   - Section 8: Script Execution from Hook Directories
 #   - Section 9: Indirect File Operations (cp, dd, tee, rsync, etc.)
 #   - Section 10: Glob Pattern Bypass Prevention
 #
@@ -12,7 +11,6 @@
 #   - COMMAND: The bash command being checked
 #   - LIB_DIR: Path to security-lib.sh
 #   - PROTECTED_PATHS: Array of protected paths
-#   - EXECUTION_BLOCKED_PATHS: Array of execution-blocked paths
 #   - INDIRECT_WRITE_CMDS: Regex pattern of indirect write commands
 #
 # Exit codes:
@@ -26,33 +24,27 @@ set -euo pipefail
 source "${LIB_DIR}/security-lib.sh"
 
 # =============================================================================
-# SECTION 8: Script Execution from Hook Directories
-# =============================================================================
-# Block direct execution of hook scripts (these should only be run by frameworks)
-# Uses EXECUTION_BLOCKED_PATHS (subset of PROTECTED_PATHS)
-
-# Guard: Only iterate if array is non-empty (set -u crashes on empty array iteration)
-if [[ ${#EXECUTION_BLOCKED_PATHS[@]} -gt 0 ]]; then
-  for path in "${EXECUTION_BLOCKED_PATHS[@]}"; do
-    # ./blocked_path/script or bash blocked_path/script
-    if [[ "$COMMAND" =~ (^|\./|bash[[:space:]]+|sh[[:space:]]+|python[[:space:]]+|python3[[:space:]]+)"$path" ]]; then
-      block_command "Script Execution" "Direct execution of hook scripts not allowed" "$path"
-    fi
-  done
-fi
-
-# =============================================================================
 # SECTION 9: Indirect File Operations (cp, dd, tee, rsync, scp, install, ln)
 # =============================================================================
 # Problem: L0/L3 deny patterns only do PREFIX matching, not path-specific
 # Solution: Regex-based detection of copy/write operations targeting protected paths
 
-# Skip Section 9 entirely if destination is /tmp/claude (safe scratch space)
-# Pattern matches /tmp/claude with or without trailing slash
-if [[ "$COMMAND" =~ [[:space:]]/tmp/claude($|/) ]] || [[ "$COMMAND" =~ \>/tmp/claude($|/) ]]; then
-  # Destination is tmp/claude, skip protected path checks for indirect writes
-  :  # No-op, fall through to Section 10
-else
+# Skip Section 9 if the final destination is /tmp/claude (safe scratch space).
+# This prevents false positives when READING from protected paths to /tmp/claude
+# (e.g., "cp .claude/hooks/hook.sh /tmp/claude/backup.sh").
+# For compound commands, each segment after && or ; is a separate command, so
+# "cp file /tmp/claude/x && cp /tmp/claude/x .claude/settings.json" still checks
+# the second cp because /tmp/claude appears as source, not final destination.
+# Note: is_path_or_glob_targeted strips /tmp/claude from path matching internally,
+# but the protected source path still appears in the command and triggers the check.
+_skip_section9=false
+if [[ "$COMMAND" =~ [[:space:]]/tmp/claude($|/)[^[:space:]]*[[:space:]]*$ ]] && ! [[ "$COMMAND" =~ (&&|\|\||;) ]]; then
+  _skip_section9=true
+elif [[ "$COMMAND" =~ \>/tmp/claude($|/) ]]; then
+  _skip_section9=true
+fi
+
+if [[ "$_skip_section9" == "false" ]]; then
   # Single loop for all indirect write commands (DRY)
   # Uses is_path_or_glob_targeted to support glob patterns (e.g., .claude/memory/*/work-agreement*.md)
   for path in "${PROTECTED_PATHS[@]}"; do

@@ -2,46 +2,47 @@
 
 ## Overview
 
-**Do not write SQL queries directly.** All database access should go through cf-db-operations which uses pre-built query files.
+**Do not write SQL queries directly.** All database access goes through the Go CLI (`codeflow db exec/query`). Queries are internal to the Go CLI binary, not stored as separate .sql files.
 
-This reference documents the available query patterns for understanding, not for direct use.
+This reference documents the query patterns used internally by the Go CLI, for understanding only.
 
-## Query File Locations
+## Query Execution
 
-All query templates are stored in `.state/db/queries/`:
+All queries are compiled into the Go CLI (`codeflow` binary). There are no separate `.sql` query files at runtime. The schema is defined in `.codeflow/scripts/db/schema.sql`.
 
-| File | Purpose |
-|------|---------|
-| `epic-queries.sql` | Epic CRUD operations |
-| `task-queries.sql` | Task CRUD operations |
-| `memory-queries.sql` | Memory event operations |
-| `session-queries.sql` | Session lifecycle operations |
-| `log-queries.sql` | Audit log operations |
-| `autorun-queries.sql` | Autorun session operations |
+| Domain | Go CLI Command | Purpose |
+|--------|----------------|---------|
+| Epics | `codeflow db exec/query` | Epic CRUD operations |
+| Tasks | `codeflow db exec/query` | Task CRUD operations |
+| Memory | `codeflow db exec/query` | Memory event operations |
+| Sessions | `codeflow db exec/query` | Session lifecycle operations |
+| Logs | `codeflow db exec/query` | Audit log operations |
+| Autorun | `codeflow db exec/query` | Autorun session operations |
 
 ## Epic Operations
 
 ### epic-create
 
 ```sql
--- Query: epic-queries.sql#create
+-- Executed by: codeflow db exec/query (Go CLI internal — create)
 INSERT INTO epics (
-    id, title, summary, status, area_type, work_type, domain,
+    id, format_id, title, summary, status, area_type, work_type, domain,
     priority, is_ongoing, file_scope, created_at, updated_at
 ) VALUES (
-    :id, :title, :summary, :status, :area_type, :work_type, :domain,
+    :id, :format_id, :title, :summary, :status, :area_type, :work_type, :domain,
     :priority, :is_ongoing, :file_scope, :created_at, :updated_at
 );
 ```
 
-- Generates ID automatically: `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}`
+- Generates ULID PK automatically: `epic-{ulid}`
+- Generates format_id automatically: `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}`
 - Appends to JSONL ledger
-- Creates markdown file in `epics/`
+- Creates markdown file in `project-management/epics/{area-folder}/`
 
 ### epic-update
 
 ```sql
--- Query: epic-queries.sql#update
+-- Executed by: codeflow db exec/query (Go CLI internal — update)
 UPDATE epics SET
     title = COALESCE(:title, title),
     summary = COALESCE(:summary, summary),
@@ -61,29 +62,31 @@ WHERE id = :id;
 ### task-create
 
 ```sql
--- Query: task-queries.sql#create
+-- Executed by: codeflow db exec/query (Go CLI internal — create)
 INSERT INTO tasks (
-    id, epic_id, title, description, status, area_type, work_type, domain,
+    id, format_id, epic_id, title, description, status, area_type, work_type, domain,
     origin, file_scope, scope_policy, scope_root, estimate, priority,
     assignee_id, autorun_eligible, auto_commit, raise_pr, auto_merge,
     target_branch, acceptance, tests, created_at, updated_at
 ) VALUES (
-    :id, :epic_id, :title, :description, :status, :area_type, :work_type, :domain,
+    :id, :format_id, :epic_id, :title, :description, :status, :area_type, :work_type, :domain,
     :origin, :file_scope, :scope_policy, :scope_root, :estimate, :priority,
     :assignee_id, :autorun_eligible, :auto_commit, :raise_pr, :auto_merge,
     :target_branch, :acceptance, :tests, :created_at, :updated_at
 );
 ```
 
-- Generates ID automatically: `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}`
+- Generates ULID PK automatically: `task-{ulid}`
+- Generates format_id automatically: `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}`
+- `epic_id` references parent epic ULID PK
 - Links to parent epic
-- Creates markdown file in `epics/{epic}/tasks/`
+- Creates markdown file in `project-management/epics/{area-folder}/{epic}/tasks/`
 - Appends to JSONL ledger
 
 ### task-update
 
 ```sql
--- Query: task-queries.sql#update
+-- Executed by: codeflow db exec/query (Go CLI internal — update)
 UPDATE tasks SET
     status = COALESCE(:status, status),
     assignee_id = COALESCE(:assignee_id, assignee_id),
@@ -99,10 +102,21 @@ WHERE id = :id;
 - Runs unblock-dependents check on completion
 - Updates all three tiers
 
+### Lookup by format_id
+
+```sql
+-- Executed by: codeflow db query (Go CLI internal — lookup by format_id)
+SELECT * FROM epics WHERE format_id = :format_id;
+SELECT * FROM tasks WHERE format_id = :format_id;
+```
+
+- Use when resolving a human-readable format_id to its ULID PK
+- Returns full row including `id` (ULID PK) for FK operations
+
 ### task-ready (autorun)
 
 ```sql
--- Query: task-queries.sql#ready-for-autorun
+-- Executed by: codeflow db exec/query (Go CLI internal — ready-for-autorun)
 SELECT t.* FROM tasks t
 WHERE t.epic_id = :epic_id
   AND t.status = 'todo'
@@ -121,7 +135,7 @@ ORDER BY t.priority DESC, t.created_at;
 ### memory-store
 
 ```sql
--- Query: memory-queries.sql#store
+-- Executed by: codeflow db exec (Go CLI internal query)
 INSERT INTO memory_events (
     id, event_type, domain, work_id, data, memory_type, created_at
 ) VALUES (
@@ -141,18 +155,18 @@ VALUES (:extraction_id, :id, 'pending', :priority, :created_at);
 ### memory-query
 
 ```sql
--- Query: memory-queries.sql#query-by-domain
+-- Executed by: codeflow db query (Go CLI internal query)
 SELECT * FROM memory_events
 WHERE domain = :domain
 ORDER BY created_at DESC
 LIMIT :limit OFFSET :offset;
 
--- Query: memory-queries.sql#query-by-work
+-- Executed by: codeflow db query (Go CLI internal query)
 SELECT * FROM memory_events
 WHERE work_id = :work_id
 ORDER BY created_at DESC;
 
--- Query: memory-queries.sql#query-fts (full-text search)
+-- Executed by: codeflow db query (Go CLI internal FTS query)
 SELECT me.*, bm25(memory_fts) as score
 FROM memory_fts
 JOIN memory_events me ON memory_fts.id = me.id
@@ -173,7 +187,7 @@ Supports multiple query modes:
 ### session-record
 
 ```sql
--- Query: session-queries.sql#start
+-- Executed by: codeflow db exec/query (Go CLI internal — start)
 INSERT INTO sessions (
     id, project_id, user_id, user_host, machine_fingerprint,
     started_at, status, previous_session_id
@@ -182,7 +196,7 @@ INSERT INTO sessions (
     :started_at, 'active', :previous_session_id
 );
 
--- Query: session-queries.sql#end
+-- Executed by: codeflow db exec/query (Go CLI internal — end)
 UPDATE sessions SET
     ended_at = :ended_at,
     duration_seconds = :duration_seconds,
@@ -200,7 +214,7 @@ WHERE id = :id;
 ### log-append
 
 ```sql
--- Query: log-queries.sql#security
+-- Executed by: codeflow db exec/query (Go CLI internal — security)
 INSERT INTO security_logs (
     id, log_type, event_type, tool, target, reason,
     skill, operation, outcome, session_id, created_at
@@ -209,7 +223,7 @@ INSERT INTO security_logs (
     :skill, :operation, :outcome, :session_id, :created_at
 );
 
--- Query: log-queries.sql#network
+-- Executed by: codeflow db exec/query (Go CLI internal — network)
 INSERT INTO network_logs (
     id, operation, url, domain, method, status_code,
     response_size, duration_ms, purpose, work_id, session_id, created_at
@@ -218,7 +232,7 @@ INSERT INTO network_logs (
     :response_size, :duration_ms, :purpose, :work_id, :session_id, :created_at
 );
 
--- Query: log-queries.sql#conversation
+-- Executed by: codeflow db exec/query (Go CLI internal — conversation)
 INSERT INTO conversation_logs (
     id, role, content, tool_calls, turn_number, session_id, created_at
 ) VALUES (
@@ -235,7 +249,7 @@ INSERT INTO conversation_logs (
 ### autorun-session-create
 
 ```sql
--- Query: autorun-queries.sql#session-create
+-- Executed by: codeflow db exec/query (Go CLI internal — session-create)
 INSERT INTO autorun_sessions (
     id, batch_file, batch_name, status, max_session_workers,
     total_tasks, created_at
@@ -248,7 +262,7 @@ INSERT INTO autorun_sessions (
 ### autorun-worker-create
 
 ```sql
--- Query: autorun-queries.sql#worker-create
+-- Executed by: codeflow db exec/query (Go CLI internal — worker-create)
 INSERT INTO autorun_workers (
     id, session_id, worker_num, task_id, status, created_at
 ) VALUES (
@@ -259,7 +273,7 @@ INSERT INTO autorun_workers (
 ### autorun-session-status
 
 ```sql
--- Query: autorun-queries.sql#session-status
+-- Executed by: codeflow db exec/query (Go CLI internal — session-status)
 SELECT
     ars.*,
     COUNT(arw.id) as total_workers,
@@ -271,6 +285,25 @@ LEFT JOIN autorun_workers arw ON arw.session_id = ars.id
 WHERE ars.id = :session_id
 GROUP BY ars.id;
 ```
+
+## Tracking Operations
+
+### tracking-generate (master epic tracker)
+
+```sql
+-- Executed by: cf-work-state.sh or tracking scripts
+-- Generates master epic tracker view at project-management/tracking/
+SELECT e.id, e.title, e.status, e.area_type, e.work_type, e.priority,
+       COUNT(t.id) as task_count,
+       SUM(CASE WHEN t.status = 'complete' THEN 1 ELSE 0 END) as completed_tasks
+FROM epics e
+LEFT JOIN tasks t ON t.epic_id = e.id
+GROUP BY e.id
+ORDER BY e.area_type, e.work_type, e.created_at;
+```
+
+- Generates auto-updated views in `project-management/tracking/`
+- Used for master epic tracker and area-level summaries
 
 ## Query Parameters
 

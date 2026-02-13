@@ -321,3 +321,61 @@ class TestFilterEvents:
         result = list(filter_events(jsonl_file, event_type="type_a", since=since))
         assert len(result) == 1
         assert result[0]["data"] == 3
+
+
+class TestFlockAtomicWrites:
+    """Tests for flock-based atomic write safety."""
+
+    def test_write_creates_lock_file(self, temp_dir):
+        """write_jsonl should create a .lock file for flock."""
+        jsonl_file = temp_dir / "locked.jsonl"
+        write_jsonl(jsonl_file, [{"a": 1}])
+        lock_file = temp_dir / "locked.jsonl.lock"
+        assert lock_file.exists()
+
+    def test_concurrent_appends_no_corruption(self, temp_dir):
+        """Concurrent appends via threads should not corrupt JSONL."""
+        import threading
+
+        jsonl_file = temp_dir / "concurrent.jsonl"
+        errors = []
+        per_thread = 50
+        num_threads = 4
+
+        def append_events(thread_id):
+            try:
+                for i in range(per_thread):
+                    append_jsonl(
+                        jsonl_file,
+                        {"thread": thread_id, "seq": i},
+                        add_timestamp=False,
+                        add_id=False,
+                    )
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=append_events, args=(t,))
+            for t in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"Errors during concurrent writes: {errors}"
+
+        # Verify all lines are valid JSON and count is correct
+        events = list(read_jsonl(jsonl_file))
+        assert len(events) == num_threads * per_thread
+
+    def test_overwrite_uses_lock(self, temp_dir):
+        """Overwrite mode should also acquire flock."""
+        jsonl_file = temp_dir / "overwrite_lock.jsonl"
+        write_jsonl(jsonl_file, [{"old": 1}])
+        write_jsonl(jsonl_file, [{"new": 2}], overwrite=True)
+        lock_file = temp_dir / "overwrite_lock.jsonl.lock"
+        assert lock_file.exists()
+        result = list(read_jsonl(jsonl_file))
+        assert len(result) == 1
+        assert result[0] == {"new": 2}

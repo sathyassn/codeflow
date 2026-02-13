@@ -4,11 +4,13 @@
 # Platform:  macOS/Linux
 #
 # This module handles:
-#   - File writes on protected branches (main, master)
+#   - File writes on protected branches (main, master, production, release/*)
 #   - Blocks echo/printf redirects (>, >>)
 #   - Blocks sed -i in-place edits
 #   - Blocks touch/tee file creation to in-project paths
+#   - Blocks cp to in-project paths
 #   - Allows /tmp/claude/ operations (safe scratch space)
+#   - Allows operations already covered by path-protection (no double-block)
 #
 # Required variables (set by caller):
 #   - COMMAND: The bash command being checked
@@ -89,7 +91,8 @@ fi
 # PROTECTED PATH SKIP LOGIC
 # =============================================================================
 # If the command targets a path already in PROTECTED_PATHS, let cf-path-protection.sh
-# handle it (it has more specific error messages).
+# handle it (it has more specific error messages and skill references).
+# This prevents double-blocking and ensures appropriate skill guidance.
 
 is_targeting_protected_path() {
     if [[ -z "${PROTECTED_PATHS[*]+x}" ]]; then
@@ -109,6 +112,47 @@ if is_targeting_protected_path; then
 fi
 
 # =============================================================================
+# CONFIG-DRIVEN ENABLE/DISABLE
+# =============================================================================
+# Check if branch_protection is explicitly disabled via config
+
+if [[ -n "${CONFIG:-}" ]] && [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
+    if jq -e '.branch_protection' "$CONFIG" >/dev/null 2>&1; then
+        BRANCH_PROTECTION_ENABLED=$(jq -r '.branch_protection.enabled // true' "$CONFIG" 2>/dev/null)
+        if [[ "$BRANCH_PROTECTION_ENABLED" == "false" ]]; then
+            return 0  # Branch protection disabled via config
+        fi
+    fi
+fi
+
+# =============================================================================
+# PATHFLOW-CONDITIONAL BLOCK HELPER
+# =============================================================================
+# In PathFlow mode (agent-teams), instruct to message cf-gitops teammate.
+# In standalone mode, instruct to invoke cf-git-workflow skill.
+
+_block_branch_protection() {
+    local reason="$1"
+    local pattern="$2"
+
+    if is_pathflow_active; then
+        block_with_skill \
+            "Branch Protection" \
+            "$reason Message your cf-gitops teammate to create a branch." \
+            "$pattern" \
+            "git-workflow" \
+            "create-branch"
+    else
+        block_with_skill \
+            "Branch Protection" \
+            "$reason Create a feature branch first." \
+            "$pattern" \
+            "git-workflow" \
+            "create-branch"
+    fi
+}
+
+# =============================================================================
 # FILE WRITES ON PROTECTED BRANCHES
 # =============================================================================
 # Block file-writing Bash operations that bypass Edit/Write tool hooks
@@ -121,23 +165,21 @@ fi
 # -----------------------------------------------------------------------------
 
 # Match redirect to a file path (not fd redirect like 2>&1)
+# Pattern explanation:
+# - ([^0-9\&\>]|^) = not preceded by digit, &, or > (or start of string)
+# - \>[[:space:]]* = > followed by optional spaces
+# - [^\>\&[:space:]] = followed by something that's not >, &, or space (i.e., a path)
 if [[ "$COMMAND" =~ ([^0-9\&\>]|^)\>[[:space:]]*[^\>\&[:space:]] ]]; then
-    block_with_skill \
-        "Branch Protection" \
-        "File redirect on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-        ">" \
-        "git-workflow" \
-        "create-feature-branch"
+    _block_branch_protection \
+        "File redirect on protected branch ($CURRENT_BRANCH)." \
+        ">"
 fi
 
 # Match append redirect (>>)
 if [[ "$COMMAND" =~ ([^0-9\&]|^)\>\>[[:space:]]*[^\>\&[:space:]] ]]; then
-    block_with_skill \
-        "Branch Protection" \
-        "File append on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-        ">>" \
-        "git-workflow" \
-        "create-feature-branch"
+    _block_branch_protection \
+        "File append on protected branch ($CURRENT_BRANCH)." \
+        ">>"
 fi
 
 # -----------------------------------------------------------------------------
@@ -146,12 +188,9 @@ fi
 # -----------------------------------------------------------------------------
 
 if [[ "$COMMAND" =~ sed[[:space:]].*-i ]]; then
-    block_with_skill \
-        "Branch Protection" \
-        "In-place file edit on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-        "sed -i" \
-        "git-workflow" \
-        "create-feature-branch"
+    _block_branch_protection \
+        "In-place file edit on protected branch ($CURRENT_BRANCH)." \
+        "sed -i"
 fi
 
 # -----------------------------------------------------------------------------
@@ -164,12 +203,9 @@ fi
 if [[ "$COMMAND" =~ (^|[[:space:]])touch[[:space:]]+[^\-/] ]]; then
     # Additional check: not targeting absolute path that's safe
     if [[ ! "$COMMAND" =~ touch[[:space:]]+/tmp ]]; then
-        block_with_skill \
-            "Branch Protection" \
-            "File creation on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-            "touch" \
-            "git-workflow" \
-            "create-feature-branch"
+        _block_branch_protection \
+            "File creation on protected branch ($CURRENT_BRANCH)." \
+            "touch"
     fi
 fi
 
@@ -177,29 +213,27 @@ fi
 # Pattern: | tee followed by relative path
 if [[ "$COMMAND" =~ \|[[:space:]]*tee[[:space:]]+[^\-/] ]]; then
     if [[ ! "$COMMAND" =~ tee[[:space:]]+/tmp ]]; then
-        block_with_skill \
-            "Branch Protection" \
-            "Piped file write on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-            "tee" \
-            "git-workflow" \
-            "create-feature-branch"
+        _block_branch_protection \
+            "Piped file write on protected branch ($CURRENT_BRANCH)." \
+            "tee"
     fi
 fi
 
 # -----------------------------------------------------------------------------
-# Block cp/mv to in-project paths on protected branches
+# Block cp to in-project paths on protected branches
+# Note: mv is NOT blocked here (mv is primarily a rename/move, not a write)
 # -----------------------------------------------------------------------------
 
-# Block cp to relative paths (not /tmp)
-if [[ "$COMMAND" =~ (^|[[:space:]])cp[[:space:]].*[[:space:]][^\-/][^[:space:]]* ]]; then
-    # Exclude if destination is /tmp
-    if [[ ! "$COMMAND" =~ cp[[:space:]].*[[:space:]]/tmp ]]; then
-        block_with_skill \
-            "Branch Protection" \
-            "File copy on protected branch ($CURRENT_BRANCH). Create a feature branch first." \
-            "cp" \
-            "git-workflow" \
-            "create-feature-branch"
+# Block cp when last argument (destination) is a relative path (not /tmp or /)
+# Extract the last word of cp command to check destination
+if [[ "$COMMAND" =~ (^|[[:space:]])cp[[:space:]] ]]; then
+    # Get last space-delimited token as the destination
+    _cp_dest="${COMMAND##* }"
+    # Block if destination is relative (doesn't start with /) or starts with .
+    if [[ "$_cp_dest" != /* ]] && [[ -n "$_cp_dest" ]]; then
+        _block_branch_protection \
+            "File copy on protected branch ($CURRENT_BRANCH)." \
+            "cp"
     fi
 fi
 

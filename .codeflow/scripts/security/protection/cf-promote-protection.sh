@@ -42,8 +42,8 @@ DESCRIPTION:
     to the extended list (permanent).
 
     Files:
-      - .codeflow/protected-adhoc.list (source)
-      - .codeflow/protected-extended.list (destination)
+      - .codeflow/config/enforcement/protection/protected-adhoc.list (source)
+      - .codeflow/config/enforcement/protection/protected-extended.list (destination)
 
 EXAMPLES:
     cf-promote-protection.sh ".secrets/*"
@@ -116,7 +116,7 @@ ADHOC_LIST="$REPO_ROOT/.codeflow/config/enforcement/protection/protected-adhoc.l
 
 # Check if pattern exists in adhoc
 IN_ADHOC=false
-if [[ -f "$ADHOC_LIST" ]] && grep -qF "$PATTERN" "$ADHOC_LIST"; then
+if [[ -f "$ADHOC_LIST" ]] && grep -qxF "$PATTERN" "$ADHOC_LIST"; then
     IN_ADHOC=true
 fi
 
@@ -127,13 +127,14 @@ if [[ "$IN_ADHOC" == "false" ]] && [[ "$FORCE" == "false" ]]; then
 fi
 
 # Check if already in extended
-if [[ -f "$EXTENDED_LIST" ]] && grep -qF "$PATTERN" "$EXTENDED_LIST"; then
+if [[ -f "$EXTENDED_LIST" ]] && grep -qxF "$PATTERN" "$EXTENDED_LIST"; then
     echo "Pattern already in extended list: $PATTERN"
 
     if [[ "$IN_ADHOC" == "true" ]] && [[ "$KEEP" == "false" ]]; then
         # Remove from adhoc since it's already in extended
-        grep -vF "$PATTERN" "$ADHOC_LIST" > "$ADHOC_LIST.tmp" 2>/dev/null || true
-        mv "$ADHOC_LIST.tmp" "$ADHOC_LIST"
+        temp_file=$(mktemp "${TMPDIR:-/tmp/claude}/cf-promote-XXXXXX")
+        grep -vxF "$PATTERN" "$ADHOC_LIST" > "$temp_file" 2>/dev/null || true
+        mv "$temp_file" "$ADHOC_LIST"
         echo "Removed duplicate from adhoc list"
     fi
 
@@ -161,8 +162,9 @@ echo "Added to extended list: $PATTERN"
 
 # Remove from adhoc (unless --keep)
 if [[ "$IN_ADHOC" == "true" ]] && [[ "$KEEP" == "false" ]]; then
-    grep -vF "$PATTERN" "$ADHOC_LIST" > "$ADHOC_LIST.tmp" 2>/dev/null || true
-    mv "$ADHOC_LIST.tmp" "$ADHOC_LIST"
+    temp_file=$(mktemp "${TMPDIR:-/tmp/claude}/cf-promote-XXXXXX")
+    grep -vxF "$PATTERN" "$ADHOC_LIST" > "$temp_file" 2>/dev/null || true
+    mv "$temp_file" "$ADHOC_LIST"
     echo "Removed from adhoc list"
 fi
 

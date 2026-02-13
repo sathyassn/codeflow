@@ -8,24 +8,14 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-reject-staged-edit.sh"
-STAGE_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-reject-staged-edit.sh"
+STAGE_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -rf "$STAGING_DIR" 2>/dev/null || true
-    rm -f /tmp/claude/test-reject-*.txt 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# Pre-clean
-cleanup
 
 echo "=== Testing cf-reject-staged-edit.sh ==="
 echo ""
@@ -93,17 +83,41 @@ else
 fi
 
 # ============================================================================
-# Test 6: Successful rejection
+# Test 6: Unknown option handling
+# ============================================================================
+OUTPUT=$("$SCRIPT" --invalid-flag 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "unknown option"; then
+    echo "PASS: Unknown option returns error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Unknown option not handled"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 7: --reason without value
+# ============================================================================
+OUTPUT=$("$SCRIPT" -r 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "requires a value"; then
+    echo "PASS: --reason without value returns error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: --reason without value not handled"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 8: Successful rejection
 # ============================================================================
 echo ""
 echo "--- Rejection functionality ---"
 
 # Create and stage a test file
-echo "original content" > /tmp/claude/test-reject-original.txt
-echo "new content" > /tmp/claude/test-reject-new.txt
-"$STAGE_SCRIPT" "/tmp/claude/test-reject-original.txt" "/tmp/claude/test-reject-new.txt" >/dev/null 2>&1
+echo "original content" > "$TEST_TMPDIR/test-reject-original.txt"
+echo "new content" > "$TEST_TMPDIR/test-reject-new.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-reject-original.txt" "$TEST_TMPDIR/test-reject-new.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" "/tmp/claude/test-reject-original.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-reject-original.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "rejected\|cleaned"; then
     echo "PASS: Rejection succeeds"
     ((TESTS_PASSED++)) || true
@@ -113,22 +127,28 @@ else
 fi
 
 # ============================================================================
-# Test 7: Staged files cleaned up
+# Test 9: All 3 staging artifacts cleaned up
 # ============================================================================
-SAFE_NAME=$(echo "/tmp/claude/test-reject-original.txt" | sed 's/[\/]/_/g')
+SAFE_NAME=$(echo "$TEST_TMPDIR/test-reject-original.txt" | sed 's/[\/]/_/g')
 
-if [[ ! -f "$STAGING_DIR/${SAFE_NAME}.staged" ]]; then
-    echo "PASS: Staged files cleaned up after rejection"
+ARTIFACTS_CLEAN=true
+for ext in staged original metadata.json; do
+    if [[ -f "$STAGING_DIR/${SAFE_NAME}.${ext}" ]]; then
+        ARTIFACTS_CLEAN=false
+        echo "FAIL: Artifact not cleaned: ${SAFE_NAME}.${ext}"
+    fi
+done
+if [[ "$ARTIFACTS_CLEAN" == "true" ]]; then
+    echo "PASS: All 3 staging artifacts cleaned up"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Staged files not cleaned up"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 8: Original file unchanged
+# Test 10: Original file unchanged
 # ============================================================================
-if grep -q "original content" /tmp/claude/test-reject-original.txt; then
+if grep -q "original content" "$TEST_TMPDIR/test-reject-original.txt"; then
     echo "PASS: Original file unchanged"
     ((TESTS_PASSED++)) || true
 else
@@ -137,23 +157,69 @@ else
 fi
 
 # ============================================================================
-# Test 9: Rejection with reason
+# Test 11: Rejection with short reason flag (-r)
 # ============================================================================
-echo "original2" > /tmp/claude/test-reject-original2.txt
-echo "new2" > /tmp/claude/test-reject-new2.txt
-"$STAGE_SCRIPT" "/tmp/claude/test-reject-original2.txt" "/tmp/claude/test-reject-new2.txt" >/dev/null 2>&1
+echo "original3" > "$TEST_TMPDIR/test-reject-original3.txt"
+echo "new3" > "$TEST_TMPDIR/test-reject-new3.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-reject-original3.txt" "$TEST_TMPDIR/test-reject-new3.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" -r "Test rejection reason" "/tmp/claude/test-reject-original2.txt" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "rejected\|reason"; then
-    echo "PASS: Rejection with reason works"
+OUTPUT=$("$SCRIPT" -r "Test rejection reason" "$TEST_TMPDIR/test-reject-original3.txt" 2>&1 || true)
+if echo "$OUTPUT" | grep -q "Test rejection reason"; then
+    echo "PASS: Rejection with -r flag shows reason"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Rejection with reason failed"
+    echo "FAIL: Rejection with -r flag failed"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 10: Shellcheck passes
+# Test 12: Rejection with long reason flag (--reason)
+# ============================================================================
+echo "original4" > "$TEST_TMPDIR/test-reject-original4.txt"
+echo "new4" > "$TEST_TMPDIR/test-reject-new4.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-reject-original4.txt" "$TEST_TMPDIR/test-reject-new4.txt" >/dev/null 2>&1
+
+OUTPUT=$("$SCRIPT" --reason "Long flag reason" "$TEST_TMPDIR/test-reject-original4.txt" 2>&1 || true)
+if echo "$OUTPUT" | grep -q "Long flag reason"; then
+    echo "PASS: Rejection with --reason flag shows reason"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Rejection with --reason flag failed"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 13: Exit code 0 on success
+# ============================================================================
+echo "original5" > "$TEST_TMPDIR/test-reject-original5.txt"
+echo "new5" > "$TEST_TMPDIR/test-reject-new5.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-reject-original5.txt" "$TEST_TMPDIR/test-reject-new5.txt" >/dev/null 2>&1
+
+"$SCRIPT" "$TEST_TMPDIR/test-reject-original5.txt" >/dev/null 2>&1
+EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo "PASS: Exit code 0 on successful rejection"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Exit code was $EXIT_CODE, expected 0"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 14: Exit code 1 on missing staged edit
+# ============================================================================
+EXIT_CODE=0
+"$SCRIPT" "/nonexistent/file" >/dev/null 2>&1 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]]; then
+    echo "PASS: Exit code 1 on missing staged edit"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Exit code was $EXIT_CODE, expected 1"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 15: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

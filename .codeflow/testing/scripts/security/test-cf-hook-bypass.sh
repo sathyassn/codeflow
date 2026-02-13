@@ -2,7 +2,12 @@
 # Test: cf-hook-bypass.sh
 # Location: .codeflow/testing/scripts/security/test-cf-hook-bypass.sh
 #
-# Tests the hook bypass detection module
+# Tests the hook bypass module after consolidation into cf-git-protection.sh.
+# cf-hook-bypass.sh is now a no-op — all checks are handled by
+# cf-git-protection.sh (Sections 1-4). This test verifies:
+#   1. Module exists and has valid syntax
+#   2. Module is a documented no-op (passes everything through)
+#   3. Consolidation note is present
 
 set -euo pipefail
 
@@ -19,23 +24,8 @@ export REPO_ROOT LIB_DIR
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Helper function to test command blocking
-test_blocks_command() {
-    local command="$1"
-    local description="$2"
-    local output
-
-    output=$(COMMAND="$command" REPO_ROOT="$REPO_ROOT" LIB_DIR="$LIB_DIR" \
-       bash -c "source '$MODULE'" 2>&1 || true)
-
-    if echo "$output" | grep -q "BLOCKED"; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    else
-        echo "FAIL: $description - Expected block"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
-}
+pass() { echo "  PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
+fail() { echo "  FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 
 # Helper function to test command allowing
 test_allows_command() {
@@ -44,128 +34,83 @@ test_allows_command() {
 
     if COMMAND="$command" REPO_ROOT="$REPO_ROOT" LIB_DIR="$LIB_DIR" \
        bash -c "source '$MODULE'" 2>/dev/null; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
+        pass "$description"
     else
-        echo "FAIL: $description - Expected allow"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
+        fail "$description - Expected allow"
     fi
 }
 
-echo "=== Testing cf-hook-bypass.sh ==="
+echo "=== Testing cf-hook-bypass.sh (consolidated into cf-git-protection.sh) ==="
 echo ""
 
-# Test 1: Block --no-verify on commit
-echo "Test 1: Block --no-verify on commit"
-test_blocks_command "git commit --no-verify -m 'message'" "Should block --no-verify"
+# =============================================================================
+# STRUCTURAL CHECKS
+# =============================================================================
+echo "--- Structural Checks ---"
 
-# Test 2: Block -n short flag on commit
-echo "Test 2: Block -n short flag on commit"
-test_blocks_command "git commit -n -m 'message'" "Should block -n flag"
+if [[ -f "$MODULE" ]]; then pass "Module file exists"; else fail "Module file not found"; fi
 
-# Test 3: Block force push
-echo "Test 3: Block force push"
-test_blocks_command "git push --force origin main" "Should block --force"
+if bash -n "$MODULE" 2>/dev/null; then
+    pass "Module has valid bash syntax"
+else
+    fail "Module has invalid bash syntax"
+fi
 
-# Test 4: Block force push short flag
-echo "Test 4: Block force push short flag"
-test_blocks_command "git push -f origin main" "Should block -f"
+if command -v shellcheck &>/dev/null; then
+    if shellcheck -e SC1091 "$MODULE" 2>/dev/null; then
+        pass "Passes shellcheck"
+    else
+        fail "Fails shellcheck"
+    fi
+else
+    pass "Shellcheck not available (skipped)"
+fi
 
-# Test 5: Block --force-with-lease
-echo "Test 5: Block --force-with-lease"
-test_blocks_command "git push --force-with-lease origin main" "Should block --force-with-lease"
+if grep -q "CONSOLIDATION NOTE" "$MODULE"; then
+    pass "Has consolidation documentation"
+else
+    fail "Missing consolidation documentation"
+fi
 
-# Test 6: Block HUSKY=0
-echo "Test 6: Block HUSKY=0"
-test_blocks_command "HUSKY=0 git commit -m 'msg'" "Should block HUSKY=0"
+if grep -q "cf-git-protection.sh" "$MODULE"; then
+    pass "References cf-git-protection.sh as authority"
+else
+    fail "Should reference cf-git-protection.sh"
+fi
 
-# Test 7: Block core.hooksPath override
-echo "Test 7: Block core.hooksPath override"
-test_blocks_command "git -c core.hooksPath=/tmp commit -m 'msg'" "Should block core.hooksPath"
+if grep -q 'return 0' "$MODULE"; then
+    pass "Returns 0 (no-op passthrough)"
+else
+    fail "Should return 0 as no-op"
+fi
 
-# Test 8: Allow normal commit
-echo "Test 8: Allow normal commit"
-test_allows_command "git commit -m 'fix: proper commit'" "Should allow normal commit"
+echo ""
 
-# Test 9: Allow normal push
-echo "Test 9: Allow normal push"
-test_allows_command "git push origin feature/branch" "Should allow normal push"
+# =============================================================================
+# NO-OP VERIFICATION: All commands should pass through
+# =============================================================================
+echo "--- No-op Verification (all commands should pass through) ---"
 
-# Test 10: Allow -n in commit message (not flag)
-echo "Test 10: Allow -n in commit message"
-test_allows_command "git commit -m 'fix: handle -n flag properly'" "Should allow -n in message"
+test_allows_command "git -c core.hooksPath=/tmp commit -m 'msg'" \
+    "Passes through -c core.hooksPath (handled by cf-git-protection.sh)"
 
-# Test 11: Block git --no-verify at git level (before subcommand)
-echo "Test 11: Block git --no-verify at git level"
-test_blocks_command "git --no-verify status" "Should block git --no-verify"
+test_allows_command "git config --unset core.hooksPath" \
+    "Passes through --unset core.hooksPath (handled by cf-git-protection.sh)"
 
-# Test 12: Block combined flags with -n (e.g., -anm)
-echo "Test 12: Block combined flags with -n"
-test_blocks_command "git commit -anm 'message'" "Should block -anm combined flag"
+test_allows_command "PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m 'msg'" \
+    "Passes through PRE_COMMIT_ALLOW_NO_CONFIG (handled by cf-git-protection.sh)"
 
-# Test 13: Block git config core.hooksPath
-echo "Test 13: Block git config core.hooksPath"
-test_blocks_command "git config core.hooksPath /tmp/hooks" "Should block core.hooksPath config"
+test_allows_command "rm -rf .git/hooks/pre-commit" \
+    "Passes through .git/hooks rm (handled by cf-git-protection.sh)"
 
-# Test 14: Block git config --unset core.hooksPath
-echo "Test 14: Block git config --unset core.hooksPath"
-test_blocks_command "git config --unset core.hooksPath" "Should block --unset core.hooksPath"
+test_allows_command "echo 'exit 0' > .git/hooks/pre-commit" \
+    "Passes through .git/hooks redirect (handled by cf-git-protection.sh)"
 
-# Test 15: Block GIT_HOOKS_PATH env var
-echo "Test 15: Block GIT_HOOKS_PATH env var"
-test_blocks_command "GIT_HOOKS_PATH=/tmp git commit -m 'msg'" "Should block GIT_HOOKS_PATH"
+test_allows_command "git commit -m 'fix: proper commit'" \
+    "Passes through normal commit"
 
-# Test 16: Block SKIP_HOOKS env var
-echo "Test 16: Block SKIP_HOOKS env var"
-test_blocks_command "SKIP_HOOKS=1 git commit -m 'msg'" "Should block SKIP_HOOKS"
-
-# Test 17: Block GIT_SKIP_HOOKS env var
-echo "Test 17: Block GIT_SKIP_HOOKS env var"
-test_blocks_command "GIT_SKIP_HOOKS=1 git commit -m 'msg'" "Should block GIT_SKIP_HOOKS"
-
-# Test 18: Block PRE_COMMIT_ALLOW_NO_CONFIG
-echo "Test 18: Block PRE_COMMIT_ALLOW_NO_CONFIG"
-test_blocks_command "PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m 'msg'" "Should block PRE_COMMIT_ALLOW_NO_CONFIG"
-
-# Test 19: Block rm on .git/hooks
-echo "Test 19: Block rm on .git/hooks"
-test_blocks_command "rm -rf .git/hooks/pre-commit" "Should block rm on .git/hooks"
-
-# Test 20: Block mv on .git/hooks
-echo "Test 20: Block mv on .git/hooks"
-test_blocks_command "mv .git/hooks/pre-commit /tmp/" "Should block mv on .git/hooks"
-
-# Test 21: Block redirect to .git/hooks
-echo "Test 21: Block redirect to .git/hooks"
-test_blocks_command "echo 'exit 0' > .git/hooks/pre-commit" "Should block redirect to .git/hooks"
-
-# Test 22: Block chmod on .git/hooks
-echo "Test 22: Block chmod on .git/hooks"
-test_blocks_command "chmod 644 .git/hooks/pre-commit" "Should block chmod on .git/hooks"
-
-# Test 23: Block --no-verify on push
-echo "Test 23: Block --no-verify on push"
-test_blocks_command "git push --no-verify origin main" "Should block --no-verify on push"
-
-# Test 24: Block --no-verify on rebase
-echo "Test 24: Block --no-verify on rebase"
-test_blocks_command "git rebase --no-verify main" "Should block --no-verify on rebase"
-
-# Test 25: Block --no-verify on cherry-pick
-echo "Test 25: Block --no-verify on cherry-pick"
-test_blocks_command "git cherry-pick --no-verify abc123" "Should block --no-verify on cherry-pick"
-
-# Test 26: Block --no-verify on merge
-echo "Test 26: Block --no-verify on merge"
-test_blocks_command "git merge --no-verify feature" "Should block --no-verify on merge"
-
-# Test 27: Allow git push -n (dry-run, not no-verify)
-echo "Test 27: Allow git push -n (dry-run)"
-test_allows_command "git push -n origin main" "Should allow git push -n (dry-run)"
-
-# Test 28: Block combined flags -nam on commit
-echo "Test 28: Block combined flags -nam on commit"
-test_blocks_command "git commit -nam 'message'" "Should block -nam combined flag"
+test_allows_command "git push origin feature/branch" \
+    "Passes through normal push"
 
 echo ""
 echo "=== Test Summary ==="

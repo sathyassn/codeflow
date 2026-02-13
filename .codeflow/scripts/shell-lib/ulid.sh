@@ -5,6 +5,10 @@
 # Requires: common.sh
 [[ -z "${CODEFLOW_LIB_VERSION:-}" ]] && source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+# Source guard to prevent multiple loads (readonly ULID_ALPHABET would fail)
+[[ -n "${_CODEFLOW_ULID_LOADED:-}" ]] && return 0
+_CODEFLOW_ULID_LOADED=1
+
 # ============================================================================
 # ULID CONSTANTS
 # ============================================================================
@@ -34,22 +38,37 @@ generate_ulid() {
     # Encode timestamp (10 chars)
     local ts_encoded=""
     local ts=$timestamp
+    local i
     for ((i=0; i<10; i++)); do
         ts_encoded="${ULID_ALPHABET:$((ts % 32)):1}${ts_encoded}"
         ts=$((ts / 32))
     done
 
-    # Generate random part (16 chars)
+    # Generate random part (16 chars from 80 bits)
+    # Use /dev/urandom for cryptographic randomness (matches Python ulid.py)
     if [[ -r /dev/urandom ]]; then
-        random_part=$(head -c 10 /dev/urandom | xxd -p | tr -d '\n')
-        # Convert hex to base32 (simplified)
+        # Read 10 bytes (80 bits), convert to hex, then to base32
+        local hex_bytes
+        hex_bytes=$(head -c 10 /dev/urandom | xxd -p | tr -d '\n')
+        # Convert each 5-bit group to base32 character
+        # 80 bits / 5 bits = 16 characters
+        local bit_accumulator=0
+        local bits_in_acc=0
+        local hex_pos=0
         random_part=""
-        for ((i=0; i<16; i++)); do
-            local rand=$((RANDOM % 32))
-            random_part+="${ULID_ALPHABET:$rand:1}"
+        while [[ ${#random_part} -lt 16 ]]; do
+            if [[ $bits_in_acc -lt 5 ]]; then
+                local hex_char="${hex_bytes:$hex_pos:2}"
+                bit_accumulator=$(( (bit_accumulator << 8) | 16#$hex_char ))
+                bits_in_acc=$((bits_in_acc + 8))
+                hex_pos=$((hex_pos + 2))
+            fi
+            bits_in_acc=$((bits_in_acc - 5))
+            local index=$(( (bit_accumulator >> bits_in_acc) & 31 ))
+            random_part+="${ULID_ALPHABET:$index:1}"
         done
     else
-        # Fallback: use RANDOM
+        # Fallback: use RANDOM (lower quality, 15 bits per call)
         random_part=""
         for ((i=0; i<16; i++)); do
             local rand=$((RANDOM % 32))
@@ -64,14 +83,14 @@ generate_ulid() {
 # ID GENERATION HELPERS
 # ============================================================================
 
-# Generate epic ID
+# Generate epic ULID primary key
 generate_epic_id() {
-    echo "EPC-$(generate_ulid)"
+    echo "epic-$(generate_ulid)"
 }
 
-# Generate task ID
+# Generate task ULID primary key
 generate_task_id() {
-    echo "TSK-$(generate_ulid)"
+    echo "task-$(generate_ulid)"
 }
 
 # Generate session ID

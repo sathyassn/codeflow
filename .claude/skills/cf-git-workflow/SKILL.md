@@ -139,7 +139,7 @@ Procedure:
 
   3. Stage memory files if modified:
      - .state/memory/*.jsonl (if exists)
-     - epics/**/*.md (task markdown updates)
+     - project-management/epics/**/*.md (task markdown updates)
 
   4. Validate commit message format:
      type(scope): description
@@ -178,7 +178,7 @@ Memory File Staging:
   | File Pattern | Stage If | Purpose |
   |--------------|----------|---------|
   | .state/memory/*.jsonl | Modified | Memory ledger sync |
-  | epics/**/*.md | Modified | Task status updates |
+  | project-management/epics/**/*.md | Modified | Task status updates |
   | .claude/memory/** | Modified | Session context |
 
 Output:
@@ -340,7 +340,7 @@ Output:
 
 ```text
 When: Merging feature branch to target
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L1 Sentinel (via bash-sentinel pattern: ^git merge)
 Prerequisite: cf-security-management:sandbox-check
 
 Procedure:
@@ -426,7 +426,7 @@ Note: This is an informational operation, no sentinel required.
 
 ```text
 When: Cleaning up commit history before PR
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L1 Sentinel (via bash-sentinel pattern: ^git rebase)
 Prerequisite: cf-memory-management:search-related-work (conflict awareness)
 
 IMPORTANT: Interactive rebase is NOT supported in automated contexts.

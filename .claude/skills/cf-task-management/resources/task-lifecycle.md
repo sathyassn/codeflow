@@ -13,6 +13,17 @@
                 └─────────┘
 ```
 
+## Initiation Phase
+
+Before a task enters the status flow, it goes through initiation:
+
+1. Task is created via ensure-work-registered or create-task
+   - Returns both `id` (ULID PK: `task-{ulid}`) and `format_id` (e.g., `BKD-TSK-FEAT-API-012`)
+2. active-task.json is created via cf-work-state.sh at `.state/runtime/active-task.json`
+   - Fields: task_id (ULID PK), epic_id (ULID PK), task_format_id, epic_format_id, title, status, branch, session_id, started_at, updated_at
+   - Note: `task_id` and `epic_id` use ULID PKs for internal references; `task_format_id` and `epic_format_id` are for display
+3. Task enters `pending` status and proceeds through the flow
+
 ## Status Definitions
 
 | Status | Description | Valid Transitions |
@@ -87,3 +98,10 @@ Use `cf-task-management:query-tasks` with status filter:
 - `status: in_progress` - Active work
 - `status: blocked` - Waiting on dependencies
 - `status: completed` - Finished work
+
+## Parallel Work Notes
+
+- active-task.json includes session_id for per-session isolation
+- Multiple Claude Code sessions on same machine: each has own active-task context
+- Multi-user/multi-machine: .state/ is gitignored, no cross-machine conflicts
+- Worktrees: each worktree has own .state/ directory

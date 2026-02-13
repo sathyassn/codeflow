@@ -35,8 +35,10 @@ if ! declare -f log_info > /dev/null 2>&1; then
     NC="${NC:-}"
 fi
 
-# Config file location
-TEST_CONFIG_FILE="${TEST_CONFIG_FILE:-$COVERAGE_DIR/../test-config.json}"
+# Config file location (may already be set as readonly by test-config.sh)
+if [[ -z "${TEST_CONFIG_FILE:-}" ]]; then
+    TEST_CONFIG_FILE="$COVERAGE_DIR/../test-config.json"
+fi
 
 # ============================================================================
 # SCRIPT DISCOVERY

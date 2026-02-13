@@ -8,18 +8,12 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-shell.sh"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-shell.sh"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -f /tmp/claude/test-validate-*.sh 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=== Testing cf-validate-shell.sh ==="
 echo ""
@@ -65,14 +59,14 @@ fi
 echo ""
 echo "--- Validation functionality ---"
 
-cat > /tmp/claude/test-validate-valid.sh <<'EOF'
+cat > "$TEST_TMPDIR/test-validate-valid.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "Hello, World!"
 EOF
 
 # Test valid script
-OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-valid.sh 2>&1 || true)
+OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-valid.sh" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "PASS"; then
     echo "PASS: Valid script passes"
     ((TESTS_PASSED++)) || true
@@ -84,14 +78,14 @@ fi
 # ============================================================================
 # Test 5: Invalid shell script (syntax error)
 # ============================================================================
-cat > /tmp/claude/test-validate-invalid.sh <<'EOF'
+cat > "$TEST_TMPDIR/test-validate-invalid.sh" <<'EOF'
 #!/usr/bin/env bash
 if [[ true ]  # Missing closing bracket
 echo "broken"
 fi
 EOF
 
-if ! "$SCRIPT" /tmp/claude/test-validate-invalid.sh 2>/dev/null; then
+if ! "$SCRIPT" "$TEST_TMPDIR/test-validate-invalid.sh" 2>/dev/null; then
     echo "PASS: Invalid script fails"
     ((TESTS_PASSED++)) || true
 else
@@ -102,18 +96,13 @@ fi
 # ============================================================================
 # Test 6: Quiet mode
 # ============================================================================
-if "$SCRIPT" --quiet /tmp/claude/test-validate-valid.sh 2>&1 | grep -qv "."; then
+OUTPUT=$("$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-valid.sh" 2>&1 || true)
+if [[ -z "$OUTPUT" ]]; then
     echo "PASS: Quiet mode suppresses output"
     ((TESTS_PASSED++)) || true
 else
-    # If output is empty, it passed
-    if [[ -z "$("$SCRIPT" --quiet /tmp/claude/test-validate-valid.sh 2>&1)" ]]; then
-        echo "PASS: Quiet mode suppresses output"
-        ((TESTS_PASSED++)) || true
-    else
-        echo "FAIL: Quiet mode should suppress output"
-        ((TESTS_FAILED++)) || true
-    fi
+    echo "FAIL: Quiet mode should suppress output"
+    ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
@@ -129,7 +118,69 @@ else
 fi
 
 # ============================================================================
-# Test 8: Shellcheck passes on script itself
+# Test 8: Exit code 0 on valid script
+# ============================================================================
+if "$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-valid.sh"; then
+    echo "PASS: Exit code 0 on valid script"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Expected exit code 0 on valid script"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 9: Exit code 1 on invalid script
+# ============================================================================
+if "$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-invalid.sh" 2>/dev/null; then
+    echo "FAIL: Expected exit code 1 on invalid script"
+    ((TESTS_FAILED++)) || true
+else
+    echo "PASS: Exit code 1 on invalid script"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 10: Unknown option handling
+# ============================================================================
+OUTPUT=$("$SCRIPT" --invalid-flag 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "unknown option\|error"; then
+    echo "PASS: Unknown option shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Unknown option should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 11: Missing arguments
+# ============================================================================
+OUTPUT=$("$SCRIPT" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "missing\|usage\|error"; then
+    echo "PASS: Missing arguments shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Missing arguments should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 12: Strict mode with shellcheck
+# ============================================================================
+if command -v shellcheck &>/dev/null; then
+    if "$SCRIPT" --strict "$TEST_TMPDIR/test-validate-valid.sh" 2>/dev/null; then
+        echo "PASS: Strict mode works on valid script"
+        ((TESTS_PASSED++)) || true
+    else
+        echo "FAIL: Strict mode should pass on valid script"
+        ((TESTS_FAILED++)) || true
+    fi
+else
+    echo "SKIP: Strict mode test (shellcheck not available)"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 13: Shellcheck passes on script itself
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

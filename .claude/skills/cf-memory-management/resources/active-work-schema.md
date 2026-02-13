@@ -1,5 +1,29 @@
 # Active Work Schema Reference
 
+## active-task.json (Work State File)
+
+The primary work tracking state file at `.state/runtime/active-task.json`, managed by cf-work-state.sh.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| task_id | string | ULID PK of parent task (e.g., `task-01JQ3KN2X9...`) |
+| epic_id | string | ULID PK of parent epic (e.g., `epic-01JQ3KM7V8...`) |
+| task_format_id | string | Human-readable task ID (e.g., `BKD-TSK-FEAT-API-012`) |
+| epic_format_id | string | Human-readable epic ID (e.g., `BKD-EPC-FEAT-API-001`) |
+| title | string | Human-readable task description |
+| status | string | pending, in_progress, completed |
+| branch | string | Git branch name |
+| session_id | string | Current session ID (for per-session isolation) |
+| started_at | string | ISO 8601 timestamp |
+| updated_at | string | ISO 8601 timestamp |
+
+### Parallel Work Isolation
+
+- Each Claude Code session gets its own active-task.json via session_id
+- Multi-user/multi-machine: .state/ is gitignored, no cross-machine conflicts
+- Worktrees: each worktree has own .state/ directory
+- cf-work-state.sh uses flock for atomicity on concurrent writes
+
 ## What is Active Work?
 
 The `active_work` table tracks currently in-progress work for:
@@ -13,7 +37,7 @@ The `active_work` table tracks currently in-progress work for:
 | Field | Type | Description |
 |-------|------|-------------|
 | id | TEXT | `work-{ulid}` format |
-| task_id | TEXT | Link to parent task |
+| task_id | TEXT | ULID PK of parent task (`task-{ulid}`) |
 | topic | TEXT | Human-readable description |
 | branch | TEXT | Git branch name |
 | worktree_path | TEXT | Path if using worktree |

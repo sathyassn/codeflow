@@ -60,23 +60,28 @@ Logging event?
 
 ## Operations
 
+**Enforcement note:** cf-db-operations is an internal data-access layer. No PreToolUse hook
+gates database operations directly. Write operations are enforced at the calling skill level
+(e.g., memory-management, task-management). The enforcement column below reflects the
+calling skill's enforcement, not a direct hook on db-operations.
+
 | # | Operation | Enforcement | Purpose |
 |---|-----------|-------------|---------|
-| 1 | epic-create | ENF-L1 Sentinel | Insert epic into work graph |
-| 2 | epic-update | ENF-L1 Sentinel | Update epic status/content |
-| 3 | task-create | ENF-L1 Sentinel | Insert task linked to epic |
-| 4 | task-update | ENF-L1 Sentinel | Update task status/assignee |
-| 5 | memory-store | ENF-L1 Sentinel | Store memory entry |
+| 1 | epic-create | None (internal) | Insert epic into work graph |
+| 2 | epic-update | None (internal) | Update epic status/content |
+| 3 | task-create | None (internal) | Insert task linked to epic |
+| 4 | task-update | None (internal) | Update task status/assignee |
+| 5 | memory-store | None (internal) | Store memory entry |
 | 6 | memory-query | None | Query memory by domain/topic |
-| 7 | active-work-create | ENF-L1 Sentinel | Register active work for tracking |
-| 8 | active-work-update | ENF-L1 Sentinel | Update active work status |
+| 7 | active-work-create | None (internal) | Register active work for tracking |
+| 8 | active-work-update | None (internal) | Update active work status |
 | 9 | active-work-query | None | Query active work by criteria |
-| 10 | session-record | ENF-L1 Sentinel | Record session lifecycle event |
-| 11 | log-append | ENF-L1 Sentinel | Append to security/network/conversation logs |
-| 12 | autorun-session-create | ENF-L1 Sentinel | Create autorun batch session |
-| 13 | autorun-worker-create | ENF-L1 Sentinel | Create worker for task execution |
-| 14 | autorun-session-update | ENF-L1 Sentinel | Update autorun session status |
-| 15 | autorun-task-run-record | ENF-L1 Sentinel | Record task execution results |
+| 10 | session-record | None (internal) | Record session lifecycle event |
+| 11 | log-append | None (internal) | Append to security/network/conversation logs |
+| 12 | autorun-session-create | None (internal) | Create autorun batch session |
+| 13 | autorun-worker-create | None (internal) | Create worker for task execution |
+| 14 | autorun-session-update | None (internal) | Update autorun session status |
+| 15 | autorun-task-run-record | None (internal) | Record task execution results |
 
 ## Operation Details
 
@@ -84,18 +89,20 @@ Logging event?
 
 ```text
 When: /cf-plan creates new epic
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-task-management:create-epic)
 Agent: cf-planner only
 
 Procedure:
   1. Validate required fields (area, type, domain, title)
-  2. Generate ID: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}
-  3. Execute INSERT into epics table
+  2. Generate both IDs:
+     - id (ULID PK): epic-{ulid} (auto-generated)
+     - format_id: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
+  3. Execute INSERT into epics table (both id and format_id)
   4. Append to JSONL ledger
-  5. Return epic ID
+  5. Return both IDs
 
 DB Tables: epics
-Query: .state/db/queries/epic-queries.sql#create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding epic table structure or required fields
@@ -105,7 +112,7 @@ Query: .state/db/queries/epic-queries.sql#create
 
 ```text
 When: Epic status/priority changes or content updates
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-task-management:update-epic)
 Agent: cf-planner only
 
 Procedure:
@@ -117,7 +124,7 @@ Procedure:
   6. Check if status change affects child tasks
 
 DB Tables: epics
-Query: .state/db/queries/epic-queries.sql#update
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [schema-reference.md](resources/schema-reference.md) - Load when: Understanding epic fields
@@ -128,19 +135,21 @@ Query: .state/db/queries/epic-queries.sql#update
 
 ```text
 When: Creating new task linked to epic
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-task-management:create-task)
 Agent: cf-planner (formal), Main Agent (informal via ensure-work-registered)
 
 Procedure:
-  1. Validate epic exists and is active
-  2. Generate task ID: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
-  3. Execute INSERT into tasks table
+  1. Validate epic exists and is active (by ULID PK)
+  2. Generate both IDs:
+     - id (ULID PK): task-{ulid} (auto-generated)
+     - format_id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
+  3. Execute INSERT into tasks table (both id and format_id, epic_id as ULID PK)
   4. Create task dependencies if specified
   5. Append to JSONL ledger
   6. Create markdown file
 
 DB Tables: tasks, task_dependencies
-Query: .state/db/queries/task-queries.sql#create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding task table structure or dependency handling
@@ -150,7 +159,7 @@ Query: .state/db/queries/task-queries.sql#create
 
 ```text
 When: Task status changes (dev, review, test)
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-task-management:update-task)
 Agent: cf-planner (all fields), cf-developer/cf-reviewer/cf-qa (status only)
 
 Procedure:
@@ -161,7 +170,7 @@ Procedure:
   5. Trigger markdown re-render if needed
 
 DB Tables: tasks, task_dependencies
-Query: .state/db/queries/task-queries.sql#update
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [schema-reference.md](resources/schema-reference.md) - Load when: Understanding updatable fields
@@ -172,7 +181,7 @@ Query: .state/db/queries/task-queries.sql#update
 
 ```text
 When: Recording work progress, decisions, or context
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-memory-management operations)
 Agent: All (to their own domain only)
 
 Procedure:
@@ -184,7 +193,7 @@ Procedure:
   6. Append to JSONL ledger
 
 DB Tables: memory_events, extraction_queue
-Query: .state/db/queries/memory-queries.sql#store
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [schema-reference.md](resources/schema-reference.md) - Load when: Understanding memory event structure
@@ -216,7 +225,7 @@ Procedure:
   4. Return structured results with JSON-parsed data
 
 DB Tables: memory_events, memory_fts, active_work
-Query: .state/db/queries/memory-queries.sql#query
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [query-templates.md](resources/query-templates.md) - Load when: Building complex memory queries
@@ -227,7 +236,7 @@ Query: .state/db/queries/memory-queries.sql#query
 
 ```text
 When: Session lifecycle events (start, pause, resume, end)
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by session hooks)
 Agent: System (automatic via hooks)
 
 Event Types:
@@ -245,7 +254,7 @@ Procedure:
   4. Append to JSONL ledger
 
 DB Tables: sessions
-Query: .state/db/queries/session-queries.sql#record
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 Hook: Stop/stop-session-record.sh
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
@@ -256,7 +265,7 @@ Hook: Stop/stop-session-record.sh
 
 ```text
 When: Security event, network call, or conversation turn
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by logging hooks)
 Agent: System (via hooks)
 
 Log Types:
@@ -273,7 +282,7 @@ Procedure:
   4. Also append to daily JSONL file
 
 DB Tables: security_logs, network_logs, conversation_logs
-Query: .state/db/queries/log-queries.sql#append
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding log table structures or required fields
@@ -283,7 +292,7 @@ Query: .state/db/queries/log-queries.sql#append
 
 ```text
 When: Starting work on a task (called by cf-memory-management:begin-work)
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-memory-management:begin-work)
 Agent: All agents (own domain)
 
 Procedure:
@@ -294,7 +303,7 @@ Procedure:
   5. Return work_id
 
 DB Tables: active_work
-Query: .state/db/queries/memory-queries.sql#active-work-create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding active_work table structure
@@ -304,7 +313,7 @@ Query: .state/db/queries/memory-queries.sql#active-work-create
 
 ```text
 When: Updating active work status (progress, completion)
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by cf-memory-management operations)
 Agent: All agents (own work only)
 
 Procedure:
@@ -314,7 +323,7 @@ Procedure:
   4. If status='completed', trigger cleanup
 
 DB Tables: active_work
-Query: .state/db/queries/memory-queries.sql#active-work-update
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding active work status values
@@ -341,7 +350,7 @@ Procedure:
   3. Return structured results
 
 DB Tables: active_work
-Query: .state/db/queries/memory-queries.sql#active-work-query
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [query-templates.md](resources/query-templates.md)
    Load when: Building complex active work queries
@@ -351,7 +360,7 @@ Query: .state/db/queries/memory-queries.sql#active-work-query
 
 ```text
 When: Starting autorun batch execution
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by Go CLI orchestrator)
 Agent: cf-planner (manual), System (CLI orchestrator)
 
 Required Fields:
@@ -368,7 +377,7 @@ Procedure:
   5. Return session_id
 
 DB Tables: autorun_sessions
-Query: .state/db/queries/autorun-queries.sql#session-create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [autorun-guide.md](resources/autorun-guide.md)
    Load when: Understanding autorun batch session structure
@@ -378,7 +387,7 @@ Query: .state/db/queries/autorun-queries.sql#session-create
 
 ```text
 When: Spawning worker for task execution
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by Go CLI orchestrator)
 Agent: System only (Go CLI orchestrator)
 
 Procedure:
@@ -390,7 +399,7 @@ Procedure:
   6. Return worker_id
 
 DB Tables: autorun_workers
-Query: .state/db/queries/autorun-queries.sql#worker-create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [autorun-guide.md](resources/autorun-guide.md)
    Load when: Understanding worker lifecycle or max worker limits
@@ -400,7 +409,7 @@ Query: .state/db/queries/autorun-queries.sql#worker-create
 
 ```text
 When: Updating autorun session status
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by Go CLI orchestrator)
 Agent: cf-planner, System
 
 Updatable Fields:
@@ -418,7 +427,7 @@ Procedure:
   4. If all tasks done, set status='completed'
 
 DB Tables: autorun_sessions
-Query: .state/db/queries/autorun-queries.sql#session-update
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [autorun-guide.md](resources/autorun-guide.md)
    Load when: Understanding session status transitions
@@ -428,7 +437,7 @@ Query: .state/db/queries/autorun-queries.sql#session-update
 
 ```text
 When: Recording task execution result
-Enforcement: ENF-L1 Sentinel
+Enforcement: None (internal data layer; called by Go CLI orchestrator)
 Agent: System only
 
 Procedure:
@@ -439,7 +448,7 @@ Procedure:
   5. Append to JSONL ledger
 
 DB Tables: autorun_task_runs, autorun_workers, autorun_sessions
-Query: .state/db/queries/autorun-queries.sql#task-run-record
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [autorun-guide.md](resources/autorun-guide.md)
    Load when: Recording task run results or understanding run outcomes
@@ -453,3 +462,7 @@ Query: .state/db/queries/autorun-queries.sql#task-run-record
 | [query-templates.md](resources/query-templates.md) | SQL query templates | When building complex queries |
 | [agent-permissions.md](resources/agent-permissions.md) | Permission matrix | When validating access |
 | [autorun-guide.md](resources/autorun-guide.md) | Autorun architecture details | When working with autorun |
+
+**Note:** All database queries are internal to the Go CLI (`codeflow` binary).
+There are no separate .sql query files at runtime. See `.codeflow/scripts/db/schema.sql`
+for the schema definition.

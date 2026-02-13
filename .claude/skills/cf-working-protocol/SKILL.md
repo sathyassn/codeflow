@@ -76,6 +76,7 @@ Procedure:
   2. Assess current context state
   3. Acknowledge knowledge limitations
   4. Check for active work context
+     - Check active-task.json at .state/runtime/active-task.json
   5. Detect autorun context (see below)
 
 Autorun Context Detection:
@@ -141,7 +142,9 @@ Output:
   [ACT] What I will do
   [CONFIRM] (if protected) Awaiting confirmation
 
-Hook: PreToolUse hooks validate PAC-5 compliance
+Enforcement note: PAC-5 is behavioral guidance applied by the agent's cognitive
+  procedure. No PreToolUse hook enforces think-and-act directly — enforcement
+  comes from the agent consistently applying this checklist before protected ops.
 
 📚 Resource: [think-and-act.md](resources/think-and-act.md)
    Load when: PAC-5 triggered for protected operations or unsure of checklist application
@@ -222,7 +225,10 @@ Procedure:
 
 Output: Verified claims with citations or uncertainty markers
 
-Hook: Stop/stop-verify-work.sh validates citation presence
+Enforcement note: ENF-L2 Stop is enforced via the stop hook's PCV validation.
+  The stop hook checks for the 🔍 marker and verify-work structure, which
+  implicitly requires research-quality claims to be substantiated within the
+  PCV output. No dedicated hook validates citations independently.
 
 📚 Resource: [research-quality.md](resources/research-quality.md)
    Load when: Making technical claims or when citation format is needed
@@ -298,6 +304,9 @@ Output Format (TIER 3):
 
 Hook: Stop/stop-verify-work.sh blocks without 🔍 marker
 
+Note: On completion, active-task.json should be cleaned up
+  via cf-memory-management:complete-work.
+
 Autorun Mode:
   In autorun context, TWO verifications occur:
     1. THIS operation (verify-work) - Claude self-verification
@@ -328,7 +337,10 @@ Procedure:
 
 Output: Sub-agent spawned with task delegation
 
-Hook: PreToolUse validates Task tool usage
+Enforcement note: The PreToolUse hook for the Task tool validates team/agent
+  spawning constraints (e.g., pathflow-gate, team-guard). It does not enforce
+  parallelize-work as a skill operation — the agent applies this procedure
+  voluntarily when decomposing complex tasks.
 
 📚 Resource: [parallelize-work.md](resources/parallelize-work.md)
    Load when: Planning parallel sub-agent delegation or managing concurrent tasks
@@ -345,3 +357,7 @@ Hook: PreToolUse validates Task tool usage
 | [research-quality.md](resources/research-quality.md) | Citation guidelines | When making claims |
 | [respond-organized.md](resources/respond-organized.md) | Response formatting | When communicating |
 | [parallelize-work.md](resources/parallelize-work.md) | Sub-agent patterns | When spawning agents |
+| [working-protocol-guide.md](resources/working-protocol-guide.md) | Full protocol walkthrough | When onboarding or reviewing procedures |
+| [context-specific-guidance.md](resources/context-specific-guidance.md) | Context-dependent behavior | When adapting protocol to specific scenarios |
+| [operation-combinations.md](resources/operation-combinations.md) | Common operation sequences | When chaining multiple operations |
+| [documentation-standards-checklist.md](resources/documentation-standards-checklist.md) | Doc standards quick check | When verifying documentation quality |

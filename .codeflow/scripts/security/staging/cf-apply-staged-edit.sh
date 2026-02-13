@@ -100,8 +100,8 @@ FILE_PATH="$1"
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 BACKUP_DIR="$REPO_ROOT/.state/backups/protected"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
@@ -141,12 +141,14 @@ fi
 
 if [[ -f "$METADATA_FILE" ]] && command -v jq &>/dev/null; then
     STORED_CHECKSUM=$(jq -r '.original_checksum' "$METADATA_FILE")
-    CURRENT_CHECKSUM=$(shasum -a 256 "$FULL_PATH" | cut -d' ' -f1)
+    # Cross-platform checksum (macOS: shasum, Linux: sha256sum)
+    CURRENT_CHECKSUM=$({ shasum -a 256 "$FULL_PATH" 2>/dev/null || sha256sum "$FULL_PATH" 2>/dev/null; } | cut -d' ' -f1)
 
     if [[ "$STORED_CHECKSUM" != "$CURRENT_CHECKSUM" ]]; then
         echo "Error: Original file has been modified since staging" >&2
         echo "The staged edit is based on an outdated version." >&2
-        echo "Please re-stage the edit with the current version." >&2
+        echo "MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')" >&2
+        echo "Re-stage the edit with the current version." >&2
         exit 1
     fi
 fi
@@ -155,45 +157,32 @@ fi
 # SYNTAX VALIDATION
 # =============================================================================
 
+VALIDATION_DIR="$REPO_ROOT/.codeflow/scripts/security/validation"
+
 validate_syntax() {
     local file="$1"
     local extension="${file##*.}"
+    local validator=""
 
     case "$extension" in
-        sh)
-            if command -v shellcheck &>/dev/null; then
-                if ! shellcheck -e SC1091 "$file" 2>/dev/null; then
-                    return 1
-                fi
-            fi
-            if ! bash -n "$file" 2>/dev/null; then
-                return 1
-            fi
-            ;;
-        py)
-            if command -v python3 &>/dev/null; then
-                if ! python3 -m py_compile "$file" 2>/dev/null; then
-                    return 1
-                fi
-            fi
-            ;;
-        json)
-            if command -v jq &>/dev/null; then
-                if ! jq empty "$file" 2>/dev/null; then
-                    return 1
-                fi
-            fi
-            ;;
-        yaml|yml)
-            if command -v python3 &>/dev/null; then
-                if ! python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
-                    return 1
-                fi
-            fi
-            ;;
+        sh|bash) validator="$VALIDATION_DIR/cf-validate-shell.sh" ;;
+        py)      validator="$VALIDATION_DIR/cf-validate-python.sh" ;;
+        json)    validator="$VALIDATION_DIR/cf-validate-json.sh" ;;
+        yaml|yml) validator="$VALIDATION_DIR/cf-validate-yaml.sh" ;;
     esac
 
-    return 0
+    # No validator for this extension - pass validation
+    if [[ -z "$validator" ]]; then
+        return 0
+    fi
+
+    # Validator script not found - pass validation gracefully
+    if [[ ! -x "$validator" ]]; then
+        return 0
+    fi
+
+    # Run validator in quiet mode (exit code only)
+    "$validator" --quiet "$file"
 }
 
 if [[ "$FORCE" != "true" ]]; then
@@ -268,6 +257,6 @@ echo "File: $FILE_PATH"
 echo "Backup: $BACKUP_PATH"
 echo ""
 echo "To rollback if needed:"
-echo "  cf-rollback-edit.sh \"$FILE_PATH\""
+echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')"
 
 exit 0

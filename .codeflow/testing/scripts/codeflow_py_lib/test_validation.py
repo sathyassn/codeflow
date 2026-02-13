@@ -25,7 +25,7 @@ class TestPatterns:
 
     def test_patterns_has_required_keys(self):
         """PATTERNS should have all required pattern keys."""
-        required = ["ulid", "epic_id", "task_id", "branch", "domain", "event_type"]
+        required = ["ulid", "epic_pk", "task_pk", "epic_format_id", "task_format_id", "branch", "domain", "event_type"]
         for key in required:
             assert key in PATTERNS
 
@@ -52,30 +52,123 @@ class TestPatterns:
         for invalid in invalid_ulids:
             assert not re.match(pattern, invalid)
 
-    def test_epic_id_pattern_valid(self):
-        """Epic ID pattern should match valid epic IDs."""
+    def test_epic_pk_pattern_valid(self):
+        """Epic PK pattern should match valid epic ULID primary keys."""
         import re
 
-        pattern = PATTERNS["epic_id"]
+        pattern = PATTERNS["epic_pk"]
+        valid_ids = [
+            "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "epic-01HQXYZ123456789ABCDEFGHJK",
+        ]
+        for valid in valid_ids:
+            assert re.match(pattern, valid), f"Should match: {valid}"
+
+    def test_epic_pk_pattern_rejects_invalid(self):
+        """Epic PK pattern should reject invalid values."""
+        import re
+
+        pattern = PATTERNS["epic_pk"]
+        invalid_ids = [
+            "EPC-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # old EPC- format
+            "task-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # wrong prefix
+            "epic-01arz3ndektsv4rrffq69g5fav",   # lowercase ULID
+            "FRT-EPC-FEAT-AUTH-001",              # format ID, not PK
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",        # bare ULID
+        ]
+        for invalid in invalid_ids:
+            assert not re.match(pattern, invalid), f"Should reject: {invalid}"
+
+    def test_task_pk_pattern_valid(self):
+        """Task PK pattern should match valid task ULID primary keys."""
+        import re
+
+        pattern = PATTERNS["task_pk"]
+        valid_ids = [
+            "task-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "task-01HQXYZ123456789ABCDEFGHJK",
+        ]
+        for valid in valid_ids:
+            assert re.match(pattern, valid), f"Should match: {valid}"
+
+    def test_task_pk_pattern_rejects_invalid(self):
+        """Task PK pattern should reject invalid values."""
+        import re
+
+        pattern = PATTERNS["task_pk"]
+        invalid_ids = [
+            "TSK-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # old TSK- format
+            "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # wrong prefix
+            "task-01arz3ndektsv4rrffq69g5fav",   # lowercase ULID
+            "FRT-TSK-FEAT-AUTH-001",              # format ID, not PK
+        ]
+        for invalid in invalid_ids:
+            assert not re.match(pattern, invalid), f"Should reject: {invalid}"
+
+    def test_epic_format_id_pattern_valid(self):
+        """Epic format ID pattern should match valid human-readable epic IDs."""
+        import re
+
+        pattern = PATTERNS["epic_format_id"]
         valid_ids = [
             "FRT-EPC-FEAT-AUTH-001",
             "BKD-EPC-FIX-API-023",
             "INF-EPC-CICD-GENL-001",
+            "XCUT-EPC-HTFX-AUTH-001",
+            "DOC-EPC-DOCS-GENL-001",
+            "SHR-EPC-RFCT-CORE-001",
         ]
         for valid in valid_ids:
-            assert re.match(pattern, valid)
+            assert re.match(pattern, valid), f"Should match: {valid}"
 
-    def test_task_id_pattern_valid(self):
-        """Task ID pattern should match valid task IDs."""
+    def test_epic_format_id_pattern_rejects_invalid(self):
+        """Epic format ID pattern should reject invalid epic IDs."""
         import re
 
-        pattern = PATTERNS["task_id"]
+        pattern = PATTERNS["epic_format_id"]
+        invalid_ids = [
+            "F-EPC-FEAT-AUTH-001",       # area too short (1 letter)
+            "FRONT-EPC-FEAT-AUTH-001",   # area too long (5 letters)
+            "FRT-EPC-F-AUTH-001",        # work type too short (1 letter)
+            "FRT-EPC-FEATURE-AUTH-001",  # work type too long (7 letters)
+            "FRT-TSK-FEAT-AUTH-001",     # wrong entity (TSK not EPC)
+            "FRT-EPC-FEAT-AUTH-01",      # number too short
+            "FRT-EPC-FEAT-AUTH-1000",    # number too long
+            "frt-EPC-FEAT-AUTH-001",     # lowercase area
+            "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # PK format, not format ID
+        ]
+        for invalid in invalid_ids:
+            assert not re.match(pattern, invalid), f"Should reject: {invalid}"
+
+    def test_task_format_id_pattern_valid(self):
+        """Task format ID pattern should match valid human-readable task IDs."""
+        import re
+
+        pattern = PATTERNS["task_format_id"]
         valid_ids = [
             "FRT-TSK-FEAT-AUTH-001",
             "BKD-TSK-FIX-API-023",
+            "XCUT-TSK-HTFX-AUTH-001",
+            "INF-TSK-RFCT-CORE-001",
+            "DOC-TSK-DOCS-UI-005",
         ]
         for valid in valid_ids:
-            assert re.match(pattern, valid)
+            assert re.match(pattern, valid), f"Should match: {valid}"
+
+    def test_task_format_id_pattern_rejects_invalid(self):
+        """Task format ID pattern should reject invalid task IDs."""
+        import re
+
+        pattern = PATTERNS["task_format_id"]
+        invalid_ids = [
+            "FRT-EPC-FEAT-AUTH-001",     # wrong entity (EPC not TSK)
+            "F-TSK-FEAT-AUTH-001",       # area too short
+            "FRONT-TSK-FEAT-AUTH-001",   # area too long
+            "FRT-TSK-FEAT-AUTH-01",      # number too short
+            "task-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # PK format, not format ID
+        ]
+        for invalid in invalid_ids:
+            assert not re.match(pattern, invalid), f"Should reject: {invalid}"
 
     def test_branch_pattern_valid(self):
         """Branch pattern should match valid branch names."""
@@ -88,9 +181,15 @@ class TestPatterns:
             "refactor/api-cleanup",
             "docs/readme-update",
             "test/unit-tests",
+            "hotfix/critical-fix",
+            "chore/dep-update",
+            "ci/pipeline-fix",
+            "experiment/spike-idea",
+            "ops/deploy-config",
+            "plan/roadmap-q3",
         ]
         for valid in valid_branches:
-            assert re.match(pattern, valid)
+            assert re.match(pattern, valid), f"Should match: {valid}"
 
     def test_branch_pattern_rejects_invalid(self):
         """Branch pattern should reject invalid branch names."""
@@ -102,9 +201,10 @@ class TestPatterns:
             "feat/UPPERCASE",  # uppercase
             "feat/under_score",  # underscore
             "main",  # no prefix
+            "deploy/something",  # not a valid prefix
         ]
         for invalid in invalid_branches:
-            assert not re.match(pattern, invalid)
+            assert not re.match(pattern, invalid), f"Should reject: {invalid}"
 
 
 class TestValidatePattern:

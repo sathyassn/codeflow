@@ -17,7 +17,7 @@ set -euo pipefail
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 LOG_DIR="$REPO_ROOT/.state/logs/git"
 
 # Colors for output

@@ -104,8 +104,21 @@ get_current_mode() {
     echo "$mode"
 }
 
+validate_mode() {
+    local mode="$1"
+    case "$mode" in
+        essential|standard|full) return 0 ;;
+        *)
+            log_error "Unknown test mode: '$mode' (valid modes: essential, standard, full)"
+            return 1
+            ;;
+    esac
+}
+
 get_mode_priorities() {
     local mode="${1:-$(get_current_mode)}"
+
+    validate_mode "$mode" || exit 1
 
     case "$mode" in
         essential)
@@ -116,10 +129,6 @@ get_mode_priorities() {
             ;;
         full)
             get_test_config "full_priorities"
-            ;;
-        *)
-            log_warn "Unknown mode: $mode, using standard"
-            get_test_config "standard_priorities"
             ;;
     esac
 }
@@ -376,7 +385,6 @@ list_categories() {
         echo "scripts-codeflow-py-lib"
         echo "scripts-coordination"
         echo "scripts-db"
-        echo "scripts-db-lib"
         echo "scripts-git-hooks"
         echo "scripts-memory"
         echo "scripts-security"
@@ -387,6 +395,7 @@ list_categories() {
         echo "scripts-settings"
         echo "scripts-shell-lib"
         echo "scripts-state"
+        echo "scripts-worktree"
     fi
 }
 
@@ -406,7 +415,6 @@ get_category_dir() {
     # Fallback mapping for common categories
     case "$category" in
         scripts-db)                    echo "scripts/db" ;;
-        scripts-db-lib)                echo "scripts/db/lib" ;;
         scripts-memory)                echo "scripts/memory" ;;
         scripts-coordination)          echo "scripts/coordination" ;;
         scripts-codeflow-py-lib)       echo "scripts/codeflow_py_lib" ;;
@@ -419,6 +427,7 @@ get_category_dir() {
         scripts-security-sentinel)     echo "scripts/security/sentinel" ;;
         scripts-settings)              echo "scripts/settings" ;;
         scripts-git-hooks)             echo "scripts/git-hooks" ;;
+        scripts-worktree)              echo "scripts/worktree" ;;
         consistency)                   echo "consistency" ;;
         claude-hooks-pre-tool-use)     echo "claude-hooks/pre-tool-use" ;;
         claude-hooks-post-tool-use)    echo "claude-hooks/post-tool-use" ;;

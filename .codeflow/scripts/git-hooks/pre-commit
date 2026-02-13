@@ -14,7 +14,7 @@
 #   - Enforces coding standards
 #
 # Coverage Policy:
-#   This hook runs FAST validation only (shellcheck, ruff, JSON).
+#   This hook runs FAST validation only (shellcheck, ruff, markdownlint, JSON).
 #   Full test coverage is enforced in CI via:
 #     .codeflow/testing/run-coverage.sh --strict
 #
@@ -31,7 +31,8 @@ set -euo pipefail
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+VALIDATION_DIR="$REPO_ROOT/.codeflow/scripts/security/validation"
 
 # Colors for output
 RED='\033[0;31m'
@@ -81,6 +82,7 @@ for protected in "${PROTECTED_BRANCHES[@]}"; do
             echo -e "${RED}${BOLD}❌ BRANCH PROTECTION: Direct commits to $CURRENT_BRANCH FORBIDDEN${NC}" >&2
             echo "" >&2
             echo -e "${YELLOW}🔒 MUST: Use Skill('cf-git-workflow', args='create-feature-branch')${NC}" >&2
+            echo "   In PathFlow mode, message the cf-gitops teammate." >&2
             echo "⛔ Do NOT commit directly to protected branches." >&2
             exit 1
             ;;
@@ -103,6 +105,7 @@ if ! echo "$CURRENT_BRANCH" | grep -qE "$BRANCH_PATTERN"; then
     echo "Types: feat, fix, docs, refactor, test, chore, experiment, etc." >&2
     echo "" >&2
     echo -e "${YELLOW}🔒 MUST: Skill('cf-git-workflow', args='branch-verification')${NC}" >&2
+    echo "   In PathFlow mode, message the cf-gitops teammate." >&2
     exit 1
 fi
 
@@ -121,6 +124,7 @@ if [[ -f "$SETTINGS_SYNC_TEST" ]] && [[ -x "$SETTINGS_SYNC_TEST" ]]; then
         echo -e "${RED}${BOLD}❌ SETTINGS CONSISTENCY CHECK FAILED${NC}" >&2
         echo "" >&2
         echo -e "${YELLOW}🔒 MUST: Skill('cf-security-management', args='sync-settings-templates')${NC}" >&2
+        echo "   In PathFlow mode, message the cf-gitops teammate." >&2
         exit 1
     fi
     echo -e "${GREEN}✓ Settings consistency check passed${NC}"
@@ -157,8 +161,9 @@ for pattern in "${SENSITIVE_PATTERNS[@]}"; do
         echo -e "${RED}ERROR: Potentially sensitive file staged for commit:${NC}"
         echo "$MATCHES"
         echo ""
-        echo "If you're sure this is safe, use: git commit --no-verify"
-        echo "(Not recommended for production)"
+        echo "If this file is safe, add it to .gitignore." >&2
+        echo "MUST: Skill('cf-security-management', args='handle-sensitive-file')" >&2
+        echo "In PathFlow mode, message the cf-gitops teammate." >&2
         exit 1
     fi
 done
@@ -172,25 +177,47 @@ echo -e "${GREEN}✓ No sensitive files detected${NC}"
 # Get staged shell scripts
 SHELL_SCRIPTS=$(echo "$STAGED_FILES" | grep -E '\.sh$' || true)
 
-if [[ -n "$SHELL_SCRIPTS" ]] && command -v shellcheck &>/dev/null; then
-    echo "Running shellcheck on staged shell scripts..."
+if [[ -n "$SHELL_SCRIPTS" ]]; then
+    SHELL_VALIDATOR="$VALIDATION_DIR/cf-validate-shell.sh"
+    if [[ -x "$SHELL_VALIDATOR" ]]; then
+        echo "Running shell validation on staged scripts..."
 
-    FAILED=0
-    for script in $SHELL_SCRIPTS; do
-        if [[ -f "$REPO_ROOT/$script" ]]; then
-            if ! shellcheck -e SC1091 "$REPO_ROOT/$script" 2>/dev/null; then
-                echo -e "${RED}shellcheck failed: $script${NC}"
-                FAILED=1
+        FAILED=0
+        for script in $SHELL_SCRIPTS; do
+            if [[ -f "$REPO_ROOT/$script" ]]; then
+                if ! "$SHELL_VALIDATOR" --quiet "$REPO_ROOT/$script"; then
+                    echo -e "${RED}Validation failed: $script${NC}"
+                    FAILED=1
+                fi
             fi
+        done
+
+        if [[ $FAILED -eq 1 ]]; then
+            echo -e "${RED}ERROR: Shell validation found issues. Fix them before committing.${NC}"
+            exit 1
         fi
-    done
 
-    if [[ $FAILED -eq 1 ]]; then
-        echo -e "${RED}ERROR: shellcheck found issues. Fix them before committing.${NC}"
-        exit 1
+        echo -e "${GREEN}✓ Shell scripts passed validation${NC}"
+    elif command -v shellcheck &>/dev/null; then
+        echo "Running shellcheck on staged shell scripts..."
+
+        FAILED=0
+        for script in $SHELL_SCRIPTS; do
+            if [[ -f "$REPO_ROOT/$script" ]]; then
+                if ! shellcheck -e SC1091 "$REPO_ROOT/$script" 2>/dev/null; then
+                    echo -e "${RED}shellcheck failed: $script${NC}"
+                    FAILED=1
+                fi
+            fi
+        done
+
+        if [[ $FAILED -eq 1 ]]; then
+            echo -e "${RED}ERROR: shellcheck found issues. Fix them before committing.${NC}"
+            exit 1
+        fi
+
+        echo -e "${GREEN}✓ Shell scripts passed shellcheck${NC}"
     fi
-
-    echo -e "${GREEN}✓ Shell scripts passed shellcheck${NC}"
 fi
 
 # =============================================================================
@@ -201,8 +228,25 @@ fi
 PYTHON_FILES=$(echo "$STAGED_FILES" | grep -E '\.py$' || true)
 
 if [[ -n "$PYTHON_FILES" ]]; then
-    # Try ruff first, then flake8
-    if command -v ruff &>/dev/null; then
+    PYTHON_VALIDATOR="$VALIDATION_DIR/cf-validate-python.sh"
+    if [[ -x "$PYTHON_VALIDATOR" ]]; then
+        echo "Running Python validation on staged files..."
+        FAILED=0
+        for pyfile in $PYTHON_FILES; do
+            if [[ -f "$REPO_ROOT/$pyfile" ]]; then
+                if ! "$PYTHON_VALIDATOR" --quiet "$REPO_ROOT/$pyfile"; then
+                    FAILED=1
+                fi
+            fi
+        done
+
+        if [[ $FAILED -eq 1 ]]; then
+            echo -e "${YELLOW}Warning: Python validation found issues. Consider fixing them.${NC}"
+            # Don't block - just warn for Python
+        else
+            echo -e "${GREEN}✓ Python files passed validation${NC}"
+        fi
+    elif command -v ruff &>/dev/null; then
         echo "Running ruff on staged Python files..."
         FAILED=0
         for pyfile in $PYTHON_FILES; do
@@ -215,7 +259,6 @@ if [[ -n "$PYTHON_FILES" ]]; then
 
         if [[ $FAILED -eq 1 ]]; then
             echo -e "${YELLOW}Warning: ruff found issues. Consider fixing them.${NC}"
-            # Don't block - just warn for Python
         else
             echo -e "${GREEN}✓ Python files passed ruff${NC}"
         fi
@@ -236,25 +279,113 @@ fi
 # Get staged JSON files
 JSON_FILES=$(echo "$STAGED_FILES" | grep -E '\.json$' || true)
 
-if [[ -n "$JSON_FILES" ]] && command -v jq &>/dev/null; then
-    echo "Validating JSON files..."
+if [[ -n "$JSON_FILES" ]]; then
+    JSON_VALIDATOR="$VALIDATION_DIR/cf-validate-json.sh"
+    if [[ -x "$JSON_VALIDATOR" ]]; then
+        echo "Validating JSON files..."
 
-    FAILED=0
-    for jsonfile in $JSON_FILES; do
-        if [[ -f "$REPO_ROOT/$jsonfile" ]]; then
-            if ! jq empty "$REPO_ROOT/$jsonfile" 2>/dev/null; then
-                echo -e "${RED}Invalid JSON: $jsonfile${NC}"
-                FAILED=1
+        FAILED=0
+        for jsonfile in $JSON_FILES; do
+            if [[ -f "$REPO_ROOT/$jsonfile" ]]; then
+                if ! "$JSON_VALIDATOR" --quiet "$REPO_ROOT/$jsonfile"; then
+                    echo -e "${RED}Invalid JSON: $jsonfile${NC}"
+                    FAILED=1
+                fi
             fi
+        done
+
+        if [[ $FAILED -eq 1 ]]; then
+            echo -e "${RED}ERROR: Invalid JSON files detected.${NC}"
+            exit 1
         fi
-    done
 
-    if [[ $FAILED -eq 1 ]]; then
-        echo -e "${RED}ERROR: Invalid JSON files detected.${NC}"
-        exit 1
+        echo -e "${GREEN}✓ JSON files are valid${NC}"
+    elif command -v jq &>/dev/null; then
+        echo "Validating JSON files..."
+
+        FAILED=0
+        for jsonfile in $JSON_FILES; do
+            if [[ -f "$REPO_ROOT/$jsonfile" ]]; then
+                if ! jq empty "$REPO_ROOT/$jsonfile" 2>/dev/null; then
+                    echo -e "${RED}Invalid JSON: $jsonfile${NC}"
+                    FAILED=1
+                fi
+            fi
+        done
+
+        if [[ $FAILED -eq 1 ]]; then
+            echo -e "${RED}ERROR: Invalid JSON files detected.${NC}"
+            exit 1
+        fi
+
+        echo -e "${GREEN}✓ JSON files are valid${NC}"
     fi
+fi
 
-    echo -e "${GREEN}✓ JSON files are valid${NC}"
+# =============================================================================
+# MARKDOWN LINTING (with auto-fix)
+# =============================================================================
+# Config auto-discovered from REPO_ROOT: .markdownlint.json (rules),
+#   .markdownlint-cli2.jsonc (ignore patterns)
+# Auto-fixes: MD009 (trailing spaces), MD012 (blank lines), MD031/MD032
+#             (blanks around fences/lists), MD037/MD038 (emphasis/code), MD047 (newline)
+# Custom fix: MD040 (code fence language) - adds 'text' label via awk
+
+MD_FILES=$(echo "$STAGED_FILES" | grep -E '\.md$' || true)
+
+if [[ -n "$MD_FILES" ]] && command -v markdownlint &>/dev/null; then
+    echo "Running markdownlint on staged markdown files..."
+
+    # Collect staged .md files into array (bash 3.2 compatible)
+    MD_FILE_ARRAY=()
+    while IFS= read -r mdfile; do
+        [[ -n "$mdfile" ]] && [[ -f "$REPO_ROOT/$mdfile" ]] && MD_FILE_ARRAY+=("$REPO_ROOT/$mdfile")
+    done <<< "$MD_FILES"
+
+    if [[ ${#MD_FILE_ARRAY[@]} -gt 0 ]]; then
+        # markdownlint auto-discovers .markdownlint.json from cwd (REPO_ROOT)
+        # No explicit --config needed
+
+        # Step 1: Auto-fix staged markdown files (handles MD009, MD012, MD031, etc.)
+        markdownlint --fix "${MD_FILE_ARRAY[@]}" 2>/dev/null || true
+
+        # Step 2: Fix MD040 - Add 'text' to bare code fences (not auto-fixable)
+        MD040_OUTPUT=$(markdownlint "${MD_FILE_ARRAY[@]}" 2>&1 | grep "MD040" || true)
+        if [[ -n "$MD040_OUTPUT" ]]; then
+            while IFS= read -r md040_line; do
+                MD_FIX_PATH=$(echo "$md040_line" | sed -E 's/^([^:]+):.*/\1/')
+                MD_FIX_LINE=$(echo "$md040_line" | sed -E 's/^[^:]+:([0-9]+).*/\1/')
+                if [[ -f "$MD_FIX_PATH" ]] && [[ -n "$MD_FIX_LINE" ]]; then
+                    # OS-agnostic in-place edit via awk + temp file
+                    md_tmp=$(mktemp "${TMPDIR:-/tmp}/md040-XXXXXX")
+                    awk -v n="$MD_FIX_LINE" 'NR==n { sub(/```[[:space:]]*$/, "```text") } 1' "$MD_FIX_PATH" > "$md_tmp" && mv "$md_tmp" "$MD_FIX_PATH"
+                fi
+            done <<< "$MD040_OUTPUT"
+        fi
+
+        # Step 3: Re-stage auto-fixed files
+        while IFS= read -r mdfile; do
+            [[ -n "$mdfile" ]] || continue
+            if [[ -f "$REPO_ROOT/$mdfile" ]] && ! git diff --quiet -- "$REPO_ROOT/$mdfile" 2>/dev/null; then
+                echo "  ✓ Auto-fixed and re-staged: $mdfile"
+                git add "$REPO_ROOT/$mdfile"
+            fi
+        done <<< "$MD_FILES"
+
+        # Step 4: Final lint check (block commit if issues remain after auto-fix)
+        if ! markdownlint "${MD_FILE_ARRAY[@]}" 2>&1; then
+            echo "" >&2
+            echo -e "${RED}${BOLD}❌ MARKDOWN LINTING FAILED${NC} (auto-fix attempted)" >&2
+            echo "" >&2
+            echo -e "${YELLOW}🔒 MUST: Skill('cf-documentation-standards', args='lint-file')${NC}" >&2
+            echo "   In PathFlow mode, message the cf-gitops teammate." >&2
+            echo "Rules: .claude/skills/cf-documentation-standards/resources/lint-rules-quick-ref.md" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}✓ Markdown linting passed${NC}"
+    fi
+elif [[ -n "$MD_FILES" ]]; then
+    echo -e "${YELLOW}⚠ markdownlint not installed, skipping markdown linting${NC}"
 fi
 
 # =============================================================================

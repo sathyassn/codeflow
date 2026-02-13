@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS estimate_types (
 
 -- Epics table
 CREATE TABLE IF NOT EXISTS epics (
-    id TEXT PRIMARY KEY,              -- FRT-EPC-FEAT-AUTH-001
+    id TEXT PRIMARY KEY,              -- ULID PK: epic-{ulid} (e.g., epic-01ARZ3NDEKTSV4RRFFQ69G5FAV)
+    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} (e.g., FRT-EPC-FEAT-AUTH-001)
     title TEXT NOT NULL,
     summary TEXT,
     status TEXT DEFAULT 'draft'
@@ -135,6 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_epics_status ON epics(status);
 CREATE INDEX IF NOT EXISTS idx_epics_area ON epics(area_type);
 CREATE INDEX IF NOT EXISTS idx_epics_work_type ON epics(work_type);
 CREATE INDEX IF NOT EXISTS idx_epics_domain ON epics(domain);
+CREATE INDEX IF NOT EXISTS idx_epics_format_id ON epics(format_id);
 CREATE INDEX IF NOT EXISTS idx_epics_ongoing ON epics(area_type, work_type, is_ongoing)
     WHERE is_ongoing = TRUE;
 CREATE INDEX IF NOT EXISTS idx_epics_active ON epics(status)
@@ -142,8 +144,9 @@ CREATE INDEX IF NOT EXISTS idx_epics_active ON epics(status)
 
 -- Tasks table
 CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,              -- FRT-TSK-FEAT-AUTH-001
-    epic_id TEXT NOT NULL REFERENCES epics(id),
+    id TEXT PRIMARY KEY,              -- ULID PK: task-{ulid} (e.g., task-01BRZ4PDFLUTW5SSGG70H6GBW)
+    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} (e.g., FRT-TSK-FEAT-AUTH-001)
+    epic_id TEXT NOT NULL REFERENCES epics(id),  -- FK to epics ULID PK
     title TEXT NOT NULL,
     description TEXT,
     status TEXT DEFAULT 'todo'
@@ -199,11 +202,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_in_progress ON tasks(status, assignee_id)
 CREATE INDEX IF NOT EXISTS idx_tasks_autorun ON tasks(epic_id, status, autorun_eligible)
     WHERE autorun_eligible = TRUE AND status = 'todo';
 CREATE INDEX IF NOT EXISTS idx_tasks_stage ON tasks(stage, stage_status);
+CREATE INDEX IF NOT EXISTS idx_tasks_format_id ON tasks(format_id);
 
 -- Task dependencies
 CREATE TABLE IF NOT EXISTS task_dependencies (
-    task_id TEXT REFERENCES tasks(id),
-    depends_on_id TEXT REFERENCES tasks(id),
+    task_id TEXT REFERENCES tasks(id),       -- FK to tasks ULID PK
+    depends_on_id TEXT REFERENCES tasks(id), -- FK to tasks ULID PK
     dependency_type TEXT DEFAULT 'blocked_by'
         CHECK(dependency_type IN ('blocked_by', 'related')),
     PRIMARY KEY (task_id, depends_on_id)
@@ -214,11 +218,11 @@ CREATE INDEX IF NOT EXISTS idx_task_dependencies_depends_on ON task_dependencies
 -- Acceptance criteria
 CREATE TABLE IF NOT EXISTS acceptance_criteria (
     id TEXT PRIMARY KEY,              -- ac-{ulid}
-    epic_id TEXT NOT NULL REFERENCES epics(id),
+    epic_id TEXT NOT NULL REFERENCES epics(id),  -- FK to epics ULID PK
     criterion TEXT NOT NULL,
     met BOOLEAN DEFAULT FALSE,
     met_at TEXT,
-    met_by TEXT REFERENCES tasks(id)
+    met_by TEXT REFERENCES tasks(id)  -- FK to tasks ULID PK
 );
 
 CREATE INDEX IF NOT EXISTS idx_acceptance_criteria_epic ON acceptance_criteria(epic_id);
@@ -750,6 +754,11 @@ CREATE TRIGGER IF NOT EXISTS entities_fts_delete AFTER DELETE ON entities BEGIN
     DELETE FROM entities_fts WHERE id = OLD.id;
 END;
 
+CREATE TRIGGER IF NOT EXISTS entities_fts_update AFTER UPDATE ON entities BEGIN
+    DELETE FROM entities_fts WHERE id = OLD.id;
+    INSERT INTO entities_fts(id, name) VALUES (NEW.id, NEW.name);
+END;
+
 -- Summaries full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
     id,
@@ -766,6 +775,12 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS summaries_fts_delete AFTER DELETE ON long_term_summaries BEGIN
     DELETE FROM summaries_fts WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS summaries_fts_update AFTER UPDATE ON long_term_summaries BEGIN
+    DELETE FROM summaries_fts WHERE id = OLD.id;
+    INSERT INTO summaries_fts(id, title, outcomes, lessons_learned, search_keywords)
+    VALUES (NEW.id, NEW.title, NEW.outcomes, NEW.lessons_learned, NEW.search_keywords);
 END;
 
 -- =============================================================================
@@ -794,6 +809,26 @@ INSERT OR IGNORE INTO area_types (code, name, description) VALUES
     ('SHR', 'Shared', 'Libraries used by multiple areas'),
     ('DOC', 'Documentation', 'Documentation only'),
     ('XCUT', 'Cross-cutting', 'Spans multiple areas');
+
+-- ============================================================================
+-- AREA FOLDER MAPPING
+-- Maps area type codes to filesystem folder names
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS area_folder_mapping (
+    area_type TEXT NOT NULL REFERENCES area_types(code),
+    folder_name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    PRIMARY KEY (area_type)
+);
+
+INSERT OR IGNORE INTO area_folder_mapping (area_type, folder_name, display_name) VALUES
+    ('FRT', 'frontend', 'Frontend'),
+    ('BKD', 'backend', 'Backend'),
+    ('INF', 'infrastructure', 'Infrastructure'),
+    ('SHR', 'shared', 'Shared'),
+    ('DOC', 'documentation', 'Documentation'),
+    ('XCUT', 'cross-cutting', 'Cross-cutting');
 
 -- Seed default work types
 INSERT OR IGNORE INTO work_types (code, name, branch_prefix, commit_type, urgency) VALUES

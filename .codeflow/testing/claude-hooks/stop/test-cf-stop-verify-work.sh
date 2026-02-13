@@ -88,7 +88,7 @@ echo "--- Execution Tests ---"
 
 # Test 9: Exits 0 on execution
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 on execution"
 else
@@ -97,7 +97,7 @@ fi
 
 # Test 10: Exits 0 with user_cancelled stop reason
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(STOP_REASON="user_cancelled" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{"stop_reason":"user_cancelled"}' | STOP_REASON="user_cancelled" bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 with user_cancelled"
 else
@@ -106,7 +106,7 @@ fi
 
 # Test 11: Exits 0 with context_limit stop reason
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(STOP_REASON="context_limit" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{"stop_reason":"context_limit"}' | STOP_REASON="context_limit" bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 with context_limit"
 else
@@ -133,12 +133,12 @@ fi
 echo ""
 echo "--- PCV Marker Detection ---"
 
-# Test 14: Has check_pcv_marker function
+# Test 14: Has inline PCV marker validation
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "check_pcv_marker()" "$HOOK"; then
-    pass "Has check_pcv_marker function"
+if grep -q "HAS_MARKER" "$HOOK" && grep -q "HAS_TEXT" "$HOOK"; then
+    pass "Has inline PCV marker validation"
 else
-    fail "Should have check_pcv_marker function"
+    fail "Should have PCV marker validation logic"
 fi
 
 # Test 15: Checks for verify-work text
@@ -149,12 +149,12 @@ else
     fail "Should check for verify-work text"
 fi
 
-# Test 16: Checks for VERIFY-WORK uppercase
+# Test 16: Checks for verify-work case-insensitively
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "VERIFY-WORK" "$HOOK"; then
-    pass "Checks for VERIFY-WORK uppercase"
+if grep -q "grep -qi" "$HOOK" && grep -q "REQUIRED_TEXT" "$HOOK"; then
+    pass "Checks verify-work case-insensitively via grep -qi"
 else
-    fail "Should check for VERIFY-WORK uppercase"
+    fail "Should check verify-work case-insensitively"
 fi
 
 # Test 17: Checks for required marker (magnifying glass emoji)
@@ -200,12 +200,12 @@ fi
 echo ""
 echo "--- Tier Check Logic ---"
 
-# Test 22: Has check_tier_requirements function
+# Test 22: Has inline tier requirement validation
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "check_tier_requirements()" "$HOOK"; then
-    pass "Has check_tier_requirements function"
+if grep -q "TIER_LEVEL" "$HOOK" && grep -q "TIER_2_SECTIONS" "$HOOK"; then
+    pass "Has inline tier requirement validation"
 else
-    fail "Should have check_tier_requirements function"
+    fail "Should have tier requirement validation logic"
 fi
 
 # Test 23: Detects TIER 1
@@ -283,12 +283,12 @@ else
     fail "Should have REQUIRE_PCV variable"
 fi
 
-# Test 32: Reads require_pcv_marker from config
+# Test 32: Reads stop_verification.enabled from config
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "stop_verification.require_pcv_marker" "$HOOK"; then
-    pass "Reads require_pcv_marker from config"
+if grep -q "stop_verification.enabled" "$HOOK"; then
+    pass "Reads stop_verification.enabled from config"
 else
-    fail "Should read require_pcv_marker from config"
+    fail "Should read stop_verification.enabled from config"
 fi
 
 # Test 33: Has MAX_RETRIES variable
@@ -379,10 +379,10 @@ fi
 
 # Test 43: Exports REPO_ROOT
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "export REPO_ROOT" "$HOOK"; then
-    pass "Exports REPO_ROOT"
+if grep -q "REPO_ROOT=" "$HOOK"; then
+    pass "Sets REPO_ROOT"
 else
-    fail "Should export REPO_ROOT"
+    fail "Should set REPO_ROOT"
 fi
 
 # Test 44: Documents bash compatibility
@@ -404,12 +404,12 @@ else
     fail "Should have STOP_REASON variable"
 fi
 
-# Test 46: Has LAST_MESSAGE variable
+# Test 46: Has transcript-based validation (reads transcript_path)
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "LAST_MESSAGE=" "$HOOK"; then
-    pass "Has LAST_MESSAGE variable"
+if grep -q "TRANSCRIPT_PATH" "$HOOK" && grep -q "CURRENT_TURN_TEXTS" "$HOOK"; then
+    pass "Has transcript-based validation"
 else
-    fail "Should have LAST_MESSAGE variable"
+    fail "Should have transcript-based validation"
 fi
 
 # Test 47: Skips on user_cancelled
@@ -460,7 +460,7 @@ echo "--- Functional Tests ---"
 
 # Test 52: Exits 0 with valid PCV marker in LAST_MESSAGE
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(LAST_MESSAGE="🔍 verify-work TIER 1 - work complete" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{}' | LAST_MESSAGE="🔍 verify-work TIER 1 - work complete" bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 with valid PCV marker"
 else
@@ -469,7 +469,7 @@ fi
 
 # Test 53: Exits 0 without LAST_MESSAGE (no message to check)
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(LAST_MESSAGE="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{}' | LAST_MESSAGE="" bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 without LAST_MESSAGE"
 else
@@ -478,7 +478,7 @@ fi
 
 # Test 54: Shows advisory when PCV missing
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(LAST_MESSAGE="I made some changes" bash "$HOOK" 2>&1)
+result=$(echo '{}' | LAST_MESSAGE="I made some changes" bash "$HOOK" 2>&1)
 if [[ "$result" == *"verification"* ]] || [[ "$result" == *"PCV"* ]]; then
     pass "Shows advisory when PCV missing"
 else
@@ -490,8 +490,8 @@ TESTS_RUN=$((TESTS_RUN + 1))
 # Create temp config with require_pcv_marker: false
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/.codeflow/config/enforcement"
-echo '{"stop_verification":{"require_pcv_marker":false}}' > "$TEMP_DIR/.codeflow/config/enforcement/enforcement-policy.json"
-result=$(cd "$TEMP_DIR" && LAST_MESSAGE="no pcv here" bash "$HOOK" 2>&1; echo "EXIT:$?")
+echo '{"stop_verification":{"enabled":false}}' > "$TEMP_DIR/.codeflow/config/enforcement/enforcement-policy.json"
+result=$(echo '{}' | (cd "$TEMP_DIR" && LAST_MESSAGE="no pcv here" bash "$HOOK" 2>&1; echo "EXIT:$?"))
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when REQUIRE_PCV is false"
@@ -502,19 +502,18 @@ fi
 echo ""
 echo "--- V4: PathFlow PCV Bypass ---"
 
-# Test 56: Hook contains pathflow-active check
+# Test 56: Hook contains PathFlow bypass check
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "pathflow-active" "$HOOK"; then
-    pass "Has pathflow-active check for V4 PCV bypass"
+if grep -q "is_pathflow_active" "$HOOK"; then
+    pass "Has PathFlow bypass via is_pathflow_active"
 else
     fail "Should have pathflow-active check for V4 PCV bypass"
 fi
 
-# Test 57: Exits 0 when pathflow-active flag exists (PCV bypass)
+# Test 57: Exits 0 when PathFlow mode active (PCV bypass)
 TESTS_RUN=$((TESTS_RUN + 1))
-# The hook checks /tmp/claude/managed/state/pathflow-active directly
-# We test by checking the code path exists
-if grep -q 'PATHFLOW_ACTIVE=' "$HOOK" && grep -A2 'PATHFLOW_ACTIVE' "$HOOK" | grep -q 'exit 0'; then
+# The hook sources security-lib.sh and calls is_pathflow_active -> exit 0
+if grep -q 'is_pathflow_active' "$HOOK" && grep -A1 'is_pathflow_active' "$HOOK" | grep -q 'exit 0'; then
     pass "Has PCV bypass exit 0 for PathFlow mode"
 else
     fail "Should bypass PCV (exit 0) in PathFlow mode"

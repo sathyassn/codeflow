@@ -126,10 +126,10 @@ if command -v jq &>/dev/null; then
     fi
 
 elif command -v python3 &>/dev/null; then
-    if ! python3 -c "import json; json.load(open('$FILE_PATH'))" 2>/dev/null; then
+    if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$FILE_PATH" 2>/dev/null; then
         [[ "$QUIET" == "false" ]] && echo "FAIL: Invalid JSON syntax" >&2
         if [[ "$QUIET" == "false" ]]; then
-            python3 -c "import json; json.load(open('$FILE_PATH'))" 2>&1
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$FILE_PATH" 2>&1
         fi
         exit 1
     fi
@@ -138,7 +138,7 @@ elif command -v python3 &>/dev/null; then
 
     if [[ "$PRETTY" == "true" ]]; then
         echo ""
-        python3 -c "import json; print(json.dumps(json.load(open('$FILE_PATH')), indent=2))"
+        python3 -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1])), indent=2))" "$FILE_PATH"
     fi
 
 else

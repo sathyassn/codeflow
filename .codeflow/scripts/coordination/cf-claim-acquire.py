@@ -3,8 +3,8 @@
 cf-claim-acquire.py - Acquire a resource claim via CRDT.
 
 Usage:
-    cf-claim-acquire.py --work-id TSK-xxx --pattern "file:src/*.ts" --owner-id agent-xxx
-    cf-claim-acquire.py --work-id TSK-xxx --pattern "dir:src/auth" --owner-id agent-xxx --mode shared
+    cf-claim-acquire.py --work-id TSK-xxx --pattern "src/models/**" --owner-id agent-xxx
+    cf-claim-acquire.py --work-id TSK-xxx --pattern "src/auth/**" --owner-id agent-xxx --mode shared
 
 Exit Codes:
     0: Success
@@ -18,13 +18,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Add codeflow_py_lib to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "codeflow_py_lib"))
+# Add parent scripts dir to path (NOT codeflow_py_lib directly, to avoid shadowing stdlib)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from codeflow_py_lib import (
     append_jsonl,
     generate_ulid,
-    get_db,
     get_logger,
     get_state_dir,
     load_coordination,
@@ -36,17 +35,28 @@ logger = get_logger(__name__)
 DEFAULT_TTL = 600  # 10 minutes (canonical)
 
 
-def main():
+def _format_utc(dt: datetime) -> str:
+    """Format a UTC datetime as ISO 8601 with Z suffix."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_expiry(expires_str: str) -> datetime:
+    """Parse an expiry timestamp string to a timezone-aware datetime."""
+    normalized = expires_str.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description="Acquire a resource claim")
     parser.add_argument(
         "--work-id",
         required=True,
-        help="Work ID (task/epic) this claim belongs to",
+        help="Work ULID PK (e.g., task-{ulid} or epic-{ulid}) this claim belongs to",
     )
     parser.add_argument(
         "--pattern",
         required=True,
-        help="Resource pattern (e.g., 'file:src/*.ts', 'dir:src/auth')",
+        help="Resource pattern (e.g., 'src/models/**', 'src/auth/**')",
     )
     parser.add_argument(
         "--owner-id",
@@ -80,13 +90,12 @@ def main():
         now = datetime.now(timezone.utc)
         for claim_id, claim in doc.claims.items():
             if claim["pattern"] == args.pattern and claim["status"] == "active":
-                # Check if claim is still valid (not expired)
                 expires_at = claim.get("expires_at")
                 if expires_at:
                     try:
-                        exp_time = datetime.fromisoformat(expires_at.replace("Z", ""))
+                        exp_time = _parse_expiry(expires_at)
                         if exp_time > now:
-                            # Active conflict found
+                            # Active conflict: block if either side is exclusive
                             if claim["mode"] == "exclusive" or args.mode == "exclusive":
                                 result = {
                                     "success": False,
@@ -104,9 +113,11 @@ def main():
                         pass
 
         # Create new claim
-        claim_id = f"claim-{generate_ulid()}"
+        claim_id = f"claim_{generate_ulid()}"
         expires = now + timedelta(seconds=args.ttl)
         fencing_token = doc.get_next_fencing_token()
+        expires_str = _format_utc(expires)
+        created_str = _format_utc(now)
 
         claim = {
             "id": claim_id,
@@ -115,9 +126,9 @@ def main():
             "mode": args.mode,
             "owner_id": args.owner_id,
             "fencing_token": fencing_token,
-            "expires_at": expires.isoformat() + "Z",
+            "expires_at": expires_str,
             "status": "active",
-            "created_at": now.isoformat() + "Z",
+            "created_at": created_str,
         }
 
         # Write to CRDT (primary coordination state)
@@ -128,29 +139,13 @@ def main():
         ledger_path = get_state_dir() / "ledger" / "sessions.jsonl"
         append_jsonl(ledger_path, {"type": "claim_created", **claim})
 
-        # Write to SQLite (query cache)
-        db = get_db()
-        db.execute_write(
-            """
-            INSERT INTO work_claims (id, work_id, pattern, mode, owner_id, fencing_token, expires_at, status)
-            VALUES (:id, :work_id, :pattern, :mode, :owner_id, :fencing_token, :expires_at, 'active')
-            """,
-            {
-                "id": claim_id,
-                "work_id": args.work_id,
-                "pattern": args.pattern,
-                "mode": args.mode,
-                "owner_id": args.owner_id,
-                "fencing_token": fencing_token,
-                "expires_at": expires.isoformat() + "Z",
-            },
-        )
-
         result = {
             "success": True,
             "claim_id": claim_id,
+            "pattern": args.pattern,
+            "mode": args.mode,
+            "expires_at": expires_str,
             "fencing_token": fencing_token,
-            "expires_at": expires.isoformat() + "Z",
         }
 
         if args.json:
@@ -158,7 +153,7 @@ def main():
         else:
             print(f"Claim acquired: {claim_id}")
             print(f"Fencing token: {fencing_token}")
-            print(f"Expires at: {expires.isoformat()}Z")
+            print(f"Expires at: {expires_str}")
 
         return 0
 

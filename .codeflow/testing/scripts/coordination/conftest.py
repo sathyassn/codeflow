@@ -88,30 +88,6 @@ def test_db(mock_state_dir: Path) -> Path:
 
 
 @pytest.fixture
-def mock_db_ops(temp_dir: Path) -> Any:
-    """Mock DatabaseOperations for testing scripts.
-
-    Args:
-        temp_dir: Temporary directory fixture.
-
-    Returns:
-        Configured DatabaseOperations instance.
-    """
-    from db_operations import DatabaseConfig, DatabaseOperations
-
-    db_path = str(temp_dir / "test.db")
-    log_path = str(temp_dir / "ops.jsonl")
-    config = DatabaseConfig(db_path=db_path, op_log_path=log_path)
-    ops = DatabaseOperations(config)
-
-    # Initialize schema
-    with ops.connection() as conn:
-        conn.executescript(COORDINATION_SCHEMA)
-
-    return ops
-
-
-@pytest.fixture
 def sample_claim() -> Dict[str, Any]:
     """Sample claim data.
 

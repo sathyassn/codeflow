@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Purpose:   Privilege escalation security checks
+# Location:  .codeflow/scripts/security/enforcement/cf-privilege-protection.sh
 # Usage:     source "enforcement/cf-privilege-protection.sh" (from main hook)
 # Platform:  macOS/Linux
 #
@@ -104,11 +105,11 @@ if [[ "$COMMAND" =~ zsh[[:space:]]+-c[[:space:]]+[\"\'] ]]; then
         "zsh -c"
 fi
 
-# eval command - blocks all eval usage (potential bypass vector)
-if [[ "$COMMAND" =~ ^eval[[:space:]] ]] || [[ "$COMMAND" =~ [[:space:]]eval[[:space:]] ]]; then
+# eval with dangerous commands (privilege escalation or destructive)
+if [[ "$COMMAND" =~ eval[[:space:]]+.*(rm|sudo|su|doas|pkexec|runuser) ]]; then
     block_command \
         "Script Bypass" \
-        "eval command not permitted" \
+        "eval with dangerous command" \
         "eval"
 fi
 
@@ -121,8 +122,8 @@ if [[ "$COMMAND" =~ ^source[[:space:]] ]]; then
 fi
 
 # . (dot) command - blocks external script sourcing
-# Pattern: starts with . followed by space and then something
-if [[ "$COMMAND" =~ ^\.\ +[^\.] ]]; then
+# Pattern: starts with . followed by space (matches ". script.sh" and ". ./script.sh")
+if [[ "$COMMAND" =~ ^\.\ + ]]; then
     block_command \
         "Script Bypass" \
         "dot source command not permitted" \

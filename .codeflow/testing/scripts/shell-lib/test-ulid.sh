@@ -127,11 +127,11 @@ test_generate_epic_id() {
     local epic_id
     epic_id=$(generate_epic_id)
 
-    # Should have EPC- prefix
-    if [[ "$epic_id" =~ ^EPC- ]]; then
-        test_pass "Epic ID has EPC- prefix"
+    # Should have epic- prefix
+    if [[ "$epic_id" =~ ^epic- ]]; then
+        test_pass "Epic ID has epic- prefix"
     else
-        test_fail "Epic ID should have EPC- prefix: $epic_id"
+        test_fail "Epic ID should have epic- prefix: $epic_id"
     fi
 
     # Should be valid epic ID
@@ -141,9 +141,9 @@ test_generate_epic_id() {
         test_fail "Generated epic ID should be valid: $epic_id"
     fi
 
-    # Total length: EPC- (4) + ULID (26) = 30
+    # Total length: epic- (5) + ULID (26) = 31
     local len=${#epic_id}
-    assert_equals "30" "$len" "Epic ID is 30 characters"
+    assert_equals "31" "$len" "Epic ID is 31 characters"
 }
 
 test_generate_task_id() {
@@ -152,11 +152,11 @@ test_generate_task_id() {
     local task_id
     task_id=$(generate_task_id)
 
-    # Should have TSK- prefix
-    if [[ "$task_id" =~ ^TSK- ]]; then
-        test_pass "Task ID has TSK- prefix"
+    # Should have task- prefix
+    if [[ "$task_id" =~ ^task- ]]; then
+        test_pass "Task ID has task- prefix"
     else
-        test_fail "Task ID should have TSK- prefix: $task_id"
+        test_fail "Task ID should have task- prefix: $task_id"
     fi
 
     # Should be valid task ID
@@ -166,9 +166,9 @@ test_generate_task_id() {
         test_fail "Generated task ID should be valid: $task_id"
     fi
 
-    # Total length: TSK- (4) + ULID (26) = 30
+    # Total length: task- (5) + ULID (26) = 31
     local len=${#task_id}
-    assert_equals "30" "$len" "Task ID is 30 characters"
+    assert_equals "31" "$len" "Task ID is 31 characters"
 }
 
 test_generate_session_id() {

@@ -57,10 +57,10 @@ Finding tasks?
 | 1 | understand-request | ENF-L3 Advisory | Parse request, extract requirements |
 | 2 | classify-work | ENF-L3 Advisory | Determine area/type/domain for work |
 | 3 | ensure-work-registered | ENF-L1 Sentinel | Guarantee task exists before modifications |
-| 4 | create-epic | ENF-L1 Sentinel | Create epic in work graph |
-| 5 | update-epic | ENF-L1 Sentinel | Modify epic status/content |
-| 6 | create-task | ENF-L1 Sentinel | Create task linked to epic |
-| 7 | update-task | ENF-L1 Sentinel | Modify task status/assignee |
+| 4 | create-epic | ENF-L3 Advisory | Create epic in work graph |
+| 5 | update-epic | ENF-L3 Advisory | Modify epic status/content |
+| 6 | create-task | ENF-L3 Advisory | Create task linked to epic |
+| 7 | update-task | ENF-L3 Advisory | Modify task status/assignee |
 | 8 | query-tasks | None | Query tasks by status/epic |
 
 ## Operation Details
@@ -145,28 +145,44 @@ Enforcement: ENF-L1 Sentinel - Required before any Edit/Write/Bash modifications
 
 Prerequisite: classify-work (this skill) provides area_type, work_type, domain
 
+ID Convention (Dual-ID):
+  - id (ULID PK): epic-{ulid} / task-{ulid} — used for DB FK references
+  - format_id: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} / {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} — used for display, filenames
+
 Procedure:
   1. Search for existing ongoing epic matching area_type + work_type
+     - Ongoing epics are per area + work_type combination
+     - e.g., format_id INF-EPC-FIX-GENL-001 for infrastructure fixes
+     - e.g., format_id INF-EPC-FEAT-GENL-001 for infrastructure features
 
   2. If no ongoing epic found, create one:
-     - id: {AREA}-EPC-{TYPE}-GENL-001
+     - id: epic-{ulid} (ULID PK, auto-generated)
+     - format_id: {AREA}-EPC-{TYPE}-GENL-001
      - title: "Ongoing {Area} {Type}s"
      - is_ongoing: TRUE
      - status: 'in_progress'
+     - file_path: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
 
   3. Create task under epic:
-     - epic_id: {found or created epic}
-     - id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
+     - epic_id: {ULID PK of found or created epic}
+     - id: task-{ulid} (ULID PK, auto-generated)
+     - format_id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
      - title: {original work description}
      - origin: 'informal'
      - scope_policy: 'soft' (default for informal)
-     - status: 'todo'
+     - status: 'pending'
 
-  4. Return task_id for use in begin-work
+  4. Create active-task.json via cf-work-state.sh after task registration
+     - Location: .state/runtime/active-task.json
+     - Fields: task_id (ULID PK), epic_id (ULID PK), task_format_id, epic_format_id, title, status, branch, session_id
+
+  5. Return task_id (ULID PK) for use in begin-work
 
 Output:
-  task_id: {created task ID}
-  epic_id: {parent epic ID}
+  task_id: {ULID PK — task-{ulid}}
+  epic_id: {ULID PK — epic-{ulid}}
+  task_format_id: {display ID — {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}}
+  epic_format_id: {display ID — {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}}
   origin: 'informal'
   is_new_epic: true | false
 
@@ -181,11 +197,13 @@ Hook: PreToolUse/pre-tool-use-task-sentinel.sh blocks without this
 ```text
 When: /cf-plan creates new epic OR ensure-work-registered needs ongoing epic
 Purpose: Create epic in work graph database
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (not in enforcement-policy.json; calls cf-db-operations internally)
 Agent: cf-planner (full creation), Main Agent (ongoing epics only)
 
 Procedure:
-  1. Generate epic ID: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}
+  1. Generate both IDs:
+     - id (ULID PK): epic-{ulid} (auto-generated)
+     - format_id: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
 
   2. Validate required fields:
      - area_type: FRT | BKD | INF | SHR | DOC | XCUT
@@ -195,13 +213,14 @@ Procedure:
 
   3. Insert into database via cf-db-operations:epic-create
 
-  4. Create markdown file: epics/{id}/{id}.md
+  4. Create markdown file: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
 
-  5. Return epic_id
+  5. Return both IDs
 
 Output:
-  epic_id: {generated ID}
-  file_path: epics/{id}/{id}.md
+  epic_id: {ULID PK — epic-{ulid}}
+  epic_format_id: {display ID — {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}}
+  file_path: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
 
 📚 Resource: [id-convention.md](resources/id-convention.md)
    Load when: Generating epic IDs or understanding ID structure
@@ -212,7 +231,7 @@ Output:
 ```text
 When: Epic status changes or content updates
 Purpose: Modify epic status, priority, or metadata
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (not in enforcement-policy.json; calls cf-db-operations internally)
 Agent: cf-planner only
 
 Updatable Fields:
@@ -240,11 +259,11 @@ Procedure:
 ```text
 When: /cf-develop creates task OR ensure-work-registered creates informal task
 Purpose: Create task linked to epic in work graph
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (not in enforcement-policy.json; calls cf-db-operations internally)
 Agent: cf-planner (full), Main Agent (informal tasks)
 
 Required Fields:
-  - epic_id: parent epic
+  - epic_id: parent epic (ULID PK — epic-{ulid})
   - title: task description
   - origin: 'formal' | 'informal'
   - scope_policy: 'soft' | 'hard' | 'permissive'
@@ -259,18 +278,21 @@ Optional Autorun Fields (cf-planner only):
   | target_branch | string | main | Branch to merge into |
 
 Procedure:
-  1. Validate epic_id exists
-  2. Generate task ID: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
+  1. Validate epic_id (ULID PK) exists
+  2. Generate both IDs:
+     - id (ULID PK): task-{ulid} (auto-generated)
+     - format_id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
   3. Insert into database via cf-db-operations:task-create
-  4. Create markdown file: epics/{epic-id}/tasks/{task-id}.md
-  5. Return task_id
+  4. Create markdown file: project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md
+  5. Return both IDs
 
 Output:
-  task_id: {generated ID}
-  epic_id: {parent epic}
-  file_path: epics/{epic-id}/tasks/{task-id}.md
+  task_id: {ULID PK — task-{ulid}}
+  task_format_id: {display ID — {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}}
+  epic_id: {parent epic ULID PK}
+  file_path: project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md
 
-Query: .state/db/queries/task-queries.sql#create
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [id-convention.md](resources/id-convention.md) - Load when: Generating task IDs
@@ -282,7 +304,7 @@ Query: .state/db/queries/task-queries.sql#create
 ```text
 When: Task status changes, assignment changes, or progress updates
 Purpose: Modify task status, assignee, or content
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (not in enforcement-policy.json; calls cf-db-operations internally)
 Agent: All agents (status), cf-planner (all fields)
 
 Updatable Fields:
@@ -333,22 +355,39 @@ Autorun Query (ready for execution):
   - No unresolved blocking dependencies
 
 Output:
-  tasks: [{id, title, status, epic_id, assignee, priority, autorun_eligible}...]
+  tasks: [{id (ULID PK), format_id, title, status, epic_id (ULID PK), assignee, priority, autorun_eligible}...]
   count: {total matching}
 
 Cross-skill: cf-db-operations (for query execution)
-Query: .state/db/queries/task-queries.sql#query
-Query (autorun): .state/db/queries/task-queries.sql#ready-for-autorun
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [classification-guide.md](resources/classification-guide.md) - Load when: Building query filters
    [task-lifecycle.md](resources/task-lifecycle.md) - Load when: Filtering by status
 ```
 
-## ID Convention
+## Area-to-Folder Mapping
+
+| Area Code | Folder Name |
+|-----------|-------------|
+| FRT | frontend/ |
+| BKD | backend/ |
+| INF | infrastructure/ |
+| SHR | shared/ |
+| DOC | documentation/ |
+| XCUT | cross-cutting/ |
+
+Used in paths: `project-management/epics/{folder}/...`
+
+## ID Convention (Dual-ID)
+
+Every epic and task has two IDs:
+
+- **ULID PK** (`id`): `epic-{ulid}` / `task-{ulid}` — for DB FK references, internal lookups
+- **Format ID** (`format_id`): `{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NNN}` — for display, filenames, branches
 
 ```text
-{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NUMBER}
+Format ID pattern: {AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NUMBER}
 
 Examples:
   FRT-EPC-FEAT-AUTH-001  → Frontend Epic: Feature in Auth domain

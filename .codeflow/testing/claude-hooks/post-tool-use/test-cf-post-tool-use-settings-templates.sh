@@ -8,10 +8,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh"
 
 TESTS_RUN=0
 TESTS_PASSED=0

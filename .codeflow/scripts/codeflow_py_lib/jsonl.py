@@ -2,8 +2,10 @@
 JSONL (JSON Lines) operations for CodeFlow scripts.
 
 Handles reading, writing, and appending to JSONL ledger files.
+Uses flock for atomic appends to ensure parallel safety (matches ledger.sh).
 """
 
+import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,17 +59,28 @@ def write_jsonl(
     """
     Write events to JSONL file.
 
+    Uses flock for atomic appends to ensure parallel safety when
+    multiple sessions write simultaneously. Matches the shell
+    equivalent (ledger.sh) which uses flock -x.
+
     Returns number of events written.
     """
     mode = "w" if overwrite else "a"
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    lock_path = path.parent / f"{path.name}.lock"
+
     count = 0
-    with open(path, mode, encoding="utf-8") as f:
-        for event in events:
-            json_line = json.dumps(event, separators=(",", ":"))
-            f.write(json_line + "\n")
-            count += 1
+    with open(lock_path, "w") as lock_f:
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        try:
+            with open(path, mode, encoding="utf-8") as f:
+                for event in events:
+                    json_line = json.dumps(event, separators=(",", ":"))
+                    f.write(json_line + "\n")
+                    count += 1
+        finally:
+            fcntl.flock(lock_f, fcntl.LOCK_UN)
 
     return count
 

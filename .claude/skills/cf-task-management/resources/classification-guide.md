@@ -51,6 +51,17 @@ Domains are project-specific. Common patterns:
 | DATA | Data models, persistence, queries |
 | GENL | General/unspecified (fallback) |
 
+## Area-to-Folder Mapping
+
+| Area Code | Folder Name |
+|-----------|-------------|
+| FRT | frontend/ |
+| BKD | backend/ |
+| INF | infrastructure/ |
+| SHR | shared/ |
+| DOC | documentation/ |
+| XCUT | cross-cutting/ |
+
 ## Example Classifications
 
 | Request | Area | Type | Domain |

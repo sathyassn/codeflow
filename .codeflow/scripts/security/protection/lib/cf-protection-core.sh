@@ -11,10 +11,17 @@
 #
 # Requires: cf-protection-common.sh must be sourced first
 #
+# Module Coupling Note:
+#   Functions add_to_list() and remove_from_list() call protect_single_file()
+#   which is defined in cf-protection-ops.sh. This creates a runtime dependency:
+#   - All modules must be sourced before calling add_to_list/remove_from_list
+#   - Sourcing order: common → core → ops → verify (handled by orchestrator)
+#   - This module cannot be used standalone without cf-protection-ops.sh
+#
 # Provides:
 #   - read_list_file() - Read paths from a list file
-#   - add_to_list() - Add path to a list file
-#   - remove_from_list() - Remove path from a list file
+#   - add_to_list() - Add path to a list file (requires cf-protection-ops.sh)
+#   - remove_from_list() - Remove path from a list file (requires cf-protection-ops.sh)
 #   - is_core_path() - Check if path is in core list
 #   - get_all_paths() - Get all paths (core + extended + adhoc)
 
@@ -96,7 +103,7 @@ remove_from_list() {
 
     # Remove from list (create temp file to avoid issues)
     local temp_file
-    temp_file=$(mktemp)
+    temp_file=$(mktemp "${TMPDIR:-/tmp/claude}/cf-core-XXXXXX")
     grep -vxF "$path" "$full_path" > "$temp_file" 2>/dev/null || true
     mv "$temp_file" "$full_path"
 

@@ -2,7 +2,7 @@
 # Test: cf-git-protection.sh
 # Location: .codeflow/testing/scripts/security/enforcement/test-cf-git-protection.sh
 #
-# Tests the git protection enforcement module (Sections 1-3)
+# Tests the git protection enforcement module (Sections 1-4)
 
 set -euo pipefail
 
@@ -21,8 +21,41 @@ TESTS_RUN=0
 pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); }
 fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); }
 
+# Functional test helpers - actually source the module and check behavior
+test_blocks_command() {
+    local command="$1"
+    local description="$2"
+    local output
+
+    output=$(COMMAND="$command" REPO_ROOT="$REPO_ROOT" LIB_DIR="$LIB_DIR" \
+       bash -c "source '$MODULE'" 2>&1 || true)
+
+    if echo "$output" | grep -q "BLOCKED"; then
+        pass "$description"
+    else
+        fail "$description - Expected block"
+    fi
+}
+
+test_allows_command() {
+    local command="$1"
+    local description="$2"
+
+    if COMMAND="$command" REPO_ROOT="$REPO_ROOT" LIB_DIR="$LIB_DIR" \
+       bash -c "source '$MODULE'" 2>/dev/null; then
+        pass "$description"
+    else
+        fail "$description - Expected allow"
+    fi
+}
+
 echo "=== Testing cf-git-protection.sh ==="
 echo ""
+
+# =========================================================================
+# PART A: Structural Tests
+# =========================================================================
+echo "--- Structural Tests ---"
 
 # Test 1: File exists
 if [[ -f "$MODULE" ]]; then pass "Module file exists"; else fail "Module file not found"; fi
@@ -83,96 +116,177 @@ else
     fail "Missing Section 3 - Hook Path Manipulation"
 fi
 
-# Test 10: Detects --no-verify flag
-if grep -q '\-\-no-verify' "$MODULE"; then
-    pass "Detects --no-verify flag"
+# Test 10: Has Section 4 - Git Hooks Directory Protection
+if grep -q "SECTION 4" "$MODULE" && grep -q "Hooks Directory" "$MODULE"; then
+    pass "Has Section 4 - Git Hooks Directory Protection"
 else
-    fail "Should detect --no-verify flag"
+    fail "Missing Section 4 - Git Hooks Directory Protection"
 fi
 
-# Test 11: Detects -n short flag for commit
-if grep -q '\-n' "$MODULE" && grep -q 'commit' "$MODULE"; then
-    pass "Detects -n flag for commit"
-else
-    fail "Should detect -n flag for commit"
-fi
-
-# Test 12: Detects --force flag
-if grep -q '\-\-force' "$MODULE"; then
-    pass "Detects --force flag"
-else
-    fail "Should detect --force flag"
-fi
-
-# Test 13: Detects --force-with-lease flag
-if grep -q '\-\-force-with-lease' "$MODULE"; then
-    pass "Detects --force-with-lease flag"
-else
-    fail "Should detect --force-with-lease flag"
-fi
-
-# Test 14: Detects -f short flag for push
-if grep -q 'push' "$MODULE" && grep -q '\-f' "$MODULE"; then
-    pass "Detects -f flag for push"
-else
-    fail "Should detect -f flag for push"
-fi
-
-# Test 15: Detects core.hooksPath manipulation
-if grep -q 'core\.hooksPath' "$MODULE"; then
-    pass "Detects core.hooksPath manipulation"
-else
-    fail "Should detect core.hooksPath manipulation"
-fi
-
-# Test 16: Detects GIT_HOOKS_PATH env var
-if grep -q 'GIT_HOOKS_PATH' "$MODULE"; then
-    pass "Detects GIT_HOOKS_PATH env var"
-else
-    fail "Should detect GIT_HOOKS_PATH env var"
-fi
-
-# Test 17: Detects SKIP_HOOKS env var
-if grep -q 'SKIP_HOOKS' "$MODULE"; then
-    pass "Detects SKIP_HOOKS env var"
-else
-    fail "Should detect SKIP_HOOKS env var"
-fi
-
-# Test 18: Detects HUSKY=0 bypass
-if grep -q 'HUSKY' "$MODULE"; then
-    pass "Detects HUSKY bypass attempt"
-else
-    fail "Should detect HUSKY bypass attempt"
-fi
-
-# Test 19: Uses block_command function
+# Test 11: Uses block_command function
 if grep -q 'block_command' "$MODULE"; then
     pass "Uses block_command function"
 else
     fail "Should use block_command function"
 fi
 
-# Test 20: Returns 0 at end
+# Test 12: Returns 0 at end
 if grep -q 'return 0' "$MODULE"; then
     pass "Returns 0 when all checks pass"
 else
     fail "Should return 0 when all checks pass"
 fi
 
-# Test 21: Uses get_flags_portion function
+# Test 13: Uses get_flags_portion function
 if grep -q 'get_flags_portion' "$MODULE"; then
     pass "Uses get_flags_portion function"
 else
     fail "Should use get_flags_portion function"
 fi
 
-# Test 22: Handles combined flags with n
+# Test 14: Handles combined flags with n
 if grep -q 'combined.*flag' "$MODULE" || grep -q '\[a-mo-z\]\*n' "$MODULE"; then
     pass "Handles combined flags with n"
 else
     fail "Should handle combined flags with n"
 fi
+
+# Test 15: Has section ownership comment documenting duplication with cf-hook-bypass.sh
+if grep -q 'SECTION OWNERSHIP' "$MODULE" && grep -q 'AUTHORITATIVE' "$MODULE"; then
+    pass "Has section ownership documentation"
+else
+    fail "Missing section ownership documentation"
+fi
+
+# Test 16: Handles --unset core.hooksPath
+if grep -q 'unset.*core\.hooksPath' "$MODULE"; then
+    pass "Handles --unset core.hooksPath"
+else
+    fail "Should handle --unset core.hooksPath"
+fi
+
+# =========================================================================
+# PART B: Functional Tests - Section 1: Hook Bypass Prevention
+# =========================================================================
+echo ""
+echo "--- Functional Tests: Section 1 (Hook Bypass) ---"
+
+test_blocks_command "git commit --no-verify -m 'message'" \
+    "Blocks --no-verify on commit"
+
+test_blocks_command "git push --no-verify origin main" \
+    "Blocks --no-verify on push"
+
+test_blocks_command "git rebase --no-verify main" \
+    "Blocks --no-verify on rebase"
+
+test_blocks_command "git cherry-pick --no-verify abc123" \
+    "Blocks --no-verify on cherry-pick"
+
+test_blocks_command "git merge --no-verify feature" \
+    "Blocks --no-verify on merge"
+
+test_blocks_command "git --no-verify status" \
+    "Blocks git --no-verify at git level"
+
+test_blocks_command "git commit -n -m 'message'" \
+    "Blocks -n short flag on commit"
+
+test_blocks_command "git commit -anm 'message'" \
+    "Blocks -anm combined flag on commit"
+
+test_blocks_command "git commit -nam 'message'" \
+    "Blocks -nam combined flag on commit"
+
+test_allows_command "git push -n origin main" \
+    "Allows git push -n (dry-run, not no-verify)"
+
+test_allows_command "git commit -m 'fix: handle -n flag properly'" \
+    "Allows -n in commit message (not flag)"
+
+# =========================================================================
+# PART C: Functional Tests - Section 2: Force Push Prevention
+# =========================================================================
+echo ""
+echo "--- Functional Tests: Section 2 (Force Push) ---"
+
+test_blocks_command "git push --force origin main" \
+    "Blocks --force push"
+
+test_blocks_command "git push --force-with-lease origin main" \
+    "Blocks --force-with-lease push"
+
+test_blocks_command "git push -f origin main" \
+    "Blocks -f short flag push"
+
+test_allows_command "git push origin feature/branch" \
+    "Allows normal push"
+
+# =========================================================================
+# PART D: Functional Tests - Section 3: Hook Path Manipulation
+# =========================================================================
+echo ""
+echo "--- Functional Tests: Section 3 (Hook Manipulation) ---"
+
+test_blocks_command "git config core.hooksPath /tmp/hooks" \
+    "Blocks git config core.hooksPath"
+
+test_blocks_command "git -c core.hooksPath=/tmp commit -m 'msg'" \
+    "Blocks git -c core.hooksPath override"
+
+test_blocks_command "GIT_HOOKS_PATH=/tmp git commit -m 'msg'" \
+    "Blocks GIT_HOOKS_PATH env var"
+
+test_blocks_command "SKIP_HOOKS=1 git commit -m 'msg'" \
+    "Blocks SKIP_HOOKS env var"
+
+test_blocks_command "GIT_SKIP_HOOKS=1 git commit -m 'msg'" \
+    "Blocks GIT_SKIP_HOOKS env var"
+
+test_blocks_command "HUSKY=0 git commit -m 'msg'" \
+    "Blocks HUSKY=0 bypass"
+
+test_blocks_command "PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m 'msg'" \
+    "Blocks PRE_COMMIT_ALLOW_NO_CONFIG bypass"
+
+test_blocks_command "git config --unset core.hooksPath" \
+    "Blocks --unset core.hooksPath"
+
+# =========================================================================
+# PART E: Functional Tests - Section 4: Git Hooks Directory Protection
+# =========================================================================
+echo ""
+echo "--- Functional Tests: Section 4 (Hooks Dir Protection) ---"
+
+test_blocks_command "rm -rf .git/hooks/pre-commit" \
+    "Blocks rm on .git/hooks"
+
+test_blocks_command "mv .git/hooks/pre-commit /tmp/" \
+    "Blocks mv on .git/hooks"
+
+test_blocks_command "chmod 644 .git/hooks/pre-commit" \
+    "Blocks chmod on .git/hooks"
+
+test_blocks_command "echo 'exit 0' > .git/hooks/pre-commit" \
+    "Blocks redirect to .git/hooks"
+
+# =========================================================================
+# PART F: Functional Tests - Allowed Commands
+# =========================================================================
+echo ""
+echo "--- Functional Tests: Allowed Commands ---"
+
+test_allows_command "git commit -m 'fix: proper commit'" \
+    "Allows normal commit"
+
+test_allows_command "git status" \
+    "Allows git status"
+
+test_allows_command "git diff" \
+    "Allows git diff"
+
+test_allows_command "git log --oneline -5" \
+    "Allows git log"
 
 echo ""
 echo "=== Test Summary ==="

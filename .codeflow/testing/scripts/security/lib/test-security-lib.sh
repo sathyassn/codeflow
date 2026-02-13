@@ -8,8 +8,8 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../../.." && pwd)"
-LIB_FILE="$REPO_ROOT/.codeflow/scripts/security/lib/security-lib.sh"
+source "$TEST_DIR/../../../lib/test-isolation.sh"
+LIB_FILE="$REAL_REPO_ROOT/.codeflow/scripts/security/lib/security-lib.sh"
 
 export REPO_ROOT
 
@@ -241,7 +241,7 @@ echo "--- Constants tests ---"
 
 if (
     source "$LIB_FILE"
-    [[ -n "$CF_DB_FILE" ]] && [[ -n "$CF_LOG_BASE" ]] && [[ -n "$CF_SESSION_ID" ]]
+    [[ -n "$CF_LOG_BASE" ]] && [[ -n "$CF_SESSION_ID" ]]
 ); then
     pass "Constants are defined"
 else
@@ -262,19 +262,6 @@ if (
     pass "_ensure_log_dirs creates directories"
 else
     fail "_ensure_log_dirs failed"
-fi
-
-# ============================================================================
-# Test 12: _generate_id function
-# ============================================================================
-result=$(
-    source "$LIB_FILE"
-    _generate_id "test"
-)
-if [[ "$result" =~ ^test-[0-9]+[a-f0-9]+$ ]]; then
-    pass "_generate_id creates valid ID"
-else
-    fail "_generate_id failed: got '$result'"
 fi
 
 # ============================================================================

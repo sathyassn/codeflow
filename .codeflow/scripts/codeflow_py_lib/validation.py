@@ -12,9 +12,11 @@ from .errors import ValidationError
 # Common patterns
 PATTERNS = {
     "ulid": r"^[0-9A-HJKMNP-TV-Z]{26}$",
-    "epic_id": r"^[A-Z]{3}-EPC-[A-Z]+-[A-Z]+-\d{3}$",
-    "task_id": r"^[A-Z]{3}-TSK-[A-Z]+-[A-Z]+-\d{3}$",
-    "branch": r"^(feat|fix|refactor|docs|test|ops|plan|chore)/[a-z0-9-]+$",
+    "epic_pk": r"^epic-[0-9A-HJKMNP-TV-Z]{26}$",
+    "task_pk": r"^task-[0-9A-HJKMNP-TV-Z]{26}$",
+    "epic_format_id": r"^[A-Z]{2,4}-EPC-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$",
+    "task_format_id": r"^[A-Z]{2,4}-TSK-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$",
+    "branch": r"^(feat|fix|hotfix|refactor|docs|test|chore|ci|experiment|ops|plan)/[a-z0-9-]+$",
     "domain": r"^(planning|development|review|qa|ops|documentation|sessions)$",
     "event_type": r"^(progress|decision|milestone|issue|question|context|summary)$",
 }

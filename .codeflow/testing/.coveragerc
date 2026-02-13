@@ -4,8 +4,6 @@
 # Source directories to measure
 source =
     ../scripts/codeflow_py_lib
-    ../scripts/db/lib
-    ../scripts/memory
     ../scripts/coordination
     ../scripts/state
 

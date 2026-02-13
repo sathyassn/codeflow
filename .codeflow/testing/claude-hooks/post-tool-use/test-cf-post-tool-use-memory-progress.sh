@@ -8,10 +8,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh"
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -21,7 +20,7 @@ pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
 fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 
 # Setup test state directory
-TEST_STATE_DIR="/tmp/claude/managed/state"
+TEST_STATE_DIR="$REPO_ROOT/.state/session"
 mkdir -p "$TEST_STATE_DIR"
 
 # Cleanup function
@@ -159,7 +158,7 @@ fi
 
 # Test 16: Has state directory for tracking
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "STATE_DIR" "$HOOK" && grep -q "/tmp/claude/managed/state" "$HOOK"; then
+if grep -q "STATE_DIR" "$HOOK" && grep -q '.state/session' "$HOOK"; then
     pass "Uses state directory for tracking"
 else
     fail "Should use state directory for tracking"

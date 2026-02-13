@@ -5,18 +5,21 @@
 # Matcher:   Bash
 #
 # This hook:
-#   - Orchestrates 7 security enforcement modules (per V3 spec)
+#   - Orchestrates 9 security enforcement modules
 #   - Validates Bash commands for dangerous patterns
 #   - Blocks privilege escalation, hook bypass, etc.
 #   - Logs security events to audit trail
+#
+# Protected paths are CRUD-protected (block create/update/delete).
+# Execution (bash script.sh) is allowed — LLMs must run hooks and scripts.
 #
 # Modules (in execution order):
 #   1. cf-dangerous-commands.sh - rm -rf /, fork bombs
 #   2. cf-privilege-protection.sh - sudo, su, doas, pkexec
 #   3. cf-git-protection.sh - Hook bypass, force push, hook manipulation
-#   4. cf-hook-bypass.sh - --no-verify, SKIP_HOOKS, etc.
+#   4. cf-hook-bypass.sh - Extended: -c hooksPath, .git/hooks dir, pre-commit
 #   5. cf-path-protection.sh - Path boundary validation
-#   6. cf-file-operations.sh - Protected paths, glob bypass
+#   6. cf-file-operations.sh - Indirect writes, glob bypass
 #   7. cf-branch-file-protection.sh - Branch-specific file protection
 #   8. cf-tmp-protection.sh - Temp directory isolation
 #   9. cf-network-protection.sh - Git push/pull, gh commands
@@ -33,6 +36,22 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+    fi
+fi
+
 # =============================================================================
 # EARLY EXIT FOR NON-BASH TOOLS
 # =============================================================================
@@ -47,7 +66,7 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
 # Security library and enforcement paths
@@ -86,15 +105,15 @@ export COMMAND
 # ENFORCEMENT MODULE LOADING
 # =============================================================================
 
-# Load protected paths from config for skip logic
+# Load protected paths from config — CRUD-protected (block create/update/delete)
+# Execution (bash script.sh) is intentionally allowed
 PROTECTED_PATHS=()
-EXECUTION_BLOCKED_PATHS=()
 INDIRECT_WRITE_CMDS="(cp|dd|tee|rsync|scp|install|ln)"
 
 # Managed tmp folder protection
 MANAGED_TMP_FOLDERS=(
     "/tmp/claude/managed"
-    "/tmp/claude/managed/protected-edits"
+    "/tmp/claude/managed/codeflow/protected-edits"
     "/tmp/claude/managed/state"
 )
 STATE_FOLDER="/tmp/claude/managed/state"
@@ -104,22 +123,17 @@ if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
         [[ -n "$path" ]] && PROTECTED_PATHS+=("$path")
     done < <(jq -r '.protected_resources | .critical[]?, .high[]?, .moderate[]? // empty' "$CONFIG" 2>/dev/null)
 
-    # Load execution-blocked paths (hooks, scripts)
-    while IFS= read -r path; do
-        [[ -n "$path" ]] && EXECUTION_BLOCKED_PATHS+=("$path")
-    done < <(jq -r '.protected_paths.core[]? | select(.tools[] == "Bash") | .pattern // empty' "$CONFIG" 2>/dev/null)
-
     # Load managed tmp folders from config if available
     MANAGED_TMP_FOLDERS=()
     while IFS= read -r folder; do
         [[ -n "$folder" ]] && MANAGED_TMP_FOLDERS+=("$folder")
-    done < <(jq -r '.protected_paths.managed_tmp.protected_folders[]? // empty' "$CONFIG" 2>/dev/null)
-    [[ ${#MANAGED_TMP_FOLDERS[@]} -eq 0 ]] && MANAGED_TMP_FOLDERS=("/tmp/claude/managed" "/tmp/claude/managed/protected-edits" "/tmp/claude/managed/state")
+    done < <(jq -r '.managed_tmp.protected_folders[]? // empty' "$CONFIG" 2>/dev/null)
+    [[ ${#MANAGED_TMP_FOLDERS[@]} -eq 0 ]] && MANAGED_TMP_FOLDERS=("/tmp/claude/managed" "/tmp/claude/managed/codeflow/protected-edits" "/tmp/claude/managed/state")
 
-    STATE_FOLDER=$(jq -r '.protected_paths.managed_tmp.state_folder // "/tmp/claude/managed/state"' "$CONFIG" 2>/dev/null)
+    STATE_FOLDER=$(jq -r '.managed_tmp.state_folder // "/tmp/claude/managed/state"' "$CONFIG" 2>/dev/null)
 fi
 
-export PROTECTED_PATHS EXECUTION_BLOCKED_PATHS INDIRECT_WRITE_CMDS MANAGED_TMP_FOLDERS STATE_FOLDER
+export PROTECTED_PATHS INDIRECT_WRITE_CMDS MANAGED_TMP_FOLDERS STATE_FOLDER
 
 # =============================================================================
 # SECURITY LIBRARY (for logging)
@@ -132,7 +146,7 @@ if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
 fi
 
 # =============================================================================
-# ENFORCEMENT MODULE ORCHESTRATION (V3 Spec: 7+ modules)
+# ENFORCEMENT MODULE ORCHESTRATION
 # =============================================================================
 # Each module checks and blocks if needed (exit 2), or returns 0 to continue.
 # Modules are sourced in priority order - critical checks first.
@@ -155,7 +169,7 @@ if [[ -f "$ENFORCEMENT_DIR/cf-git-protection.sh" ]]; then
     source "$ENFORCEMENT_DIR/cf-git-protection.sh"
 fi
 
-# 4. Hook bypass (--no-verify, SKIP_HOOKS, HUSKY=0) - HIGH
+# 4. Extended hook bypass (-c hooksPath, .git/hooks dir, pre-commit) - HIGH
 if [[ -f "$ENFORCEMENT_DIR/cf-hook-bypass.sh" ]]; then
     # shellcheck source=/dev/null
     source "$ENFORCEMENT_DIR/cf-hook-bypass.sh"
@@ -167,7 +181,7 @@ if [[ -f "$ENFORCEMENT_DIR/cf-path-protection.sh" ]]; then
     source "$ENFORCEMENT_DIR/cf-path-protection.sh"
 fi
 
-# 6. File operations (protected paths, glob bypass) - HIGH
+# 6. File operations (indirect writes, glob bypass) - HIGH
 if [[ -f "$ENFORCEMENT_DIR/cf-file-operations.sh" ]]; then
     # shellcheck source=/dev/null
     source "$ENFORCEMENT_DIR/cf-file-operations.sh"

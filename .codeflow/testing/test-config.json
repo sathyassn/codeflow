@@ -2,21 +2,18 @@
   "$schema": "./test-config.schema.json",
   "version": "2.0.0",
   "description": "Config-driven test execution for CodeFlow - Phase 3 Updated",
-
   "priorities": {
     "CRITICAL": {
       "description": "Core data layer - schema, DB operations, validation, CRDT + consistency checks",
       "files": [
         "scripts/db/test_schema.py",
-        "scripts/db/test_db_operations.py",
-        "scripts/db/lib/test_db_operations.py",
-        "scripts/db/test_db_retry_concurrency.py",
         "scripts/codeflow_py_lib/test_validation.py",
         "scripts/codeflow_py_lib/test_crdt.py",
-        "scripts/codeflow_py_lib/test_db.py",
         "scripts/coordination/test_crdt_doc.py",
         "scripts/coordination/test_crdt_io.py",
+        "scripts/coordination/test_cf_crdt_rebuild.py",
         "scripts/db/test_v4_schema.sh",
+        "scripts/db/test-schema-restructure.sh",
         "consistency/test-settings-sync.sh",
         "consistency/test-config-consistency.sh"
       ]
@@ -24,21 +21,14 @@
     "HIGH": {
       "description": "Workflow operations - memory, coordination, state management, security enforcement",
       "files": [
-        "scripts/memory/test_memory_store.py",
-        "scripts/memory/test_memory_query.py",
-        "scripts/memory/test_memory_search.py",
-        "scripts/memory/test_memory_traverse.py",
-        "scripts/memory/test_memory_at_time.py",
-        "scripts/memory/test_entity_query.py",
-        "scripts/memory/test_entity_traverse.py",
-        "scripts/coordination/test_claim_operations.py",
-        "scripts/coordination/test_crdt_sync.py",
         "scripts/coordination/test_pattern_matching.py",
+        "scripts/coordination/test_cf_claim_acquire.py",
+        "scripts/coordination/test_cf_claim_check.py",
+        "scripts/coordination/test_cf_claim_list.py",
+        "scripts/coordination/test_cf_claim_release.py",
+        "scripts/coordination/test_cf_claim_renew.py",
         "scripts/state/test-ledger.sh",
         "scripts/state/test-memory.sh",
-        "scripts/db/test_db_lib_shell.sh",
-        "scripts/db/lib/test-db-lib.sh",
-        "scripts/db/test_db_fts.py",
         "scripts/security/test-cf-dangerous-commands.sh",
         "scripts/security/test-cf-privilege-protection.sh",
         "scripts/security/test-cf-path-protection.sh",
@@ -56,23 +46,30 @@
         "scripts/security/protection/test-cf-protection-common.sh",
         "scripts/security/protection/test-cf-protection-core.sh",
         "scripts/security/protection/test-cf-protection-ops.sh",
-        "scripts/security/protection/test-cf-protection-verify.sh"
+        "scripts/security/protection/test-cf-protection-verify.sh",
+        "scripts/security/lib/test-context-lib.sh",
+        "scripts/security/lib/test-pathflow-mode.sh",
+        "scripts/security/lib/test-security-lib-functions.sh",
+        "scripts/state/test-tracking-generate.sh",
+        "scripts/state/test-work-state.sh",
+        "scripts/state/test-stage-sync.sh",
+        "scripts/state/test_stage_sync.py"
       ]
     },
     "MEDIUM": {
-      "description": "Library utilities - config, paths, jsonl, ulid, hooks, git, validation",
+      "description": "Library utilities - shell-lib, python-lib, hooks, git, settings, staging",
       "files": [
         "scripts/codeflow_py_lib/test_config.py",
         "scripts/codeflow_py_lib/test_paths.py",
         "scripts/codeflow_py_lib/test_jsonl.py",
         "scripts/codeflow_py_lib/test_ulid.py",
-        "scripts/codeflow_py_lib/test_chunking.py",
-        "scripts/codeflow_py_lib/test_embeddings.py",
         "scripts/shell-lib/test-common.sh",
         "scripts/shell-lib/test-config.sh",
+        "scripts/shell-lib/test-errors.sh",
         "scripts/shell-lib/test-validation.sh",
         "scripts/shell-lib/test-ulid.sh",
-        "scripts/db/test_db_maintenance.py",
+        "scripts/shell-lib/test-logging.sh",
+        "scripts/shell-lib/test-index.sh",
         "scripts/security/test-cf-stage-edit.sh",
         "scripts/security/test-cf-apply-staged-edit.sh",
         "scripts/security/test-cf-reject-staged-edit.sh",
@@ -120,7 +117,7 @@
         "claude-hooks/session-end/test-cf-session-end-logging.sh",
         "claude-hooks/stop/test-cf-stop-logging.sh",
         "claude-hooks/stop/test-cf-stop-verify-work.sh",
-        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-context.sh",
+        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh"
       ]
     },
@@ -129,33 +126,37 @@
       "files": [
         "scripts/codeflow_py_lib/test_logging.py",
         "scripts/codeflow_py_lib/test_errors.py",
-        "scripts/db/test_db_backup.py",
-        "scripts/shell-lib/test-logging.sh",
-        "scripts/shell-lib/test-errors.sh",
-        "scripts/shell-lib/test-index.sh",
         "lib/test-test-coverage.sh"
       ]
     }
   },
-
   "modes": {
     "essential": {
       "description": "Minimum validation - core data layer + consistency only",
-      "priorities": ["CRITICAL"],
+      "priorities": [
+        "CRITICAL"
+      ],
       "estimated_seconds": 20
     },
     "standard": {
       "description": "Default - core + workflow operations + security",
-      "priorities": ["CRITICAL", "HIGH"],
+      "priorities": [
+        "CRITICAL",
+        "HIGH"
+      ],
       "estimated_seconds": 45
     },
     "full": {
       "description": "Comprehensive validation - all tests including claude hooks",
-      "priorities": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+      "priorities": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW"
+      ],
       "estimated_seconds": 90
     }
   },
-
   "categories": {
     "consistency": {
       "directory": "consistency",
@@ -165,17 +166,13 @@
     "scripts-db": {
       "directory": "scripts/db",
       "description": "Database operations tests",
-      "language": "python"
-    },
-    "scripts-db-lib": {
-      "directory": "scripts/db/lib",
-      "description": "Database shell library tests",
-      "language": "bash"
+      "language": "mixed"
     },
     "scripts-memory": {
       "directory": "scripts/memory",
-      "description": "Memory script tests",
-      "language": "python"
+      "description": "Memory script tests (deleted — awaiting Go CLI Phase 7)",
+      "language": "python",
+      "skip": true
     },
     "scripts-coordination": {
       "directory": "scripts/coordination",
@@ -195,7 +192,7 @@
     "scripts-state": {
       "directory": "scripts/state",
       "description": "State management tests",
-      "language": "bash"
+      "language": "mixed"
     },
     "scripts-security": {
       "directory": "scripts/security",
@@ -232,6 +229,11 @@
       "description": "Git hook tests",
       "language": "bash"
     },
+    "scripts-worktree": {
+      "directory": "scripts/worktree",
+      "description": "Worktree management tests",
+      "language": "bash"
+    },
     "claude-hooks-pre-tool-use": {
       "directory": "claude-hooks/pre-tool-use",
       "description": "Claude Code PreToolUse hook tests",
@@ -263,7 +265,6 @@
       "language": "bash"
     }
   },
-
   "pre_commit": {
     "default_mode": "essential",
     "env_override": "TEST_MODE",
@@ -274,18 +275,19 @@
       "fail_fast": true
     }
   },
-
   "cli": {
     "allow_priority_filter": true,
     "allow_mode_override": true,
     "fallback_mode": "standard"
   },
-
+  "parallel": {
+    "max_jobs": 6,
+    "progress_style": "compact"
+  },
   "coverage_enforcement": {
     "enabled": true,
     "validation_mode": "warn",
     "pre_commit_mode": "new_only",
-
     "python": {
       "enabled": true,
       "enforcement": "line_coverage",
@@ -297,7 +299,6 @@
       },
       "notes": "Python coverage is accurate and enforceable via coverage.py"
     },
-
     "shell": {
       "enabled": true,
       "enforcement": "tests_pass",
@@ -308,7 +309,6 @@
         "warn_under": 50
       }
     },
-
     "exceptions": {
       "no_test_required": [
         {
@@ -344,18 +344,17 @@
         },
         {
           "pattern": ".codeflow/scripts/coordination/cf-claim-*.py",
-          "tested_by": "scripts/coordination/test_claim_operations.py",
-          "reason": "Claim scripts tested via integration test (Phase 2)"
+          "tested_by": "scripts/coordination/test_cf_claim_*.py",
+          "reason": "Claim scripts have dedicated per-script tests (Phase 3)"
         },
         {
-          "pattern": ".codeflow/scripts/memory/cf-*.py",
-          "tested_by": "scripts/memory/test_memory_*.py",
-          "reason": "Memory scripts tested via integration tests (Phase 2)"
+          "pattern": ".codeflow/scripts/state/*.sh",
+          "tested_by": "scripts/state/test-*.sh",
+          "reason": "State scripts have dedicated tests (Phase 3)"
         }
       ]
     }
   },
-
   "pytest": {
     "config_file": "pytest.ini",
     "coverage_config": ".coveragerc",
@@ -366,10 +365,13 @@
       "low": "LOW priority tests"
     }
   },
-
   "reporting": {
     "output_dir": "coverage_reports",
-    "formats": ["json", "text", "html"],
+    "formats": [
+      "json",
+      "text",
+      "html"
+    ],
     "retention_days": 30
   }
 }

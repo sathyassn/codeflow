@@ -45,9 +45,13 @@ SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 export SCRIPT_DIR
 
 # Source library files in order
+# shellcheck source=lib/cf-protection-common.sh
 source "$SCRIPT_DIR/lib/cf-protection-common.sh"
+# shellcheck source=lib/cf-protection-core.sh
 source "$SCRIPT_DIR/lib/cf-protection-core.sh"
+# shellcheck source=lib/cf-protection-ops.sh
 source "$SCRIPT_DIR/lib/cf-protection-ops.sh"
+# shellcheck source=lib/cf-protection-verify.sh
 source "$SCRIPT_DIR/lib/cf-protection-verify.sh"
 
 # =============================================================================

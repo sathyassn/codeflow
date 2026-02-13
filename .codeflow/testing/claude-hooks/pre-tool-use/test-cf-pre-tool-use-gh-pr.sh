@@ -15,10 +15,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -79,7 +78,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Bash tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -87,7 +86,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Bash tools (Edit)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -95,7 +94,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Bash tools (Write)
-result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Write tool"
 else
@@ -103,7 +102,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Bash tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -111,7 +110,7 @@ else
 fi
 
 # Test 11: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -119,7 +118,7 @@ else
 fi
 
 # Test 12: Exits 0 when empty command
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty command"
 else
@@ -130,7 +129,7 @@ echo ""
 echo "--- Non-PR Commands (Should Allow) ---"
 
 # Test 13: Allows non-gh commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows non-gh commands"
 else
@@ -138,7 +137,7 @@ else
 fi
 
 # Test 14: Allows gh issue list
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh issue list"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh issue list"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows gh issue list"
 else
@@ -146,7 +145,7 @@ else
 fi
 
 # Test 15: Allows gh repo clone
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh repo clone owner/repo"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh repo clone owner/repo"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows gh repo clone"
 else
@@ -154,7 +153,7 @@ else
 fi
 
 # Test 16: Allows gh pr view
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr view 123"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr view 123"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows gh pr view"
 else
@@ -162,7 +161,7 @@ else
 fi
 
 # Test 17: Allows gh pr list
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr list"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr list"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows gh pr list"
 else
@@ -170,7 +169,7 @@ else
 fi
 
 # Test 18: Allows gh workflow run
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh workflow run test.yml"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh workflow run test.yml"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows gh workflow run"
 else
@@ -181,7 +180,7 @@ echo ""
 echo "--- Body Flag Requirement ---"
 
 # Test 19: Blocks gh pr create without --body
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks gh pr create without --body"
 else
@@ -189,7 +188,7 @@ else
 fi
 
 # Test 20: Allows with --body flag
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows with --body flag"
 else
@@ -197,7 +196,7 @@ else
 fi
 
 # Test 21: Allows with -b flag (short form)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" -b \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" -b \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows with -b flag (short form)"
 else
@@ -208,7 +207,7 @@ echo ""
 echo "--- AI Attribution Blocking ---"
 
 # Test 22: Blocks Claude attribution
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGenerated with Claude\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGenerated with Claude\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Claude attribution"
 else
@@ -216,7 +215,7 @@ else
 fi
 
 # Test 23: Blocks ChatGPT attribution
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nChatGPT helped\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nChatGPT helped\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks ChatGPT attribution"
 else
@@ -224,7 +223,7 @@ else
 fi
 
 # Test 24: Blocks Copilot attribution
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nUsed Copilot\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nUsed Copilot\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Copilot attribution"
 else
@@ -232,7 +231,7 @@ else
 fi
 
 # Test 25: Blocks Gemini attribution
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGemini assisted\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGemini assisted\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Gemini attribution"
 else
@@ -240,7 +239,7 @@ else
 fi
 
 # Test 26: Blocks AI-generated phrase
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nAI-generated code\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nAI-generated code\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks AI-generated phrase"
 else
@@ -248,7 +247,7 @@ else
 fi
 
 # Test 27: Blocks Generated with phrase
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGenerated with AI\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nGenerated with AI\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Generated with phrase"
 else
@@ -256,7 +255,7 @@ else
 fi
 
 # Test 28: Blocks Anthropic mention
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nAnthropic model\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nAnthropic model\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Anthropic mention"
 else
@@ -264,7 +263,7 @@ else
 fi
 
 # Test 29: Blocks OpenAI mention
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nOpenAI powered\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nOpenAI powered\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks OpenAI mention"
 else
@@ -272,7 +271,7 @@ else
 fi
 
 # Test 30: Case-insensitive AI detection (lowercase)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nclaude helped\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\nclaude helped\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Case-insensitive AI detection"
 else
@@ -283,7 +282,7 @@ echo ""
 echo "--- Required Sections ---"
 
 # Test 31: Blocks missing ## Summary section
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"Some body without sections\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"Some body without sections\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks missing ## Summary section"
 else
@@ -291,7 +290,7 @@ else
 fi
 
 # Test 32: Blocks missing ## Testing section
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\ntest content\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"## Summary\ntest content\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks missing ## Testing section"
 else
@@ -299,7 +298,7 @@ else
 fi
 
 # Test 33: Block message mentions missing section
-HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"no sections here\""}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body \"no sections here\""}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"Missing required section"* ]]; then
     pass "Block message mentions missing section"
 else
@@ -310,7 +309,7 @@ echo ""
 echo "--- Title Format (Conventional Commit) ---"
 
 # Test 34: Blocks title without type prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bad title\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bad title\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks title without type prefix"
 else
@@ -318,7 +317,7 @@ else
 fi
 
 # Test 35: Blocks title without colon-space
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat test\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat test\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks title without colon-space"
 else
@@ -326,7 +325,7 @@ else
 fi
 
 # Test 36: Allows feat: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: add feature\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: add feature\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows feat: prefix"
 else
@@ -334,7 +333,7 @@ else
 fi
 
 # Test 37: Allows fix: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"fix: bug fix\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"fix: bug fix\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows fix: prefix"
 else
@@ -342,7 +341,7 @@ else
 fi
 
 # Test 38: Allows docs: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"docs: update readme\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"docs: update readme\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows docs: prefix"
 else
@@ -350,7 +349,7 @@ else
 fi
 
 # Test 39: Allows refactor: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"refactor: clean up\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"refactor: clean up\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows refactor: prefix"
 else
@@ -358,7 +357,7 @@ else
 fi
 
 # Test 40: Allows test: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test: add tests\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test: add tests\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows test: prefix"
 else
@@ -366,7 +365,7 @@ else
 fi
 
 # Test 41: Allows chore: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"chore: update deps\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"chore: update deps\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows chore: prefix"
 else
@@ -374,7 +373,7 @@ else
 fi
 
 # Test 42: Allows perf: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"perf: optimize\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"perf: optimize\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows perf: prefix"
 else
@@ -382,7 +381,7 @@ else
 fi
 
 # Test 43: Allows ci: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"ci: update workflow\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"ci: update workflow\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows ci: prefix"
 else
@@ -390,7 +389,7 @@ else
 fi
 
 # Test 44: Allows bugfix: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bugfix: resolve edge case\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bugfix: resolve edge case\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows bugfix: prefix"
 else
@@ -398,7 +397,7 @@ else
 fi
 
 # Test 45: Allows hotfix: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"hotfix: critical patch\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"hotfix: critical patch\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows hotfix: prefix"
 else
@@ -406,7 +405,7 @@ else
 fi
 
 # Test 46: Allows style: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"style: fix formatting\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"style: fix formatting\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows style: prefix"
 else
@@ -414,7 +413,7 @@ else
 fi
 
 # Test 47: Allows build: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"build: update makefile\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"build: update makefile\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows build: prefix"
 else
@@ -422,7 +421,7 @@ else
 fi
 
 # Test 48: Allows revert: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"revert: undo bad change\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"revert: undo bad change\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows revert: prefix"
 else
@@ -430,7 +429,7 @@ else
 fi
 
 # Test 49: Allows merge: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"merge: combine branches\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"merge: combine branches\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows merge: prefix"
 else
@@ -438,7 +437,7 @@ else
 fi
 
 # Test 50: Allows plan: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"plan: design new feature\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"plan: design new feature\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows plan: prefix"
 else
@@ -446,7 +445,7 @@ else
 fi
 
 # Test 51: Allows refine: prefix
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"refine: polish workflow\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"refine: polish workflow\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows refine: prefix"
 else
@@ -458,7 +457,7 @@ echo "--- Title Length Limits ---"
 
 # Test 44: Blocks title exceeding max length
 long_title="feat: this is a very long title that exceeds the maximum allowed character limit"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$long_title\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$long_title\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks title exceeding max length"
 else
@@ -466,7 +465,7 @@ else
 fi
 
 # Test 45: Block message shows character count
-HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$long_title\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$long_title\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"chars"* ]]; then
     pass "Block message shows character count"
 else
@@ -475,7 +474,7 @@ fi
 
 # Test 46: Allows title at max length (50 chars)
 title_50="feat: exactly fifty characters title ok"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$title_50\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"$title_50\\\" --body \\\"## Summary\\ntest\\n## Testing\\ntest\\\"\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows title at max length"
 else
@@ -486,7 +485,7 @@ echo ""
 echo "--- Title Extraction Patterns ---"
 
 # Test 47: Extracts title with double quotes
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: double quoted\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: double quoted\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Extracts title with double quotes"
 else
@@ -494,7 +493,7 @@ else
 fi
 
 # Test 48: Extracts title with single quotes
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title 'feat: single quoted' --body '## Summary\ntest\n## Testing\ntest'\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title 'feat: single quoted' --body '## Summary\ntest\n## Testing\ntest'\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Extracts title with single quotes"
 else
@@ -502,7 +501,7 @@ else
 fi
 
 # Test 49: Extracts title with -t flag
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create -t \"feat: short flag\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create -t \"feat: short flag\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Extracts title with -t flag"
 else
@@ -565,7 +564,7 @@ else
 fi
 
 # Test 57: Block message includes MUST: Skill
-HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bad\" --body \"no sections\""}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bad\" --body \"no sections\""}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"MUST:"* ]] && [[ "$HOOK_OUTPUT" == *"Skill"* ]]; then
     pass "Block message includes MUST: Skill"
 else
@@ -631,7 +630,7 @@ echo ""
 echo "--- Scoped Title Format ---"
 
 # Test 65: Allows feat(api): scoped title
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat(api): add endpoint\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat(api): add endpoint\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows feat(api): scoped title"
 else
@@ -639,7 +638,7 @@ else
 fi
 
 # Test 66: Allows fix(auth): scoped title
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"fix(auth): resolve login bug\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"fix(auth): resolve login bug\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows fix(auth): scoped title"
 else
@@ -647,7 +646,7 @@ else
 fi
 
 # Test 67: Allows docs(readme): scoped title
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"docs(readme): update usage\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"docs(readme): update usage\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows docs(readme): scoped title"
 else
@@ -655,7 +654,7 @@ else
 fi
 
 # Test 68: Allows chore(deps-2): hyphenated scope with number
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"chore(deps-2): bump versions\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"chore(deps-2): bump versions\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows hyphenated scope with number"
 else
@@ -663,7 +662,7 @@ else
 fi
 
 # Test 69: Still allows non-scoped titles
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: plain title\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: plain title\" --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Still allows non-scoped titles"
 else
@@ -674,7 +673,7 @@ echo ""
 echo "--- Body File Support (--body-file / -F) ---"
 
 # Test 70: Allows --body-file flag (satisfies body requirement)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows --body-file flag (satisfies body requirement)"
 else
@@ -682,7 +681,7 @@ else
 fi
 
 # Test 71: Allows -F flag (satisfies body requirement)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" -F /tmp/claude/pr-body.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" -F /tmp/claude/pr-body.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows -F flag (satisfies body requirement)"
 else
@@ -693,7 +692,7 @@ fi
 BODY_FILE="/tmp/claude/test-pr-ai-body.md"
 mkdir -p /tmp/claude
 printf '## Summary\nGenerated with Claude\n## Testing\ntest' > "$BODY_FILE"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]] && [[ "$result" == *"AI attribution"* ]]; then
     pass "Blocks AI attribution in --body-file content"
 else
@@ -702,7 +701,7 @@ fi
 
 # Test 73: --body-file with missing required sections
 printf 'Just some text without sections' > "$BODY_FILE"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]] && [[ "$result" == *"Missing required section"* ]]; then
     pass "Blocks --body-file with missing required sections"
 else
@@ -711,7 +710,7 @@ fi
 
 # Test 74: --body-file with valid content passes
 printf '## Summary\nGood content\n## Testing\nAll tests pass' > "$BODY_FILE"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" --body-file $BODY_FILE\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows --body-file with valid content"
 else
@@ -719,7 +718,7 @@ else
 fi
 
 # Test 75: --body-file with nonexistent file allows through
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/nonexistent-file.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/nonexistent-file.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows --body-file with nonexistent file (graceful)"
 else
@@ -728,7 +727,7 @@ fi
 
 # Test 76: -F with AI attribution in file content
 printf '## Summary\nChatGPT wrote this\n## Testing\ntest' > "$BODY_FILE"
-result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" -F $BODY_FILE\"}" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"gh pr create --title \\\"feat: test\\\" -F $BODY_FILE\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks AI attribution via -F flag"
 else
@@ -742,7 +741,7 @@ echo ""
 echo "--- File Path Exclusion from AI Check ---"
 
 # Test 77: File path containing 'Claude' does NOT trigger AI check
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /tmp/claude/pr-body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "File path with claude does not false-positive AI check"
 else
@@ -750,7 +749,7 @@ else
 fi
 
 # Test 78: Path with Anthropic does not false-positive
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /home/Anthropic/docs/body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"feat: test\" --body-file /home/Anthropic/docs/body.md --body \"## Summary\ntest\n## Testing\ntest\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "File path with Anthropic does not false-positive AI check"
 else

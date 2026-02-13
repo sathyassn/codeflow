@@ -7,6 +7,7 @@
 #   - System destruction: rm -rf /, dd if=/dev/zero
 #   - Dangerous permissions: chmod 777 /
 #   - Disk operations: mkfs, > /dev/sd*
+#   - Fork bombs
 #
 # Required variables (set by caller):
 #   - COMMAND: The bash command being checked
@@ -26,27 +27,21 @@ source "${LIB_DIR}/security-lib.sh"
 # DANGEROUS COMMAND PATTERNS
 # =============================================================================
 
-# Destructive patterns that should always be blocked
+# Destructive patterns that should always be blocked (simple substring match)
+# NOTE: rm/chmod/chown patterns are handled by dedicated check functions
+# to avoid false positives on safe paths like /tmp/claude/
 readonly DANGEROUS_PATTERNS=(
-    "rm -rf /"
-    "rm -rf /*"
-    "rm -rf ~"
-    "rm -rf ~/*"
     "dd if=/dev/zero"
     "dd if=/dev/random"
     "mkfs."
     "> /dev/sd"
-    "chmod 777 /"
-    "chmod -R 777 /"
-    "chown -R /"
-    ":(){:|:&};:"
 )
 
 # =============================================================================
 # CHECK FUNCTIONS
 # =============================================================================
 
-# Check for destructive patterns
+# Check for destructive patterns (simple substring match)
 check_dangerous_patterns() {
     local cmd="$1"
 
@@ -64,20 +59,37 @@ check_dangerous_patterns() {
 check_recursive_delete() {
     local cmd="$1"
 
-    # rm with -r or -R flag targeting root
-    if [[ "$cmd" =~ rm[[:space:]].*-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+/($|[[:space:]]) ]]; then
+    # rm -rf / or rm -rf /* (but NOT rm -rf /tmp/... or rm -rf /some/path)
+    # Match: rm <flags containing r> followed by / alone, /*, or /$ end
+    if [[ "$cmd" =~ rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*f?[[:space:]]+/([[:space:]]|$|\*) ]]; then
         block_command \
             "Dangerous Command" \
             "Recursive deletion of root directory" \
-            "rm -r /"
+            "rm -r[f] /"
     fi
 
-    # rm -rf with space before /
-    if [[ "$cmd" =~ rm[[:space:]]+-rf[[:space:]]+/[[:space:]]* ]]; then
+    # rm -rf / with reversed flags (-fr)
+    if [[ "$cmd" =~ rm[[:space:]]+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*[[:space:]]+/([[:space:]]|$|\*) ]]; then
         block_command \
             "Dangerous Command" \
             "Recursive forced deletion of root" \
-            "rm -rf /"
+            "rm -fr /"
+    fi
+
+    # rm -rf ~ or rm -rf ~/*
+    if [[ "$cmd" =~ rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+~([[:space:]]|$|/\*) ]]; then
+        block_command \
+            "Dangerous Command" \
+            "Recursive deletion of home directory" \
+            "rm -r ~"
+    fi
+
+    # rm targeting critical system directories
+    if [[ "$cmd" =~ rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+/(etc|var|usr|bin|sbin|boot|lib|lib64|opt|root|sys|proc)([[:space:]]|$|/) ]]; then
+        block_command \
+            "Dangerous Command" \
+            "Recursive deletion of system directory" \
+            "rm -r /system-dir"
     fi
 }
 
@@ -106,12 +118,13 @@ check_disk_operations() {
 check_permission_changes() {
     local cmd="$1"
 
-    # chmod 777 on system directories
-    if [[ "$cmd" =~ chmod[[:space:]].*777[[:space:]].*(/|/etc|/var|/usr|/bin|/sbin) ]]; then
+    # chmod 777 on root or system directories (anchored to path boundaries)
+    # Matches: chmod [flags] 777 /  OR  chmod [flags] 777 /etc  etc.
+    if [[ "$cmd" =~ chmod[[:space:]].*777[[:space:]]+(/(etc|var|usr|bin|sbin|boot|lib|opt|root)([[:space:]]|$|/)|/([[:space:]]|$)) ]]; then
         block_command \
             "Dangerous Command" \
             "Dangerous permission change on system path" \
-            "chmod 777 /"
+            "chmod 777 /system-path"
     fi
 
     # Recursive permission change on root
@@ -121,22 +134,30 @@ check_permission_changes() {
             "Recursive permission change on root" \
             "chmod -R /"
     fi
+
+    # chown -R on root
+    if [[ "$cmd" =~ chown[[:space:]]+-R[[:space:]].*[[:space:]]/($|[[:space:]]) ]]; then
+        block_command \
+            "Dangerous Command" \
+            "Recursive ownership change on root" \
+            "chown -R /"
+    fi
 }
 
 # Check for fork bomb patterns
 check_fork_bomb() {
     local cmd="$1"
 
-    # Classic fork bomb
-    if [[ "$cmd" =~ :\(\)\{.*\|.*:\&\}\;: ]]; then
+    # Classic fork bomb - allow optional spaces: :(){ :|:& };:
+    if [[ "$cmd" =~ :\(\)[[:space:]]*\{[[:space:]]*.*\|.*:[[:space:]]*\&[[:space:]]*\}[[:space:]]*\;[[:space:]]*: ]]; then
         block_command \
             "Dangerous Command" \
             "Fork bomb detected" \
             ":(){:|:&};:"
     fi
 
-    # Variations
-    if [[ "$cmd" =~ \.\(\)\{.*\|.*\.\&\}\;\. ]]; then
+    # Dot variant fork bomb: .(){.|.&};.
+    if [[ "$cmd" =~ \.\(\)[[:space:]]*\{[[:space:]]*.*\|.*\.[[:space:]]*\&[[:space:]]*\}[[:space:]]*\;[[:space:]]*\. ]]; then
         block_command \
             "Dangerous Command" \
             "Fork bomb variation detected" \

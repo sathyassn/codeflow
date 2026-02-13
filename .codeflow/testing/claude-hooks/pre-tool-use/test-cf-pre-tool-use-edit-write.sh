@@ -14,10 +14,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -35,7 +34,7 @@ run_edit_write() {
     local json_input="{\"file_path\": \"$file_path\"}"
 
     local output exit_code
-    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 
     HOOK_OUTPUT="$output"
     HOOK_EXIT_CODE=$exit_code
@@ -92,7 +91,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Edit/Write tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -100,7 +99,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Edit/Write tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -108,7 +107,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Edit/Write tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -116,7 +115,7 @@ else
 fi
 
 # Test 10: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -124,7 +123,7 @@ else
 fi
 
 # Test 11: Exits 0 when empty file_path
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty file_path"
 else

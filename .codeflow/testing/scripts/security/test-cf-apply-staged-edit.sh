@@ -8,22 +8,14 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
-STAGE_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
+STAGE_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -rf "$STAGING_DIR" 2>/dev/null || true
-    rm -rf "$REPO_ROOT/.state/backups/protected" 2>/dev/null || true
-    rm -f /tmp/claude/test-apply-*.txt 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=== Testing cf-apply-staged-edit.sh ==="
 echo ""
@@ -97,11 +89,11 @@ echo ""
 echo "--- Apply functionality ---"
 
 # Create and stage a test file
-echo "original content" > /tmp/claude/test-apply-original.txt
-echo "new content" > /tmp/claude/test-apply-new.txt
-"$STAGE_SCRIPT" "/tmp/claude/test-apply-original.txt" "/tmp/claude/test-apply-new.txt" >/dev/null 2>&1
+echo "original content" > "$TEST_TMPDIR/test-apply-original.txt"
+echo "new content" > "$TEST_TMPDIR/test-apply-new.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-apply-original.txt" "$TEST_TMPDIR/test-apply-new.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" "/tmp/claude/test-apply-original.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-apply-original.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "applied successfully"; then
     echo "PASS: Apply succeeds"
     ((TESTS_PASSED++)) || true
@@ -113,7 +105,7 @@ fi
 # ============================================================================
 # Test 7: File content updated
 # ============================================================================
-if grep -q "new content" /tmp/claude/test-apply-original.txt; then
+if grep -q "new content" "$TEST_TMPDIR/test-apply-original.txt"; then
     echo "PASS: File content updated"
     ((TESTS_PASSED++)) || true
 else
@@ -136,7 +128,7 @@ fi
 # ============================================================================
 # Test 9: Staged files cleaned up
 # ============================================================================
-SAFE_NAME=$(echo "/tmp/claude/test-apply-original.txt" | sed 's/[\/]/_/g')
+SAFE_NAME=$(echo "$TEST_TMPDIR/test-apply-original.txt" | sed 's/[\/]/_/g')
 
 if [[ ! -f "$STAGING_DIR/${SAFE_NAME}.staged" ]]; then
     echo "PASS: Staged files cleaned up"

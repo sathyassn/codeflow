@@ -17,6 +17,22 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+    fi
+fi
+
 # =============================================================================
 # EARLY EXIT FOR NON-EDIT/WRITE TOOLS
 # =============================================================================
@@ -31,7 +47,7 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 CLAIMS_FILE="$REPO_ROOT/.state/active-work-claims.yaml"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
@@ -48,7 +64,7 @@ fi
 # In agent-teams mode, claim validation is handled by the team coordination
 # system (task ownership via TaskUpdate). Skip local claims check.
 
-if declare -f is_agent_teams_active &>/dev/null && is_agent_teams_active; then
+if declare -f is_pathflow_active &>/dev/null && is_pathflow_active; then
     # Agent-teams mode: team task ownership replaces local claim validation
     exit 0
 fi

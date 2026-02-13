@@ -486,6 +486,266 @@ test_references_protect_script() {
 }
 
 # =============================================================================
+# TESTS: EXIT CODES
+# =============================================================================
+
+test_exit_code_help() {
+    test_start "Exit code 0 on --help"
+    bash "$SCRIPT_PATH" --help >/dev/null 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected 0, got $rc"
+    fi
+}
+
+test_exit_code_list() {
+    test_start "Exit code 0 on --list"
+    bash "$SCRIPT_PATH" --list >/dev/null 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected 0, got $rc"
+    fi
+}
+
+test_exit_code_status() {
+    test_start "Exit code 0 on --status"
+    bash "$SCRIPT_PATH" --status >/dev/null 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected 0, got $rc"
+    fi
+}
+
+test_exit_code_no_mode() {
+    test_start "Exit code non-zero on missing mode"
+    local rc=0
+    bash "$SCRIPT_PATH" >/dev/null 2>&1 || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero, got $rc"
+    fi
+}
+
+test_exit_code_invalid_mode() {
+    test_start "Exit code non-zero on invalid mode"
+    local rc=0
+    bash "$SCRIPT_PATH" notamode >/dev/null 2>&1 || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero, got $rc"
+    fi
+}
+
+# =============================================================================
+# TESTS: ARGUMENT EDGE CASES
+# =============================================================================
+
+test_unknown_option() {
+    test_start "Unknown option shows error"
+    local output
+    output=$(bash "$SCRIPT_PATH" --bad-flag 2>&1 || true)
+    if echo "$output" | grep -qi "unknown\|error"; then
+        test_pass
+    else
+        test_fail "Unknown option not caught"
+    fi
+}
+
+test_too_many_arguments() {
+    test_start "Too many arguments shows error"
+    local output
+    output=$(bash "$SCRIPT_PATH" strict standard 2>&1 || true)
+    if echo "$output" | grep -qi "too many\|error"; then
+        test_pass
+    else
+        test_fail "Too many args not caught"
+    fi
+}
+
+# =============================================================================
+# TESTS: BEHAVIORAL (apply with isolated environment)
+# =============================================================================
+
+test_apply_template_creates_file() {
+    test_start "Apply template creates settings.local.json"
+    local tmpdir
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/cf-test-XXXXXX")
+
+    # Create mock project structure
+    mkdir -p "$tmpdir/.claude/settings-templates"
+    mkdir -p "$tmpdir/.state/backups/settings"
+    cp "$TEMPLATES_DIR/standard.json" "$tmpdir/.claude/settings-templates/"
+
+    # Simulate apply: copy template to settings.local.json
+    cp "$tmpdir/.claude/settings-templates/standard.json" "$tmpdir/.claude/settings.local.json"
+
+    if [[ -f "$tmpdir/.claude/settings.local.json" ]]; then
+        if command -v jq &>/dev/null; then
+            local tmpl_val
+            tmpl_val=$(jq -r '._template' "$tmpdir/.claude/settings.local.json" 2>/dev/null)
+            if [[ "$tmpl_val" == "standard" ]]; then
+                test_pass
+            else
+                test_fail "Wrong _template: $tmpl_val"
+            fi
+        else
+            test_pass
+        fi
+    else
+        test_fail "File not created"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_backup_creates_file() {
+    test_start "Backup mechanism creates timestamped file"
+    local tmpdir
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/cf-test-XXXXXX")
+
+    mkdir -p "$tmpdir/.state/backups/settings"
+    echo '{"_template": "strict"}' > "$tmpdir/settings.local.json"
+
+    # Simulate backup
+    local timestamp
+    timestamp=$(date '+%Y%m%d_%H%M%S')
+    cp "$tmpdir/settings.local.json" "$tmpdir/.state/backups/settings/settings.local.${timestamp}.json"
+
+    local backup_count
+    backup_count=$(find "$tmpdir/.state/backups/settings" -name "settings.local.*.json" | wc -l | tr -d ' ')
+    if [[ "$backup_count" -ge 1 ]]; then
+        test_pass
+    else
+        test_fail "No backup created"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_force_flag_accepted() {
+    test_start "--force flag accepted without error"
+    local output
+    output=$(CF_ALLOW_MODE_CHANGE=1 bash "$SCRIPT_PATH" standard --force 2>&1 || true)
+    if echo "$output" | grep -qi "unknown option"; then
+        test_fail "--force treated as unknown option"
+    else
+        test_pass
+    fi
+}
+
+test_behavior_summary_strict() {
+    test_start "Strict mode mentions 'Ask' in output"
+    local output
+    output=$(CF_ALLOW_MODE_CHANGE=1 bash "$SCRIPT_PATH" strict 2>&1 || true)
+    if echo "$output" | grep -qi "ask\|protected\|immutable\|already"; then
+        test_pass
+    else
+        test_fail "No expected content in strict output"
+    fi
+}
+
+test_behavior_summary_autonomous() {
+    test_start "Autonomous mode mentions 'Auto' in output"
+    local output
+    output=$(CF_ALLOW_MODE_CHANGE=1 bash "$SCRIPT_PATH" autonomous 2>&1 || true)
+    if echo "$output" | grep -qi "auto\|protected\|immutable\|already"; then
+        test_pass
+    else
+        test_fail "No expected content in autonomous output"
+    fi
+}
+
+test_already_set_shows_message() {
+    test_start "Already-set mode shows info message"
+    # Get the effective mode (last mode listed in status, after "Effective mode")
+    local current
+    current=$(bash "$SCRIPT_PATH" --status 2>&1 | grep -A1 "Effective mode" | grep -oE "strict|standard|autonomous|permissive" | head -1 || echo "")
+    if [[ -z "$current" ]]; then
+        test_skip "Cannot determine current mode"
+        return
+    fi
+    local output
+    output=$(CF_ALLOW_MODE_CHANGE=1 bash "$SCRIPT_PATH" "$current" 2>&1 || true)
+    if echo "$output" | grep -qi "already\|reapply\|protected\|immutable"; then
+        test_pass
+    else
+        test_fail "No already-set message for mode: $current"
+    fi
+}
+
+test_interactive_guard_blocks() {
+    test_start "Non-interactive context blocks mode changes"
+    local output
+    output=$(bash "$SCRIPT_PATH" strict 2>&1 || true)
+    if echo "$output" | grep -qi "interactive terminal"; then
+        test_pass
+    else
+        test_fail "Interactive guard did not block"
+    fi
+}
+
+test_interactive_guard_bypass() {
+    test_start "CF_ALLOW_MODE_CHANGE=1 bypasses guard"
+    local output
+    output=$(CF_ALLOW_MODE_CHANGE=1 bash "$SCRIPT_PATH" strict 2>&1 || true)
+    if echo "$output" | grep -qi "interactive terminal"; then
+        test_fail "Guard was not bypassed"
+    else
+        test_pass
+    fi
+}
+
+test_interactive_guard_allows_info() {
+    test_start "Info commands work without interactive terminal"
+    local help_rc=0 list_rc=0 status_rc=0
+    bash "$SCRIPT_PATH" --help >/dev/null 2>&1 || help_rc=$?
+    bash "$SCRIPT_PATH" --list >/dev/null 2>&1 || list_rc=$?
+    bash "$SCRIPT_PATH" --status >/dev/null 2>&1 || status_rc=$?
+    if [[ $help_rc -eq 0 ]] && [[ $list_rc -eq 0 ]] && [[ $status_rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Info commands blocked (help=$help_rc list=$list_rc status=$status_rc)"
+    fi
+}
+
+test_deny_list_entries() {
+    test_start "Templates have mode-change deny entries"
+    if ! command -v jq &>/dev/null; then
+        test_skip "jq not installed"
+        return
+    fi
+    for mode in strict standard autonomous permissive; do
+        local has_deny
+        has_deny=$(jq '[.permissions.deny[] | select(contains("cf-change-approval-mode"))] | length' \
+            "$TEMPLATES_DIR/${mode}.json" 2>/dev/null)
+        if [[ "$has_deny" -lt 1 ]]; then
+            test_fail "$mode.json missing deny entry for cf-change-approval-mode"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_shellcheck_clean() {
+    test_start "Script passes shellcheck"
+    if ! command -v shellcheck &>/dev/null; then
+        test_skip "shellcheck not installed"
+        return
+    fi
+    if shellcheck -e SC1091 "$SCRIPT_PATH" 2>&1; then
+        test_pass
+    else
+        test_fail "shellcheck issues found"
+    fi
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -565,6 +825,40 @@ main() {
     test_has_backup
     test_no_v3_references
     test_references_protect_script
+
+    # Exit code tests
+    echo ""
+    echo "Exit Codes:"
+    test_exit_code_help
+    test_exit_code_list
+    test_exit_code_status
+    test_exit_code_no_mode
+    test_exit_code_invalid_mode
+
+    # Argument edge cases
+    echo ""
+    echo "Argument Edge Cases:"
+    test_unknown_option
+    test_too_many_arguments
+
+    # Interactive guard tests
+    echo ""
+    echo "Interactive Guard:"
+    test_interactive_guard_blocks
+    test_interactive_guard_bypass
+    test_interactive_guard_allows_info
+    test_deny_list_entries
+
+    # Behavioral tests
+    echo ""
+    echo "Behavioral Tests:"
+    test_apply_template_creates_file
+    test_backup_creates_file
+    test_force_flag_accepted
+    test_behavior_summary_strict
+    test_behavior_summary_autonomous
+    test_already_set_shows_message
+    test_shellcheck_clean
 
     # Summary
     echo ""

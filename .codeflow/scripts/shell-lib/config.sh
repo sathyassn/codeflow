@@ -79,14 +79,14 @@ config_get_yaml() {
             local value
             value=$(python3 -c "
 import yaml, sys
-with open('$full_path') as f:
+with open(sys.argv[1]) as f:
     data = yaml.safe_load(f)
-path = '$yaml_path'.lstrip('.').split('.')
+path = sys.argv[2].lstrip('.').split('.')
 for p in path:
     if p and data:
         data = data.get(p)
 print(data if data else '')
-" 2>/dev/null)
+" "$full_path" "$yaml_path" 2>/dev/null)
             echo "${value:-$default}"
         else
             echo "$default"

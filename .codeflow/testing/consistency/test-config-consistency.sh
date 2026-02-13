@@ -239,8 +239,8 @@ if [[ -f "$PRE_PUSH_HOOK" ]]; then
     PRE_PUSH_PROTECTED=$(grep 'DEFAULT_PROTECTED_BRANCHES=' "$PRE_PUSH_HOOK" | head -1 | \
         sed 's/.*DEFAULT_PROTECTED_BRANCHES="//' | sed 's/".*//' | tr ' ' '\n' | sort)
 
-    # git_format.protected_branches from config
-    CONFIG_GIT_PROTECTED=$(jq -r '.git_format.protected_branches[]' "$CONFIG_FILE" 2>/dev/null | sort)
+    # protected_branches (root) from config
+    CONFIG_GIT_PROTECTED=$(jq -r '.protected_branches[]' "$CONFIG_FILE" 2>/dev/null | sort)
 
     # Check pre-push includes all config protected branches (git_format)
     MISSING_PROTECTED=""
@@ -252,7 +252,7 @@ if [[ -f "$PRE_PUSH_HOOK" ]]; then
     done <<< "$CONFIG_GIT_PROTECTED"
 
     if [[ -z "$MISSING_PROTECTED" ]]; then
-        test_pass "pre-push includes all git_format.protected_branches"
+        test_pass "pre-push includes all protected_branches (root)"
     else
         test_fail "pre-push missing protected branches:$MISSING_PROTECTED"
     fi

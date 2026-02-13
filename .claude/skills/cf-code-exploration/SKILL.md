@@ -56,8 +56,8 @@ Unsure which tool?
 | 2 | load-compressed-context | ENF-L3 Advisory | Load Tree-sitter code map for architecture |
 | 3 | search-symbol | ENF-L3 Advisory | Fast symbol lookup via Tree-sitter FTS |
 | 4 | analyze-dependencies | ENF-L3 Advisory | Build dependency graph via Tree-sitter |
-| 5 | navigate-to-definition | None | LSP or Read file at line |
-| 6 | find-all-references | None | LSP find_references or Grep |
+| 5 | navigate-to-definition | ENF-L1 Sentinel | LSP or Read file at line |
+| 6 | find-all-references | ENF-L1 Sentinel | LSP find_references or Grep |
 
 ## Operation Details
 
@@ -76,8 +76,8 @@ Decision Matrix:
   | Dependency analysis | Tree-sitter | get_symbol_graph() | Tree-sitter graph |
   | Precise navigation | LSP | go_to_definition() | Real-time |
   | All usages | LSP/Grep | find_references() | Real-time |
-  | Semantic code search | Vector | cf-memory-search.py | Vector embeddings |
-  | Exact string match | Grep/FTS | cf-memory-query.py | FTS5 |
+  | Semantic code search | Vector | Go CLI (planned) | Vector embeddings |
+  | Exact string match | Grep/FTS | Go CLI (planned) | FTS5 |
 
 Output:
   strategy: tree-sitter | lsp | vector | grep
@@ -163,7 +163,7 @@ Output:
 
 ```text
 When: Need precise location of symbol definition
-Enforcement: None (read-only operation)
+Enforcement: ENF-L1 Sentinel (via enforcement-policy.json grep-sentinel)
 
 Procedure:
   1. Detect file language
@@ -197,7 +197,7 @@ Output:
 
 ```text
 When: Need to find all usages of a symbol
-Enforcement: None (read-only operation)
+Enforcement: ENF-L1 Sentinel (via enforcement-policy.json grep-sentinel)
 
 Procedure:
   1. Detect file language

@@ -725,6 +725,242 @@ test_concurrent_append() {
 }
 
 # ============================================================================
+# TEST: Input Validation
+# ============================================================================
+
+test_append_ledger_empty_file() {
+    test_section "append_ledger: empty ledger_file"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    local output
+    if output=$(append_ledger "" "event" '"data":"x"' 2>&1); then
+        test_fail "Should reject empty ledger_file"
+    else
+        test_pass "Rejects empty ledger_file"
+        assert_contains "$output" "requires" "Error message mentions requirements"
+    fi
+
+    teardown_test_ledger
+}
+
+test_append_ledger_empty_event_type() {
+    test_section "append_ledger: empty event_type"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    local output
+    if output=$(append_ledger "sessions.jsonl" "" '"data":"x"' 2>&1); then
+        test_fail "Should reject empty event_type"
+    else
+        test_pass "Rejects empty event_type"
+    fi
+
+    teardown_test_ledger
+}
+
+test_append_ledger_empty_data() {
+    test_section "append_ledger: empty data is allowed"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    # Empty data should produce valid JSON with just ts and e
+    append_ledger "sessions.jsonl" "simple_event" ""
+
+    local content
+    content=$(cat "$LEDGER_PATH/sessions.jsonl")
+    assert_contains "$content" '"e":"simple_event"' "Event type recorded without data"
+
+    teardown_test_ledger
+}
+
+test_append_event_empty_args() {
+    test_section "append_event: empty args"
+
+    setup_test_ledger
+
+    local output
+    if output=$(append_event "" "" 2>&1); then
+        test_fail "Should reject empty args"
+    else
+        test_pass "Rejects empty args"
+    fi
+
+    teardown_test_ledger
+}
+
+# ============================================================================
+# TEST: Work Graph Event Helpers
+# ============================================================================
+
+test_record_epic_created() {
+    test_section "record_epic_created: basic"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_epic_created "epic-ABC123" "Test Epic" "FRT" "FEAT" "AUTH"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"e":"epic_created"' "Event type is epic_created"
+    assert_contains "$content" '"id":"epic-ABC123"' "Epic ID recorded"
+    assert_contains "$content" '"title":"Test Epic"' "Title recorded"
+    assert_contains "$content" '"area_type":"FRT"' "Area type recorded"
+    assert_contains "$content" '"work_type":"FEAT"' "Work type recorded"
+    assert_contains "$content" '"domain":"AUTH"' "Domain recorded"
+
+    teardown_test_ledger
+}
+
+test_record_epic_created_optional_params() {
+    test_section "record_epic_created: optional params"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_epic_created "epic-XYZ789" "Ongoing Epic" "INF" "FIX" "GENL" "true" "high" "src/" "INF-EPC-FIX-GENL-001"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"is_ongoing":true' "Ongoing flag set"
+    assert_contains "$content" '"priority":"high"' "Priority recorded"
+    assert_contains "$content" '"file_scope":"src/"' "File scope recorded"
+    assert_contains "$content" '"format_id":"INF-EPC-FIX-GENL-001"' "Format ID recorded"
+
+    teardown_test_ledger
+}
+
+test_record_task_created() {
+    test_section "record_task_created: basic"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_task_created "task-DEF456" "epic-ABC123" "Implement auth" "FRT" "FEAT" "AUTH"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"e":"task_created"' "Event type is task_created"
+    assert_contains "$content" '"id":"task-DEF456"' "Task ID recorded"
+    assert_contains "$content" '"epic_id":"epic-ABC123"' "Epic ID recorded"
+    assert_contains "$content" '"title":"Implement auth"' "Title recorded"
+    assert_contains "$content" '"status":"todo"' "Default status is todo"
+
+    teardown_test_ledger
+}
+
+test_record_task_created_with_format_id() {
+    test_section "record_task_created: with format ID"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_task_created "task-GHI789" "epic-ABC123" "Fix bug" "BKD" "FIX" "API" "in_progress" "high" "BKD-TSK-FIX-API-001"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"status":"in_progress"' "Custom status recorded"
+    assert_contains "$content" '"priority":"high"' "Priority recorded"
+    assert_contains "$content" '"format_id":"BKD-TSK-FIX-API-001"' "Format ID recorded"
+
+    teardown_test_ledger
+}
+
+test_record_task_status_changed() {
+    test_section "record_task_status_changed: basic"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_task_status_changed "task-DEF456" "in_progress" "todo"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"e":"task_status_changed"' "Event type is task_status_changed"
+    assert_contains "$content" '"task_id":"task-DEF456"' "Task ID recorded"
+    assert_contains "$content" '"new_status":"in_progress"' "New status recorded"
+    assert_contains "$content" '"old_status":"todo"' "Old status recorded"
+
+    teardown_test_ledger
+}
+
+test_record_task_status_changed_with_format_id() {
+    test_section "record_task_status_changed: with format ID"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_task_status_changed "task-DEF456" "complete" "in_progress" "FRT-TSK-FEAT-AUTH-001"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"format_id":"FRT-TSK-FEAT-AUTH-001"' "Format ID recorded"
+
+    teardown_test_ledger
+}
+
+test_record_epic_status_changed() {
+    test_section "record_epic_status_changed: basic"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_epic_status_changed "epic-ABC123" "in_progress" "draft"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"e":"epic_status_changed"' "Event type is epic_status_changed"
+    assert_contains "$content" '"epic_id":"epic-ABC123"' "Epic ID recorded"
+    assert_contains "$content" '"new_status":"in_progress"' "New status recorded"
+    assert_contains "$content" '"old_status":"draft"' "Old status recorded"
+
+    teardown_test_ledger
+}
+
+test_record_epic_status_changed_with_format_id() {
+    test_section "record_epic_status_changed: with format ID"
+
+    setup_test_ledger
+    init_ledger >/dev/null
+
+    record_epic_status_changed "epic-ABC123" "complete" "in_progress" "INF-EPC-FIX-GENL-001"
+
+    local content
+    content=$(read_ledger "work-graph.jsonl")
+
+    assert_contains "$content" '"format_id":"INF-EPC-FIX-GENL-001"' "Format ID recorded"
+
+    teardown_test_ledger
+}
+
+# ============================================================================
+# TEST: Source Guard
+# ============================================================================
+
+test_source_guard() {
+    test_section "source guard"
+
+    # Source guard should prevent errors on double-source
+    # The variable _CODEFLOW_LEDGER_LOADED should be set
+    if [[ -n "${_CODEFLOW_LEDGER_LOADED:-}" ]]; then
+        test_pass "Source guard variable is set"
+    else
+        test_fail "Source guard variable not set"
+    fi
+}
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -814,6 +1050,25 @@ main() {
 
     # Concurrent test
     test_concurrent_append
+
+    # Input validation tests
+    test_append_ledger_empty_file
+    test_append_ledger_empty_event_type
+    test_append_ledger_empty_data
+    test_append_event_empty_args
+
+    # Work graph event helper tests
+    test_record_epic_created
+    test_record_epic_created_optional_params
+    test_record_task_created
+    test_record_task_created_with_format_id
+    test_record_task_status_changed
+    test_record_task_status_changed_with_format_id
+    test_record_epic_status_changed
+    test_record_epic_status_changed_with_format_id
+
+    # Source guard test
+    test_source_guard
 
     print_test_summary
 

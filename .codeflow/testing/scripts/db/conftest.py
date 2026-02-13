@@ -55,7 +55,8 @@ def schema_path() -> Path:
     """
     return (
         Path(__file__).parent.parent.parent.parent.parent
-        / ".state"
+        / ".codeflow"
+        / "scripts"
         / "db"
         / "schema.sql"
     )

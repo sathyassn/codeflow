@@ -69,6 +69,7 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
+  "teammateMode": "in-process",
   "permissions": {
     "defaultMode": "bypassPermissions",
     "ask": [],
@@ -80,7 +81,6 @@
       "Edit(//tmp/claude/**)",
       "Write(/**)",
       "Write(//tmp/claude/**)",
-
       "Bash(git add:*)",
       "Bash(git branch:*)",
       "Bash(git checkout:*)",
@@ -99,7 +99,6 @@
       "Bash(git switch:*)",
       "Bash(git tag:*)",
       "Bash(gh pr create:*)",
-
       "Bash(ls:*)",
       "Bash(pwd:*)",
       "Bash(which:*)",
@@ -113,7 +112,6 @@
       "Bash(cp:*)",
       "Bash(mv:*)",
       "Bash(rm:*)",
-
       "Bash(npm:*)",
       "Bash(yarn:*)",
       "Bash(pip:*)",
@@ -121,7 +119,6 @@
       "Bash(python:*)",
       "Bash(./scripts:*)",
       "Bash(./.codeflow/scripts:*)",
-
       "Skill",
       "SlashCommand",
       "Task",
@@ -137,7 +134,6 @@
       "Bash(su:*)",
       "Bash(doas:*)",
       "Bash(pkexec:*)",
-
       "Bash(bash -c:*)",
       "Bash(sh -c:*)",
       "Bash(/bin/bash -c:*)",
@@ -148,7 +144,6 @@
       "Bash(eval$:*)",
       "Bash(source:*)",
       "Bash(.:*)",
-
       "Bash(rm -rf /:*)",
       "Bash(rm -rf ~:*)",
       "Bash(rm -rf /*:*)",
@@ -158,17 +153,14 @@
       "Bash(chmod 777 /:*)",
       "Bash(mkfs:*)",
       "Bash(dd if=/dev/zero:*)",
-
       "Bash(nc:*)",
       "Bash(ncat:*)",
       "Bash(netcat:*)",
       "Bash(telnet:*)",
-
       "Bash(git config core.hooksPath:*)",
       "Bash(git config --global core.hooksPath:*)",
       "Bash(git config --local core.hooksPath:*)",
       "Bash(git config --unset core.hooksPath:*)",
-
       "Read(/**/.env)",
       "Read(/**/.env.*)",
       "Read(/**/*.key)",
@@ -180,7 +172,6 @@
       "Read(~/.gnupg/**)",
       "Read(~/.password-store/**)",
       "Read(~/.config/gh/*)",
-
       "Bash(rm /.claude/settings.json:*)",
       "Bash(rm -f /.claude/settings.json:*)",
       "Bash(rm -r /.claude/settings.json:*)",
@@ -213,7 +204,6 @@
       "Bash(rm -r /.codeflow/scripts/security:*)",
       "Bash(rm -rf /.codeflow/scripts/security:*)",
       "Bash(rm -f /.codeflow/scripts/security:*)",
-
       "Bash(mv /.claude/settings.json:*)",
       "Bash(mv /.claude/settings.local.json:*)",
       "Bash(mv /.claude/hooks:*)",
@@ -222,7 +212,6 @@
       "Bash(mv /.github:*)",
       "Bash(mv /.codeflow/config:*)",
       "Bash(mv /.codeflow/scripts/security:*)",
-
       "Bash(git rm /.claude/settings.json:*)",
       "Bash(git rm /.claude/settings.local.json:*)",
       "Bash(git rm /.codeflow/scripts:*)",
@@ -238,7 +227,6 @@
       "Bash(git rm -rf:*)",
       "Bash(git rm --cached /.claude/settings.json:*)",
       "Bash(git rm --cached /.claude/settings.local.json:*)",
-
       "Bash(unlink /.claude/settings.json:*)",
       "Bash(unlink /.claude/settings.local.json:*)",
       "Bash(rmdir /.codeflow/scripts:*)",
@@ -247,7 +235,6 @@
       "Bash(rmdir /.github:*)",
       "Bash(rmdir /.codeflow/config:*)",
       "Bash(rmdir /.codeflow/scripts/security:*)",
-
       "Bash(truncate /.claude/settings.json:*)",
       "Bash(truncate /.claude/settings.local.json:*)",
       "Bash(truncate /.codeflow/scripts:*)",
@@ -255,11 +242,9 @@
       "Bash(truncate /.github/workflows:*)",
       "Bash(truncate /.codeflow/config:*)",
       "Bash(truncate /.codeflow/scripts/security:*)",
-
       "Bash(cat /dev/null > /.claude/settings.json:*)",
       "Bash(echo > /.claude/settings.json:*)",
       "Bash(> /.claude/settings.json:*)",
-
       "Bash(git commit --no-verify:*)",
       "Bash(git push --no-verify:*)",
       "Bash(git push --force:*)",
@@ -269,7 +254,10 @@
       "Bash(git push origin -f:*)",
       "Bash(git push origin --force-with-lease:*)",
       "Bash(git push origin --delete main:*)",
-      "Bash(git push origin --delete master:*)"
+      "Bash(git push origin --delete master:*)",
+      "Bash(.codeflow/scripts/settings/cf-change-approval-mode.sh:*)",
+      "Bash(bash .codeflow/scripts/settings/cf-change-approval-mode.sh:*)",
+      "Bash(bash ./.codeflow/scripts/settings/cf-change-approval-mode.sh:*)"
     ]
   },
   "hooks": {
@@ -284,17 +272,17 @@
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
             "timeout": 2
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/session-start/cf-session-start-logging.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-logging.sh",
             "timeout": 2
           }
         ]
@@ -306,12 +294,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-context.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit.sh",
             "timeout": 2
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-logging.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-logging.sh",
             "timeout": 2
           }
         ]
@@ -323,17 +311,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh",
             "timeout": 3
           }
         ]
@@ -343,22 +331,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh",
             "timeout": 1
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
             "timeout": 2
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh",
             "timeout": 2
           }
         ]
@@ -368,7 +356,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-webfetch.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-webfetch.sh",
             "timeout": 2
           }
         ]
@@ -378,27 +366,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh",
             "timeout": 3
           }
         ]
       },
       {
-        "matcher": "Read|Edit|Write",
+        "matcher": "Read",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh",
             "timeout": 3
           }
         ]
       },
       {
-        "matcher": "Task",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh",
             "timeout": 3
           }
         ]
@@ -408,7 +396,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh",
             "timeout": 2
           }
         ]
@@ -418,7 +406,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh",
             "timeout": 2
           }
         ]
@@ -426,21 +414,21 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Skill",
+        "matcher": "Skill|TaskUpdate",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh",
             "timeout": 5
           }
         ]
       },
       {
-        "matcher": "Edit|Write|Grep|Bash",
+        "matcher": "Edit|Write|Read|Grep|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-instructions.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-instructions.sh",
             "timeout": 2
           }
         ]
@@ -450,7 +438,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh",
             "timeout": 2
           }
         ]
@@ -460,7 +448,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh",
             "timeout": 1
           }
         ]
@@ -470,7 +458,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-tmp-workflow.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-tmp-workflow.sh",
             "timeout": 1
           }
         ]
@@ -480,7 +468,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh",
             "timeout": 2
           }
         ]
@@ -491,12 +479,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/stop/cf-stop-logging.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-logging.sh",
             "timeout": 2
           }
         ]
@@ -507,7 +495,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
             "timeout": 3
           }
         ]
@@ -519,12 +507,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/codeflow/session-end/cf-session-end-logging.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-end/cf-session-end-logging.sh",
             "timeout": 2
           }
         ]

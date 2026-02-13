@@ -19,14 +19,14 @@
 set -euo pipefail
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
 
 # Only for protected-edits tmp files in managed area
-if [[ "$FILE_PATH" != /tmp/claude/managed/protected-edits/* ]]; then
+if [[ "$FILE_PATH" != /tmp/claude/managed/codeflow/protected-edits/* ]]; then
   exit 0
 fi
 
@@ -102,7 +102,7 @@ if [[ "$IS_SETTINGS_FILE" == "true" ]]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp /tmp/claude/managed/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Skill('cf-security-management', args='sync-settings-templates')\n(6) Cleanup: rm /tmp/claude/managed/protected-edits/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
+    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Skill('cf-security-management', args='sync-settings-templates')\n(6) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
   }
 }
 EOF
@@ -112,7 +112,7 @@ elif [[ -n "$VALIDATION_HINT" ]]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "PROTECTED RESOURCE WORKFLOW [${FILE_TYPE}]\n\n(1) Show user the changes\n(2) ${VALIDATION_HINT}\n(3) Provide: sudo cp /tmp/claude/managed/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) Cleanup: rm /tmp/claude/managed/protected-edits/{file} (targeted, not entire folder)"
+    "additionalContext": "PROTECTED RESOURCE WORKFLOW [${FILE_TYPE}]\n\n(1) Show user the changes\n(2) ${VALIDATION_HINT}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file} (targeted, not entire folder)"
   }
 }
 EOF
@@ -121,7 +121,7 @@ else
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "PROTECTED RESOURCE WORKFLOW\n\n(1) Show user the changes\n(2) Provide: sudo cp /tmp/claude/managed/protected-edits/{path} {original}\n(3) After user confirms, READ original to verify\n(4) Cleanup: rm /tmp/claude/managed/protected-edits/{file} (targeted, not entire folder)"
+    "additionalContext": "PROTECTED RESOURCE WORKFLOW\n\n(1) Show user the changes\n(2) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(3) After user confirms, READ original to verify\n(4) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file} (targeted, not entire folder)"
   }
 }
 EOF

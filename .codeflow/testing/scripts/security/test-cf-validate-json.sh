@@ -8,18 +8,12 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-json.sh"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-json.sh"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -f /tmp/claude/test-validate-*.json 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=== Testing cf-validate-json.sh ==="
 echo ""
@@ -65,9 +59,9 @@ fi
 echo ""
 echo "--- Validation functionality ---"
 
-echo '{"name": "test", "value": 42}' > /tmp/claude/test-validate-valid.json
+echo '{"name": "test", "value": 42}' > "$TEST_TMPDIR/test-validate-valid.json"
 
-if "$SCRIPT" /tmp/claude/test-validate-valid.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" "$TEST_TMPDIR/test-validate-valid.json" 2>&1 | grep -q "PASS"; then
     echo "PASS: Valid JSON passes"
     ((TESTS_PASSED++)) || true
 else
@@ -78,9 +72,9 @@ fi
 # ============================================================================
 # Test 5: Invalid JSON (syntax error)
 # ============================================================================
-echo '{"name": "test", "value": }' > /tmp/claude/test-validate-invalid.json
+echo '{"name": "test", "value": }' > "$TEST_TMPDIR/test-validate-invalid.json"
 
-if ! "$SCRIPT" /tmp/claude/test-validate-invalid.json 2>/dev/null; then
+if ! "$SCRIPT" "$TEST_TMPDIR/test-validate-invalid.json" 2>/dev/null; then
     echo "PASS: Invalid JSON fails"
     ((TESTS_PASSED++)) || true
 else
@@ -91,9 +85,9 @@ fi
 # ============================================================================
 # Test 6: Empty JSON object (valid)
 # ============================================================================
-echo '{}' > /tmp/claude/test-validate-empty.json
+echo '{}' > "$TEST_TMPDIR/test-validate-empty.json"
 
-if "$SCRIPT" /tmp/claude/test-validate-empty.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" "$TEST_TMPDIR/test-validate-empty.json" 2>&1 | grep -q "PASS"; then
     echo "PASS: Empty object is valid"
     ((TESTS_PASSED++)) || true
 else
@@ -104,9 +98,9 @@ fi
 # ============================================================================
 # Test 7: JSON array (valid)
 # ============================================================================
-echo '[1, 2, 3]' > /tmp/claude/test-validate-array.json
+echo '[1, 2, 3]' > "$TEST_TMPDIR/test-validate-array.json"
 
-if "$SCRIPT" /tmp/claude/test-validate-array.json 2>&1 | grep -q "PASS"; then
+if "$SCRIPT" "$TEST_TMPDIR/test-validate-array.json" 2>&1 | grep -q "PASS"; then
     echo "PASS: JSON array is valid"
     ((TESTS_PASSED++)) || true
 else
@@ -117,7 +111,7 @@ fi
 # ============================================================================
 # Test 8: Pretty print option
 # ============================================================================
-if "$SCRIPT" --pretty /tmp/claude/test-validate-valid.json 2>&1 | grep -q "name"; then
+if "$SCRIPT" --pretty "$TEST_TMPDIR/test-validate-valid.json" 2>&1 | grep -q "name"; then
     echo "PASS: Pretty print works"
     ((TESTS_PASSED++)) || true
 else
@@ -138,7 +132,68 @@ else
 fi
 
 # ============================================================================
-# Test 10: Shellcheck passes
+# Test 10: Unknown option handling
+# ============================================================================
+echo ""
+echo "--- Edge cases ---"
+
+OUTPUT=$("$SCRIPT" --invalid-flag 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "unknown option\|error"; then
+    echo "PASS: Unknown option shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Unknown option should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 11: Missing arguments (no args)
+# ============================================================================
+OUTPUT=$("$SCRIPT" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "missing\|usage\|error"; then
+    echo "PASS: Missing arguments shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Missing arguments should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 12: Quiet mode suppresses output on valid file
+# ============================================================================
+OUTPUT=$("$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-valid.json" 2>&1)
+if [[ -z "$OUTPUT" ]]; then
+    echo "PASS: Quiet mode suppresses output on valid file"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Quiet mode should suppress output (got: $OUTPUT)"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 13: Exit code 0 on valid JSON
+# ============================================================================
+if "$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-valid.json"; then
+    echo "PASS: Exit code 0 on valid JSON"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Exit code should be 0 on valid JSON"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 14: Exit code 1 on invalid JSON
+# ============================================================================
+if "$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-invalid.json" 2>/dev/null; then
+    echo "FAIL: Exit code should be 1 on invalid JSON"
+    ((TESTS_FAILED++)) || true
+else
+    echo "PASS: Exit code 1 on invalid JSON"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 15: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

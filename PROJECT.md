@@ -174,8 +174,9 @@ codeflow/
 │   ├── coordination/           # CRDT state
 │   └── logs/                   # Operation logs
 ├── project/                    # Project knowledge base
-├── epics/                      # Epic/task hierarchy
-├── tracking/                   # Flat task tracking (alternative)
+├── project-management/         # Project management
+│   ├── epics/                  # Epic/task hierarchy (by area)
+│   └── tracking/               # Auto-generated tracking views
 ├── PROJECT.md                  # This file
 ├── AGENTS.md                   # External AI instructions
 └── codeflow                    # CLI entry point

@@ -8,18 +8,12 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-yaml.sh"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-yaml.sh"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -f /tmp/claude/test-validate-*.yaml /tmp/claude/test-validate-*.yml 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=== Testing cf-validate-yaml.sh ==="
 echo ""
@@ -60,7 +54,31 @@ else
 fi
 
 # ============================================================================
-# Test 4: Valid YAML
+# Test 4: Unknown option handling
+# ============================================================================
+OUTPUT=$("$SCRIPT" --invalid-flag 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "unknown option"; then
+    echo "PASS: Unknown option shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Unknown option should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 5: Missing arguments
+# ============================================================================
+OUTPUT=$("$SCRIPT" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "missing"; then
+    echo "PASS: Missing arguments shows error"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Missing arguments should show error"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 6: Valid YAML
 # ============================================================================
 echo ""
 echo "--- Validation functionality ---"
@@ -71,7 +89,7 @@ if python3 -c "import yaml" 2>/dev/null || command -v yq &>/dev/null; then
     HAS_YAML_VALIDATOR=true
 fi
 
-cat > /tmp/claude/test-validate-valid.yaml <<'EOF'
+cat > "$TEST_TMPDIR/test-validate-valid.yaml" <<'EOF'
 name: test
 version: 1.0.0
 features:
@@ -84,12 +102,11 @@ config:
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-valid.yaml 2>&1 || true)
-    if echo "$OUTPUT" | grep -qi "PASS"; then
-        echo "PASS: Valid YAML passes"
+    if "$SCRIPT" "$TEST_TMPDIR/test-validate-valid.yaml" >/dev/null 2>&1; then
+        echo "PASS: Valid YAML exits 0"
         ((TESTS_PASSED++)) || true
     else
-        echo "FAIL: Valid YAML should pass"
+        echo "FAIL: Valid YAML should exit 0"
         ((TESTS_FAILED++)) || true
     fi
 else
@@ -98,20 +115,15 @@ else
 fi
 
 # ============================================================================
-# Test 5: Invalid YAML (syntax error)
+# Test 7: Valid YAML output contains PASS
 # ============================================================================
-cat > /tmp/claude/test-validate-invalid.yaml <<'EOF'
-name: test
-  invalid indentation here
-    broken: true
-EOF
-
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    if ! "$SCRIPT" /tmp/claude/test-validate-invalid.yaml 2>/dev/null; then
-        echo "PASS: Invalid YAML fails"
+    OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-valid.yaml" 2>&1 || true)
+    if echo "$OUTPUT" | grep -qi "PASS"; then
+        echo "PASS: Valid YAML shows PASS message"
         ((TESTS_PASSED++)) || true
     else
-        echo "FAIL: Invalid YAML should fail"
+        echo "FAIL: Valid YAML should show PASS message"
         ((TESTS_FAILED++)) || true
     fi
 else
@@ -120,12 +132,51 @@ else
 fi
 
 # ============================================================================
-# Test 6: Empty YAML (valid)
+# Test 8: Invalid YAML (syntax error) exits non-zero
 # ============================================================================
-echo "---" > /tmp/claude/test-validate-empty.yaml
+cat > "$TEST_TMPDIR/test-validate-invalid.yaml" <<'EOF'
+name: test
+  invalid indentation here
+    broken: true
+EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-empty.yaml 2>&1 || true)
+    if ! "$SCRIPT" "$TEST_TMPDIR/test-validate-invalid.yaml" 2>/dev/null; then
+        echo "PASS: Invalid YAML exits non-zero"
+        ((TESTS_PASSED++)) || true
+    else
+        echo "FAIL: Invalid YAML should exit non-zero"
+        ((TESTS_FAILED++)) || true
+    fi
+else
+    echo "SKIP: No YAML validator available"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 9: Quiet mode suppresses output
+# ============================================================================
+if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
+    OUTPUT=$("$SCRIPT" --quiet "$TEST_TMPDIR/test-validate-valid.yaml" 2>&1 || true)
+    if [[ -z "$OUTPUT" ]]; then
+        echo "PASS: Quiet mode suppresses output"
+        ((TESTS_PASSED++)) || true
+    else
+        echo "FAIL: Quiet mode should suppress output (got: $OUTPUT)"
+        ((TESTS_FAILED++)) || true
+    fi
+else
+    echo "SKIP: No YAML validator available"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 10: Empty YAML (valid)
+# ============================================================================
+echo "---" > "$TEST_TMPDIR/test-validate-empty.yaml"
+
+if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
+    OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-empty.yaml" 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: Empty YAML is valid"
         ((TESTS_PASSED++)) || true
@@ -139,16 +190,16 @@ else
 fi
 
 # ============================================================================
-# Test 7: YAML list (valid)
+# Test 11: YAML list (valid)
 # ============================================================================
-cat > /tmp/claude/test-validate-list.yaml <<'EOF'
+cat > "$TEST_TMPDIR/test-validate-list.yaml" <<'EOF'
 - item1
 - item2
 - item3
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-list.yaml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-list.yaml" 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: YAML list is valid"
         ((TESTS_PASSED++)) || true
@@ -162,14 +213,14 @@ else
 fi
 
 # ============================================================================
-# Test 8: .yml extension
+# Test 12: .yml extension
 # ============================================================================
-cat > /tmp/claude/test-validate-ext.yml <<'EOF'
+cat > "$TEST_TMPDIR/test-validate-ext.yml" <<'EOF'
 key: value
 EOF
 
 if [[ "$HAS_YAML_VALIDATOR" == "true" ]]; then
-    OUTPUT=$("$SCRIPT" /tmp/claude/test-validate-ext.yml 2>&1 || true)
+    OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-ext.yml" 2>&1 || true)
     if echo "$OUTPUT" | grep -qi "PASS"; then
         echo "PASS: .yml extension works"
         ((TESTS_PASSED++)) || true
@@ -183,7 +234,7 @@ else
 fi
 
 # ============================================================================
-# Test 9: File not found
+# Test 13: File not found
 # ============================================================================
 OUTPUT=$("$SCRIPT" /nonexistent/file.yaml 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "not found\|error"; then
@@ -195,7 +246,48 @@ else
 fi
 
 # ============================================================================
-# Test 10: Shellcheck passes
+# Test 14: Strict mode - duplicate key detection
+# ============================================================================
+echo ""
+echo "--- Strict mode ---"
+
+if [[ "$HAS_YAML_VALIDATOR" == "true" ]] && python3 -c "import yaml" 2>/dev/null; then
+    cat > "$TEST_TMPDIR/test-validate-dupkeys.yaml" <<'EOF'
+name: first
+name: second
+key: value
+EOF
+
+    if ! "$SCRIPT" --strict "$TEST_TMPDIR/test-validate-dupkeys.yaml" 2>/dev/null; then
+        echo "PASS: Strict mode catches duplicate keys"
+        ((TESTS_PASSED++)) || true
+    else
+        echo "FAIL: Strict mode should catch duplicate keys"
+        ((TESTS_FAILED++)) || true
+    fi
+else
+    echo "SKIP: python3 yaml not available for strict mode test"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 15: Strict mode - valid YAML passes
+# ============================================================================
+if [[ "$HAS_YAML_VALIDATOR" == "true" ]] && python3 -c "import yaml" 2>/dev/null; then
+    if "$SCRIPT" --strict "$TEST_TMPDIR/test-validate-valid.yaml" >/dev/null 2>&1; then
+        echo "PASS: Strict mode passes valid YAML"
+        ((TESTS_PASSED++)) || true
+    else
+        echo "FAIL: Strict mode should pass valid YAML"
+        ((TESTS_FAILED++)) || true
+    fi
+else
+    echo "SKIP: python3 yaml not available for strict mode test"
+    ((TESTS_PASSED++)) || true
+fi
+
+# ============================================================================
+# Test 16: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

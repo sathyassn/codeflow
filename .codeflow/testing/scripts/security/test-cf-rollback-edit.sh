@@ -8,27 +8,18 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-rollback-edit.sh"
-STAGE_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
-APPLY_SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-rollback-edit.sh"
+STAGE_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
+APPLY_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
+# shellcheck disable=SC2034  # used by sourced staging scripts
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
+# shellcheck disable=SC2034
 BACKUP_DIR="$REPO_ROOT/.state/backups/protected"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -rf "$STAGING_DIR" 2>/dev/null || true
-    rm -rf "$BACKUP_DIR" 2>/dev/null || true
-    rm -f /tmp/claude/test-rollback-*.txt 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# Pre-clean
-cleanup
 
 echo "=== Testing cf-rollback-edit.sh ==="
 echo ""
@@ -102,12 +93,12 @@ echo ""
 echo "--- Rollback functionality ---"
 
 # Create, stage, and apply to create a backup
-echo "original content" > /tmp/claude/test-rollback-original.txt
-echo "new content" > /tmp/claude/test-rollback-new.txt
-"$STAGE_SCRIPT" "/tmp/claude/test-rollback-original.txt" "/tmp/claude/test-rollback-new.txt" >/dev/null 2>&1
-"$APPLY_SCRIPT" "/tmp/claude/test-rollback-original.txt" >/dev/null 2>&1
+echo "original content" > "$TEST_TMPDIR/test-rollback-original.txt"
+echo "new content" > "$TEST_TMPDIR/test-rollback-new.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" "$TEST_TMPDIR/test-rollback-new.txt" >/dev/null 2>&1
+"$APPLY_SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" --list "/tmp/claude/test-rollback-original.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" --list "$TEST_TMPDIR/test-rollback-original.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "backup"; then
     echo "PASS: List option shows backups"
     ((TESTS_PASSED++)) || true
@@ -119,7 +110,7 @@ fi
 # ============================================================================
 # Test 7: Successful rollback
 # ============================================================================
-OUTPUT=$("$SCRIPT" "/tmp/claude/test-rollback-original.txt" 2>&1 || true)
+OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "rollback.*success\|restored"; then
     echo "PASS: Rollback succeeds"
     ((TESTS_PASSED++)) || true
@@ -131,7 +122,7 @@ fi
 # ============================================================================
 # Test 8: Content restored
 # ============================================================================
-if grep -q "original content" /tmp/claude/test-rollback-original.txt; then
+if grep -q "original content" "$TEST_TMPDIR/test-rollback-original.txt"; then
     echo "PASS: Original content restored"
     ((TESTS_PASSED++)) || true
 else

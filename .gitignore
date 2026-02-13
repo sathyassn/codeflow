@@ -2,8 +2,8 @@
 .claude/settings.local.json
 
 # State files - Untracked (machine-specific, regeneratable)
-# Per V3 spec: coordination/, logs/, runtime/ are untracked
-# Per V3 spec: ledger/, db/schema/, db/queries/, db/scripts/, schemas/ are tracked
+# coordination/, logs/, runtime/ are untracked
+# ledger/ is tracked (Tier 0 rebuild authority)
 .state/coordination/
 .state/logs/
 .state/runtime/
@@ -11,7 +11,16 @@
 .state/db/codeflow.db-shm
 .state/db/codeflow.db-wal
 .state/db/codeflow.db-journal
+.state/db/schema.sql
 .state/backups/
+.state/ledger/*.lock
+# Sentinel and session state (session-scoped, not persistent)
+.state/sentinels/skill/*
+!.state/sentinels/skill/.gitkeep
+.state/sentinels/pathflow/*
+!.state/sentinels/pathflow/.gitkeep
+.state/session/*
+!.state/session/.gitkeep
 
 # Node.js
 node_modules/

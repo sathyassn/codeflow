@@ -4,22 +4,25 @@
 # Platform:  macOS/Linux
 #
 # This is a LIBRARY file - meant to be sourced, not executed directly.
+# Sources context-lib.sh for mode detection (is_pathflow_active, get_pathflow_setting).
 #
 # Functions:
 #   - block_command: Block with standard security message
 #   - block_with_skill: Block with skill guidance
-#   - log_security_event: Dual-write audit logging (JSONL + SQLite)
+#   - log_security_event: Audit logging (JSONL)
 #   - log_blocked: Log blocked command event
 #   - log_protection: Log path protection event
 #   - log_sentinel: Log sentinel operation event
 #   - log_network: Log network activity event
 #   - get_flags_portion: Extract git commit flags before -m
-#   - is_agent_teams_active: Check if agent-teams mode is active (flag file)
-#   - get_agent_teams_setting: Read agent_teams setting from settings.json
 #   - is_path_targeted: Check if path appears with proper boundaries
 #   - glob_to_regex: Convert glob pattern to regex
 #   - is_glob_path_targeted: Check if command targets a glob pattern
 #   - is_path_or_glob_targeted: Unified check for both exact and glob patterns
+#
+# Re-exported from context-lib.sh (available after sourcing this file):
+#   - is_pathflow_active: Check if PathFlow mode is active (flag file)
+#   - get_pathflow_setting: Read agent_teams setting from settings.json
 
 set -euo pipefail
 
@@ -40,8 +43,8 @@ _SECURITY_LIB_SOURCED=1
 # Get repo root (set by caller or detect)
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
-# Database and log paths
-readonly CF_DB_FILE="${REPO_ROOT}/.state/db/codeflow.db"
+# Log paths
+
 readonly CF_LOG_BASE="${REPO_ROOT}/.state/logs/security"
 CF_DATE=$(date +%Y-%m-%d)
 readonly CF_DATE
@@ -50,56 +53,24 @@ readonly CF_DATE
 readonly CF_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 
 # =============================================================================
-# MODE DETECTION
+# CONTEXT LIBRARY (mode detection — is_pathflow_active, get_pathflow_setting)
 # =============================================================================
 
-# Check if agent-teams mode is active
-# Returns 0 if active, 1 if not
-# Detection: Checks for pathflow-active flag file (runtime indicator)
-# The flag is created at PF-1 (session start) and removed at PF-7/session-end
-is_agent_teams_active() {
-    local flag_file="/tmp/claude/managed/state/pathflow-active"
-    [[ -f "$flag_file" ]]
-}
-
-# Check the agent_teams setting from settings.json
-# Returns: "auto", "always", "never", or "" if not set
-# This reads the _codeflow.agent_teams value from project settings
-get_agent_teams_setting() {
-    local settings_file="${REPO_ROOT}/.claude/settings.json"
-
-    if [[ ! -f "$settings_file" ]]; then
-        echo ""
-        return
-    fi
-
-    if command -v jq &>/dev/null; then
-        jq -r '._codeflow.agent_teams // ""' "$settings_file" 2>/dev/null || echo ""
-    else
-        echo ""
-    fi
-}
+LIB_DIR="${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+if [[ -f "${LIB_DIR}/context-lib.sh" ]]; then
+    # shellcheck source=context-lib.sh
+    source "${LIB_DIR}/context-lib.sh"
+fi
 
 # =============================================================================
-# AUDIT LOGGING FUNCTIONS (Dual-Write Pattern)
+# AUDIT LOGGING FUNCTIONS
 # =============================================================================
 
 # Ensure log directories exist
 _ensure_log_dirs() {
     mkdir -p "$CF_LOG_BASE"/{audit,blocked,protection,sentinel,network} 2>/dev/null || true
 }
-
-# Generate ULID-like ID for database entries
-_generate_id() {
-    local prefix="$1"
-    local timestamp
-    timestamp=$(date +%s%N | cut -c1-13)
-    local random
-    random=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    echo "${prefix}-${timestamp}${random}"
-}
-
-# Log security event to JSONL file and SQLite (dual-write)
+# Log security event to JSONL file
 # Parameters:
 #   $1 - log_type: blocked, protection, sentinel, network
 #   $2 - event: event type
@@ -150,15 +121,6 @@ log_security_event() {
     # Also write to combined audit log
     echo "$json" >> "$CF_LOG_BASE/audit/audit-$CF_DATE.jsonl" 2>/dev/null || true
 
-    # 2. Write to SQLite (secondary - best effort, may fail if DB locked)
-    if [[ -f "$CF_DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
-        local id
-        id=$(_generate_id "seclog")
-        sqlite3 "$CF_DB_FILE" "
-            INSERT INTO security_logs (id, log_type, event_type, tool, target, reason, session_id, created_at)
-            VALUES ('$id', '$log_type', '$event', '$tool', '$target', '$reason', '$CF_SESSION_ID', '$ts');
-        " 2>/dev/null || true
-    fi
 }
 
 # Convenience: Log blocked command
@@ -282,11 +244,11 @@ block_with_skill() {
     log_blocked "Bash" "${COMMAND:-<unknown>}" "$reason" "${BASH_SOURCE[1]:-unknown}"
 
     cat >&2 <<EOF
-🔒 BLOCKED: $category
+BLOCKED: $category
 Reason: $reason | Pattern: $pattern
 Command: ${COMMAND:-<unknown>}
 
-🔒 MUST: Skill('cf-$skill', args='$operation')
+MUST: Skill('cf-$skill', args='$operation')
 EOF
     exit 2
 }
@@ -383,7 +345,7 @@ is_path_targeted() {
 # =============================================================================
 
 # Convert glob pattern to regex for matching
-# e.g., ".claude/memory/*/work-agreement*.md" → "\.claude/memory/[^/]+/work-agreement[^/]*\.md"
+# e.g., ".claude/memory/*/work-agreement*.md" -> "\.claude/memory/[^/]+/work-agreement[^/]*\.md"
 # Parameters:
 #   $1 - pattern: The glob pattern to convert
 # Returns: Echoes the regex pattern
@@ -418,10 +380,26 @@ is_glob_path_targeted() {
     local regex
     regex=$(glob_to_regex "$pattern")
 
+    # Strip /tmp/claude paths before checking (same as is_path_targeted)
+    local cmd_clean="$cmd"
+    while [[ "$cmd_clean" =~ (.*)"/tmp/claude"[^[:space:]]*(.*) ]]; do
+        cmd_clean="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+    done
+
     # Check if command contains a path matching the pattern
-    if [[ "$cmd" =~ $regex ]]; then
+    if [[ "$cmd_clean" =~ $regex ]]; then
         return 0
     fi
+
+    # For /** patterns, also match the directory itself
+    # e.g., ".claude/hooks/codeflow/**" should match "rm -rf .claude/hooks/codeflow"
+    if [[ "$pattern" == *"/**" ]]; then
+        local dir_path="${pattern%/**}"
+        if is_path_targeted "$cmd" "$dir_path"; then
+            return 0
+        fi
+    fi
+
     return 1
 }
 
@@ -436,7 +414,7 @@ is_path_or_glob_targeted() {
 
     # Check if path contains glob characters
     if [[ "$path" == *"*"* ]] || [[ "$path" == *"?"* ]]; then
-        # Use glob matching
+        # Use glob matching (includes /** directory protection)
         is_glob_path_targeted "$cmd" "$path"
     else
         # Use standard path matching

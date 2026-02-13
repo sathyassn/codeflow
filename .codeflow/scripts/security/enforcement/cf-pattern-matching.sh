@@ -20,6 +20,16 @@
 
 set -euo pipefail
 
+# =============================================================================
+# SOURCE GUARD - Prevent double-sourcing
+# =============================================================================
+
+if [[ -n "${_PATTERN_MATCHING_SOURCED:-}" ]]; then
+    # shellcheck disable=SC2317  # exit is fallback when return fails (executed vs sourced)
+    return 0 2>/dev/null || exit 0
+fi
+_PATTERN_MATCHING_SOURCED=1
+
 # Source shared library
 # shellcheck source=/dev/null
 source "${LIB_DIR}/security-lib.sh"
@@ -53,7 +63,7 @@ matches_extended_glob() {
             return 0
         fi
     else
-        # Use standard glob matching via is_glob_path_targeted
+        # Use standard glob matching via bash pattern matching
         # shellcheck disable=SC2053  # We intentionally want glob matching here
         if [[ "$path" == $pattern ]]; then
             return 0
@@ -230,8 +240,14 @@ is_path_within() {
     path=$(normalize_path "$path")
     base=$(normalize_path "$base")
 
-    # Check if path starts with base
-    if [[ "$path" == "$base"* ]]; then
+    # Ensure base ends with / for proper prefix matching
+    # This prevents "srcextra/file" from matching base "src"
+    if [[ "$base" != */ ]]; then
+        base="$base/"
+    fi
+
+    # Check if path starts with base or is exact match (without trailing /)
+    if [[ "$path/" == "$base"* ]]; then
         return 0
     fi
 
@@ -239,7 +255,10 @@ is_path_within() {
 }
 
 # =============================================================================
-# MODULE COMPLETE
+# LIBRARY GUARD - Prevent direct execution
 # =============================================================================
-# This module provides utility functions only, no blocking
-return 0
+if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
+    echo "Error: This is a library file. Source it instead of executing." >&2
+    echo "Usage: source \"$(basename "$0")\"" >&2
+    exit 1
+fi

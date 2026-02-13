@@ -532,7 +532,7 @@ Cross-skill: cf-memory-management:search-related-work
 
 ```text
 When: Maintenance or on error recovery
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L1 Sentinel (cleanup uses tmux kill-session, gated by terminate-session sentinel)
 
 Procedure:
   1. Query sessions via cf-db-operations:active-work-query
@@ -627,3 +627,7 @@ cf-db-operations:active-work-query(type='model_session', status='active')
 | [prompt-template.md](resources/prompt-template.md) | Delegation prompt template | Before any delegation |
 | [model-comparison.md](resources/model-comparison.md) | Model capability comparison | When selecting model |
 | [session-management.md](resources/session-management.md) | T3 session details | When using persistent sessions |
+
+**Note:** Resource files above are planned but not yet created. The operation details
+in this SKILL.md contain sufficient inline guidance for each operation. Resource files
+will be created when the model orchestrator is actively used in production.

@@ -2,6 +2,10 @@
 # CodeFlow Shell Library: Error Handling
 # Location: .codeflow/scripts/shell-lib/errors.sh
 
+# Source guard to prevent multiple loads
+[[ -n "${_CODEFLOW_ERRORS_LOADED:-}" ]] && return 0
+_CODEFLOW_ERRORS_LOADED=1
+
 # Requires: common.sh, logging.sh
 [[ -z "${CODEFLOW_LIB_VERSION:-}" ]] && source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 [[ -z "${LOG_LEVEL_ERROR:-}" ]] && source "$(dirname "${BASH_SOURCE[0]}")/logging.sh"
@@ -63,7 +67,9 @@ die() {
     exit "$exit_code"
 }
 
-# Die if condition fails
+# Die if condition is true (exits when condition evaluates to true)
+# SECURITY NOTE: Uses eval - condition MUST NOT contain user-controlled input.
+# Only use with shell test expressions from trusted code paths.
 die_if() {
     local condition="$1"
     local message="$2"
@@ -74,7 +80,9 @@ die_if() {
     fi
 }
 
-# Die unless condition passes
+# Die unless condition is true (exits when condition evaluates to false)
+# SECURITY NOTE: Uses eval - condition MUST NOT contain user-controlled input.
+# Only use with shell test expressions from trusted code paths.
 die_unless() {
     local condition="$1"
     local message="$2"
@@ -94,7 +102,7 @@ assert_file_exists() {
     local file="$1"
     local message="${2:-File not found: $file}"
 
-    [[ -f "$file" ]] || die "$message" $EXIT_NOT_FOUND
+    [[ -f "$file" ]] || die "$message" "$EXIT_NOT_FOUND"
 }
 
 # Assert directory exists
@@ -102,7 +110,7 @@ assert_dir_exists() {
     local dir="$1"
     local message="${2:-Directory not found: $dir}"
 
-    [[ -d "$dir" ]] || die "$message" $EXIT_NOT_FOUND
+    [[ -d "$dir" ]] || die "$message" "$EXIT_NOT_FOUND"
 }
 
 # Assert command exists
@@ -110,7 +118,7 @@ assert_command_exists() {
     local cmd="$1"
     local message="${2:-Required command not found: $cmd}"
 
-    command_exists "$cmd" || die "$message" $EXIT_DEPENDENCY_ERROR
+    command_exists "$cmd" || die "$message" "$EXIT_DEPENDENCY_ERROR"
 }
 
 # Assert variable is set
@@ -118,7 +126,7 @@ assert_var_set() {
     local var_name="$1"
     local message="${2:-Required variable not set: $var_name}"
 
-    [[ -n "${!var_name:-}" ]] || die "$message" $EXIT_INVALID_INPUT
+    [[ -n "${!var_name:-}" ]] || die "$message" "$EXIT_INVALID_INPUT"
 }
 
 # Assert not empty
@@ -126,7 +134,7 @@ assert_not_empty() {
     local value="$1"
     local message="${2:-Value cannot be empty}"
 
-    [[ -n "$value" ]] || die "$message" $EXIT_INVALID_INPUT
+    [[ -n "$value" ]] || die "$message" "$EXIT_INVALID_INPUT"
 }
 
 # ============================================================================

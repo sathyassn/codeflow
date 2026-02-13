@@ -47,11 +47,18 @@ source "$TESTING_DIR/lib/test-helpers.sh"
 test_library_loaded_flag() {
     test_section "Library loaded flag"
 
-    # _CODEFLOW_SHELL_LIB_LOADED should be set
+    # _CODEFLOW_SHELL_LIB_LOADED should be set (internal guard)
     if [[ "${_CODEFLOW_SHELL_LIB_LOADED:-}" == "1" ]]; then
         test_pass "_CODEFLOW_SHELL_LIB_LOADED is set"
     else
         test_fail "_CODEFLOW_SHELL_LIB_LOADED should be set"
+    fi
+
+    # CODEFLOW_SHELL_LIB_LOADED should be exported (V4 spec)
+    if [[ "${CODEFLOW_SHELL_LIB_LOADED:-}" == "1" ]]; then
+        test_pass "CODEFLOW_SHELL_LIB_LOADED is set (exported)"
+    else
+        test_fail "CODEFLOW_SHELL_LIB_LOADED should be set (exported, V4 spec)"
     fi
 }
 
@@ -303,6 +310,11 @@ test_direct_index_load() {
             echo "FLAG_OK"
         fi
 
+        # Check exported flag (V4 spec)
+        if [[ "${CODEFLOW_SHELL_LIB_LOADED:-}" == "1" ]]; then
+            echo "EXPORTED_FLAG_OK"
+        fi
+
         # Check a function from each module
         type find_repo_root &>/dev/null && echo "COMMON_OK"
         type log_info &>/dev/null && echo "LOGGING_OK"
@@ -316,6 +328,12 @@ test_direct_index_load() {
         test_pass "Direct load sets _CODEFLOW_SHELL_LIB_LOADED"
     else
         test_fail "Direct load should set _CODEFLOW_SHELL_LIB_LOADED"
+    fi
+
+    if [[ "$result" == *"EXPORTED_FLAG_OK"* ]]; then
+        test_pass "Direct load sets CODEFLOW_SHELL_LIB_LOADED (exported)"
+    else
+        test_fail "Direct load should set CODEFLOW_SHELL_LIB_LOADED (exported)"
     fi
 
     if [[ "$result" == *"COMMON_OK"* ]]; then

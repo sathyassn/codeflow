@@ -13,11 +13,10 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh"
-SENTINEL_DIR="/tmp/claude/managed/sentinels"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh"
+SENTINEL_DIR="$REPO_ROOT/.state/sentinels/skill"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -35,7 +34,7 @@ run_file_sentinel() {
     local json_input="{\"file_path\": \"$file_path\"}"
 
     local output exit_code
-    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 
     # shellcheck disable=SC2034  # HOOK_OUTPUT used by test assertions externally
     HOOK_OUTPUT="$output"
@@ -125,7 +124,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Edit/Write tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -133,7 +132,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Edit/Write tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -141,7 +140,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Edit/Write tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -149,7 +148,7 @@ else
 fi
 
 # Test 10: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -157,7 +156,7 @@ else
 fi
 
 # Test 11: Exits 0 when empty file_path
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty file_path"
 else
@@ -479,11 +478,11 @@ cleanup_test_sentinels
 echo ""
 echo "--- V4: PathFlow Mode-Awareness ---"
 
-# Test 51: Hook contains is_agent_teams_active reference
-if grep -q "is_agent_teams_active" "$HOOK"; then
-    pass "Hook contains is_agent_teams_active reference"
+# Test 51: Hook contains is_pathflow_active reference
+if grep -q "is_pathflow_active" "$HOOK"; then
+    pass "Hook contains is_pathflow_active reference"
 else
-    fail "Should contain is_agent_teams_active reference"
+    fail "Should contain is_pathflow_active reference"
 fi
 
 # Test 52: Hook contains V4 PathFlow section
@@ -494,7 +493,7 @@ else
 fi
 
 # Test 53: Hook has PathFlow sentinel check
-if grep -q "PATHFLOW_SENTINEL_DIR" "$HOOK" && grep -q "pathflow:pf-3" "$HOOK"; then
+if grep -q "PATHFLOW_SENTINEL_DIR" "$HOOK" && grep -q "pathflow-pf-3" "$HOOK"; then
     pass "Hook has PathFlow sentinel check"
 else
     fail "Should have PathFlow sentinel check"

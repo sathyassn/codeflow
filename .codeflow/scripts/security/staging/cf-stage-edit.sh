@@ -43,7 +43,7 @@ DESCRIPTION:
     staging workflow for security review.
 
     Staged files are stored in:
-      /tmp/claude/managed/protected-edits/
+      /tmp/claude/managed/codeflow/protected-edits/
 
 EXAMPLES:
     cf-stage-edit.sh .claude/CLAUDE.md /tmp/new-content.md
@@ -96,8 +96,8 @@ NEW_CONTENT_FILE="$2"
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
@@ -144,8 +144,8 @@ METADATA_FILE="$STAGING_DIR/${SAFE_NAME}.metadata.json"
 if [[ -f "$STAGED_FILE" ]]; then
     echo "Error: A staged edit already exists for this file" >&2
     echo "Resolve the existing staged edit first:" >&2
-    echo "  cf-apply-staged-edit.sh $FILE_PATH  # to apply" >&2
-    echo "  cf-reject-staged-edit.sh $FILE_PATH  # to reject" >&2
+    echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')" >&2
+    echo "  The skill will guide you through applying or rejecting the staged edit." >&2
     exit 1
 fi
 
@@ -163,13 +163,15 @@ cp "$FULL_PATH" "$ORIGINAL_FILE"
 cp "$NEW_CONTENT_FILE" "$STAGED_FILE"
 
 # Generate checksums
-ORIGINAL_CHECKSUM=$(shasum -a 256 "$ORIGINAL_FILE" | cut -d' ' -f1)
-STAGED_CHECKSUM=$(shasum -a 256 "$STAGED_FILE" | cut -d' ' -f1)
+# Cross-platform checksum (macOS: shasum, Linux: sha256sum)
+_checksum() { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1" 2>/dev/null; }
+ORIGINAL_CHECKSUM=$(_checksum "$ORIGINAL_FILE" | cut -d' ' -f1)
+STAGED_CHECKSUM=$(_checksum "$STAGED_FILE" | cut -d' ' -f1)
 
 # Get TTL from config or use default (1 hour)
 TTL_SECONDS=3600
 if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
-    CONFIG_TTL=$(jq -r '.sentinel.default_ttl_seconds // 3600' "$CONFIG" 2>/dev/null || echo "3600")
+    CONFIG_TTL=$(jq -r '.managed_tmp.staging_ttl // 3600' "$CONFIG" 2>/dev/null || echo "3600")
     TTL_SECONDS="$CONFIG_TTL"
 fi
 
@@ -232,10 +234,8 @@ echo ""
 echo "To review diff:"
 echo "  diff \"$ORIGINAL_FILE\" \"$STAGED_FILE\""
 echo ""
-echo "To apply:"
-echo "  cf-apply-staged-edit.sh \"$FILE_PATH\""
-echo ""
-echo "To reject:"
-echo "  cf-reject-staged-edit.sh \"$FILE_PATH\""
+echo "Next steps - use the security management skill:"
+echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')"
+echo "  The skill will guide you through reviewing, applying, or rejecting the edit."
 
 exit 0

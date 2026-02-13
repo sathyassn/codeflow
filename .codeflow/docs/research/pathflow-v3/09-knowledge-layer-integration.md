@@ -23,7 +23,7 @@ The Knowledge Layer is CodeFlow's persistent data system, managed exclusively by
 
 The Knowledge Layer uses a three-tier data model:
 
-```
+```text
 Tier 0: JSONL Ledger     (append-only, source of truth for rebuilds)
      |
      v
@@ -59,7 +59,7 @@ ALTER TABLE tasks ADD COLUMN stage_history TEXT DEFAULT '[]';
 
 The existing `status` field (`todo | blocked | in_progress | complete`) tracks the OVERALL task lifecycle. The new `stage` and `stage_status` fields track WHERE the task is in the development pipeline.
 
-```
+```text
 +-------------------------------+
 |          tasks table          |
 +-------------------------------+
@@ -122,7 +122,7 @@ SELECT t.stage FROM active_work aw
 
 When a session resumes work that was started with a team, the resuming session needs to know what team configuration to recreate. The `team_name` field enables this:
 
-```
+```text
 Session A: Creates team "feat-auth-42", starts DEV stage, crashes
 Session B: Detects active_work with team_name="feat-auth-42"
            Can recreate team with same structure
@@ -134,7 +134,7 @@ Session B: Detects active_work with team_name="feat-auth-42"
 
 When a stage transition occurs, all three data tiers must be updated atomically. cf-knowledge-layer handles this via cf-db-operations.
 
-```
+```text
 Stage Transition: DEV -> REVIEW
 (cf-reviewer sends: "Dev stage complete for FRT-TSK-042")
 
@@ -159,7 +159,7 @@ TIER 1 (SQLite):
   WHERE task_id = 'FRT-TSK-FEAT-AUTH-042';
 
 TIER 2 (Markdown):
-  Update epics/{epic-id}/tasks/{task-id}.md:
+  Update project-management/epics/{area}/{epic-id}/tasks/{task-id}.md:
     Stage: review (pending)
     Stage History:
       - DEV: complete (2026-02-07T14:00-14:25, cf-developer, pass)
@@ -167,7 +167,7 @@ TIER 2 (Markdown):
 
 **Data flow diagram**:
 
-```
+```text
 cf-developer                 cf-knowledge-layer                  Data Tiers
      |                            |                            |
      |  "Dev complete for         |                            |
@@ -287,7 +287,7 @@ When a session crashes or is interrupted mid-pipeline, the next session must rec
 
 **Recovery flow**:
 
-```
+```text
 New session starts (PF-1 -> PF-2 Context Awareness)
 
 cf-knowledge-layer queries:
@@ -352,7 +352,7 @@ Not all teammates should update stage fields. Permissions are enforced via instr
 
 **Role teammate interaction pattern**:
 
-```
+```text
 cf-developer:  "Dev stage complete for FRT-TSK-042. Verdict: pass."
                (sends message to cf-knowledge-layer)
 

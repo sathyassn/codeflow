@@ -12,12 +12,11 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh"
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh"
 STATE_DIR="$REPO_ROOT/.state"
 CLAIMS_FILE="$STATE_DIR/active-work-claims.yaml"
-
-export REPO_ROOT
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -35,7 +34,7 @@ run_claim_validation() {
     local json_input="{\"file_path\": \"$file_path\"}"
 
     local output exit_code
-    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 
     HOOK_OUTPUT="$output"
     HOOK_EXIT_CODE=$exit_code
@@ -162,7 +161,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 6: Exits 0 for non-Edit/Write tools
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -170,7 +169,7 @@ else
 fi
 
 # Test 7: Exits 0 for Bash tool
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -178,7 +177,7 @@ else
 fi
 
 # Test 8: Exits 0 for Grep tool
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -186,7 +185,7 @@ else
 fi
 
 # Test 9: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -194,7 +193,7 @@ else
 fi
 
 # Test 10: Exits 0 when file_path is empty
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when file_path is empty"
 else
@@ -393,11 +392,11 @@ fi
 echo ""
 echo "--- V4: Agent-Teams Mode-Awareness ---"
 
-# Test 31: Hook contains is_agent_teams_active reference
-if grep -q "is_agent_teams_active" "$HOOK"; then
-    pass "Hook contains is_agent_teams_active reference"
+# Test 31: Hook contains is_pathflow_active reference
+if grep -q "is_pathflow_active" "$HOOK"; then
+    pass "Hook contains is_pathflow_active reference"
 else
-    fail "Should contain is_agent_teams_active reference"
+    fail "Should contain is_pathflow_active reference"
 fi
 
 # Test 32: Hook contains V4 agent-teams mode section
@@ -408,7 +407,7 @@ else
 fi
 
 # Test 33: In agent-teams mode, hook exits 0 (bypass claims)
-if grep -A2 "is_agent_teams_active" "$HOOK" | grep -q "exit 0"; then
+if grep -A2 "is_pathflow_active" "$HOOK" | grep -q "exit 0"; then
     pass "In agent-teams mode, hook exits 0 (bypass claims)"
 else
     fail "Should exit 0 in agent-teams mode to bypass claims"

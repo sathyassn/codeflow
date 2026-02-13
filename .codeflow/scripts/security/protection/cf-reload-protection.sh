@@ -123,13 +123,13 @@ fi
 
 # Validate extended list (if exists)
 if [[ -f "$EXTENDED_LIST" ]]; then
-    LINE_COUNT=$(wc -l < "$EXTENDED_LIST" | tr -d ' ')
+    LINE_COUNT=$({ grep -v '^#' "$EXTENDED_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | wc -l | tr -d ' ')
     echo "PASS: protected-extended.list ($LINE_COUNT patterns)"
 fi
 
 # Validate adhoc list (if exists)
 if [[ -f "$ADHOC_LIST" ]]; then
-    LINE_COUNT=$(wc -l < "$ADHOC_LIST" | tr -d ' ')
+    LINE_COUNT=$({ grep -v '^#' "$ADHOC_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | wc -l | tr -d ' ')
     echo "PASS: protected-adhoc.list ($LINE_COUNT patterns)"
 fi
 
@@ -173,13 +173,13 @@ if [[ "$LIST_PATHS" == "true" ]]; then
     if [[ -f "$EXTENDED_LIST" ]]; then
         echo ""
         echo "=== Extended (from protected-extended.list) ==="
-        grep -v '^#' "$EXTENDED_LIST" 2>/dev/null | grep -v '^$' | sed 's/^/  /'
+        { grep -v '^#' "$EXTENDED_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | sed 's/^/  /'
     fi
 
     if [[ -f "$ADHOC_LIST" ]]; then
         echo ""
         echo "=== Adhoc (from protected-adhoc.list) ==="
-        grep -v '^#' "$ADHOC_LIST" 2>/dev/null | grep -v '^$' | sed 's/^/  /'
+        { grep -v '^#' "$ADHOC_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | sed 's/^/  /'
     fi
 
     exit 0
@@ -207,11 +207,11 @@ if command -v jq &>/dev/null; then
     fi
 
     if [[ -f "$EXTENDED_LIST" ]]; then
-        EXTENDED_PATHS=$(grep -v '^#' "$EXTENDED_LIST" 2>/dev/null | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))' || echo "[]")
+        EXTENDED_PATHS=$({ grep -v '^#' "$EXTENDED_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | jq -R -s -c 'split("\n") | map(select(length > 0))')
     fi
 
     if [[ -f "$ADHOC_LIST" ]]; then
-        ADHOC_PATHS=$(grep -v '^#' "$ADHOC_LIST" 2>/dev/null | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))' || echo "[]")
+        ADHOC_PATHS=$({ grep -v '^#' "$ADHOC_LIST" 2>/dev/null | grep -v '^[[:space:]]*$' || true; } | jq -R -s -c 'split("\n") | map(select(length > 0))')
     fi
 
     # Write cache

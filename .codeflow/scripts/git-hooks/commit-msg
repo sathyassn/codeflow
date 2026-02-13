@@ -26,7 +26,7 @@ set -euo pipefail
 # ============================================================================
 
 # Resolve paths - commit-msg hook runs from repo root
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 CONFIG_FILE="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
 # Default fallbacks (used if config unavailable)
@@ -139,7 +139,8 @@ ${RED}ERROR: AI attribution detected${NC}
 Pattern: '$pattern'
 AI attribution is not allowed in commit messages.
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format.
+Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
+or if in PathFlow mode, message the cf-gitops teammate.
 EOF
     exit 1
   fi
@@ -160,7 +161,8 @@ ${RED}ERROR: Subject line too long${NC}
 Current: $SUBJECT_LEN chars (max: $MAX_SUBJECT_LENGTH)
 Subject: $SUBJECT
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format.
+Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
+or if in PathFlow mode, message the cf-gitops teammate.
 EOF
   ERRORS=$((ERRORS + 1))
 fi
@@ -174,7 +176,8 @@ Subject: $SUBJECT
 Required: type: description  OR  type(scope): description
 Valid types: $(echo "$VALID_TYPES" | tr '|' ', ')
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format.
+Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
+or if in PathFlow mode, message the cf-gitops teammate.
 EOF
   ERRORS=$((ERRORS + 1))
 fi
@@ -241,7 +244,7 @@ EOF
     fi
 
     # Count bullet points (from config)
-    BULLET_COUNT=$(echo "$BODY" | grep -c '^[- ]' || true)
+    BULLET_COUNT=$(echo "$BODY" | grep -c '^- ' || true)
 
     if [ "$BULLET_COUNT" -gt "$MAX_BULLETS" ]; then
       echo -e "${RED}ERROR: Too many bullet points in body${NC}" >&2

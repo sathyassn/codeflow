@@ -28,6 +28,26 @@ set -euo pipefail
 # shellcheck disable=SC2034  # VERSION used for identification
 readonly VERSION="2.0.0"
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # =============================================================================
 # EARLY EXIT FOR NON-SKILL TOOLS
 # =============================================================================
@@ -42,16 +62,28 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 # shellcheck disable=SC2034  # CONFIG exported for sentinel library
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
+# Source work-state library for active task functions
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.codeflow/scripts/state/cf-work-state.sh" 2>/dev/null || true
+
 SENTINEL_LIB="$REPO_ROOT/.codeflow/scripts/security/sentinel/cf-sentinel.sh"
 LOG_DIR="$REPO_ROOT/.state/logs/sessions"
 SECURITY_LOG_DIR="$REPO_ROOT/.state/logs/security/sentinel"
 
 # Get session ID from environment
 SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+
+# Source security library (provides is_pathflow_active via context-lib.sh)
+LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
+if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
+    export LIB_DIR
+    # shellcheck source=/dev/null
+    source "$LIB_DIR/security-lib.sh"
+fi
 
 # Source sentinel library if available
 if [[ -f "$SENTINEL_LIB" ]]; then
@@ -98,10 +130,10 @@ create_pathflow_sentinel() {
     local skill="$1"
     local operation="$2"
 
-    local sentinel_dir="$REPO_ROOT/.state/sentinels"
+    local sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
     mkdir -p "$sentinel_dir" 2>/dev/null || true
 
-    local sentinel_file="$sentinel_dir/pathflow:${operation}"
+    local sentinel_file="$sentinel_dir/pathflow-${operation}"
 
     if command -v jq &>/dev/null; then
         jq -nc \
@@ -176,7 +208,7 @@ log_sentinel_creation() {
             --arg operation "$operation" \
             --arg sentinel_id "$sentinel_file" \
             --argjson ttl_sec "$ttl" \
-            --arg path "/tmp/claude/managed/sentinels/$sentinel_file" \
+            --arg path "$sentinel_file" \
             '{ts: $ts, level: $level, session_id: $session_id, event: $event, sentinel_type: $sentinel_type, skill: $skill, operation: $operation, sentinel_id: $sentinel_id, ttl_sec: $ttl_sec, path: $path}')
 
         echo "$log_entry" >> "$log_file" 2>/dev/null || true
@@ -189,10 +221,9 @@ if [[ "$TOOL_RESULT" == *"error"* ]] || [[ "$TOOL_RESULT" == *"BLOCKED"* ]]; the
     SKILL_SUCCESS="false"
 fi
 
-# V4: Check if in PathFlow mode
-PATHFLOW_ACTIVE="/tmp/claude/managed/state/pathflow-active"
+# V4: Check if in PathFlow mode (via context-lib.sh function)
 IS_PATHFLOW_MODE="false"
-if [[ -f "$PATHFLOW_ACTIVE" ]]; then
+if is_pathflow_active 2>/dev/null; then
     IS_PATHFLOW_MODE="true"
 fi
 
@@ -244,6 +275,32 @@ if command -v jq &>/dev/null; then
         '{ts: $ts, session_id: $session_id, event: "skill_completed", skill_name: $skill_name, skill_args: $skill_args, success: ($success == "true")}')
 
     echo "$LOG_ENTRY" >> "$LOG_FILE" 2>/dev/null || true
+fi
+
+# =============================================================================
+# ACTIVE TASK BRIDGE: skill invocation -> state file creation
+# =============================================================================
+
+# After detecting begin-work or ensure-work-registered skill invocation,
+# parse for task_id and call set_active_task()
+if [[ "$SKILL_SUCCESS" == "true" ]]; then
+    case "$SKILL_ARGS" in
+        *begin-work*|*ensure-work-registered*)
+            # Extract task details from tool result if available
+            _bridge_task_id=""
+            _bridge_epic_id=""
+            _bridge_title=""
+            if [[ -n "$TOOL_RESULT" ]] && command -v jq &>/dev/null; then
+                _bridge_task_id=$(echo "$TOOL_RESULT" | jq -r '.task_id // empty' 2>/dev/null) || true
+                _bridge_epic_id=$(echo "$TOOL_RESULT" | jq -r '.epic_id // empty' 2>/dev/null) || true
+                _bridge_title=$(echo "$TOOL_RESULT" | jq -r '.title // empty' 2>/dev/null) || true
+            fi
+            # Create active task if we got a task_id
+            if [[ -n "$_bridge_task_id" ]]; then
+                set_active_task "$_bridge_task_id" "$_bridge_epic_id" "$_bridge_title"
+            fi
+            ;;
+    esac
 fi
 
 # =============================================================================

@@ -41,7 +41,7 @@ Both frameworks address the **context loss problem** in AI-assisted development:
 | **Foundation** | Three-tier (JSONL → SQLite → Markdown) | Git-backed storage |
 | **Rebuild Authority** | JSONL as immutable truth | Git hooks (worktree-based) |
 | **Query Layer** | SQLite with FTS5 + vector search | Direct git operations |
-| **Human Interface** | Markdown + epics/*.md | Git-native workflow |
+| **Human Interface** | Markdown + project-management/epics/*.md | Git-native workflow |
 
 **Analysis:** CodeFlow's three-tier architecture is more sophisticated, enabling semantic search, entity extraction, and complex queries. Gastown's git-only approach is simpler but less powerful for knowledge management.
 
@@ -70,12 +70,14 @@ Both frameworks address the **context loss problem** in AI-assisted development:
 ### Philosophical Differences
 
 #### CodeFlow Philosophy
+
 - **Specification-driven:** 180+ spec files, 8.7/10 review score
 - **Defense-in-depth:** Multiple independent protection layers
 - **Enterprise-ready:** Audit trails, CRDT coordination, comprehensive testing
 - **Predictable:** Formal procedures, validated operations
 
 #### Gastown Philosophy
+
 - **Vibe coding:** "The codebase is 100% vibe coded"
 - **Pragmatic:** Built in <3 weeks, fourth orchestrator in 2025
 - **Experimental:** Explicit "probably don't want to use it yet" warning
@@ -147,7 +149,7 @@ Both frameworks address the **context loss problem** in AI-assisted development:
 
 The AI development tools market has segmented into distinct categories:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    AI Development Tools 2026                     │
 ├─────────────────┬─────────────────┬─────────────────────────────┤
@@ -165,21 +167,25 @@ The AI development tools market has segmented into distinct categories:
 ### Direct Competitors
 
 #### 1. Aider (Most Similar Open-Source)
+
 - **Strengths:** Git-native, 100+ languages, multi-file refactoring
 - **Weaknesses:** No persistent memory, simpler orchestration
 - **CodeFlow Advantage:** Memory persistence, enterprise security, multi-agent coordination
 
 #### 2. CrewAI (Production Teams)
+
 - **Strengths:** Role-based agent teams, production focus
 - **Weaknesses:** Generic (not Claude-specific), no IDE integration
 - **CodeFlow Advantage:** Claude Code native, deeper integration, semantic memory
 
 #### 3. LangGraph (Performance Leader)
+
 - **Strengths:** Fastest latency, conditional logic, precise control
 - **Weaknesses:** Generic framework, requires significant customization
 - **CodeFlow Advantage:** Opinionated workflows, ready-to-use procedures
 
 #### 4. Gastown (Experimental Orchestration)
+
 - **Strengths:** Multi-runtime, simpler model, rapid iteration
 - **Weaknesses:** Experimental, limited security, minimal documentation
 - **CodeFlow Advantage:** Enterprise-ready, comprehensive, well-tested
@@ -266,18 +272,21 @@ The AI development tools market has segmented into distinct categories:
 ### Recommended Strategy
 
 #### Short-Term (Phases 3-5)
+
 1. Complete hook system and enforcement
 2. Add "quick start" mode with minimal configuration
 3. Create showcase videos demonstrating value
 4. Publish to GitHub with clear positioning
 
 #### Medium-Term (Phases 6-7)
+
 1. Build community around enterprise Claude Code users
 2. Expand runtime support (Gemini, Codex)
 3. Create CodeFlow CLI for frictionless installation
 4. Pursue enterprise pilot programs
 
 #### Long-Term (Phases 8-9+)
+
 1. Establish CodeFlow as standard for AI development workflows
 2. Build ecosystem (plugins, integrations)
 3. Consider commercial offerings for enterprise support
@@ -325,6 +334,7 @@ The AI development tools market has segmented into distinct categories:
 ## Appendix: Implementation vs Specification Gap
 
 ### Current Status
+
 - **Phase 1:** ✓ Complete (Foundation)
 - **Phase 2:** ✓ Complete (Knowledge Layer)
 - **Phase 3:** 🚧 In Progress (Hooks & Enforcement)
@@ -341,6 +351,7 @@ The AI development tools market has segmented into distinct categories:
 | Tests | 148+ | 667 | 450%+ |
 
 ### Estimated Completion
+
 Based on Phase 1 & 2 velocity, remaining phases (4-9) would require approximately 10-12 additional weeks of development.
 
 ---

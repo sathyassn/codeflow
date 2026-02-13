@@ -4,10 +4,13 @@
 # Location: .codeflow/scripts/state/memory.sh
 #
 # Provides functions for memory event management:
-#   - init_db()        Initialize database with schema
-#   - record_event()   Record a memory event
-#   - query_events()   Query events by domain/type
-#   - search_memory()  Full-text search
+#   - init_db()        Initialize database via Go CLI
+#   - record_event()   Record a memory event (JSONL ledger)
+#   - query_events()   Query events via Go CLI
+#   - search_memory()  Full-text search via Go CLI
+#
+# DB access policy: All SQLite operations go through the Go CLI (`codeflow db`).
+# Shell scripts write JSONL ledger files only. Direct sqlite3 calls are prohibited.
 
 set -euo pipefail
 
@@ -19,47 +22,34 @@ if [[ -f "$REPO_ROOT/.codeflow/scripts/shell-lib/index.sh" ]]; then
     source "$REPO_ROOT/.codeflow/scripts/shell-lib/index.sh"
 fi
 
-if [[ -f "$REPO_ROOT/.codeflow/scripts/db/lib/db-lib.sh" ]]; then
-    source "$REPO_ROOT/.codeflow/scripts/db/lib/db-lib.sh"
-fi
 
 # Configuration
-DB_PATH="${CODEFLOW_DB_FILE:-$REPO_ROOT/.state/db/codeflow.db}"
 LEDGER_PATH="${CODEFLOW_LEDGER_PATH:-$REPO_ROOT/.state/ledger}"
 
 # ============================================================================
 # DATABASE INITIALIZATION
 # ============================================================================
 
-# Initialize database with schema
+# Initialize database with schema (delegates to Go CLI)
 init_db() {
-    local schema_path="${1:-$REPO_ROOT/.state/db/schema.sql}"
+    local schema_path="${1:-$REPO_ROOT/.codeflow/scripts/db/schema.sql}"
 
     if [[ ! -f "$schema_path" ]]; then
         echo "Error: Schema file not found: $schema_path" >&2
         return 1
     fi
 
-    # Ensure directory exists
-    mkdir -p "$(dirname "$DB_PATH")"
-
-    sqlite3 "$DB_PATH" < "$schema_path"
-    echo "Database initialized: $DB_PATH"
+    if command -v codeflow >/dev/null 2>&1; then
+        codeflow db init --schema "$schema_path"
+    else
+        echo "Error: codeflow CLI not found. DB operations require the Go CLI." >&2
+        return 1
+    fi
 }
 
 # ============================================================================
 # MEMORY EVENT OPERATIONS
 # ============================================================================
-
-# Generate ULID (requires Python)
-_generate_ulid() {
-    python3 -c "
-import sys
-sys.path.insert(0, '$REPO_ROOT/.codeflow/scripts/codeflow_py_lib')
-from codeflow_py_lib import generate_ulid
-print(generate_ulid())
-" 2>/dev/null || echo "$(date +%s)$(printf '%06d' $RANDOM)"
-}
 
 # Record a memory event
 # Args: $1=event_type, $2=domain, $3=data (JSON), $4=work_id (optional), $5=memory_type (optional)
@@ -73,9 +63,9 @@ record_event() {
 
     # Validate event_type
     case "$event_type" in
-        progress|decision|milestone|blocker) ;;
+        progress|decision|milestone|blocker|stage_transition|stage_complete|rework_limit) ;;
         *)
-            echo "Error: Invalid event_type: $event_type" >&2
+            echo "Error: record_event: Invalid event_type: $event_type" >&2
             return 1
             ;;
     esac
@@ -84,91 +74,113 @@ record_event() {
     case "$domain" in
         planning|development|review|qa|ops|documentation) ;;
         *)
-            echo "Error: Invalid domain: $domain" >&2
+            echo "Error: record_event: Invalid domain: $domain" >&2
             return 1
             ;;
     esac
 
-    # Generate event ID
+    # Validate data is valid JSON
+    if command -v jq >/dev/null 2>&1; then
+        if ! echo "$data" | jq empty 2>/dev/null; then
+            echo "Error: record_event: data must be valid JSON" >&2
+            return 1
+        fi
+    fi
+
+    # Generate event ID using shell-lib ULID (falls back to timestamp+random)
     local event_id
-    event_id="memory-$(_generate_ulid)"
+    if type generate_ulid >/dev/null 2>&1; then
+        event_id="memory-$(generate_ulid)"
+    else
+        event_id="memory-$(date +%s)$(printf '%06d' $RANDOM)"
+    fi
     local timestamp
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Insert into database
-    sqlite3 "$DB_PATH" <<EOF
-INSERT INTO memory_events (id, event_type, domain, work_id, data, memory_type, created_at)
-VALUES ('$event_id', '$event_type', '$domain', $([ -n "$work_id" ] && echo "'$work_id'" || echo "NULL"), '$data', $([ -n "$memory_type" ] && echo "'$memory_type'" || echo "NULL"), '$timestamp');
-EOF
+    # Build JSON line, omitting empty optional fields (matches cf-memory-store.py)
+    local json_line="{\"ts\":\"$timestamp\",\"type\":\"memory_stored\",\"id\":\"$event_id\",\"event_type\":\"$event_type\",\"domain\":\"$domain\""
+    [[ -n "$work_id" ]] && json_line="$json_line,\"work_id\":\"$work_id\""
+    [[ -n "$memory_type" ]] && json_line="$json_line,\"memory_type\":\"$memory_type\""
+    json_line="$json_line,\"data\":$data}"
 
-    # Append to JSONL ledger
+    # Append to JSONL ledger with flock for parallel safety
     local ledger_file="$LEDGER_PATH/memory-events.jsonl"
     mkdir -p "$(dirname "$ledger_file")"
-    echo "{\"ts\":\"$timestamp\",\"type\":\"memory_stored\",\"id\":\"$event_id\",\"event_type\":\"$event_type\",\"domain\":\"$domain\",\"work_id\":\"$work_id\",\"data\":$data}" >> "$ledger_file"
+
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 200
+            echo "$json_line" >> "$ledger_file"
+        ) 200>"$ledger_file.lock"
+    else
+        echo "$json_line" >> "$ledger_file"
+    fi
 
     echo "$event_id"
 }
 
-# Query events by domain and/or type
+# Query events by domain and/or type (delegates to Go CLI)
 # Args: $1=domain (optional), $2=event_type (optional), $3=limit (optional, default 100)
 query_events() {
     local domain="${1:-}"
     local event_type="${2:-}"
     local limit="${3:-100}"
 
-    local where_clause="1=1"
-    [[ -n "$domain" ]] && where_clause="$where_clause AND domain='$domain'"
-    [[ -n "$event_type" ]] && where_clause="$where_clause AND event_type='$event_type'"
+    if ! command -v codeflow >/dev/null 2>&1; then
+        echo "Error: codeflow CLI not found. DB queries require the Go CLI." >&2
+        return 1
+    fi
 
-    sqlite3 -json "$DB_PATH" <<EOF
-SELECT id, event_type, domain, work_id, data, memory_type, created_at
-FROM memory_events
-WHERE $where_clause
-ORDER BY created_at DESC
-LIMIT $limit;
-EOF
+    local args=("db" "query" "memory_events" "--limit" "$limit" "--format" "json")
+    [[ -n "$domain" ]] && args+=("--where" "domain=$domain")
+    [[ -n "$event_type" ]] && args+=("--where" "event_type=$event_type")
+
+    codeflow "${args[@]}"
 }
 
-# Full-text search memory events
+# Full-text search memory events (delegates to Go CLI)
 # Args: $1=query, $2=limit (optional, default 50)
 search_memory() {
     local query="$1"
     local limit="${2:-50}"
 
-    sqlite3 -json "$DB_PATH" <<EOF
-SELECT m.id, m.event_type, m.domain, m.work_id, m.data, m.memory_type, m.created_at,
-       bm25(memory_fts) as score
-FROM memory_fts f
-JOIN memory_events m ON f.id = m.id
-WHERE memory_fts MATCH '$query'
-ORDER BY score
-LIMIT $limit;
-EOF
+    if ! command -v codeflow >/dev/null 2>&1; then
+        echo "Error: codeflow CLI not found. DB queries require the Go CLI." >&2
+        return 1
+    fi
+
+    codeflow db search memory_events --query "$query" --limit "$limit" --format json
 }
 
-# Get memory event by ID
+# Get memory event by ID (delegates to Go CLI)
 # Args: $1=event_id
 get_event() {
     local event_id="$1"
 
-    sqlite3 -json "$DB_PATH" <<EOF
-SELECT id, event_type, domain, work_id, data, memory_type, created_at
-FROM memory_events
-WHERE id = '$event_id';
-EOF
+    if ! command -v codeflow >/dev/null 2>&1; then
+        echo "Error: codeflow CLI not found. DB queries require the Go CLI." >&2
+        return 1
+    fi
+
+    codeflow db get memory_events --id "$event_id" --format json
 }
 
-# Count memory events
+# Count memory events (delegates to Go CLI)
 # Args: $1=domain (optional), $2=event_type (optional)
 count_events() {
     local domain="${1:-}"
     local event_type="${2:-}"
 
-    local where_clause="1=1"
-    [[ -n "$domain" ]] && where_clause="$where_clause AND domain='$domain'"
-    [[ -n "$event_type" ]] && where_clause="$where_clause AND event_type='$event_type'"
+    if ! command -v codeflow >/dev/null 2>&1; then
+        echo "Error: codeflow CLI not found. DB queries require the Go CLI." >&2
+        return 1
+    fi
 
-    sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM memory_events WHERE $where_clause;"
+    local args=("db" "count" "memory_events")
+    [[ -n "$domain" ]] && args+=("--where" "domain=$domain")
+    [[ -n "$event_type" ]] && args+=("--where" "event_type=$event_type")
+
+    codeflow "${args[@]}"
 }
 
 # ============================================================================

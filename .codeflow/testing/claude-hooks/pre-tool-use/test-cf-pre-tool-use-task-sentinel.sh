@@ -16,11 +16,10 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh"
-ACTIVE_TASK_FILE="/tmp/claude/managed/state/active-task.json"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh"
+ACTIVE_TASK_FILE="$REPO_ROOT/.state/runtime/active-task.json"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -35,7 +34,9 @@ setup_active_task() {
     mkdir -p "$(dirname "$ACTIVE_TASK_FILE")"
     cat > "$ACTIVE_TASK_FILE" << 'EOF'
 {
-  "task_id": "test-task-001",
+  "task_id": "task-01ARZ3NDEKTSV4RRFFQ69G5FA1",
+  "task_format_id": "INF-TSK-FIX-GENL-001",
+  "status": "in_progress",
   "file_scope": ["src/**", "tests/**"],
   "scope_policy": "soft"
 }
@@ -46,7 +47,9 @@ setup_strict_task() {
     mkdir -p "$(dirname "$ACTIVE_TASK_FILE")"
     cat > "$ACTIVE_TASK_FILE" << 'EOF'
 {
-  "task_id": "test-task-002",
+  "task_id": "task-02BRZ4NDEKTSV4RRFFQ69G5FA2",
+  "task_format_id": "INF-TSK-FIX-GENL-002",
+  "status": "in_progress",
   "file_scope": ["src/**"],
   "scope_policy": "strict"
 }
@@ -57,7 +60,9 @@ setup_no_scope_task() {
     mkdir -p "$(dirname "$ACTIVE_TASK_FILE")"
     cat > "$ACTIVE_TASK_FILE" << 'EOF'
 {
-  "task_id": "test-task-003"
+  "task_id": "task-03CRZ5NDEKTSV4RRFFQ69G5FA3",
+  "task_format_id": "INF-TSK-FIX-GENL-003",
+  "status": "in_progress"
 }
 EOF
 }
@@ -117,7 +122,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Edit/Write tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -125,7 +130,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Edit/Write tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -133,7 +138,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Edit/Write tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -141,7 +146,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Edit/Write tools (Glob)
-result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Glob tool"
 else
@@ -149,7 +154,7 @@ else
 fi
 
 # Test 11: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -157,7 +162,7 @@ else
 fi
 
 # Test 12: Exits 0 when empty file_path
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty file_path"
 else
@@ -168,7 +173,7 @@ echo ""
 echo "--- Exempt Paths ---"
 
 # Test 13: Exits 0 for memory paths
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/memory/test.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/memory/test.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for memory paths"
 else
@@ -176,7 +181,7 @@ else
 fi
 
 # Test 14: Exits 0 for tmp paths (absolute)
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for /tmp/claude/ paths"
 else
@@ -184,7 +189,7 @@ else
 fi
 
 # Test 15: Exits 0 for /tmp paths
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for /tmp paths"
 else
@@ -192,7 +197,7 @@ else
 fi
 
 # Test 16: Exits 0 for .state paths
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".state/logs/test.log"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".state/logs/test.log"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for .state paths"
 else
@@ -200,7 +205,7 @@ else
 fi
 
 # Test 17: Exits 0 for .codeflow/state paths
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/state/test.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/state/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for .codeflow/state paths"
 else
@@ -214,7 +219,7 @@ echo "--- Active Task Checking (No Task) ---"
 teardown_active_task
 
 # Test 18: Blocks Edit when no active task
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit when no active task"
 else
@@ -222,7 +227,7 @@ else
 fi
 
 # Test 19: Blocks Write when no active task
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"src/new.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"src/new.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Write when no active task"
 else
@@ -230,7 +235,7 @@ else
 fi
 
 # Test 20: Block message includes skill direction
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"cf-task-management"* ]]; then
     pass "Block message includes skill direction"
 else
@@ -238,7 +243,7 @@ else
 fi
 
 # Test 21: Block message includes MUST directive
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"MUST:"* ]]; then
     pass "Block message includes MUST directive"
 else
@@ -246,7 +251,7 @@ else
 fi
 
 # Test 22: Block message shows file path
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"Path:"* ]]; then
     pass "Block message shows file path"
 else
@@ -260,7 +265,7 @@ echo "--- Active Task Checking (With Task) ---"
 setup_active_task
 
 # Test 23: Allows Edit when task exists and file in scope
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/main.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Edit when task exists and file in scope"
 else
@@ -268,7 +273,7 @@ else
 fi
 
 # Test 24: Allows Write when task exists and file in scope
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Write when task exists and file in scope"
 else
@@ -276,7 +281,7 @@ else
 fi
 
 # Test 25: Allows edit for nested path in scope
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/components/Button.tsx"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/components/Button.tsx"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows edit for nested path in scope"
 else
@@ -291,7 +296,7 @@ echo "--- Scope Validation (Soft Policy) ---"
 setup_active_task  # soft policy with src/** and tests/**
 
 # Test 26: Warns but allows out-of-scope file (soft policy)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]] && [[ "$result" == *"WARNING"* ]]; then
     pass "Warns but allows out-of-scope file (soft)"
 else
@@ -299,19 +304,19 @@ else
 fi
 
 # Test 27: Warning includes scope info
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"Scope:"* ]]; then
     pass "Warning includes scope info"
 else
     fail "Should include scope in warning"
 fi
 
-# Test 28: Warning suggests expand-scope
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
-if [[ "$result" == *"expand-scope"* ]]; then
-    pass "Warning suggests expand-scope"
+# Test 28: Warning suggests update-task
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"docs/README.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"update-task"* ]]; then
+    pass "Warning suggests update-task"
 else
-    fail "Should suggest expand-scope"
+    fail "Should suggest update-task"
 fi
 
 teardown_active_task
@@ -322,7 +327,7 @@ echo "--- Scope Validation (Strict Policy) ---"
 setup_strict_task  # strict policy with src/** only
 
 # Test 29: Blocks out-of-scope file (strict policy)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks out-of-scope file (strict)"
 else
@@ -330,7 +335,7 @@ else
 fi
 
 # Test 30: Allows in-scope file (strict policy)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/index.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/index.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows in-scope file (strict)"
 else
@@ -338,7 +343,7 @@ else
 fi
 
 # Test 31: Block message mentions strict policy
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"tests/test.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"strict"* ]]; then
     pass "Block message mentions strict policy"
 else
@@ -353,7 +358,7 @@ echo "--- No Scope Defined ---"
 setup_no_scope_task  # task with no file_scope
 
 # Test 32: Allows any file when no scope defined
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"anywhere/file.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"anywhere/file.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows any file when no scope defined"
 else
@@ -361,7 +366,7 @@ else
 fi
 
 # Test 33: No warning when no scope defined
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"random/path.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"random/path.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" != *"WARNING"* ]]; then
     pass "No warning when no scope defined"
 else

@@ -24,7 +24,6 @@ from codeflow_py_lib import (
     ValidationError,
     append_jsonl,
     generate_ulid,
-    get_db,
     get_logger,
     get_state_dir,
 )
@@ -65,7 +64,7 @@ def main():
     )
     parser.add_argument(
         "--work-id",
-        help="Optional work ID (task/epic) this event relates to",
+        help="Optional work ULID PK (e.g., task-{ulid} or epic-{ulid}) this event relates to",
     )
     parser.add_argument(
         "--memory-type",
@@ -86,39 +85,22 @@ def main():
         # Prepare data payload
         data = {"content": args.content}
 
-        # Get database operations
-        db = get_db()
+        # Build event (omit None fields for consistent JSONL schema)
+        event = {
+            "type": "memory_stored",
+            "id": event_id,
+            "event_type": args.event_type,
+            "domain": args.domain,
+            "data": data,
+        }
+        if args.work_id:
+            event["work_id"] = args.work_id
+        if args.memory_type:
+            event["memory_type"] = args.memory_type
 
-        # Write to SQLite (Tier 1 - operational state)
-        db.execute_write(
-            """
-            INSERT INTO memory_events (id, event_type, domain, work_id, data, memory_type)
-            VALUES (:id, :event_type, :domain, :work_id, :data, :memory_type)
-            """,
-            {
-                "id": event_id,
-                "event_type": args.event_type,
-                "domain": args.domain,
-                "work_id": args.work_id,
-                "data": json.dumps(data),
-                "memory_type": args.memory_type,
-            },
-        )
-
-        # Write to JSONL (Tier 0 - rebuild authority)
+        # Write to JSONL ledger (primary write path)
         ledger_path = get_state_dir() / "ledger" / "memory-events.jsonl"
-        append_jsonl(
-            ledger_path,
-            {
-                "type": "memory_stored",
-                "id": event_id,
-                "event_type": args.event_type,
-                "domain": args.domain,
-                "work_id": args.work_id,
-                "data": data,
-                "memory_type": args.memory_type,
-            },
-        )
+        append_jsonl(ledger_path, event)
 
         result = {"success": True, "id": event_id}
 

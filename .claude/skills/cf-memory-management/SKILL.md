@@ -30,7 +30,7 @@ agent: cf-general-purpose
 │ Rule: Can rebuild from Tier 0 if corrupted                  │
 ├─────────────────────────────────────────────────────────────┤
 │ Tier 2: Markdown (Human-Readable)                           │
-│ Location: epics/**/*.md, .claude/memory/**                  │
+│ Location: project-management/epics/**/*.md, .claude/memory/**                  │
 │ Purpose: Human review, git diffs, documentation             │
 │ Rule: Generated from Tier 1, not authoritative              │
 └─────────────────────────────────────────────────────────────┘
@@ -107,9 +107,13 @@ Purpose: Find in-progress work for context recovery
 Enforcement: ENF-L3 Advisory
 
 Procedure:
-  1. Query active_work via cf-db-operations:memory-query
-  2. For each active work, get recent progress events
-  3. Present options: resume, start new, cleanup stale
+  1. Read active-task.json at .state/runtime/active-task.json
+     - Contains: task_id (ULID PK), epic_id (ULID PK), task_format_id, epic_format_id, title, status, branch, session_id
+     - NOT active-work.json (legacy name)
+     - Note: task_id/epic_id are ULID PKs for internal references; format_id variants are for display
+  2. Query active_work via cf-db-operations:memory-query (using ULID PKs)
+  3. For each active work, get recent progress events
+  4. Present options: resume, start new, cleanup stale
 
 Output:
   active_work: [{id, topic, branch, last_progress}...]
@@ -117,7 +121,7 @@ Output:
 
 Cross-skill: cf-db-operations:memory-query
 Hook: UserPromptSubmit/user-prompt-submit.sh triggers
-Query: .state/db/queries/memory-queries.sql#detect-active
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [active-work-schema.md](resources/active-work-schema.md)
    Load when: Understanding active work data structure or debugging detection
@@ -144,7 +148,7 @@ Output:
   deliverables: {remaining items}
 
 Cross-skill: cf-db-operations:memory-query
-Query: .state/db/queries/memory-queries.sql#load-context
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [active-work-schema.md](resources/active-work-schema.md) - Load when: Understanding context structure
@@ -169,7 +173,7 @@ Output:
   safe_to_proceed: true | false
 
 Cross-skill: cf-git-workflow:create-worktree (prerequisite), cf-db-operations:memory-query
-Query: .state/db/queries/memory-queries.sql#search-related
+Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [scope-patterns.md](resources/scope-patterns.md)
    Load when: Understanding scope pattern syntax or debugging conflicts
@@ -222,6 +226,9 @@ Procedure:
 
   3. If interactive:
      - Validate task exists and is actionable (no blocking deps)
+     - Create active-task.json via cf-work-state.sh (NOT Go CLI)
+       Fields: task_id (ULID PK), epic_id (ULID PK), task_format_id, epic_format_id, title, status, branch, session_id
+       Location: .state/runtime/active-task.json
      - Create work agreement in memory domain
      - Register active_work via cf-db-operations:memory-store
      - Append to JSONL ledger (Tier 0)
@@ -229,7 +236,8 @@ Procedure:
 
 Output:
   work_id: work-{ulid}
-  task_id: {task_id}
+  task_id: {ULID PK — task-{ulid}}
+  task_format_id: {display ID — {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}}
   branch: {branch}
   scope: {file_scope}
   autorun_mode: true | false
@@ -240,7 +248,7 @@ On Failure:
   - task blocked: BLOCK with "unresolved dependencies: {blockers}"
 
 Cross-skill: cf-db-operations:memory-store, cf-db-operations:task-update
-Query: .state/db/queries/memory-queries.sql#begin-work
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [active-work-schema.md](resources/active-work-schema.md)
    Load when: Understanding work registration requirements or troubleshooting
@@ -279,7 +287,7 @@ Output:
 
 Cross-skill: cf-db-operations:memory-store
 Hook: PostToolUse/post-tool-use-memory-progress.sh (reminder)
-Query: .state/db/queries/memory-queries.sql#store
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resource: [active-work-schema.md](resources/active-work-schema.md)
    Load when: Recording progress events or understanding event types
@@ -315,19 +323,21 @@ Procedure:
 
   6. Record completion event via cf-db-operations:memory-store
 
-  7. Create sentinel for git commit (TTL: 600s)
+  7. Update active-task.json status to "completed" and then clear it
 
-  8. In autorun: Prepare verification summary for Stop hook
+  8. Create sentinel for git commit (TTL: 600s)
+
+  9. In autorun: Prepare verification summary for Stop hook
 
 Output:
   work_id: {completed work ID}
-  task_id: {task ID}
+  task_id: {ULID PK — task-{ulid}}
   sentinel_created: true
   commit_allowed_until: {expiry timestamp}
   autorun_criteria_met: [{criterion, met: true/false}] (if autorun)
 
 Cross-skill: cf-git-workflow:create-commit (enables via sentinel), cf-db-operations:memory-store, cf-db-operations:task-update
-Query: .state/db/queries/memory-queries.sql#complete-work
+Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 Note: In autorun, the Stop hook (Haiku LLM) performs additional
 verification. Both complete-work and Stop hook must approve for
@@ -378,7 +388,7 @@ On Failure:
   - If Tier 2 update fails: WARN but continue (can regenerate)
 
 Cross-skill: cf-db-operations:memory-query
-Query: .state/db/queries/memory-queries.sql#lifecycle
+Executed by: codeflow db exec/query (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
 📚 Resources:
    [active-work-schema.md](resources/active-work-schema.md) - Load when: Understanding archive structure
@@ -395,6 +405,14 @@ Query: .state/db/queries/memory-queries.sql#lifecycle
 | qa | qa | Test plans, coverage reports |
 | ops | ops | Deployment logs, incident notes |
 | documentation | documenter | Documentation notes, standards |
+
+## Parallel Work Notes
+
+- active-task.json includes session_id for per-session isolation
+- Multiple Claude Code sessions on same machine: each has own active-task context
+- Multi-user/multi-machine: .state/ is gitignored, no cross-machine conflicts
+- Worktrees: each worktree has own .state/ directory
+- cf-work-state.sh uses flock for atomicity on concurrent writes
 
 ## Resources
 

@@ -16,7 +16,7 @@
 #
 # Exit codes:
 #   - 0: All checks passed (via return, not exit)
-#   - 2: Block command (via block_command, exits script)
+#   - 2: Block command (via block_with_skill, exits script)
 
 set -euo pipefail
 
@@ -42,9 +42,8 @@ fi
 # NETWORK OPERATION DETECTION (config-driven)
 # =============================================================================
 
-INSTRUCTIONS_DIR="${REPO_ROOT}/.codeflow/config/instructions"
-
 # Check if command matches network operation patterns from config
+# Returns 0 if match found, 1 if no match
 check_network_pattern() {
     local patterns_path="$1"
 
@@ -62,26 +61,18 @@ check_network_pattern() {
     return 1  # No match
 }
 
-# Output block message from instruction file
-output_network_block() {
-    local instruction_file="${INSTRUCTIONS_DIR}/network-operations.txt"
-
-    if [[ -f "$instruction_file" ]]; then
-        cat "$instruction_file" >&2
-    else
-        # Instruction file missing - minimal error
-        echo "BLOCKED: Network operation requires sandbox bypass." >&2
-        echo "Missing instruction file: $instruction_file" >&2
-    fi
-}
-
 # =============================================================================
 # GIT NETWORK OPERATIONS
 # =============================================================================
 
 if check_network_pattern ".network_operations.git_network.patterns"; then
-    output_network_block
-    exit 2
+    if declare -f is_pathflow_active &>/dev/null && is_pathflow_active; then
+        # PathFlow mode: route to cf-gitops teammate for git network ops
+        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). In agent-teams mode, delegate to cf-gitops teammate." "git network" "security-management" "sandbox-check"
+    else
+        # Standalone mode: invoke cf-git-workflow skill
+        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). Use cf-git-workflow:sync-remote after cf-security-management:sandbox-check." "git network" "security-management" "sandbox-check"
+    fi
 fi
 
 # =============================================================================
@@ -89,8 +80,7 @@ fi
 # =============================================================================
 
 if check_network_pattern ".network_operations.github_cli.patterns"; then
-    output_network_block
-    exit 2
+    block_with_skill "Network Operation" "GitHub CLI requires sandbox bypass (dangerouslyDisableSandbox: true)" "gh cli" "security-management" "sandbox-check"
 fi
 
 # All network protection checks passed

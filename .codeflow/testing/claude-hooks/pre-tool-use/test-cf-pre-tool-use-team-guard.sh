@@ -12,10 +12,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh"
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -165,7 +164,7 @@ echo "--- Execution Tests: Non-Teammate Tools ---"
 
 # Test 17: Exits 0 for non-Teammate tool (Edit)
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -174,7 +173,7 @@ fi
 
 # Test 18: Exits 0 for non-Teammate tool (Bash)
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -183,7 +182,7 @@ fi
 
 # Test 19: Exits 0 for non-Teammate tool (Read)
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -192,7 +191,7 @@ fi
 
 # Test 20: Exits 0 when no TOOL_NAME
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_NAME"
 else
@@ -204,7 +203,7 @@ echo "--- Execution Tests: Teammate Non-Cleanup Operations ---"
 
 # Test 21: Exits 0 for Teammate with operation=spawnTeam
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"spawnTeam","team_name":"test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"spawnTeam","team_name":"test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Teammate spawnTeam"
 else
@@ -213,7 +212,7 @@ fi
 
 # Test 22: Exits 0 for Teammate with empty input
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Teammate" TOOL_INPUT='' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Teammate" TOOL_INPUT='' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Teammate with empty input"
 else
@@ -222,7 +221,7 @@ fi
 
 # Test 23: Exits 0 for Teammate with no operation field
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Teammate" TOOL_INPUT='{"team_name":"test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Teammate" TOOL_INPUT='{"team_name":"test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Teammate with no operation field"
 else
@@ -235,7 +234,7 @@ echo "--- Execution Tests: Cleanup Without PathFlow ---"
 # Test 24: Exits 0 for cleanup when pathflow-active missing
 TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for cleanup when pathflow-active missing"
@@ -251,7 +250,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 rm -rf "$TEMP_DIR"
 if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
     pass "Exits 2 for cleanup when pathflow-active exists"
@@ -264,7 +263,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" 2>&1) || true
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" </dev/null 2>&1) || true
 rm -rf "$TEMP_DIR"
 if [[ "$output" == *"PathFlow"* ]]; then
     pass "Block message mentions PathFlow"
@@ -277,7 +276,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" 2>&1) || true
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Teammate" TOOL_INPUT='{"operation":"cleanup"}' bash "$HOOK" </dev/null 2>&1) || true
 rm -rf "$TEMP_DIR"
 if [[ "$output" == *"cleanup"* ]]; then
     pass "Block message mentions cleanup"

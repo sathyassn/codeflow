@@ -113,8 +113,28 @@ Tests are organized into **modes** that determine which priority levels run. Cho
 
 ```bash
 ./codeflow test --mode essential   # Fast check (~20s)
-./codeflow test                    # Standard mode is default (~45s)
-./codeflow test --mode full        # Comprehensive (~90s)
+./codeflow test                    # Standard mode (~30s with parallel)
+./codeflow test --mode full        # Comprehensive (~40s with parallel)
+```
+
+### Parallel Execution
+
+By default, `run-all-tests.sh` runs test categories in parallel using up to 6 concurrent jobs. This typically reduces wall-clock time by 2-3x compared to sequential execution.
+
+| Flag | Effect |
+|------|--------|
+| *(default)* | Parallel with 6 jobs |
+| `--jobs N` | Override max parallel jobs |
+| `--sequential` | Force sequential execution (useful for debugging) |
+
+Single-category runs (`--category`) always execute sequentially since there is only one unit of work.
+
+The default job count is configured in `test-config.json`:
+
+```json
+"parallel": {
+    "max_jobs": 6
+}
 ```
 
 ### Priority Levels
@@ -138,9 +158,8 @@ Tests are grouped into **22 categories** for targeted testing. Use categories wh
 
 | Category | Tests |
 |----------|-------|
-| `scripts-db` | Database operations |
-| `scripts-db-lib` | Database shell library |
-| `scripts-memory` | Memory management |
+| `scripts-db` | Database schema tests |
+| `scripts-memory` | Memory management (pending Go CLI) |
 | `scripts-coordination` | CRDT and coordination |
 | `scripts-codeflow-py-lib` | Python shared library |
 | `scripts-shell-lib` | Shell shared library |
@@ -240,6 +259,8 @@ Alternative shell-based runner with **category support** and additional features
 | `--coverage` | Enable coverage enforcement |
 | `--report` | Generate JSON and text reports |
 | `--validate-coverage` | Validate test coverage mapping before running |
+| `--jobs N` | Max parallel category jobs (default: 6) |
+| `--sequential` | Force sequential execution (for debugging) |
 
 **Examples:**
 
@@ -408,6 +429,10 @@ Test behavior is controlled by `test-config.json`. This file defines priorities,
     "scripts-db": { "directory": "scripts/db" },
     "scripts-security": { "directory": "scripts/security" }
   },
+  "parallel": {
+      "max_jobs": 6,
+      "progress_style": "compact"
+  },
   "coverage_enforcement": {
     "python": { "fail_under": 85, "enforcement": "line_coverage" },
     "shell": { "enforcement": "tests_pass" }
@@ -423,6 +448,7 @@ Test behavior is controlled by `test-config.json`. This file defines priorities,
 | `modes` | Defines which priorities each mode includes |
 | `categories` | Maps category names to test directories |
 | `coverage_enforcement` | Sets coverage thresholds and enforcement mode |
+| `parallel` | Controls parallel category execution |
 
 ---
 
@@ -515,7 +541,8 @@ After creating a test file, add it to `test-config.json`:
 │   ├── test-discovery.sh     # Test file discovery
 │   ├── test-helpers.sh       # Test assertions (pass/fail)
 │   ├── test-reporting.sh     # Report generation
-│   └── test-runner.sh        # Test execution engine
+│   ├── test-runner.sh        # Test execution engine
+│   └── test-parallel.sh      # Parallel execution engine
 │
 ├── consistency/              # Cross-cutting consistency tests
 │   └── test-settings-sync.sh # Settings template consistency

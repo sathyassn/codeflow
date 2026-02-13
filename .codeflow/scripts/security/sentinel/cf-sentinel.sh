@@ -18,7 +18,7 @@ SENTINEL_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirna
 SENTINEL_CONFIG="${SENTINEL_REPO_ROOT}/.codeflow/config/enforcement/enforcement-policy.json"
 
 # Fallback defaults (used if config is missing or invalid)
-SENTINEL_DIR_DEFAULT="/tmp/claude/managed/sentinels"
+SENTINEL_DIR_DEFAULT=".state/sentinels/skill"
 SENTINEL_TTL_DEFAULT=600  # 10 minutes - matches config default for consistency
 
 # Will be set by sentinel_load_config()
@@ -29,9 +29,12 @@ SENTINEL_CONFIG_LOADED=""
 sentinel_load_config() {
     # Load configuration from enforcement-policy.json
     # Sets SENTINEL_DIR and SENTINEL_TTL from config, with fallback to defaults
+    # Session-scoped: appends CODEFLOW_SESSION_ID for isolation
 
     # Skip if already loaded
     [ -n "$SENTINEL_CONFIG_LOADED" ] && return 0
+
+    local session_id="${CODEFLOW_SESSION_ID:-unknown}"
 
     if [ -f "$SENTINEL_CONFIG" ] && command -v jq &>/dev/null; then
         # Load from config
@@ -40,7 +43,15 @@ sentinel_load_config() {
         ttl=$(jq -r '.sentinel.default_ttl // empty' "$SENTINEL_CONFIG" 2>/dev/null)
 
         # Use config values or fall back to defaults
-        SENTINEL_DIR="${dir:-$SENTINEL_DIR_DEFAULT}"
+        dir="${dir:-$SENTINEL_DIR_DEFAULT}"
+
+        # Resolve relative path against repo root
+        if [[ "$dir" != /* ]]; then
+            dir="$SENTINEL_REPO_ROOT/$dir"
+        fi
+
+        # Append session ID for isolation
+        SENTINEL_DIR="${dir}/${session_id}"
 
         # Validate TTL is a number
         if [[ "$ttl" =~ ^[0-9]+$ ]]; then
@@ -52,7 +63,7 @@ sentinel_load_config() {
         SENTINEL_CONFIG_LOADED="true"
     else
         # Config not found or jq not available - use defaults
-        SENTINEL_DIR="$SENTINEL_DIR_DEFAULT"
+        SENTINEL_DIR="$SENTINEL_REPO_ROOT/$SENTINEL_DIR_DEFAULT/${session_id}"
         SENTINEL_TTL="$SENTINEL_TTL_DEFAULT"
         SENTINEL_CONFIG_LOADED="fallback"
 
@@ -140,7 +151,7 @@ sentinel_matches_exclude_pattern() {
 
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if echo "$file_path" | grep -qE "$pattern"; then
+        if printf '%s\n' "$file_path" | grep -qE -- "$pattern"; then
             return 0  # File matches exclude pattern
         fi
     done <<< "$exclude_patterns"
@@ -252,7 +263,7 @@ sentinel_find_skill_for_command() {
             pattern=$(sentinel_get_operation_pattern "$skill" "$operation")
             [ -z "$pattern" ] && continue
 
-            if echo "$cmd" | grep -qE "$pattern"; then
+            if printf '%s\n' "$cmd" | grep -qE -- "$pattern"; then
                 echo "$skill"
                 return 0
             fi
@@ -315,7 +326,7 @@ sentinel_find_skill_for_file() {
             pattern=$(sentinel_get_operation_pattern "$skill" "$operation")
             [ -z "$pattern" ] && continue
 
-            if echo "$file_path" | grep -qE "$pattern"; then
+            if printf '%s\n' "$file_path" | grep -qE -- "$pattern"; then
                 # Track longest pattern (most specific match)
                 local pattern_len=${#pattern}
                 if [ "$pattern_len" -gt "$best_pattern_len" ]; then
@@ -377,7 +388,7 @@ sentinel_find_skill_for_grep() {
             file_pattern=$(sentinel_get_operation_pattern "$skill" "$operation")
             [ -z "$file_pattern" ] && continue
 
-            if ! echo "$file_path" | grep -qE "$file_pattern"; then
+            if ! printf '%s\n' "$file_path" | grep -qE -- "$file_pattern"; then
                 continue
             fi
 
@@ -387,7 +398,7 @@ sentinel_find_skill_for_grep() {
 
             if [ -n "$cfg_content_pattern" ]; then
                 # Content pattern specified - check if search pattern matches
-                if echo "$content_pattern" | grep -qE "$cfg_content_pattern"; then
+                if printf '%s\n' "$content_pattern" | grep -qE -- "$cfg_content_pattern"; then
                     echo "${skill}:${operation}"
                     return 0
                 fi
@@ -452,8 +463,9 @@ sentinel_create() {
     created=$(date +%s)
     local expires=$((created + ttl))
 
-    # Escape backslashes for valid JSON (\ -> \\)
+    # Escape for valid JSON: backslashes first, then double quotes
     local json_pattern="${tool_pattern//\\/\\\\}"
+    json_pattern="${json_pattern//\"/\\\"}"
 
     cat > "$SENTINEL_DIR/$filename" << EOF
 {
@@ -499,7 +511,7 @@ sentinel_validate() {
 
         # Check pattern matches tool input (skip if pattern is empty)
         [ -z "$tool_pattern" ] && continue
-        if echo "$tool_input" | grep -qE "$tool_pattern"; then
+        if printf '%s\n' "$tool_input" | grep -qE -- "$tool_pattern"; then
             return 0  # Valid sentinel found
         fi
     done < <(find "$SENTINEL_DIR" -maxdepth 1 -name "${skill}:*.json" -type f 2>/dev/null)
@@ -597,4 +609,143 @@ sentinel_list() {
             echo "  $sentinel (EXPIRED)"
         fi
     done
+}
+
+# =============================================================================
+# PATHFLOW SENTINEL SUPPORT (V4 Dual-Type)
+# =============================================================================
+# PathFlow sentinels are session-scoped (no TTL) and stored separately from
+# skill sentinels. They track phase progression (pf-1 through pf-7) and
+# work stages (ws-dev-done, ws-rev-done, ws-qa-done, ws-work-done).
+sentinel_pathflow_dir() {
+    # Returns the PathFlow sentinel directory path
+    # PathFlow sentinels are stored separately from skill sentinels
+    local repo_root="${SENTINEL_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+    local session_id="${CODEFLOW_SESSION_ID:-unknown}"
+    printf '%s\n' "$repo_root/.state/sentinels/pathflow/${session_id}"
+}
+
+sentinel_create_pathflow() {
+    # Create a PathFlow sentinel (session-scoped, no TTL)
+    # Arguments: type skill operation
+    # Returns: filename of created sentinel
+    local pf_type="$1"
+    local skill="$2"
+    local operation="$3"
+
+    local pf_dir
+    pf_dir=$(sentinel_pathflow_dir)
+    mkdir -p "$pf_dir"
+
+    # Portable ID generation
+    local id
+    id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$$-$(date +%s)")
+    local short_id="${id:0:6}"
+    local filename="pathflow-${pf_type}-${short_id}.json"
+    local created_at
+    created_at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    local session_id="${CODEFLOW_SESSION_ID:-unknown}"
+
+    if command -v jq &>/dev/null; then
+        jq -nc \
+            --arg type "pathflow" \
+            --arg sentinel "pathflow:${pf_type}" \
+            --arg skill "$skill" \
+            --arg operation "$operation" \
+            --arg created_at "$created_at" \
+            --arg session_id "$session_id" \
+            '{type: $type, sentinel: $sentinel, skill: $skill, operation: $operation, created_at: $created_at, session_id: $session_id}' \
+            > "$pf_dir/$filename"
+    else
+        printf '{\n  "type": "pathflow",\n  "sentinel": "pathflow:%s",\n  "skill": "%s",\n  "operation": "%s",\n  "created_at": "%s",\n  "session_id": "%s"\n}\n' "$pf_type" "$skill" "$operation" "$created_at" "$session_id" > "$pf_dir/$filename"
+    fi
+
+    printf '%s\n' "$filename"
+}
+
+sentinel_validate_pathflow() {
+    # Check if a valid PathFlow sentinel exists for a given type
+    # Arguments: type (e.g., "pf-3", "ws-dev-done")
+    # Returns: 0 if found, 1 if not
+    local pf_type="$1"
+
+    local pf_dir
+    pf_dir=$(sentinel_pathflow_dir)
+
+    [ -d "$pf_dir" ] || return 1
+
+    # Look for files matching pathflow-{type}-*.json
+    for file in "$pf_dir"/pathflow-"${pf_type}"-*.json; do
+        [ -f "$file" ] && return 0
+    done
+
+    return 1
+}
+
+sentinel_cleanup_pathflow() {
+    # Remove ALL PathFlow sentinels for current session
+    # Returns: count of removed sentinels
+    local pf_dir
+    pf_dir=$(sentinel_pathflow_dir)
+    local cleaned=0
+
+    [ -d "$pf_dir" ] || { echo "0"; return 0; }
+
+    for file in "$pf_dir"/pathflow-*.json; do
+        [ -f "$file" ] || continue
+        rm -f "$file"
+        ((cleaned++)) || true
+    done
+
+    echo "$cleaned"
+}
+
+sentinel_list_pathflow() {
+    # List all PathFlow sentinels for current session
+    local pf_dir
+    pf_dir=$(sentinel_pathflow_dir)
+
+    echo "PathFlow Sentinels:"
+
+    if [ ! -d "$pf_dir" ]; then
+        echo "  (none)"
+        return 0
+    fi
+
+    local found=false
+    for file in "$pf_dir"/pathflow-*.json; do
+        [ -f "$file" ] || continue
+        found=true
+
+        local sentinel_name created_at
+        if command -v jq &>/dev/null; then
+            sentinel_name=$(jq -r '.sentinel // "unknown"' "$file" 2>/dev/null)
+            created_at=$(jq -r '.created_at // "unknown"' "$file" 2>/dev/null)
+        else
+            sentinel_name=$(basename "$file" .json)
+            created_at="unknown"
+        fi
+
+        echo "  $sentinel_name (created: $created_at)"
+    done
+
+    if [ "$found" = "false" ]; then
+        echo "  (none)"
+    fi
+}
+
+sentinel_is_pathflow_mode() {
+    # Check if PathFlow mode is currently active
+    # Uses context-lib.sh is_pathflow_active if available,
+    # otherwise checks the flag file directly.
+    # Returns: 0 if active, 1 if not
+    if declare -f is_pathflow_active &>/dev/null; then
+        is_pathflow_active
+        return $?
+    fi
+
+    # Direct flag file check as fallback
+    local repo_root="${SENTINEL_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+    local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+    [ -f "$flag_file" ]
 }

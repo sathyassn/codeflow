@@ -8,19 +8,13 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-SCRIPT="$REPO_ROOT/.codeflow/scripts/security/staging/cf-cleanup-expired.sh"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+source "$TEST_DIR/../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-cleanup-expired.sh"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-# Cleanup
-cleanup() {
-    rm -rf "$STAGING_DIR" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=== Testing cf-cleanup-expired.sh ==="
 echo ""

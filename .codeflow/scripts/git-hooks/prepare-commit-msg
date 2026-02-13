@@ -44,6 +44,11 @@ if [[ "$COMMIT_SOURCE" == "commit" ]]; then
     exit 0
 fi
 
+# Skip for squash merges (preserve squash message)
+if [[ "$COMMIT_SOURCE" == "squash" ]]; then
+    exit 0
+fi
+
 # =============================================================================
 # BRANCH DETECTION
 # =============================================================================
@@ -54,7 +59,7 @@ BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 COMMIT_TYPE=""
 COMMIT_SCOPE=""
 
-if [[ "$BRANCH" =~ ^(feat|fix|docs|refactor|test|chore|perf|ci|build)/(.+)$ ]]; then
+if [[ "$BRANCH" =~ ^(feat|fix|bugfix|hotfix|docs|refactor|test|chore|style|perf|build|ci|revert|merge|plan|refine)/(.+)$ ]]; then
     COMMIT_TYPE="${BASH_REMATCH[1]}"
     SCOPE_PART="${BASH_REMATCH[2]}"
 
@@ -88,7 +93,8 @@ if [[ -z "$CURRENT_MSG" ]] || [[ "$CURRENT_MSG" == "# "* ]]; then
         echo "# Conventional commit format:"
         echo "#   type(scope): description"
         echo "#"
-        echo "# Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build"
+        echo "# Types: feat, fix, bugfix, hotfix, docs, refactor, test, chore,"
+        echo "#        style, perf, build, ci, revert, merge, plan, refine"
         echo "#"
         echo "# Examples:"
         echo "#   feat: add user authentication"

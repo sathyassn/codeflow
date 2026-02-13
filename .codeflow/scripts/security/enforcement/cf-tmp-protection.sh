@@ -6,7 +6,7 @@
 # This module handles:
 #   - Section 11: Managed Tmp Protection
 #     - Protects /tmp/claude/managed/ folder structure
-#     - Blocks deletion of managed folders (protected-edits, state)
+#     - Blocks deletion of managed folders (config-driven via enforcement-policy.json)
 #     - Blocks deletion of state files (but allows create/edit)
 #
 # Required variables (set by caller):
@@ -29,10 +29,9 @@ source "${LIB_DIR}/security-lib.sh"
 # SECTION 11: Managed Tmp Protection
 # =============================================================================
 # Purpose: Protect the managed tmp structure from accidental deletion
-# Structure:
+# Structure (config-driven, defaults shown):
 #   /tmp/claude/managed/               - Container (protected from deletion)
 #   /tmp/claude/managed/protected-edits/ - For protected resource workflow
-#   /tmp/claude/managed/state/         - For state tracking
 
 # Block deletion/rename of managed folders
 for folder in "${MANAGED_TMP_FOLDERS[@]}"; do
@@ -42,7 +41,7 @@ for folder in "${MANAGED_TMP_FOLDERS[@]}"; do
       "Managed Tmp Protection" \
       "Cannot delete/rename managed folder" \
       "$folder" \
-      "cf-security-management" \
+      "security-management" \
       "diagnose-permission-error"
   fi
   # Also catch rm -rf targeting the folder
@@ -52,7 +51,7 @@ for folder in "${MANAGED_TMP_FOLDERS[@]}"; do
       "Managed Tmp Protection" \
       "Cannot delete managed folder recursively" \
       "$folder" \
-      "cf-security-management" \
+      "security-management" \
       "diagnose-permission-error"
   fi
 done
@@ -63,7 +62,7 @@ if [[ "$COMMAND" =~ (rm|unlink)[[:space:]]+((-[a-zA-Z]+[[:space:]]+)*)"$STATE_FO
     "State File Protection" \
     "State files protected from deletion. User can rm manually if needed." \
     "${STATE_FOLDER}/*" \
-    "cf-security-management" \
+    "security-management" \
     "diagnose-permission-error"
 fi
 

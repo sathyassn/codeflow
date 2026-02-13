@@ -101,6 +101,164 @@ test_die_default_exit_code() {
 }
 
 # ============================================================================
+# TEST: die_if / die_unless
+# ============================================================================
+
+test_die_if_true_condition() {
+    test_section "die_if: true condition"
+
+    # die_if should exit when condition is true
+    local exit_code
+    exit_code=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        die_if "[[ 1 -eq 1 ]]" "condition was true" 5
+        echo "unreachable"
+    ' 2>&1 || echo "EXIT:$?")
+
+    if [[ "$exit_code" == *"EXIT:5"* ]]; then
+        test_pass "die_if exits when condition is true"
+    else
+        test_fail "die_if should exit when condition is true: $exit_code"
+    fi
+}
+
+test_die_if_false_condition() {
+    test_section "die_if: false condition"
+
+    # die_if should NOT exit when condition is false
+    local result
+    result=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        die_if "[[ 1 -eq 2 ]]" "should not die"
+        echo "OK"
+    ' 2>&1)
+
+    if [[ "$result" == *"OK"* ]]; then
+        test_pass "die_if continues when condition is false"
+    else
+        test_fail "die_if should continue when condition is false: $result"
+    fi
+}
+
+test_die_unless_true_condition() {
+    test_section "die_unless: true condition"
+
+    # die_unless should NOT exit when condition is true
+    local result
+    result=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        die_unless "[[ 1 -eq 1 ]]" "should not die"
+        echo "OK"
+    ' 2>&1)
+
+    if [[ "$result" == *"OK"* ]]; then
+        test_pass "die_unless continues when condition is true"
+    else
+        test_fail "die_unless should continue when condition is true: $result"
+    fi
+}
+
+test_die_unless_false_condition() {
+    test_section "die_unless: false condition"
+
+    # die_unless should exit when condition is false
+    local exit_code
+    exit_code=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        die_unless "[[ 1 -eq 2 ]]" "condition was false" 4
+        echo "unreachable"
+    ' 2>&1 || echo "EXIT:$?")
+
+    if [[ "$exit_code" == *"EXIT:4"* ]]; then
+        test_pass "die_unless exits when condition is false"
+    else
+        test_fail "die_unless should exit when condition is false: $exit_code"
+    fi
+}
+
+# ============================================================================
+# TEST: Error Trap
+# ============================================================================
+
+test_setup_error_trap() {
+    test_section "setup_error_trap"
+
+    # setup_error_trap should install ERR trap that calls handle_error
+    local output
+    output=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        setup_error_trap
+        trap -p ERR
+    ' 2>&1)
+
+    if [[ "$output" == *"handle_error"* ]]; then
+        test_pass "setup_error_trap installs ERR trap"
+    else
+        test_fail "setup_error_trap should install ERR trap: $output"
+    fi
+}
+
+test_handle_error_output() {
+    test_section "handle_error"
+
+    # handle_error should log error details
+    local output
+    output=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        handle_error 42 100 "failing_command"
+    ' 2>&1)
+
+    if [[ "$output" == *"line 100"* ]] && [[ "$output" == *"failing_command"* ]]; then
+        test_pass "handle_error logs line number and command"
+    else
+        test_fail "handle_error should log error details: $output"
+    fi
+}
+
+# ============================================================================
+# TEST: Source Guard
+# ============================================================================
+
+test_source_guard() {
+    test_section "source guard"
+
+    # Sourcing errors.sh twice should not fail
+    local result
+    result=$(bash -c '
+        REPO_ROOT="'"$(find_repo_root)"'"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/common.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/logging.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        source "$REPO_ROOT/.codeflow/scripts/shell-lib/errors.sh"
+        echo "OK"
+    ' 2>&1)
+
+    if [[ "$result" == *"OK"* ]]; then
+        test_pass "errors.sh can be sourced twice safely"
+    else
+        test_fail "errors.sh should be safe to source twice: $result"
+    fi
+}
+
+# ============================================================================
 # TEST: Assertions
 # ============================================================================
 
@@ -369,6 +527,17 @@ main() {
     # Die functions
     test_die
     test_die_default_exit_code
+    test_die_if_true_condition
+    test_die_if_false_condition
+    test_die_unless_true_condition
+    test_die_unless_false_condition
+
+    # Error trap
+    test_setup_error_trap
+    test_handle_error_output
+
+    # Source guard
+    test_source_guard
 
     # Assertions
     test_assert_file_exists_pass

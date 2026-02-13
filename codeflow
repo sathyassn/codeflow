@@ -129,6 +129,27 @@ cmd_test() {
     fi
 }
 
+# Mode command - change approval mode (interactive only)
+cmd_mode() {
+    if [[ ! -d "$CODEFLOW_DIR" ]]; then
+        echo -e "${RED}Error:${NC} Not in a CodeFlow project (.codeflow/ not found)"
+        exit 1
+    fi
+
+    local mode_script="$CODEFLOW_DIR/scripts/settings/cf-change-approval-mode.sh"
+    if [[ ! -f "$mode_script" ]]; then
+        echo -e "${RED}Error:${NC} Mode script not found at $mode_script"
+        exit 1
+    fi
+
+    # Default to --status when no arguments given
+    if [[ $# -eq 0 ]]; then
+        exec bash "$mode_script" --status
+    fi
+
+    exec bash "$mode_script" "$@"
+}
+
 # Version - can show basic info locally, or defer to global
 cmd_version() {
     echo -e "${BOLD}CodeFlow${NC}"
@@ -163,6 +184,7 @@ ${BOLD}USAGE:${NC}
 
 ${BOLD}LOCAL COMMANDS:${NC} (work without global CLI)
     test [options]     Run tests
+    mode [mode]        View or change approval mode
     version            Show versions
     help               Show this help
 
@@ -178,7 +200,18 @@ ${BOLD}TEST OPTIONS:${NC}
     --coverage, -c     Enable coverage enforcement
     <file>             Run single test file
 
+${BOLD}MODE OPTIONS:${NC}
+    strict             Maximum safety, ask for everything
+    standard           Balanced mode (recommended)
+    autonomous         High automation, ask for network git only
+    permissive         Maximum automation, L0 blocks only
+    --list             List available modes with descriptions
+    --status           Show current mode (default when no args)
+
 ${BOLD}EXAMPLES:${NC}
+    ./codeflow mode                          Show current mode
+    ./codeflow mode strict                   Switch to strict mode
+    ./codeflow mode --list                   List available modes
     ./codeflow test                          Run tests
     ./codeflow test --mode full --coverage   Full tests with coverage
     ./codeflow test path/to/test_file.py     Run single test
@@ -213,6 +246,10 @@ main() {
         test)
             shift
             cmd_test "$@"
+            ;;
+        mode)
+            shift
+            cmd_mode "$@"
             ;;
         version|--version|-v)
             cmd_version

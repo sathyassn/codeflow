@@ -30,6 +30,8 @@ assert_true() {
     local condition="$1"
     local description="$2"
 
+    # Disable glob expansion to prevent ** patterns from expanding during eval
+    set -f
     if eval "$condition"; then
         echo "PASS: $description"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -37,12 +39,14 @@ assert_true() {
         echo "FAIL: $description"
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
+    set +f
 }
 
 assert_false() {
     local condition="$1"
     local description="$2"
 
+    set -f
     if ! eval "$condition"; then
         echo "PASS: $description"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -50,6 +54,7 @@ assert_false() {
         echo "FAIL: $description"
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
+    set +f
 }
 
 assert_equals() {
@@ -202,6 +207,53 @@ else
     echo "FAIL: Should extract multiple paths (got '$RESULT')"
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
+
+# Test 29: is_path_within - prefix boundary check (prevents false positives)
+echo "Test 29: Path within - prefix boundary"
+assert_false "is_path_within 'srcextra/file.py' 'src'" "srcextra should not be within src"
+
+# Test 30: matches_extended_glob with deep recursive
+echo "Test 30: Deep recursive glob match"
+if matches_extended_glob 'a/b/c/d/e.py' 'a/**/*.py'; then
+    echo "PASS: Should match deep path"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Should match deep path"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Test 31: matches_extended_glob with ** at end (directory match)
+echo "Test 31: Recursive glob at end"
+if matches_extended_glob '.claude/hooks/codeflow/pre-tool-use/hook.sh' '.claude/hooks/codeflow/**'; then
+    echo "PASS: Should match ** at end"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Should match ** at end"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Test 32: normalize_path handles double slashes
+echo "Test 32: Normalize path - double slashes"
+RESULT=$(normalize_path "src//lib//file.py")
+assert_equals "src/lib/file.py" "$RESULT" "Should remove double slashes"
+
+# Test 33: source guard prevents double-sourcing
+echo "Test 33: Source guard"
+if [[ -n "${_PATTERN_MATCHING_SOURCED:-}" ]]; then
+    echo "PASS: Source guard variable is set"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo "FAIL: Source guard variable should be set after sourcing"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Test 34: is_risky_pattern - /tmp/* is risky
+echo "Test 34: Risky pattern - /tmp/*"
+assert_true "is_risky_pattern '/tmp/*'" "/tmp/* should be risky"
+
+# Test 35: matches_extended_glob with dotfiles
+echo "Test 35: Glob match with dotfile pattern"
+assert_true "matches_extended_glob '.claude/settings.json' '.claude/*.json'" "Should match dotfile glob"
 
 echo ""
 echo "=== Test Summary ==="

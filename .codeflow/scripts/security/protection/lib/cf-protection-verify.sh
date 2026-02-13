@@ -71,12 +71,12 @@ check_path_status() {
         if [[ -d "$full_path" ]]; then
             first_file=$(find "$full_path" -type f -print -quit 2>/dev/null)
             if [[ -n "$first_file" ]]; then
-                # shellcheck disable=SC2012
+                # shellcheck disable=SC2012 # ls -lO required for macOS immutable flags
                 flags=$(ls -lO "$first_file" 2>/dev/null | awk '{print $5}')
                 [[ "$flags" == *"uchg"* ]] && immutable="yes"
             fi
         else
-            # shellcheck disable=SC2012
+            # shellcheck disable=SC2012 # ls -lO required for macOS immutable flags
             flags=$(ls -lO "$full_path" 2>/dev/null | awk '{print $5}')
             [[ "$flags" == *"uchg"* ]] && immutable="yes"
         fi
@@ -165,6 +165,8 @@ show_status() {
 }
 
 # Verify protection by attempting writes
+# For directories: tries to create a file inside
+# For files: tries to write to the file itself (non-destructively)
 verify_protection() {
     echo ""
     echo "Verification Test"
@@ -197,7 +199,8 @@ verify_protection() {
                 return 0
             fi
         else
-            # File: test writing to the file itself
+            # File: test writing to the file itself (non-destructive append of nothing)
+            # This tests if the file can be opened for writing, without modifying content
             if sudo -u "$original_user" bash -c "echo -n >> '$full_path'" 2>/dev/null; then
                 echo -e "  ${RED}FAIL${NC} $path (file write succeeded)"
                 return 1

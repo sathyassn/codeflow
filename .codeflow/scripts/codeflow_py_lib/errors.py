@@ -86,7 +86,7 @@ class JSONLError(CodeFlowError):
 
 
 class ScriptError(CodeFlowError):
-    """Script execution errors."""
+    """Memory/coordination script errors."""
 
     def __init__(
         self,

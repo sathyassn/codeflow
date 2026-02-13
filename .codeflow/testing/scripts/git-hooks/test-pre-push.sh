@@ -414,7 +414,8 @@ test_prepush_with_output \
 echo ""
 echo "--- Valid prefix branches (behavioral) ---"
 
-for prefix in feat fix docs refactor test chore plan experiment release hotfix bugfix feature perf style build ci revert merge wip refine; do
+# Note: release/* is excluded - it's a protected branch pattern (glob match)
+for prefix in feat fix docs refactor test chore plan experiment hotfix bugfix feature perf style build ci revert merge wip refine; do
     test_prepush \
         "Should allow push to ${prefix}/something" \
         0 \
@@ -447,9 +448,9 @@ echo ""
 echo "--- Error message content (behavioral) ---"
 
 test_prepush_with_output \
-    "Force push error should mention creating a PR" \
+    "Force push error should mention skill remediation" \
     1 \
-    "create a PR" \
+    "create-pull-request" \
     "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
     "origin" \
     "https://github.com/test/repo.git" \
@@ -465,6 +466,48 @@ test_prepush_with_output \
     "https://github.com/test/repo.git" \
     "not-ancestor" \
     "main"
+
+# ============================================================================
+# Behavioral Test 15: release/* glob matching (should BLOCK as protected)
+# ============================================================================
+echo ""
+echo "--- Protected branch glob matching (behavioral) ---"
+
+test_prepush_with_output \
+    "Should block push to release/v1.0 (glob match)" \
+    1 \
+    "protected branch" \
+    "refs/heads/release/v1.0 $FAKE_LOCAL refs/heads/release/v1.0 $FAKE_REMOTE" \
+    "origin" \
+    "https://github.com/test/repo.git" \
+    "ancestor" \
+    "release/v1.0"
+
+test_prepush_with_output \
+    "Should block push to release/2.0-rc1 (glob match)" \
+    1 \
+    "protected branch" \
+    "refs/heads/release/2.0-rc1 $FAKE_LOCAL refs/heads/release/2.0-rc1 $FAKE_REMOTE" \
+    "origin" \
+    "https://github.com/test/repo.git" \
+    "ancestor" \
+    "release/2.0-rc1"
+
+# ============================================================================
+# Pattern Tests: New features
+# ============================================================================
+echo ""
+echo "--- New feature pattern checks ---"
+
+check_pattern "is_force_push" "Should have is_force_push function"
+check_pattern "log_override" "Should have log_override function"
+check_pattern "is_pathflow_active" "Should have is_pathflow_active function"
+check_pattern "REPO_ROOT.*:-" "Should have overridable REPO_ROOT"
+check_pattern ">&2" "Should output errors to stderr"
+check_pattern "Emergency Override" "Should have emergency override section"
+check_pattern "cf-gitops" "Should mention cf-gitops teammate for PathFlow mode"
+check_pattern "cf-git-workflow" "Should mention cf-git-workflow skill for standalone mode"
+check_pattern "push-overrides.log" "Should log overrides to push-overrides.log"
 
 # ============================================================================
 # Summary

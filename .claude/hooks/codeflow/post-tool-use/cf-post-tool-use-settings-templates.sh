@@ -33,7 +33,7 @@ readonly VERSION="2.2.0"
 # -----------------------------------------------------------------------------
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
 # Config file path (relative to repo root)
@@ -342,7 +342,7 @@ main() {
     if [[ "$file_path" == /* ]]; then
         template_dir=$(dirname "$file_path")
     else
-        template_dir="$TEMPLATE_DIR_RELATIVE"
+        template_dir="$repo_root/$TEMPLATE_DIR_RELATIVE"
     fi
 
     # Verify template consistency

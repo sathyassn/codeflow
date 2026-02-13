@@ -4,49 +4,85 @@
 #
 # Tests SessionEnd cleanup hook
 # Verifies proper cleanup of sentinels, state files, and temp files
+#
+# Compatibility: bash 3.2+ (macOS compatible)
 
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh"
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
 
-export REPO_ROOT
+# Allow override for testing the fixed version
+if [[ -n "${HOOK_OVERRIDE:-}" ]] && [[ -f "$HOOK_OVERRIDE" ]]; then
+    HOOK="$HOOK_OVERRIDE"
+else
+    HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh"
+fi
 
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
-fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
+pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); }
+fail() { echo "FAIL: $1${2:+ ($2)}"; TESTS_FAILED=$((TESTS_FAILED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); }
 
 # Setup test directories
 setup_test_dirs() {
-    mkdir -p /tmp/claude/managed/sentinels 2>/dev/null || true
-    mkdir -p /tmp/claude/managed/state 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/sentinels/skill" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/session" 2>/dev/null || true
     mkdir -p /tmp/claude/sessions/test-session 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/sentinels" 2>/dev/null || true
 }
 
 # Cleanup test artifacts
 cleanup_test_artifacts() {
-    rm -f /tmp/claude/managed/sentinels/test-*.json 2>/dev/null || true
-    rm -f /tmp/claude/managed/state/*-test-session* 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/sentinels/skill"/test-*.json 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/session"/*-test-session* 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/session"/memory-progress-* 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/sentinels"/pathflow-* 2>/dev/null || true
     rm -rf /tmp/claude/sessions/test-session 2>/dev/null || true
+}
+
+# Helper: create a sentinel JSON with specific expiry
+create_sentinel() {
+    local name="$1"
+    local expires="$2"
+    local dir="${3:-$REPO_ROOT/.state/sentinels/skill}"
+    cat > "$dir/$name" <<EOF
+{"skill":"test","operation":"test","expires":$expires,"created":$(date +%s)}
+EOF
+}
+
+# Helper: run hook with optional stdin JSON
+run_hook() {
+    local session_id="${1:-test-session}"
+    local stdin_json="${2:-}"
+    if [[ -n "$stdin_json" ]]; then
+        echo "$stdin_json" | CODEFLOW_SESSION_ID="$session_id" bash "$HOOK" 2>&1
+    else
+        CODEFLOW_SESSION_ID="$session_id" bash "$HOOK" </dev/null 2>&1
+    fi
 }
 
 echo "=== Testing cf-session-end-cleanup.sh ==="
 echo ""
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Hook Basics
+# ═══════════════════════════════════════════════════════════════════════════════
+
+echo "--- Hook Basics ---"
+
 # Test 1: File exists
-TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$HOOK" ]]; then pass "Hook file exists"; else fail "Hook file not found"; fi
 
 # Test 2: File is executable
-TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -x "$HOOK" ]]; then pass "Hook is executable"; else fail "Hook not executable"; fi
 
 # Test 3: Shellcheck passes
-TESTS_RUN=$((TESTS_RUN + 1))
 if command -v shellcheck &>/dev/null; then
     if shellcheck -e SC1091 "$HOOK" 2>/dev/null; then
         pass "Passes shellcheck"
@@ -58,7 +94,6 @@ else
 fi
 
 # Test 4: Has proper header comments
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Purpose:" "$HOOK" && grep -q "Exit codes:" "$HOOK"; then
     pass "Has proper header comments"
 else
@@ -66,7 +101,6 @@ else
 fi
 
 # Test 5: Uses set -euo pipefail
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "set -euo pipefail" "$HOOK"; then
     pass "Uses strict mode"
 else
@@ -74,7 +108,6 @@ else
 fi
 
 # Test 6: Has VERSION constant
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "VERSION=" "$HOOK" || grep -q "readonly VERSION" "$HOOK"; then
     pass "Has VERSION constant"
 else
@@ -82,7 +115,6 @@ else
 fi
 
 # Test 7: Has Hook Type header
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Hook Type:" "$HOOK"; then
     pass "Has Hook Type header"
 else
@@ -90,7 +122,6 @@ else
 fi
 
 # Test 8: Has Location header
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then
     pass "Has Location header"
 else
@@ -101,8 +132,7 @@ echo ""
 echo "--- Execution Tests ---"
 
 # Test 9: Exits 0 on execution
-TESTS_RUN=$((TESTS_RUN + 1))
-result=$(bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 on execution"
 else
@@ -110,8 +140,7 @@ else
 fi
 
 # Test 10: Exits 0 with session ID
-TESTS_RUN=$((TESTS_RUN + 1))
-result=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 with session ID"
 else
@@ -119,8 +148,7 @@ else
 fi
 
 # Test 11: Exits 0 without session ID
-TESTS_RUN=$((TESTS_RUN + 1))
-result=$(bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 without session ID"
 else
@@ -128,7 +156,6 @@ else
 fi
 
 # Test 12: Has exit 0 at end
-TESTS_RUN=$((TESTS_RUN + 1))
 last_exit=$(grep "^exit" "$HOOK" | tail -1)
 if [[ "$last_exit" == "exit 0" ]]; then
     pass "Has exit 0 at end"
@@ -140,7 +167,6 @@ echo ""
 echo "--- Sentinel Cleanup ---"
 
 # Test 13: Has sentinel cleanup logic
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -qE "sentinel|SENTINEL" "$HOOK"; then
     pass "Has sentinel cleanup logic"
 else
@@ -148,23 +174,20 @@ else
 fi
 
 # Test 14: References SENTINEL_DIR
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "SENTINEL_DIR" "$HOOK"; then
     pass "References SENTINEL_DIR"
 else
     fail "Should reference SENTINEL_DIR"
 fi
 
-# Test 15: Cleans *.json sentinel files
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -qF '*.json' "$HOOK" && grep -q "SENTINEL_DIR" "$HOOK"; then
-    pass "Cleans *.json sentinel files"
+# Test 15: Uses expired-only sentinel cleanup (not rm -f *.json)
+if grep -q "sentinel.*clean\|expired\|_sentinels_cleaned" "$HOOK"; then
+    pass "Uses expired-only sentinel cleanup"
 else
-    fail "Should clean *.json sentinel files"
+    fail "Should use expired-only sentinel cleanup"
 fi
 
 # Test 16: Reads sentinel directory from config
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "sentinel.directory" "$HOOK"; then
     pass "Reads sentinel directory from config"
 else
@@ -172,8 +195,7 @@ else
 fi
 
 # Test 17: Has fallback sentinel directory
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "/tmp/claude/managed/sentinels" "$HOOK"; then
+if grep -q ".state/sentinels/skill" "$HOOK"; then
     pass "Has fallback sentinel directory"
 else
     fail "Should have fallback sentinel directory"
@@ -183,7 +205,6 @@ echo ""
 echo "--- State Cleanup ---"
 
 # Test 18: Has state cleanup logic
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "STATE_DIR" "$HOOK"; then
     pass "Has state cleanup logic"
 else
@@ -191,7 +212,6 @@ else
 fi
 
 # Test 19: Cleans session-specific state files
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q 'SESSION_ID' "$HOOK" && grep -q "STATE_DIR" "$HOOK"; then
     pass "Cleans session-specific state files"
 else
@@ -199,23 +219,20 @@ else
 fi
 
 # Test 20: Reads state directory from config
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "state_folder\|managed_tmp" "$HOOK"; then
+if grep -q "STATE_DIR\|SHARED_STATE_DIR\|SESSION_STATE_DIR" "$HOOK"; then
     pass "Reads state directory from config"
 else
     fail "Should read state directory from config"
 fi
 
 # Test 21: Has fallback state directory
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "/tmp/claude/managed/state" "$HOOK"; then
+if grep -q '.state/session' "$HOOK"; then
     pass "Has fallback state directory"
 else
     fail "Should have fallback state directory"
 fi
 
 # Test 22: Only cleans state for known session
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q 'SESSION_ID.*!=.*unknown' "$HOOK"; then
     pass "Only cleans state for known session"
 else
@@ -226,7 +243,6 @@ echo ""
 echo "--- Temp File Cleanup ---"
 
 # Test 23: Has temp cleanup logic
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "TEMP_DIR" "$HOOK"; then
     pass "Has temp cleanup logic"
 else
@@ -234,7 +250,6 @@ else
 fi
 
 # Test 24: References session temp directory
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "/tmp/claude/sessions" "$HOOK"; then
     pass "References session temp directory"
 else
@@ -242,7 +257,6 @@ else
 fi
 
 # Test 25: Uses rm -rf for temp cleanup
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "rm -rf.*TEMP_DIR" "$HOOK"; then
     pass "Uses rm -rf for temp cleanup"
 else
@@ -253,7 +267,6 @@ echo ""
 echo "--- Config Integration ---"
 
 # Test 26: References enforcement-policy.json
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "enforcement-policy.json" "$HOOK"; then
     pass "References enforcement-policy.json"
 else
@@ -261,7 +274,6 @@ else
 fi
 
 # Test 27: Uses jq for JSON parsing
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "jq" "$HOOK"; then
     pass "Uses jq for JSON parsing"
 else
@@ -269,7 +281,6 @@ else
 fi
 
 # Test 28: Has jq availability check
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "command -v jq" "$HOOK"; then
     pass "Has jq availability check"
 else
@@ -277,7 +288,6 @@ else
 fi
 
 # Test 29: Has jq error handling
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q 'jq.*2>/dev/null' "$HOOK" || grep -q 'jq.*|| echo' "$HOOK"; then
     pass "Has jq error handling"
 else
@@ -288,7 +298,6 @@ echo ""
 echo "--- Code Quality ---"
 
 # Test 30: Uses robust REPO_ROOT with git rev-parse
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "git rev-parse --show-toplevel" "$HOOK"; then
     pass "Uses robust REPO_ROOT with git rev-parse"
 else
@@ -296,7 +305,6 @@ else
 fi
 
 # Test 31: Has proper fallback grouping for REPO_ROOT
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q '|| { cd' "$HOOK"; then
     pass "Has proper fallback grouping for REPO_ROOT"
 else
@@ -304,7 +312,6 @@ else
 fi
 
 # Test 32: Exports REPO_ROOT
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "export REPO_ROOT" "$HOOK"; then
     pass "Exports REPO_ROOT"
 else
@@ -312,7 +319,6 @@ else
 fi
 
 # Test 33: Documents bash compatibility
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -qi "bash 3.2\|Compatibility:" "$HOOK"; then
     pass "Documents bash compatibility"
 else
@@ -320,7 +326,6 @@ else
 fi
 
 # Test 34: Has CONFIG variable
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "CONFIG=" "$HOOK"; then
     pass "Has CONFIG variable"
 else
@@ -328,7 +333,6 @@ else
 fi
 
 # Test 35: All exits are 0
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -qE "exit [1-9]" "$HOOK" 2>/dev/null; then
     fail "SessionEnd should only have exit 0"
 else
@@ -339,7 +343,6 @@ echo ""
 echo "--- Error Handling ---"
 
 # Test 36: Has error suppression for rm commands
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q 'rm.*|| true' "$HOOK"; then
     pass "Has error suppression for rm commands"
 else
@@ -347,7 +350,6 @@ else
 fi
 
 # Test 37: Has 2>/dev/null for rm commands
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q 'rm.*2>/dev/null' "$HOOK"; then
     pass "Has stderr suppression for rm commands"
 else
@@ -355,7 +357,6 @@ else
 fi
 
 # Test 38: Checks directory existence before cleanup
-TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q '\[\[ -d.*SENTINEL_DIR' "$HOOK" && grep -q '\[\[ -d.*TEMP_DIR' "$HOOK"; then
     pass "Checks directory existence before cleanup"
 else
@@ -365,23 +366,35 @@ fi
 echo ""
 echo "--- Functional Tests ---"
 
-# Test 39: Actually cleans sentinel files
-TESTS_RUN=$((TESTS_RUN + 1))
+# Test 39: Session sentinels are cleaned (session-end removes all for session)
 setup_test_dirs
-echo '{"test": true}' > /tmp/claude/managed/sentinels/test-sentinel.json
-CODEFLOW_SESSION_ID="test-session" bash "$HOOK" 2>/dev/null
-if [[ ! -f /tmp/claude/managed/sentinels/test-sentinel.json ]]; then
-    pass "Actually cleans sentinel files"
+cleanup_test_artifacts
+_now=$(date +%s)
+_expired=$((_now - 100))
+_valid=$((_now + 600))
+mkdir -p "$REPO_ROOT/.state/sentinels/skill/test-session" 2>/dev/null || true
+create_sentinel "test-expired.json" "$_expired" "$REPO_ROOT/.state/sentinels/skill/test-session"
+create_sentinel "test-valid-other.json" "$_valid"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/sentinels/skill/test-session/test-expired.json" ]]; then
+    pass "Session sentinel is cleaned on session end"
 else
-    fail "Should actually clean sentinel files"
-    rm -f /tmp/claude/managed/sentinels/test-sentinel.json
+    fail "Should clean expired sentinel"
+    rm -f "$REPO_ROOT/.state/sentinels/skill/test-session/test-expired.json"
 fi
 
-# Test 40: Actually cleans session temp directory
-TESTS_RUN=$((TESTS_RUN + 1))
+# Test 40: Non-session sentinel is preserved
+if [[ -f "$REPO_ROOT/.state/sentinels/skill/test-valid-other.json" ]]; then
+    pass "Valid sentinel is preserved"
+    rm -f "$REPO_ROOT/.state/sentinels/skill/test-valid-other.json"
+else
+    fail "Should preserve valid (non-expired) sentinel"
+fi
+
+# Test 41: Actually cleans session temp directory
 setup_test_dirs
 touch /tmp/claude/sessions/test-session/test-file.txt 2>/dev/null || true
-CODEFLOW_SESSION_ID="test-session" bash "$HOOK" 2>/dev/null
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
 if [[ ! -d /tmp/claude/sessions/test-session ]]; then
     pass "Actually cleans session temp directory"
 else
@@ -389,33 +402,31 @@ else
     rm -rf /tmp/claude/sessions/test-session
 fi
 
-# Test 41: Actually cleans session state files
-TESTS_RUN=$((TESTS_RUN + 1))
+# Test 42: Actually cleans session state directory
 setup_test_dirs
-echo '{"count": 1}' > /tmp/claude/managed/state/memory-progress-test-session
-CODEFLOW_SESSION_ID="test-session" bash "$HOOK" 2>/dev/null
-if [[ ! -f /tmp/claude/managed/state/memory-progress-test-session ]]; then
+mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+echo '{"count": 1}' > "$REPO_ROOT/.state/session/test-session/claim-heartbeat"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/session/test-session" ]]; then
     pass "Actually cleans session state files"
 else
     fail "Should actually clean session state files"
-    rm -f /tmp/claude/managed/state/memory-progress-test-session
+    rm -rf "$REPO_ROOT/.state/session/test-session"
 fi
 
-# Test 42: Does not clean state for unknown session
-TESTS_RUN=$((TESTS_RUN + 1))
+# Test 43: Does not clean state for unknown session
 setup_test_dirs
-echo '{"count": 1}' > /tmp/claude/managed/state/memory-progress-other-session
-bash "$HOOK" 2>/dev/null  # No CODEFLOW_SESSION_ID set
-if [[ -f /tmp/claude/managed/state/memory-progress-other-session ]]; then
+echo '{"count": 1}' > "$REPO_ROOT/.state/session/claim-heartbeat-other-session"
+bash "$HOOK" </dev/null 2>/dev/null || true  # No CODEFLOW_SESSION_ID set
+if [[ -f "$REPO_ROOT/.state/session/claim-heartbeat-other-session" ]]; then
     pass "Does not clean state for unknown session"
-    rm -f /tmp/claude/managed/state/memory-progress-other-session
+    rm -f "$REPO_ROOT/.state/session/claim-heartbeat-other-session"
 else
     fail "Should not clean state for unknown session"
 fi
 
-# Test 43: Handles missing directories gracefully
-TESTS_RUN=$((TESTS_RUN + 1))
-result=$(CODEFLOW_SESSION_ID="nonexistent-session" bash "$HOOK" 2>&1; echo "EXIT:$?")
+# Test 44: Handles missing directories gracefully
+result=$(CODEFLOW_SESSION_ID="nonexistent-session" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles missing directories gracefully"
 else
@@ -428,28 +439,233 @@ cleanup_test_artifacts
 echo ""
 echo "--- V4: PathFlow Cleanup ---"
 
-# Test 44: Hook contains pathflow-active cleanup
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "pathflow-active" "$HOOK"; then
-    pass "Has pathflow-active cleanup"
+# Test 45: Hook contains pathflow flag cleanup (is-pathflow-active)
+if grep -q "is-pathflow-active" "$HOOK"; then
+    pass "Has is-pathflow-active flag cleanup"
 else
-    fail "Should have pathflow-active cleanup"
+    fail "Should have is-pathflow-active flag cleanup"
 fi
 
-# Test 45: Hook contains PathFlow sentinel cleanup (rm -f pathflow:*)
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'pathflow:\*' "$HOOK" || grep -q 'pathflow:' "$HOOK"; then
+# Test 46: Hook contains PathFlow sentinel cleanup (pathflow-*)
+if grep -q 'pathflow/' "$HOOK" || grep -q 'PATHFLOW_SENTINEL_DIR' "$HOOK"; then
     pass "Has PathFlow sentinel cleanup"
 else
-    fail "Should have PathFlow sentinel cleanup (pathflow:*)"
+    fail "Should have PathFlow sentinel cleanup (pathflow-*)"
 fi
 
-# Test 46: Hook has PATHFLOW CLEANUP section
-TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "PATHFLOW CLEANUP" "$HOOK"; then
-    pass "Has PATHFLOW CLEANUP section"
+# Test 47: Hook has PATHFLOW section
+if grep -qi "PATHFLOW" "$HOOK"; then
+    pass "Has PATHFLOW section"
 else
-    fail "Should have PATHFLOW CLEANUP section"
+    fail "Should have PATHFLOW section"
+fi
+
+# Test 48: Actually removes is-pathflow-active flag (via session dir cleanup)
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+echo "active" > "$REPO_ROOT/.state/session/test-session/is-pathflow-active"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" ]]; then
+    pass "Actually removes is-pathflow-active flag"
+else
+    fail "Should remove is-pathflow-active flag"
+    rm -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active"
+fi
+
+# Test 49: Actually removes PathFlow sentinels (session-scoped)
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+echo '{"type":"pathflow"}' > "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-gate-test.json"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-gate-test.json" ]]; then
+    pass "Actually removes PathFlow sentinels"
+else
+    fail "Should remove PathFlow sentinels"
+    rm -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-gate-test.json"
+fi
+
+cleanup_test_artifacts
+
+echo ""
+echo "--- V4: Memory Progress Cleanup ---"
+
+# Test 50: Has memory-progress cleanup logic
+if grep -q "memory-progress" "$HOOK"; then
+    pass "Has memory-progress cleanup logic"
+else
+    fail "Should have memory-progress cleanup"
+fi
+
+# Test 51: Actually cleans memory-progress files (via session dir cleanup)
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+echo '{"count":3}' > "$REPO_ROOT/.state/session/test-session/memory-progress"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/session/test-session/memory-progress" ]]; then
+    pass "Actually cleans all memory-progress files"
+else
+    fail "Should clean all memory-progress files"
+    rm -rf "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+fi
+
+cleanup_test_artifacts
+
+echo ""
+echo "--- V4: Task Preservation ---"
+
+# Test 52: Has task preservation logic
+if grep -q "active-task\|ACTIVE_TASK\|task_preserved\|_task_preserved" "$HOOK"; then
+    pass "Has task preservation logic"
+else
+    fail "Should have task preservation logic"
+fi
+
+# Test 53: Preserves in_progress task
+setup_test_dirs
+cat > "$REPO_ROOT/.state/runtime/active-task.json" <<'EOF'
+{"task_id":"FRT-TSK-001","status":"in_progress","description":"Fix auth bug"}
+EOF
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ -f "$REPO_ROOT/.state/runtime/active-task.json" ]]; then
+    pass "Preserves in_progress task"
+else
+    fail "Should preserve in_progress task"
+fi
+
+# Test 54: Removes completed task
+setup_test_dirs
+cat > "$REPO_ROOT/.state/runtime/active-task.json" <<'EOF'
+{"task_id":"FRT-TSK-002","status":"completed","description":"Done"}
+EOF
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/runtime/active-task.json" ]]; then
+    pass "Removes completed task"
+else
+    fail "Should remove completed task"
+    rm -f "$REPO_ROOT/.state/runtime/active-task.json"
+fi
+
+cleanup_test_artifacts
+
+echo ""
+echo "--- V4: Output Messages ---"
+
+# Test 55: Produces output messages
+setup_test_dirs
+_now=$(date +%s)
+_expired=$((_now - 100))
+create_sentinel "test-output-expired.json" "$_expired"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"SessionEnd:"* ]]; then
+    pass "Produces SessionEnd output messages"
+else
+    fail "Should produce SessionEnd: output messages"
+fi
+rm -f "$REPO_ROOT/.state/sentinels/skill/test-output-expired.json" 2>/dev/null || true
+
+# Test 56: Reports sentinel count in output
+setup_test_dirs
+_now=$(date +%s)
+_expired=$((_now - 100))
+create_sentinel "test-count-1.json" "$_expired"
+create_sentinel "test-count-2.json" "$_expired"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"sentinel(s)"* ]] || [[ "$output" == *"sentinels"* ]]; then
+    pass "Reports sentinel count in output"
+else
+    fail "Should report sentinel count" "$output"
+fi
+rm -f "$REPO_ROOT/.state/sentinels/skill"/test-count-*.json 2>/dev/null || true
+
+# Test 57: Reports task preservation in output
+setup_test_dirs
+cat > "$REPO_ROOT/.state/runtime/active-task.json" <<'EOF'
+{"task_id":"FRT-TSK-003","status":"in_progress","description":"Test"}
+EOF
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"preserved"* ]]; then
+    pass "Reports task preservation in output"
+else
+    fail "Should report task preservation in output" "$output"
+fi
+
+cleanup_test_artifacts
+
+echo ""
+echo "--- V4: Stdin Session ID ---"
+
+# Test 58: Has stdin reading block
+if grep -q '_HOOK_STDIN\|HOOK_STDIN' "$HOOK"; then
+    pass "Has stdin reading block"
+else
+    fail "Should read session_id from stdin"
+fi
+
+# Test 59: Reads session_id from stdin JSON
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/stdin-test-id" 2>/dev/null || true
+echo '{"count":1}' > "$REPO_ROOT/.state/session/stdin-test-id/claim-heartbeat"
+stdin_json='{"session_id":"stdin-test-id","transcript_path":"/tmp/test.jsonl"}'
+echo "$stdin_json" | CODEFLOW_SESSION_ID="fallback" bash "$HOOK" 2>/dev/null || true
+# If stdin session_id was used, it should have cleaned the stdin-test-id session dir
+if [[ ! -d "$REPO_ROOT/.state/session/stdin-test-id" ]]; then
+    pass "Uses session_id from stdin JSON"
+else
+    fail "Should use session_id from stdin JSON over env var"
+    rm -rf "$REPO_ROOT/.state/session/stdin-test-id"
+fi
+
+cleanup_test_artifacts
+
+echo ""
+echo "--- V4: Config Enabled Check ---"
+
+# Test 60: Has cleanup enabled check
+if grep -q "session_end\|CLEANUP_ENABLED\|cleanup.enabled" "$HOOK"; then
+    pass "Has cleanup enabled check"
+else
+    fail "Should check session_end.cleanup.enabled config"
+fi
+
+echo ""
+echo "--- V4: Security Lib Integration ---"
+
+# Test 61: Sources or references security-lib.sh
+if grep -q "security-lib.sh\|SECURITY_LIB\|is_pathflow_active" "$HOOK"; then
+    pass "References security-lib.sh for PathFlow detection"
+else
+    fail "Should use security-lib.sh for PathFlow mode detection"
+fi
+
+# Test 62: Uses is_pathflow_active or is_pathflow_active
+if grep -q "is_pathflow_active\|is_pathflow_active\|_PATHFLOW_ACTIVE" "$HOOK"; then
+    pass "Uses PathFlow mode detection function"
+else
+    fail "Should use is_pathflow_active() or is_pathflow_active()"
+fi
+
+echo ""
+echo "--- V4: Cleanup Order ---"
+
+# Test 63: PathFlow sentinels cleaned before skill sentinels
+pf_line=$(grep -n "PATHFLOW.*SENTINEL\|pathflow/\|PATHFLOW_SENTINEL_DIR" "$HOOK" | head -1 | cut -d: -f1)
+sk_line=$(grep -n "EXPIRED.*SENTINEL\|sentinel_cleanup_expired\|SKILL.*SENTINEL" "$HOOK" | head -1 | cut -d: -f1)
+if [[ -n "$pf_line" ]] && [[ -n "$sk_line" ]] && [[ "$pf_line" -lt "$sk_line" ]]; then
+    pass "PathFlow sentinels cleaned before skill sentinels"
+else
+    fail "V4 spec requires PathFlow sentinels cleaned first"
+fi
+
+# Test 64: Session state cleanup (which removes pathflow flag) after sentinel cleanup
+state_line=$(grep -n "SESSION_STATE_DIR.*rm\|rm.*SESSION_STATE_DIR" "$HOOK" | head -1 | cut -d: -f1 || echo "")
+if [[ -z "$state_line" ]]; then
+    # Fallback: check for is-pathflow-active reference after sentinel cleanup
+    state_line=$(grep -n "is-pathflow-active\|SESSION_STATE_DIR" "$HOOK" | tail -1 | cut -d: -f1 || echo "")
+fi
+if [[ -n "$state_line" ]] && [[ -n "$sk_line" ]] && [[ "$state_line" -gt "$sk_line" ]]; then
+    pass "PathFlow flag removed after sentinel cleanup (via session dir)"
+else
+    fail "V4 spec requires flag removal after sentinel cleanup"
 fi
 
 echo ""

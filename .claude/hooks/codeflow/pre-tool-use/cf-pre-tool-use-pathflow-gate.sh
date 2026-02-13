@@ -8,7 +8,7 @@
 #   - Blocks Edit/Write/Bash(git commit) when PathFlow is active but PF-3 not complete
 #   - Only checks when pathflow-active flag file exists (PathFlow mode)
 #   - If flag doesn't exist, allows everything (standalone mode)
-#   - Checks for PF-3 sentinel at REPO_ROOT/.state/sentinels/pathflow:pf-3-*
+#   - Checks for PF-3 sentinel at REPO_ROOT/.state/sentinels/pathflow-pf-3-*
 #   - For Bash: only gates "git commit" commands
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -22,6 +22,26 @@ set -euo pipefail
 # shellcheck disable=SC2034
 VERSION="1.0.0"
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # =============================================================================
 # EARLY EXIT: CHECK TOOL NAME
 # =============================================================================
@@ -32,29 +52,41 @@ if [[ "$TOOL_NAME" != "Edit" ]] && [[ "$TOOL_NAME" != "Write" ]] && [[ "$TOOL_NA
 fi
 
 # =============================================================================
-# PATHFLOW FLAG CHECK
-# =============================================================================
-
-# Allow overriding the flag path for testing
-PATHFLOW_FLAG="${PATHFLOW_FLAG_FILE:-/tmp/claude/managed/state/pathflow-active}"
-
-if [[ ! -f "$PATHFLOW_FLAG" ]]; then
-    # Not in PathFlow mode - allow everything
-    exit 0
-fi
-
-# =============================================================================
-# SETUP
+# SETUP (before flag check - REPO_ROOT needed for session-scoped paths)
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
-# Security library for logging
+# =============================================================================
+# PATHFLOW FLAG CHECK
+# =============================================================================
+
+# Source security library (provides is_pathflow_active via context-lib.sh)
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
+export LIB_DIR
+
+# Allow overriding the flag path for testing via PATHFLOW_FLAG_FILE env var
+if [[ -n "${PATHFLOW_FLAG_FILE:-}" ]]; then
+    # Test mode: use explicit flag file path
+    if [[ ! -f "$PATHFLOW_FLAG_FILE" ]]; then
+        exit 0
+    fi
+else
+    # Production mode: use is_pathflow_active() from context-lib.sh
+    if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "$LIB_DIR/security-lib.sh"
+    fi
+    if ! is_pathflow_active 2>/dev/null; then
+        # Not in PathFlow mode - allow everything
+        exit 0
+    fi
+fi
+
+# Source security library for logging (if not already sourced above)
 if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
-    export LIB_DIR
     # shellcheck source=/dev/null
     source "$LIB_DIR/security-lib.sh"
 fi
@@ -91,11 +123,11 @@ fi
 # =============================================================================
 
 # Allow overriding sentinel dir for testing
-SENTINEL_DIR="${PATHFLOW_SENTINEL_DIR:-$REPO_ROOT/.state/sentinels}"
+SENTINEL_DIR="${PATHFLOW_SENTINEL_DIR:-$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID}"
 
 # Check for PF-3 sentinel (work classification complete)
 pf3_found=false
-for file in "$SENTINEL_DIR"/pathflow:pf-3-*; do
+for file in "$SENTINEL_DIR"/pathflow-pf-3-*; do
     if [[ -f "$file" ]]; then
         pf3_found=true
         break

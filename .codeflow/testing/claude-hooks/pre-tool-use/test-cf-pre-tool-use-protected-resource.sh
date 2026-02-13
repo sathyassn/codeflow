@@ -13,10 +13,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -77,7 +76,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Edit/Write tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -85,7 +84,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Edit/Write tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -93,7 +92,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Edit/Write tools (WebSearch)
-result=$(TOOL_NAME="WebSearch" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="WebSearch" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for WebSearch tool"
 else
@@ -101,7 +100,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Edit/Write tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -109,7 +108,7 @@ else
 fi
 
 # Test 11: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -117,7 +116,7 @@ else
 fi
 
 # Test 12: Exits 0 when empty file_path
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty file_path"
 else
@@ -128,7 +127,7 @@ echo ""
 echo "--- Allowed Operations (non-protected) ---"
 
 # Test 13: Allows non-protected files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows non-protected files"
 else
@@ -136,7 +135,7 @@ else
 fi
 
 # Test 14: Allows regular project files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/component.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"src/component.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows regular project files"
 else
@@ -144,7 +143,7 @@ else
 fi
 
 # Test 15: Allows Write to regular files
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"src/new-file.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"src/new-file.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Write to regular files"
 else
@@ -155,7 +154,7 @@ echo ""
 echo "--- Critical Protection Tier ---"
 
 # Test 16: Blocks Edit to .claude/settings.json
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .claude/settings.json"
 else
@@ -163,7 +162,7 @@ else
 fi
 
 # Test 17: Blocks Write to .claude/settings.json
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Write to .claude/settings.json"
 else
@@ -171,7 +170,7 @@ else
 fi
 
 # Test 18: Blocks Edit to .claude/settings.local.json
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.local.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.local.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .claude/settings.local.json"
 else
@@ -179,7 +178,7 @@ else
 fi
 
 # Test 19: Blocks Edit to .claude/CLAUDE.md
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/CLAUDE.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/CLAUDE.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .claude/CLAUDE.md"
 else
@@ -187,7 +186,7 @@ else
 fi
 
 # Test 20: Critical block message shows CRITICAL tier
-HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"CRITICAL"* ]]; then
     pass "Critical block message shows CRITICAL tier"
 else
@@ -198,7 +197,7 @@ echo ""
 echo "--- High Protection Tier ---"
 
 # Test 21: Blocks Edit to .claude/hooks/codeflow files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/hooks/codeflow/pre-tool-use/test.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/hooks/codeflow/pre-tool-use/test.sh"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .claude/hooks/codeflow files"
 else
@@ -206,7 +205,7 @@ else
 fi
 
 # Test 22: Blocks Edit to .codeflow/config files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/config/test.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/config/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .codeflow/config files"
 else
@@ -214,7 +213,7 @@ else
 fi
 
 # Test 23: Blocks Edit to .codeflow/scripts/security files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/security/test.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/security/test.sh"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .codeflow/scripts/security files"
 else
@@ -222,7 +221,7 @@ else
 fi
 
 # Test 24: High block message shows HIGH tier
-HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/config/test.json"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/config/test.json"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"HIGH"* ]]; then
     pass "High block message shows HIGH tier"
 else
@@ -230,7 +229,7 @@ else
 fi
 
 # Test 24b: Blocks Edit to .codeflow/scripts/git-hooks files (NEW)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .codeflow/scripts/git-hooks files"
 else
@@ -238,7 +237,7 @@ else
 fi
 
 # Test 24c: Blocks Edit to .codeflow/scripts/shell-lib files (NEW)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/shell-lib/config.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/shell-lib/config.sh"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .codeflow/scripts/shell-lib files"
 else
@@ -246,7 +245,7 @@ else
 fi
 
 # Test 24d: Blocks Edit to .github/workflows (elevated to HIGH)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks Edit to .github/workflows (elevated to HIGH)"
 else
@@ -254,7 +253,7 @@ else
 fi
 
 # Test 24e: .github/workflows block message shows HIGH tier (not moderate)
-HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".github/workflows/ci.yml"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"HIGH"* ]]; then
     pass ".github/workflows block message shows HIGH tier"
 else
@@ -265,7 +264,7 @@ echo ""
 echo "--- Moderate Protection Tier (warn but allow) ---"
 
 # Test 25: Allows Edit to project/mission.md (with warning)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/mission.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/mission.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Edit to project/mission.md"
 else
@@ -273,7 +272,7 @@ else
 fi
 
 # Test 26: project/tech-stack still in moderate tier (warn but allow)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/tech-stack/overview.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/tech-stack/overview.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Edit to project/tech-stack (moderate tier)"
 else
@@ -281,7 +280,7 @@ else
 fi
 
 # Test 27: Moderate tier shows warning message
-HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/mission.md"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"project/mission.md"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"moderately protected"* ]] || [[ "$HOOK_OUTPUT" == *"Note"* ]]; then
     pass "Moderate tier shows warning message"
 else
@@ -292,7 +291,7 @@ echo ""
 echo "--- Staging Area Exception ---"
 
 # Test 28: Allows Edit to staging area
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/managed/protected-edits/test.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/managed/codeflow/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Edit to staging area"
 else
@@ -300,7 +299,7 @@ else
 fi
 
 # Test 29: Allows Write to staging area
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/managed/protected-edits/test.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/managed/codeflow/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows Write to staging area"
 else
@@ -318,7 +317,7 @@ echo ""
 echo "--- Block Messages ---"
 
 # Test 31: Block message includes path
-HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"Path:"* ]]; then
     pass "Block message includes path"
 else
@@ -346,11 +345,11 @@ else
     fail "Should mention cf-security-management skill"
 fi
 
-# Test 35: Block message suggests stage-protected-edit
-if [[ "$HOOK_OUTPUT" == *"stage-protected-edit"* ]]; then
-    pass "Block message suggests stage-protected-edit"
+# Test 35: Block message suggests handle-protected-resource
+if [[ "$HOOK_OUTPUT" == *"handle-protected-resource"* ]]; then
+    pass "Block message suggests handle-protected-resource"
 else
-    fail "Should suggest stage-protected-edit"
+    fail "Should suggest handle-protected-resource"
 fi
 
 echo ""
@@ -423,7 +422,7 @@ else
 fi
 
 # Test 44b: ** glob matches deeply nested files (fixed bug: ** was becoming .*.*)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/hooks/codeflow/pre-tool-use/deeply/nested/test.sh"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".claude/hooks/codeflow/pre-tool-use/deeply/nested/test.sh"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]]; then
     pass "** glob matches deeply nested paths"
 else
@@ -431,7 +430,7 @@ else
 fi
 
 # Test 44c: ** glob matches single-level files
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":".codeflow/scripts/git-hooks/pre-commit"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]]; then
     pass "** glob matches single-level files under protected dir"
 else

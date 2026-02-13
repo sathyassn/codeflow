@@ -161,7 +161,75 @@ else
 fi
 
 # ============================================================================
-# Test 10: Shellcheck passes
+# Test 10: --keep flag preserves adhoc entry
+# ============================================================================
+echo ""
+echo "--- Keep and edge cases ---"
+
+echo "test-keep-pattern" >> "$ADHOC_LIST"
+
+OUTPUT=$("$SCRIPT" --keep "test-keep-pattern" 2>&1 || true)
+if grep -qxF "test-keep-pattern" "$ADHOC_LIST" 2>/dev/null; then
+    echo "PASS: --keep preserves adhoc entry"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: --keep should preserve adhoc entry"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 11: Already in extended list (duplicate handling)
+# ============================================================================
+OUTPUT=$("$SCRIPT" --force "test-pattern-force-add" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "already"; then
+    echo "PASS: Detects duplicate in extended list"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Should detect duplicate in extended list"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 12: Unknown option rejected
+# ============================================================================
+OUTPUT=$("$SCRIPT" --bogus 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "unknown\|error"; then
+    echo "PASS: Unknown option rejected"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Should reject unknown options"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 13: Help text shows correct paths
+# ============================================================================
+HELP_OUTPUT=$("$SCRIPT" --help 2>&1)
+if echo "$HELP_OUTPUT" | grep -q "config/enforcement/protection/protected-adhoc.list" && \
+   echo "$HELP_OUTPUT" | grep -q "config/enforcement/protection/protected-extended.list"; then
+    echo "PASS: Help text shows correct list paths"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Help text has wrong list paths"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 14: Exact line match (not substring)
+# ============================================================================
+# Add "foo" to adhoc, then try to promote "foobar" - should fail (not found)
+echo "test-exact-foo" >> "$ADHOC_LIST"
+OUTPUT=$("$SCRIPT" "test-exact-foobar" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "not found\|error"; then
+    echo "PASS: grep uses exact line match (not substring)"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: grep should use exact line match"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 15: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

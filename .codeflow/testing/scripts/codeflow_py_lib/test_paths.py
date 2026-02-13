@@ -4,6 +4,7 @@ test_paths.py - Tests for path utilities module.
 Tests get_repo_root, get_state_dir, get_config_dir, and other path utilities.
 """
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -15,9 +16,11 @@ from codeflow_py_lib.paths import (
     get_db_path,
     get_ledger_dir,
     get_logs_dir,
+    get_pathflow_setting,
     get_repo_root,
     get_scripts_dir,
     get_state_dir,
+    is_pathflow_active,
     relative_to_repo,
 )
 
@@ -199,3 +202,134 @@ class TestRelativeToRepo:
         outside_path = Path("/some/other/path/file.py")
         result = relative_to_repo(outside_path)
         assert result == str(outside_path)
+
+
+class TestGetPathflowSetting:
+    """Tests for get_pathflow_setting function."""
+
+    def test_returns_empty_when_no_settings(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Should return empty string when settings.json doesn't exist."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        result = get_pathflow_setting()
+        assert result == ""
+
+    def test_reads_pathflow_mode(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Should read _codeflow.pathflow_mode from settings.json."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / "settings.json"
+        settings_file.write_text(json.dumps({
+            "_codeflow": {"pathflow_mode": "always"}
+        }))
+        result = get_pathflow_setting()
+        assert result == "always"
+
+    def test_returns_empty_when_key_missing(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Should return empty string when pathflow_mode key is absent."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / "settings.json"
+        settings_file.write_text(json.dumps({"other": "value"}))
+        result = get_pathflow_setting()
+        assert result == ""
+
+    def test_handles_invalid_json(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Should return empty string on malformed JSON."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / "settings.json"
+        settings_file.write_text("not valid json")
+        result = get_pathflow_setting()
+        assert result == ""
+
+
+class TestIsPathflowActive:
+    """Tests for is_pathflow_active function."""
+
+    def test_env_override_always(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Env CODEFLOW_PATHFLOW_OVERRIDE=always should return True."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.setenv("CODEFLOW_PATHFLOW_OVERRIDE", "always")
+        assert is_pathflow_active() is True
+
+    def test_env_override_never(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Env CODEFLOW_PATHFLOW_OVERRIDE=never should return False."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.setenv("CODEFLOW_PATHFLOW_OVERRIDE", "never")
+        assert is_pathflow_active() is False
+
+    def test_settings_always(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Settings pathflow_mode=always should return True."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.delenv("CODEFLOW_PATHFLOW_OVERRIDE", raising=False)
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "_codeflow": {"pathflow_mode": "always"}
+        }))
+        assert is_pathflow_active() is True
+
+    def test_settings_never(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Settings pathflow_mode=never should return False."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.delenv("CODEFLOW_PATHFLOW_OVERRIDE", raising=False)
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "_codeflow": {"pathflow_mode": "never"}
+        }))
+        assert is_pathflow_active() is False
+
+    def test_falls_back_to_flag_file_present(
+        self, temp_repo, reset_repo_root_cache, monkeypatch, tmp_path
+    ):
+        """Should return True when flag file exists and no override."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.delenv("CODEFLOW_PATHFLOW_OVERRIDE", raising=False)
+        monkeypatch.setenv("CODEFLOW_SESSION_ID", "test-session")
+        # Create session-scoped flag file
+        flag_dir = temp_repo / ".state" / "session" / "test-session"
+        flag_dir.mkdir(parents=True, exist_ok=True)
+        (flag_dir / "is-pathflow-active").touch()
+        assert is_pathflow_active() is True
+
+    def test_falls_back_to_flag_file_absent(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Should return False when no flag file and no override."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.delenv("CODEFLOW_PATHFLOW_OVERRIDE", raising=False)
+        # No settings.json, no flag file
+        assert is_pathflow_active() is False
+
+    def test_env_override_takes_priority_over_settings(
+        self, temp_repo, reset_repo_root_cache, monkeypatch
+    ):
+        """Env override should take priority over settings.json."""
+        monkeypatch.setenv("CODEFLOW_REPO_ROOT", str(temp_repo))
+        monkeypatch.setenv("CODEFLOW_PATHFLOW_OVERRIDE", "never")
+        settings_dir = temp_repo / ".claude"
+        settings_dir.mkdir(exist_ok=True)
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "_codeflow": {"pathflow_mode": "always"}
+        }))
+        assert is_pathflow_active() is False

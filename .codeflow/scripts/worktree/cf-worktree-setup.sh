@@ -2,7 +2,7 @@
 # Purpose:   Set up git worktree for parallel development
 # Usage:     cf-worktree-setup.sh <worktree-path> <branch-name> [agent-type] [purpose] [trigger]
 # Platform:  macOS/Linux
-# Version:   1.0.0
+# Version:   1.1.0
 #
 # This script:
 #   1. Configures the worktree (copies configs, installs deps)
@@ -18,7 +18,7 @@
 #
 # Exit codes:
 #   - 0: Setup successful
-#   - 1: Error (missing arguments, etc.)
+#   - 1: Error (missing arguments, invalid path, etc.)
 
 set -euo pipefail
 
@@ -51,7 +51,7 @@ EOF
 }
 
 show_version() {
-    echo "cf-worktree-setup.sh version 1.0.0"
+    echo "cf-worktree-setup.sh version 1.1.0"
 }
 
 # =============================================================================
@@ -77,7 +77,8 @@ TRIGGER="${5:-manual}"
 
 if [[ -z "$WORKTREE_PATH" ]] || [[ -z "$BRANCH_NAME" ]]; then
     echo "Error: Missing required arguments" >&2
-    show_help >&2
+    echo "  Required: <worktree-path> <branch-name>" >&2
+    echo "  Use --help for usage information" >&2
     exit 1
 fi
 
@@ -85,7 +86,24 @@ fi
 # SETUP
 # =============================================================================
 
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# Validate worktree path exists
+if [[ ! -d "$WORKTREE_PATH" ]]; then
+    echo "Error: Worktree path does not exist: $WORKTREE_PATH" >&2
+    echo "  Create the worktree first: git worktree add <path> -b <branch>" >&2
+    exit 1
+fi
+
+# PathFlow detection (optional, for mode-aware messaging)
+_IS_PATHFLOW=false
+if [[ -f "$REPO_ROOT/.codeflow/scripts/security/lib/context-lib.sh" ]]; then
+    # shellcheck source=../security/lib/context-lib.sh
+    source "$REPO_ROOT/.codeflow/scripts/security/lib/context-lib.sh" 2>/dev/null || true
+    if is_pathflow_active 2>/dev/null; then
+        _IS_PATHFLOW=true
+    fi
+fi
 
 echo "Setting up worktree: $WORKTREE_PATH"
 echo "  Branch: $BRANCH_NAME"
@@ -150,10 +168,7 @@ fi
 # =============================================================================
 # REGISTER WORKTREE
 # =============================================================================
-# NOTE: Currently registers in .state/worktrees.yaml (YAML-based, V3 approach).
-# Phase 4 will add SQLite registration to the 'worktrees' and 'active_work'
-# tables via the begin-work lifecycle flow. The DB schema already supports this
-# (schema.sql: worktrees table with work_id FK to active_work).
+# Registers in .state/worktrees.yaml (YAML-based tracking).
 
 echo "Registering worktree in .state/worktrees.yaml..."
 
@@ -179,11 +194,15 @@ fi
 
 if grep -q "path: \"$WORKTREE_PATH\"" "$WORKTREES_FILE" 2>/dev/null; then
     echo "  Worktree already registered, updating status..."
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|status: abandoned|status: active|g" "$WORKTREES_FILE"
-    else
-        sed -i "s|status: abandoned|status: active|g" "$WORKTREES_FILE"
-    fi
+    # Scope the status update to only the matching worktree entry
+    TEMP_FILE=$(mktemp)
+    awk -v target_path="$WORKTREE_PATH" '
+    /path:/ { found_target = (index($0, "\"" target_path "\"") > 0) }
+    found_target && /status: abandoned/ { sub(/status: abandoned/, "status: active"); found_target = 0 }
+    /^  - path:/ && !found_target { found_target = 0 }
+    { print }
+    ' "$WORKTREES_FILE" > "$TEMP_FILE"
+    mv "$TEMP_FILE" "$WORKTREES_FILE"
 else
     TEMP_FILE=$(mktemp)
     awk -v path="$WORKTREE_PATH" \
@@ -194,7 +213,7 @@ else
         -v purpose="$PURPOSE" \
     '
     /^worktrees:/ {
-        print
+        print "worktrees:"
         print "  - path: \"" path "\""
         print "    branch: \"" branch "\""
         print "    created_at: \"" created "\""
@@ -219,4 +238,13 @@ else
 fi
 
 echo "Worktree registered in $WORKTREES_FILE"
-echo "Worktree setup complete"
+
+# =============================================================================
+# COMPLETION MESSAGE
+# =============================================================================
+
+echo "Worktree setup complete: $WORKTREE_PATH ($BRANCH_NAME)"
+
+if [[ "$_IS_PATHFLOW" == "true" ]]; then
+    echo "  PathFlow active: cf-gitops teammate manages git operations for this worktree"
+fi

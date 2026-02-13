@@ -17,7 +17,7 @@
 
 ## Setup Script Details
 
-The `scripts/worktree/setup.sh` script performs automatic configuration:
+The `.codeflow/scripts/worktree/cf-worktree-setup.sh` script performs automatic configuration:
 
 **What it does:**
 
@@ -30,10 +30,10 @@ The `scripts/worktree/setup.sh` script performs automatic configuration:
 **Arguments:**
 
 ```bash
-bash scripts/worktree/setup.sh <worktree-path> <branch-name> [agent-type]
+bash .codeflow/scripts/worktree/cf-worktree-setup.sh <worktree-path> <branch-name> [agent-type]
 
 # Example:
-bash scripts/worktree/setup.sh ".git-worktrees/feat-phase-6-1" "feat/phase-6-1" "developer"
+bash .codeflow/scripts/worktree/cf-worktree-setup.sh ".git-worktrees/feat-phase-6-1" "feat/phase-6-1" "developer"
 ```
 
 **When to run manually:**
@@ -129,12 +129,12 @@ Work on multiple phases simultaneously without conflicts:
 ```bash
 # Terminal 1: Phase 6.1
 git worktree add .git-worktrees/feat-phase-6-1/ -b feat/phase-6-1
-bash scripts/worktree/setup.sh ".git-worktrees/feat-phase-6-1" "feat/phase-6-1" "developer"
+bash .codeflow/scripts/worktree/cf-worktree-setup.sh ".git-worktrees/feat-phase-6-1" "feat/phase-6-1" "developer"
 cd .git-worktrees/feat-phase-6-1/
 
 # Terminal 2: Phase 6.2 (simultaneously)
 git worktree add .git-worktrees/feat-phase-6-2/ -b feat/phase-6-2
-bash scripts/worktree/setup.sh ".git-worktrees/feat-phase-6-2" "feat/phase-6-2" "developer"
+bash .codeflow/scripts/worktree/cf-worktree-setup.sh ".git-worktrees/feat-phase-6-2" "feat/phase-6-2" "developer"
 cd .git-worktrees/feat-phase-6-2/
 ```
 
@@ -146,7 +146,7 @@ Experiment with new approaches without affecting main work:
 # Main repo: Continue with current feature (feat/current-feature)
 # Separate terminal: Create exploration worktree
 git worktree add .git-worktrees/experiment-new-approach/ -b experiment/new-approach
-bash scripts/worktree/setup.sh ".git-worktrees/experiment-new-approach" "experiment/new-approach" "general"
+bash .codeflow/scripts/worktree/cf-worktree-setup.sh ".git-worktrees/experiment-new-approach" "experiment/new-approach" "general"
 cd .git-worktrees/experiment-new-approach/
 ```
 

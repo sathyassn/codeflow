@@ -2,6 +2,10 @@
 # CodeFlow Shell Library: Logging
 # Location: .codeflow/scripts/shell-lib/logging.sh
 
+# Source guard to prevent multiple loads
+[[ -n "${_CODEFLOW_LOGGING_LOADED:-}" ]] && return 0
+_CODEFLOW_LOGGING_LOADED=1
+
 # Requires: common.sh
 [[ -z "${CODEFLOW_LIB_VERSION:-}" ]] && source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -21,7 +25,8 @@ CODEFLOW_LOG_LEVEL="${CODEFLOW_LOG_LEVEL:-$LOG_LEVEL_INFO}"
 # COLORS
 # ============================================================================
 
-if [[ -t 1 ]]; then
+# Respect NO_COLOR (https://no-color.org/) and non-terminal output
+if [[ -z "${NO_COLOR:-}" ]] && [[ -t 1 ]]; then
     readonly COLOR_RED='\033[0;31m'
     readonly COLOR_GREEN='\033[0;32m'
     readonly COLOR_YELLOW='\033[0;33m'
@@ -86,19 +91,19 @@ _log() {
 
 # Public logging functions
 log_debug() {
-    _log $LOG_LEVEL_DEBUG "DEBUG" "$COLOR_GRAY" "$@"
+    _log "$LOG_LEVEL_DEBUG" "DEBUG" "$COLOR_GRAY" "$@"
 }
 
 log_info() {
-    _log $LOG_LEVEL_INFO "INFO" "$COLOR_BLUE" "$@"
+    _log "$LOG_LEVEL_INFO" "INFO" "$COLOR_BLUE" "$@"
 }
 
 log_warn() {
-    _log $LOG_LEVEL_WARN "WARN" "$COLOR_YELLOW" "$@"
+    _log "$LOG_LEVEL_WARN" "WARN" "$COLOR_YELLOW" "$@"
 }
 
 log_error() {
-    _log $LOG_LEVEL_ERROR "ERROR" "$COLOR_RED" "$@"
+    _log "$LOG_LEVEL_ERROR" "ERROR" "$COLOR_RED" "$@"
 }
 
 # ============================================================================

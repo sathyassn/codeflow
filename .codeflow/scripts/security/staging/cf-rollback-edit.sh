@@ -79,6 +79,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -n|--number)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --number requires a value" >&2
+                exit 1
+            fi
             BACKUP_NUMBER="$2"
             shift 2
             ;;
@@ -105,7 +109,7 @@ FILE_PATH="$1"
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 BACKUP_DIR="$REPO_ROOT/.state/backups/protected"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 

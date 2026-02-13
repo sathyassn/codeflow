@@ -116,7 +116,7 @@ ERRORS=0
 if ! bash -n "$FILE_PATH" 2>/dev/null; then
     [[ "$QUIET" == "false" ]] && echo "FAIL: Bash syntax check failed" >&2
     if [[ "$QUIET" == "false" ]]; then
-        bash -n "$FILE_PATH" 2>&1 | head -20
+        bash -n "$FILE_PATH" 2>&1 | head -20 || true
     fi
     ERRORS=$((ERRORS + 1))
 else
@@ -135,7 +135,7 @@ if command -v shellcheck &>/dev/null; then
     if ! shellcheck "${SHELLCHECK_OPTS[@]}" "$FILE_PATH" 2>/dev/null; then
         [[ "$QUIET" == "false" ]] && echo "FAIL: ShellCheck analysis failed" >&2
         if [[ "$QUIET" == "false" ]]; then
-            shellcheck "${SHELLCHECK_OPTS[@]}" "$FILE_PATH" 2>&1 | head -30
+            shellcheck "${SHELLCHECK_OPTS[@]}" "$FILE_PATH" 2>&1 | head -30 || true
         fi
         ERRORS=$((ERRORS + 1))
     else

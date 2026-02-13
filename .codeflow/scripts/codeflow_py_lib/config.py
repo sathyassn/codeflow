@@ -66,7 +66,14 @@ class Config:
         else:
             raise ConfigError(f"Unsupported config format: {path.suffix}")
 
-        return cls(**data) if data else cls()
+        if not data:
+            return cls()
+        if not isinstance(data, dict):
+            raise ConfigError(f"Config must be a mapping, got {type(data).__name__}")
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ConfigError(f"Invalid config keys: {e}") from e
 
     @classmethod
     def from_env(cls, prefix: str = "CODEFLOW_") -> "Config":

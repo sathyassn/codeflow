@@ -466,7 +466,7 @@ main() {
     local mode=""
     local force="false"
 
-    # Parse arguments
+    # Parse arguments (info commands allowed from any context)
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --list|-l)
@@ -516,6 +516,25 @@ main() {
         log_error "Invalid mode: $mode"
         echo ""
         echo "Valid modes: ${VALID_MODES[*]}"
+        exit 1
+    fi
+
+    # Security: require interactive terminal for mode changes.
+    # Info commands (--help, --list, --status) are allowed from any context.
+    # Mode changes are blocked from non-interactive contexts to prevent
+    # AI agents from self-escalating their permission level.
+    # Set CF_ALLOW_MODE_CHANGE=1 to bypass (for CI/automation only).
+    if [[ ! -t 0 ]] && [[ "${CF_ALLOW_MODE_CHANGE:-}" != "1" ]]; then
+        log_error "Mode changes require an interactive terminal"
+        log_error "This prevents AI agents from self-escalating permissions"
+        echo ""
+        echo "Run directly from your shell:"
+        echo "  $0 $mode"
+        echo ""
+        echo "Or use the CodeFlow CLI:"
+        echo "  ./codeflow mode $mode"
+        echo ""
+        echo "For CI/automation, set CF_ALLOW_MODE_CHANGE=1"
         exit 1
     fi
 

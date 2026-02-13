@@ -75,16 +75,28 @@ is_valid_ulid() {
     [[ "$id" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]]
 }
 
-# Validate epic ID format (EPC-ULID)
+# Validate epic ID format (epic-ULID primary key)
 is_valid_epic_id() {
     local id="$1"
-    [[ "$id" =~ ^EPC-[0-9A-HJKMNP-TV-Z]{26}$ ]]
+    [[ "$id" =~ ^epic-[0-9A-HJKMNP-TV-Z]{26}$ ]]
 }
 
-# Validate task ID format (TSK-ULID)
+# Validate task ID format (task-ULID primary key)
 is_valid_task_id() {
     local id="$1"
-    [[ "$id" =~ ^TSK-[0-9A-HJKMNP-TV-Z]{26}$ ]]
+    [[ "$id" =~ ^task-[0-9A-HJKMNP-TV-Z]{26}$ ]]
+}
+
+# Validate epic format ID (human-readable)
+is_valid_epic_format_id() {
+    local id="$1"
+    [[ "$id" =~ ^[A-Z]{2,4}-EPC-[A-Z]{2,4}-[A-Z]{2,4}-[0-9]{3}$ ]]
+}
+
+# Validate task format ID (human-readable)
+is_valid_task_format_id() {
+    local id="$1"
+    [[ "$id" =~ ^[A-Z]{2,4}-TSK-[A-Z]{2,4}-[A-Z]{2,4}-[0-9]{3}$ ]]
 }
 
 # ============================================================================
@@ -92,14 +104,28 @@ is_valid_task_id() {
 # ============================================================================
 
 # Valid branch prefixes
+# Source: cf-git-workflow SKILL.md create-branch operation (authoritative)
+# Includes V4 spec prefixes plus git-workflow aliases and additional types
 readonly VALID_BRANCH_PREFIXES=(
     "feat/"
+    "feature/"
     "fix/"
+    "bugfix/"
     "refactor/"
     "docs/"
     "test/"
+    "hotfix/"
     "chore/"
+    "ci/"
+    "build/"
+    "spike/"
+    "experiment/"
+    "perf/"
+    "style/"
+    "revert/"
     "plan/"
+    "release/"
+    "merge/"
     "ops/"
     "deploy/"
 )

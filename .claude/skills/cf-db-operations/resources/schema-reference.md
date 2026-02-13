@@ -16,7 +16,8 @@ All writes must update all tiers atomically via cf-db-operations.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| id | TEXT | PK | `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` |
+| id | TEXT | PK | ULID PK: `epic-{ulid}` |
+| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` |
 | title | TEXT | NOT NULL | Epic title |
 | summary | TEXT | | One-line summary |
 | status | TEXT | 'draft' | draft\|planning\|in_progress\|blocked\|complete\|archived |
@@ -36,8 +37,9 @@ All writes must update all tiers atomically via cf-db-operations.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| id | TEXT | PK | `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` |
-| epic_id | TEXT | NOT NULL FK | Parent epic reference |
+| id | TEXT | PK | ULID PK: `task-{ulid}` |
+| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` |
+| epic_id | TEXT | NOT NULL FK | Parent epic ULID PK reference |
 | title | TEXT | NOT NULL | Task title |
 | description | TEXT | | One-line description |
 | status | TEXT | 'todo' | todo\|blocked\|in_progress\|complete |
@@ -231,8 +233,24 @@ All writes must update all tiers atomically via cf-db-operations.
 | Record session | `cf-db-operations:session-record` |
 | Append log | `cf-db-operations:log-append` |
 
+## Area Folder Mapping
+
+Reference mapping from area codes to filesystem folder names:
+
+| Area Code | Folder Name | Used In |
+|-----------|-------------||---------|
+| FRT | frontend/ | project-management/epics/frontend/ |
+| BKD | backend/ | project-management/epics/backend/ |
+| INF | infrastructure/ | project-management/epics/infrastructure/ |
+| SHR | shared/ | project-management/epics/shared/ |
+| DOC | documentation/ | project-management/epics/documentation/ |
+| XCUT | cross-cutting/ | project-management/epics/cross-cutting/ |
+
+This mapping is used by the Go CLI and cf-work-state.sh when resolving epic/task
+paths under `project-management/epics/`.
+
 ## Schema Location
 
-- **Full schema**: `.state/db/schema.sql`
-- **Query templates**: `.state/db/queries/`
+- **Full schema**: `.codeflow/scripts/db/schema.sql` (source of truth; embedded by Go CLI at build time)
+- **Query execution**: Internal to Go CLI (`codeflow db query/exec`)
 - **Database file**: `.state/db/codeflow.db`

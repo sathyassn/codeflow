@@ -14,11 +14,10 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh"
-SENTINEL_DIR="/tmp/claude/managed/sentinels"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh"
+SENTINEL_DIR="$REPO_ROOT/.state/sentinels/skill"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -44,7 +43,7 @@ run_bash_sentinel() {
     fi
 
     local output exit_code
-    output=$(TOOL_NAME="Bash" TOOL_INPUT="$json_input" bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(TOOL_NAME="Bash" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 
     HOOK_OUTPUT="$output"
     HOOK_EXIT_CODE=$exit_code
@@ -233,7 +232,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 19: Exits 0 for non-Bash tools
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for non-Bash tools"
 else
@@ -241,7 +240,7 @@ else
 fi
 
 # Test 20: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -249,7 +248,7 @@ else
 fi
 
 # Test 21: Exits 0 when empty command
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty command"
 else
@@ -428,15 +427,15 @@ else
     fail "Should check PathFlow sentinels directory"
 fi
 
-# Test 42: Hook checks is_agent_teams_active
-if grep -q "is_agent_teams_active" "$HOOK"; then
-    pass "Hook checks is_agent_teams_active"
+# Test 42: Hook checks is_pathflow_active
+if grep -q "is_pathflow_active" "$HOOK"; then
+    pass "Hook checks is_pathflow_active"
 else
-    fail "Should check is_agent_teams_active"
+    fail "Should check is_pathflow_active"
 fi
 
 # Test 43: PathFlow mode checks for PF-3 sentinel
-if grep -q "pathflow:pf-3" "$HOOK"; then
+if grep -q "pathflow-pf-3" "$HOOK"; then
     pass "PathFlow mode checks for PF-3 sentinel"
 else
     fail "Should check for PF-3 sentinel in PathFlow mode"

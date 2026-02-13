@@ -4,6 +4,7 @@ Path utilities for CodeFlow scripts.
 Provides consistent path resolution across all scripts.
 """
 
+import json
 import os
 import subprocess
 from functools import lru_cache
@@ -92,3 +93,41 @@ def relative_to_repo(path: Path) -> str:
         return str(path.relative_to(get_repo_root()))
     except ValueError:
         return str(path)
+
+
+def get_pathflow_setting() -> str:
+    """Read pathflow_mode setting from settings.json.
+
+    Returns:
+        The pathflow_mode value ("auto", "always", "never") or "" if not set.
+    """
+    settings_file = get_repo_root() / ".claude" / "settings.json"
+    if not settings_file.exists():
+        return ""
+    try:
+        data = json.loads(settings_file.read_text())
+        return data.get("_codeflow", {}).get("pathflow_mode", "")
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+
+def is_pathflow_active() -> bool:
+    """Check if PathFlow mode is active using 3-way priority.
+
+    Mirrors the shell function is_pathflow_active() in context-lib.sh.
+    Priority: env override > settings.json > flag file.
+
+    Returns:
+        True if PathFlow mode is active, False otherwise.
+    """
+    setting = os.environ.get("CODEFLOW_PATHFLOW_OVERRIDE", "")
+    if not setting:
+        setting = get_pathflow_setting()
+    if setting == "never":
+        return False
+    elif setting == "always":
+        return True
+    else:
+        session_id = os.environ.get("CODEFLOW_SESSION_ID", "unknown")
+        flag = get_state_dir() / "session" / session_id / "is-pathflow-active"
+        return flag.exists()

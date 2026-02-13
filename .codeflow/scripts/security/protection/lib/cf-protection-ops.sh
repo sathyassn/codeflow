@@ -87,8 +87,8 @@ protect_path() {
         # Directory: rwxr-xr-x (755) - everyone can read/traverse
         chmod 755 "$full_path"
 
-        # Process all files inside
-        find "$full_path" -type f | while read -r file; do
+        # Process all files inside (null-delimited for filename safety)
+        find "$full_path" -type f -print0 | while IFS= read -r -d '' file; do
             protect_single_file "$file"
         done
 

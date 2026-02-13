@@ -22,7 +22,7 @@ cf-security-management:validate-protected-resource
 The staging system creates:
 
 ```text
-/tmp/claude/managed/protected-edits/
+/tmp/claude/managed/codeflow/protected-edits/
 ├── {filename}.staged          # Modified version
 ├── {filename}.original        # Backup of original
 └── {filename}.metadata.json   # Edit metadata

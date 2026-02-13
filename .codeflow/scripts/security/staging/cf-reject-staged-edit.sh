@@ -70,6 +70,10 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         -r|--reason)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --reason requires a value" >&2
+                exit 1
+            fi
             REASON="$2"
             shift 2
             ;;
@@ -96,8 +100,8 @@ FILE_PATH="$1"
 # SETUP
 # =============================================================================
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-STAGING_DIR="/tmp/claude/managed/protected-edits"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
 # Source security library if available

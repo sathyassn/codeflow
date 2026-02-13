@@ -20,6 +20,26 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # =============================================================================
 # EARLY EXIT FOR NON-EDIT/WRITE TOOLS
 # =============================================================================
@@ -34,10 +54,9 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
-ACTIVE_TASK_FILE="/tmp/claude/managed/state/active-task.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
 # Source security library for logging
@@ -46,6 +65,10 @@ if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
     # shellcheck source=/dev/null
     source "$LIB_DIR/security-lib.sh"
 fi
+
+# Source work-state library for active task functions
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.codeflow/scripts/state/cf-work-state.sh" 2>/dev/null || true
 
 # =============================================================================
 # CONFIGURATION
@@ -127,8 +150,8 @@ fi
 # ACTIVE TASK CHECK
 # =============================================================================
 
-# Check if active task context exists
-if [[ ! -f "$ACTIVE_TASK_FILE" ]]; then
+# Check if active task context exists (using work-state.sh)
+if ! is_task_active; then
     # Log the block event
     if declare -f log_security_event &>/dev/null; then
         log_security_event "blocked" "task_required" "$TOOL_NAME" "$FILE_PATH" "No active task context"
@@ -161,13 +184,13 @@ FILE_SCOPE=()
 SCOPE_POLICY="soft"
 
 if command -v jq &>/dev/null; then
-    TASK_ID=$(jq -r '.task_id // empty' "$ACTIVE_TASK_FILE" 2>/dev/null)
-    SCOPE_POLICY=$(jq -r '.scope_policy // "soft"' "$ACTIVE_TASK_FILE" 2>/dev/null)
+    TASK_ID=$(get_active_task_id)
+    SCOPE_POLICY=$(jq -r '.scope_policy // "soft"' "$(get_active_task_file)" 2>/dev/null)
 
     # Read file scope patterns
     while IFS= read -r pattern; do
         [[ -n "$pattern" ]] && FILE_SCOPE+=("$pattern")
-    done < <(jq -r '.file_scope[]? // empty' "$ACTIVE_TASK_FILE" 2>/dev/null)
+    done < <(jq -r '.file_scope[]? // empty' "$(get_active_task_file)" 2>/dev/null)
 fi
 
 # If no scope defined, allow all (scope is optional)
@@ -203,8 +226,8 @@ Scope: ${FILE_SCOPE[*]}
 File: $FILE_PATH
 Policy: $SCOPE_POLICY
 
-Consider expanding scope:
-SUGGEST: Skill('cf-task-management', args='expand-scope')
+Consider updating task scope:
+SUGGEST: Skill('cf-task-management', args='update-task')
 EOF
         # Log warning but allow
         if declare -f log_security_event &>/dev/null; then
@@ -223,7 +246,7 @@ Task: $TASK_ID
 Scope: ${FILE_SCOPE[*]}
 File: $FILE_PATH
 
-MUST: Skill('cf-task-management', args='expand-scope')
+MUST: Skill('cf-task-management', args='update-task')
 EOF
         exit 2
     fi

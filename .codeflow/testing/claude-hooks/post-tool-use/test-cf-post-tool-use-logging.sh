@@ -5,10 +5,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -37,7 +36,7 @@ else
 fi
 
 # Test 4: Exits 0 when no TOOL_NAME
-result=$(TOOL_NAME="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_NAME"
 else
@@ -45,7 +44,7 @@ else
 fi
 
 # Test 5: Exits 0 for any tool
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' TOOL_RESULT="file.txt" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' TOOL_RESULT="file.txt" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -171,7 +170,7 @@ echo ""
 echo "--- Functional Tests ---"
 
 # Test 22: Logs Edit tool
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Logs Edit tool successfully"
 else
@@ -179,7 +178,7 @@ else
 fi
 
 # Test 23: Logs Write tool
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"new.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"new.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Logs Write tool successfully"
 else
@@ -187,7 +186,7 @@ else
 fi
 
 # Test 24: Logs Read tool
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"doc.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"doc.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Logs Read tool successfully"
 else
@@ -195,7 +194,7 @@ else
 fi
 
 # Test 25: Handles session ID from environment
-result=$(CODEFLOW_SESSION_ID="test-session-123" TOOL_NAME="Bash" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(CODEFLOW_SESSION_ID="test-session-123" TOOL_NAME="Bash" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles session ID from environment"
 else
@@ -203,7 +202,7 @@ else
 fi
 
 # Test 26: Handles missing session ID
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles missing session ID gracefully"
 else
@@ -324,29 +323,6 @@ else
     fail "Should have result_truncated field"
 fi
 
-echo ""
-echo "--- SQLite Integration ---"
-
-# Test 42: Has SQLite logging support
-if grep -q "sqlite3\|SQLite" "$HOOK"; then
-    pass "Has SQLite logging support"
-else
-    fail "Should have SQLite logging support"
-fi
-
-# Test 43: Uses best-effort SQLite logging
-if grep -q "|| true" "$HOOK"; then
-    pass "Uses best-effort logging (|| true)"
-else
-    fail "Should use best-effort logging"
-fi
-
-# Test 44: Generates log ID for SQLite
-if grep -q "LOG_ID\|toollog-" "$HOOK"; then
-    pass "Generates log ID for SQLite"
-else
-    fail "Should generate log ID"
-fi
 
 echo ""
 echo "=== Test Summary ==="

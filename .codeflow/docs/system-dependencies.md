@@ -11,7 +11,7 @@ This document lists external system tools required by CodeFlow.
 | bash | Shell execution (v4+) | `brew install bash` | Built-in |
 | jq | JSON processing | `brew install jq` | `apt install jq` |
 | shellcheck | Shell linting | `brew install shellcheck` | `apt install shellcheck` |
-| sqlite3 | Database operations | Built-in | `apt install sqlite3` |
+| sqlite3 | Schema tests only (Go CLI is sole DB authority) | Built-in | `apt install sqlite3` |
 
 ### Python Tools
 
@@ -48,11 +48,13 @@ This causes coverage to fail for scripts using the system bash.
 ### Solution: Use Homebrew Bash
 
 **Install Homebrew bash:**
+
 ```bash
 brew install bash
 ```
 
 **Update script shebangs to use Homebrew bash:**
+
 ```bash
 #!/opt/homebrew/bin/bash    # Apple Silicon
 #!/usr/local/bin/bash       # Intel Mac
@@ -61,6 +63,7 @@ brew install bash
 Or use `#!/usr/bin/env bash` with PATH configured to find Homebrew bash first.
 
 **Why this works:**
+
 - Homebrew binaries are installed in `/opt/homebrew/` (not SIP-protected)
 - kcov can instrument non-SIP binaries freely
 - Sourced scripts are tracked when the parent uses Homebrew bash
@@ -83,6 +86,7 @@ kcov --include-path=.codeflow/scripts \
 ### Alternative: bashcov
 
 [bashcov](https://github.com/infertux/bashcov) is a Ruby-based alternative:
+
 - Requires Ruby 3.0+ (macOS ships with 2.6)
 - Install: `gem install bashcov` (after installing Ruby 3.0+)
 - Uses SimpleCov for HTML reports

@@ -10,7 +10,7 @@
 # This hook:
 #   - Logs all tool operations to audit trail
 #   - Captures tool name, input, results, and duration
-#   - Implements dual-write pattern (JSONL + SQLite)
+#   - Logs to JSONL audit trail
 #   - Redacts sensitive data (passwords, tokens, emails)
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -20,12 +20,30 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _tr=$(echo "$_HOOK_STDIN" | jq -c '.tool_result // empty' 2>/dev/null)
+        [[ -n "$_tr" ]] && [[ "$_tr" != "null" ]] && TOOL_RESULT="$_tr"
+    fi
+fi
+
 # =============================================================================
 # SETUP
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LOG_DIR="$REPO_ROOT/.state/logs/sessions"
@@ -191,22 +209,6 @@ fi
 
 # Write to JSONL file
 echo "$LOG_ENTRY" >> "$LOG_FILE" 2>/dev/null || true
-
-# =============================================================================
-# SQLITE LOGGING (BEST EFFORT)
-# =============================================================================
-
-DB_FILE="$REPO_ROOT/.state/db/codeflow.db"
-if [[ -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
-    # Generate ID
-    LOG_ID="toollog-$(date +%s%N | cut -c1-13)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-
-    # Insert log entry
-    sqlite3 "$DB_FILE" "
-        INSERT OR IGNORE INTO tool_logs (id, session_id, tool_name, created_at)
-        VALUES ('$LOG_ID', '$SESSION_ID', '$TOOL_NAME', '$TS');
-    " 2>/dev/null || true
-fi
 
 # =============================================================================
 # SUCCESS

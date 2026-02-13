@@ -1,7 +1,6 @@
 {
   "version": "1.4.0",
   "description": "CodeFlow security enforcement configuration",
-
   "edit_write": {
     "description": "Configuration for Edit/Write pre-tool-use validation",
     "blocked_directories": [
@@ -21,47 +20,47 @@
       "/tmp/"
     ],
     "dangerous_extensions": {
-      "binary": ["exe", "dll", "so", "dylib", "bin", "o", "a"],
-      "credential": ["pem", "key", "crt", "p12", "pfx", "keystore", "jks"],
-      "archive": ["zip", "tar", "gz", "rar", "7z"]
+      "binary": [
+        "exe",
+        "dll",
+        "so",
+        "dylib",
+        "bin",
+        "o",
+        "a"
+      ],
+      "credential": [
+        "pem",
+        "key",
+        "crt",
+        "p12",
+        "pfx",
+        "keystore",
+        "jks"
+      ],
+      "archive": [
+        "zip",
+        "tar",
+        "gz",
+        "rar",
+        "7z"
+      ]
     },
-    "warn_on_dangerous": true,
-    "block_binary_writes": false
+    "warn_on_dangerous": true
   },
-
   "enforcement_levels": {
-    "L0_KERNEL": {
-      "description": "Absolute blocks via settings.json deny list",
-      "configurable": false,
-      "examples": ["rm -rf /", "sudo", "chmod 777 /"]
-    },
     "L1_SENTINEL": {
       "description": "Skill enforcement via hooks",
       "configurable": true,
       "enabled": true,
-      "examples": ["git commit requires cf-git-workflow", "protected edits require cf-security-management"]
-    },
-    "L2_STOP": {
-      "description": "End-of-session verification",
-      "configurable": true,
-      "enabled": true,
-      "examples": ["PCV marker required", "task completion check"]
-    },
-    "L3_ADVISORY": {
-      "description": "Guidance via instructions",
-      "configurable": true,
-      "enabled": true,
-      "examples": ["memory progress reminders", "documentation hints"]
+      "examples": [
+        "git commit requires cf-git-workflow",
+        "protected edits require cf-security-management"
+      ]
     }
   },
-
   "settings_templates": {
     "directory": ".claude/settings-templates",
-    "verification": {
-      "hooks_must_match": true,
-      "version_must_match": true,
-      "note": "All templates must have identical hooks section and _version"
-    },
     "copy_mappings": [
       {
         "template": "strict.json",
@@ -73,26 +72,24 @@
         "destination": ".claude/settings.local.json",
         "purpose": "Local settings (gitignored)"
       }
-    ],
-    "note": "Used by post-tool-use-settings-templates.sh for active verification"
+    ]
   },
-
   "thresholds": {
     "post_tool_use": {
       "memory_progress": {
         "threshold": 3,
-        "tracked_tools": ["Edit", "Write"],
-        "exclude_patterns": [".claude/memory/"],
+        "tracked_tools": [
+          "Edit",
+          "Write"
+        ],
         "note": "Triggers memory progress reminder after N substantive tool operations"
       }
     }
   },
-
   "sentinel": {
-    "directory": "/tmp/claude/managed/sentinels",
+    "directory": ".state/sentinels/skill",
     "default_ttl": 600
   },
-
   "skills": {
     "git-workflow": {
       "operations": {
@@ -122,7 +119,7 @@
           "ttl": 600,
           "note": "Guards git pull/fetch/clone - requires skill invocation before network ops"
         },
-        "create-feature-branch": {
+        "create-branch": {
           "tool": "Bash",
           "pattern": "^git checkout -b|^git switch -c",
           "enforcement": "PreToolUse",
@@ -132,18 +129,18 @@
             "operation": "begin-work",
             "reason": "Work tracking required before branch creation"
           },
-          "note": "Requires memory-management begin-work to ensure work tracking"
+          "note": "Renamed from create-feature-branch: not all branches are feature branches. Requires memory-management begin-work to ensure work tracking"
         },
         "create-worktree": {
           "tool": "Bash",
           "pattern": "^git worktree add",
           "enforcement": "PreToolUse",
           "ttl": 600,
-          "post_script": ".codeflow/scripts/worktree/setup.sh"
+          "post_script": ".codeflow/scripts/worktree/cf-worktree-setup.sh"
         },
         "update-worktree-status": {
           "tool": "Bash",
-          "pattern": ".codeflow/scripts/worktree/status\\.sh",
+          "pattern": ".codeflow/scripts/worktree/cf-worktree-status\\.sh",
           "enforcement": "PreToolUse",
           "ttl": 600
         },
@@ -152,6 +149,20 @@
           "pattern": "^git worktree remove|^git worktree prune",
           "enforcement": "PreToolUse",
           "ttl": 600
+        },
+        "merge-branch": {
+          "tool": "Bash",
+          "pattern": "^git merge",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Guards git merge - requires skill invocation for conflict awareness"
+        },
+        "rebase-interactive": {
+          "tool": "Bash",
+          "pattern": "^git rebase",
+          "enforcement": "PreToolUse",
+          "ttl": 600,
+          "note": "Guards git rebase - requires skill invocation for history-rewrite awareness"
         },
         "block-hard-reset": {
           "tool": "Bash",
@@ -184,7 +195,9 @@
       }
     },
     "documentation-standards": {
-      "exclude_patterns": ["^\\.claude/memory/"],
+      "exclude_patterns": [
+        "^\\.claude/memory/"
+      ],
       "operations": {
         "apply-standard": {
           "tool": "Write",
@@ -278,19 +291,21 @@
     },
     "code-exploration": {
       "operations": {
-        "find-symbol-definition": {
+        "navigate-to-definition": {
           "tool": "Grep",
           "pattern": "\\.py$",
           "content_pattern": "^(def |class |import |from .* import)",
           "enforcement": "PreToolUse",
-          "ttl": 600
+          "ttl": 600,
+          "note": "Renamed from find-symbol-definition to match LSP terminology used in SKILL.md"
         },
-        "find-symbol-references": {
+        "find-all-references": {
           "tool": "Grep",
           "pattern": "\\.py$",
           "content_pattern": "[A-Z][a-z]+[A-Z]|[a-z_]+\\(",
           "enforcement": "PreToolUse",
-          "ttl": 600
+          "ttl": 600,
+          "note": "Renamed from find-symbol-references to match LSP terminology used in SKILL.md"
         }
       }
     },
@@ -347,150 +362,6 @@
       }
     }
   },
-
-  "scope_enforcement": {
-    "enabled": true,
-    "note": "File scope checking for active work registry - prevents parallel work conflicts",
-    "edit_write": {
-      "validation_script": ".codeflow/scripts/state/scope-check.sh",
-      "args": ["$TOOL_NAME", "$FILE_PATH"],
-      "on_violation": "block",
-      "outputs": {
-        "ALLOW": "Proceed with operation",
-        "ALLOW:expanded": "Scope was expanded, proceed with warning",
-        "BLOCK:*": "Block operation, show reason after colon"
-      }
-    }
-  },
-
-  "stop_hooks": {
-    "working-protocol": {
-      "verify-work": {
-        "output_pattern": "complete|done|finished",
-        "required_marker": "🔍",
-        "required_text": "verify-work",
-        "tier_patterns": {
-          "tier_1": "TIER 1",
-          "tier_2": "TIER 2",
-          "tier_3": "TIER 3"
-        },
-        "tier_2_required_sections": ["ARTIFACTS:", "VERIFICATION:"],
-        "tier_3_required_sections": ["ARTIFACTS:", "VERIFICATION:", "ADVERSARIAL:"],
-        "hook_types": ["Stop", "SubagentStop"],
-        "fallback": {
-          "max_retries_default": 2,
-          "config_key": "_verify_work_config.maxRetries"
-        }
-      }
-    },
-    "model-orchestrator": {
-      "review-output": {
-        "output_pattern": "codex.*output|gemini.*result",
-        "required_marker": "reviewed output",
-        "hook_types": ["Stop", "SubagentStop"]
-      }
-    }
-  },
-
-  "protected_paths": {
-    "core": [
-      {
-        "id": "settings",
-        "pattern": ".claude/settings.json",
-        "reason": "Settings require template workflow",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "settings_local",
-        "pattern": ".claude/settings.local.json",
-        "reason": "Settings require template workflow",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "claude_hooks",
-        "pattern": ".claude/hooks",
-        "reason": "Hook modifications are protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "codeflow_scripts_security",
-        "pattern": ".codeflow/scripts/security",
-        "reason": "Security scripts are protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "codeflow_config",
-        "pattern": ".codeflow/config",
-        "reason": "Configuration files are protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "github_workflows",
-        "pattern": ".github/workflows",
-        "reason": "CI workflows are protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "github_dir",
-        "pattern": ".github",
-        "reason": "GitHub config is protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Bash"],
-        "note": "Bash-only: blocks dangerous ops, Edit/Write checked via .github/workflows"
-      },
-      {
-        "id": "git_hooks",
-        "pattern": ".git/hooks",
-        "reason": "Git hooks are protected",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Bash"],
-        "note": "Bash-only: .git/ is not editable via Edit/Write tools"
-      },
-      {
-        "id": "codeflow_git_hooks",
-        "pattern": ".codeflow/scripts/git-hooks",
-        "reason": "Git hooks enforce commit format and branch protection",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      },
-      {
-        "id": "codeflow_shell_lib",
-        "pattern": ".codeflow/scripts/shell-lib",
-        "reason": "Foundation libraries define config paths and exit codes used by all hooks",
-        "skill": "security-management",
-        "operation": "handle-protected-resource",
-        "tools": ["Edit", "Write", "Bash"]
-      }
-    ],
-    "extended_list": ".codeflow/config/enforcement/protection/protected-extended.list",
-    "adhoc_list": ".codeflow/config/enforcement/protection/protected-adhoc.list",
-    "managed_tmp": {
-      "allow_prefix": "/tmp/claude/managed/",
-      "protected_folders": [
-        "/tmp/claude/managed",
-        "/tmp/claude/managed/protected-edits",
-        "/tmp/claude/managed/state"
-      ],
-      "state_folder": "/tmp/claude/managed/state",
-      "state_protection": "block_delete_only"
-    }
-  },
-
   "network_operations": {
     "_note": "Commands that REQUIRE dangerouslyDisableSandbox: true - hook BLOCKS without it",
     "git_network": {
@@ -504,14 +375,16 @@
       "security_reference": "Skill('cf-security-management', args='sandbox-check')"
     },
     "github_cli": {
-      "patterns": ["^gh\\s+(pr|issue|release|api|workflow|run|repo|gist)\\s"],
+      "patterns": [
+        "^gh\\s+(pr|issue|release|api|workflow|run|repo|gist)\\s"
+      ],
       "block_message": "BLOCKED: GitHub CLI requires sandbox bypass",
       "skill_reference": "Skill('cf-git-workflow', args='create-pull-request')",
       "security_reference": "Skill('cf-security-management', args='sandbox-check')"
     }
   },
-
   "protected_resources": {
+    "_note": "CRUD-protected: block create/update/delete via Bash. Execution (bash script.sh) is intentionally allowed — LLMs must be able to run hooks, scripts, and tests.",
     "critical": [
       ".claude/settings.json",
       ".claude/settings.local.json",
@@ -524,52 +397,126 @@
       ".codeflow/scripts/security/**",
       ".codeflow/scripts/git-hooks/**",
       ".codeflow/scripts/shell-lib/**",
-      ".github/workflows/**"
+      ".github/workflows/**",
+      ".github/**",
+      ".git/hooks/**"
     ],
     "moderate": [
       "project/mission.md",
       "project/tech-stack/**"
     ]
   },
-
-  "protected_branches": ["main", "master", "release/*", "production"],
-
-  "security": {
-    "dangerous_file_commands": ["rm", "unlink", "mv", "shred", "truncate"],
-    "permission_commands": ["chmod", "chown"],
-    "indirect_write_commands": ["cp", "rsync", "scp", "install", "tee", "ln"],
-    "privilege_escalation_commands": ["sudo", "su", "doas", "pkexec", "runuser"],
-    "script_bypass_commands": ["bash -c", "sh -c", "eval", "source"],
-    "hook_bypass_patterns": ["--no-verify", "-n", "SKIP_HOOKS", "GIT_SKIP_HOOKS", "HUSKY=0"]
-  },
-
+  "protected_branches": [
+    "main",
+    "master",
+    "release/*",
+    "production"
+  ],
   "git_format": {
-    "protected_branches": ["main", "master", "release/*", "production"],
     "commit_types": [
-      "feat", "fix", "bugfix", "hotfix", "docs", "refactor", "test",
-      "chore", "style", "perf", "build", "ci", "revert", "merge", "plan", "refine"
+      "feat",
+      "fix",
+      "bugfix",
+      "hotfix",
+      "docs",
+      "refactor",
+      "test",
+      "chore",
+      "style",
+      "perf",
+      "build",
+      "ci",
+      "revert",
+      "merge",
+      "plan",
+      "refine"
     ],
     "branch_types": [
-      "feature", "feat", "fix", "bugfix", "hotfix", "release", "docs",
-      "refactor", "test", "chore", "perf", "style", "build", "ci",
-      "revert", "plan", "merge", "experiment", "wip", "refine"
+      "feature",
+      "feat",
+      "fix",
+      "bugfix",
+      "hotfix",
+      "release",
+      "docs",
+      "refactor",
+      "test",
+      "chore",
+      "perf",
+      "style",
+      "build",
+      "ci",
+      "revert",
+      "plan",
+      "merge",
+      "experiment",
+      "wip",
+      "refine"
     ],
     "branch_prefixes": [
-      "feat/", "fix/", "docs/", "refactor/", "test/", "chore/",
-      "plan/", "experiment/", "release/", "hotfix/", "bugfix/",
-      "feature/", "perf/", "style/", "build/", "ci/", "revert/",
-      "merge/", "wip/", "refine/"
+      "feat/",
+      "fix/",
+      "docs/",
+      "refactor/",
+      "test/",
+      "chore/",
+      "plan/",
+      "experiment/",
+      "release/",
+      "hotfix/",
+      "bugfix/",
+      "feature/",
+      "perf/",
+      "style/",
+      "build/",
+      "ci/",
+      "revert/",
+      "merge/",
+      "wip/",
+      "refine/"
     ],
     "ai_attribution_patterns": [
-      "Claude", "Anthropic", "@anthropic.com", "claude.ai", "claude code",
-      "ChatGPT", "OpenAI", "GPT-3", "GPT-4", "GPT-4o", "o1-preview", "o1-mini",
-      "Codex", "@openai.com", "Gemini", "Google AI", "Bard", "@google.com",
-      "Copilot", "GitHub Copilot", "@github.com", "Cursor", "Codeium", "Tabnine",
-      "CodeWhisperer", "Amazon CodeWhisperer", "Sourcegraph Cody", "Replit AI",
-      "Windsurf", "Aider", "Generated with", "Generated by", "AI-generated",
-      "AI generated", "Co-Authored-By: AI", "Co-Authored-By: Claude",
-      "Co-Authored-By: ChatGPT", "Co-Authored-By: Copilot",
-      "🤖", "🔮", "✨ Generated"
+      "Claude",
+      "Anthropic",
+      "@anthropic.com",
+      "claude.ai",
+      "claude code",
+      "ChatGPT",
+      "OpenAI",
+      "GPT-3",
+      "GPT-4",
+      "GPT-4o",
+      "o1-preview",
+      "o1-mini",
+      "Codex",
+      "@openai.com",
+      "Gemini",
+      "Google AI",
+      "Bard",
+      "@google.com",
+      "Copilot",
+      "GitHub Copilot",
+      "@github.com",
+      "Cursor",
+      "Codeium",
+      "Tabnine",
+      "CodeWhisperer",
+      "Amazon CodeWhisperer",
+      "Sourcegraph Cody",
+      "Replit AI",
+      "Windsurf",
+      "Aider",
+      "Generated with",
+      "Generated by",
+      "AI-generated",
+      "AI generated",
+      "Co-Authored-By: AI",
+      "Co-Authored-By: Claude",
+      "Co-Authored-By: ChatGPT",
+      "Co-Authored-By: Copilot",
+      "\ud83e\udd16",
+      "\ud83d\udd2e",
+      "\u2728 Generated"
     ],
     "subject": {
       "max_length": 50,
@@ -582,51 +529,52 @@
       "line_max_length": 72
     },
     "pr": {
-      "required_sections": ["## Summary", "## Testing"],
+      "required_sections": [
+        "## Summary",
+        "## Testing"
+      ],
       "require_body_flag": true
     }
   },
-
-  "branch_protection": {
+  "stop_verification": {
     "enabled": true,
-    "note": "Blocks file-writing Bash operations on protected branches (main, master)",
-    "safe_prefixes": ["/tmp/claude/", "/tmp/"],
-    "blocked_operations": {
-      "redirect": {
-        "description": "File redirects (>, >>)",
-        "examples": ["echo x > file", "cat data >> file"]
+    "max_retries": 3,
+    "require_task_completion": true,
+    "hook_types": [
+      "Stop",
+      "SubagentStop"
+    ],
+    "retry_config_key": "_verify_work_config.maxRetries",
+    "pcv": {
+      "required_marker": "\ud83d\udd0d",
+      "required_text": "verify-work",
+      "output_pattern": "complete|done|finished",
+      "tier_patterns": {
+        "tier_1": "TIER 1",
+        "tier_2": "TIER 2",
+        "tier_3": "TIER 3"
       },
-      "sed_inplace": {
-        "description": "In-place file edits",
-        "examples": ["sed -i '' 's/a/b/' file"]
-      },
-      "touch": {
-        "description": "File creation via touch",
-        "examples": ["touch newfile.txt"]
-      },
-      "tee": {
-        "description": "Piped file writes",
-        "examples": ["echo x | tee file"]
+      "tier_requirements": {
+        "1": [
+          "verify-work",
+          "TIER"
+        ],
+        "2": [
+          "verify-work",
+          "TIER",
+          "ARTIFACTS:",
+          "VERIFICATION:"
+        ],
+        "3": [
+          "verify-work",
+          "TIER",
+          "ARTIFACTS:",
+          "VERIFICATION:",
+          "ADVERSARIAL:"
+        ]
       }
     }
   },
-
-  "stop_verification": {
-    "require_pcv_marker": true,
-    "tier_requirements": {
-      "1": ["verify-work", "TIER"],
-      "2": ["verify-work", "TIER", "ARTIFACTS", "VERIFICATION"],
-      "3": ["verify-work", "TIER", "ARTIFACTS", "VERIFICATION", "ADVERSARIAL"]
-    },
-    "require_task_completion": true,
-    "max_retries": 3,
-    "autorun_llm_model": "haiku",
-    "autorun_llm_timeout_ms": 30000,
-    "autorun_approval_threshold": 0.8,
-    "autorun_retry_on_low_confidence": true,
-    "autorun_escalate_tier_3": true
-  },
-
   "logging": {
     "session_start": {
       "enabled": true,
@@ -643,15 +591,37 @@
       "log_directory": ".state/logs/sessions",
       "max_result_size": 2000,
       "redact_sensitive": true,
-      "tools_to_log": ["Edit", "Write", "Bash", "Read", "Grep"]
+      "tools_to_log": [
+        "Edit",
+        "Write",
+        "Bash",
+        "Read",
+        "Grep"
+      ]
     },
-    "security": {
+    "session_end": {
       "enabled": true,
-      "log_directory": ".state/logs/security",
-      "retention_days": 30
+      "generate_summary": true,
+      "trigger_rotation": true,
+      "log_directory": ".state/logs/sessions",
+      "rotation": {
+        "max_age_days": 30,
+        "max_logs": 100,
+        "max_size_mb": 100
+      }
+    },
+    "stop": {
+      "enabled": true,
+      "capture_pcv_details": true,
+      "capture_task_context": true
+    },
+    "user_prompt": {
+      "enabled": true,
+      "capture_full_text": true,
+      "detect_intent": true,
+      "privacy_mode": false
     }
   },
-
   "network": {
     "always_block_domains": {
       "enabled": true,
@@ -673,18 +643,27 @@
       "private_ip_ranges": [
         "169.254.*",
         "10.*",
-        "172.16.*", "172.17.*", "172.18.*", "172.19.*",
-        "172.20.*", "172.21.*", "172.22.*", "172.23.*",
-        "172.24.*", "172.25.*", "172.26.*", "172.27.*",
-        "172.28.*", "172.29.*", "172.30.*", "172.31.*",
+        "172.16.*",
+        "172.17.*",
+        "172.18.*",
+        "172.19.*",
+        "172.20.*",
+        "172.21.*",
+        "172.22.*",
+        "172.23.*",
+        "172.24.*",
+        "172.25.*",
+        "172.26.*",
+        "172.27.*",
+        "172.28.*",
+        "172.29.*",
+        "172.30.*",
+        "172.31.*",
         "192.168.*"
       ]
     }
   },
-
   "read_delegation": {
-    "enabled": true,
-    "delegation_target": "Explore",
     "allowed_paths": [
       ".claude/CLAUDE.md",
       ".claude/settings.json",
@@ -716,6 +695,26 @@
       "yml": 200,
       "toml": 200,
       "default": 400
+    }
+  },
+  "managed_tmp": {
+    "allow_prefix": "/tmp/claude/managed/",
+    "protected_folders": [
+      "/tmp/claude/managed",
+      "/tmp/claude/managed/codeflow/protected-edits",
+      "/tmp/claude/managed/state"
+    ],
+    "staging_ttl": 3600,
+    "state_folder": "/tmp/claude/managed/state",
+    "state_protection": "block_delete_only"
+  },
+  "session_end": {
+    "cleanup": {
+      "enabled": true,
+      "clean_expired_sentinels": true,
+      "preserve_valid_sentinels": true,
+      "preserve_active_task": true,
+      "log_session_end": true
     }
   }
 }

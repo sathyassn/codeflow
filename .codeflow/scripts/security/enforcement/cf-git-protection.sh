@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose:   Git-related security checks (Sections 1-3)
+# Purpose:   Git-related security checks (Sections 1-4)
 # Location:  .codeflow/scripts/security/enforcement/cf-git-protection.sh
 # Usage:     source "cf-git-protection.sh" (from main hook)
 #
@@ -7,6 +7,15 @@
 #   - Section 1: Git Hook Bypass Prevention (--no-verify, -n)
 #   - Section 2: Force Push Prevention (--force, -f)
 #   - Section 3: Hook Path Manipulation (core.hooksPath, env vars)
+#   - Section 4: Git Hooks Directory Protection (.git/hooks)
+#
+# SECTION OWNERSHIP: This script is the AUTHORITATIVE owner of Sections 1-4.
+# cf-hook-bypass.sh duplicates these checks (git -c core.hooksPath,
+# PRE_COMMIT_ALLOW_NO_CONFIG, .git/hooks manipulation, .git/hooks redirect).
+# Since cf-git-protection.sh runs first in the orchestrator chain, the
+# overlapping checks in cf-hook-bypass.sh are dead code.
+# cf-hook-bypass.sh should only retain checks unique to it (currently none
+# after --unset core.hooksPath was absorbed here).
 #
 # Required variables (set by caller):
 #   - COMMAND: The bash command being checked
@@ -77,9 +86,19 @@ fi
 # SECTION 3: Hook Path Manipulation
 # =============================================================================
 
-# core.hooksPath modification
+# core.hooksPath modification via git config
 if [[ "$COMMAND" =~ git[[:space:]]+config.*core\.hooksPath ]]; then
   block_command "Hook Manipulation" "Hook path modification attempt" "core.hooksPath"
+fi
+
+# core.hooksPath via -c flag (git -c core.hooksPath=...)
+if [[ "$COMMAND" =~ git[[:space:]]+-c[[:space:]]+core\.hooksPath ]]; then
+  block_command "Hook Manipulation" "Hook path override via -c flag" "-c core.hooksPath"
+fi
+
+# core.hooksPath unset attempt (git config --unset core.hooksPath)
+if [[ "$COMMAND" =~ git[[:space:]]+config.*--unset.*core\.hooksPath ]]; then
+  block_command "Hook Manipulation" "Hook path unset attempt" "--unset core.hooksPath"
 fi
 
 # Environment variable bypass attempts
@@ -97,6 +116,25 @@ fi
 
 if [[ "$COMMAND" =~ HUSKY[[:space:]]*=[[:space:]]*0 ]]; then
   block_command "Hook Manipulation" "Husky bypass attempt" "HUSKY=0"
+fi
+
+# PRE_COMMIT_ALLOW_NO_CONFIG (pre-commit framework bypass)
+if [[ "$COMMAND" =~ PRE_COMMIT_ALLOW_NO_CONFIG ]]; then
+  block_command "Hook Manipulation" "pre-commit bypass attempt" "PRE_COMMIT_ALLOW_NO_CONFIG"
+fi
+
+# =============================================================================
+# SECTION 4: Git Hooks Directory Protection
+# =============================================================================
+
+# Modifying .git/hooks directly (rm, mv, chmod, chown)
+if [[ "$COMMAND" =~ (rm|mv|chmod|chown)[[:space:]].*\.git/hooks ]]; then
+  block_command "Hook Manipulation" "Direct .git/hooks modification" ".git/hooks"
+fi
+
+# Writing to .git/hooks via redirect
+if [[ "$COMMAND" =~ \>[[:space:]]*\.git/hooks ]]; then
+  block_command "Hook Manipulation" "Redirect to .git/hooks" "> .git/hooks"
 fi
 
 # All git protection checks passed

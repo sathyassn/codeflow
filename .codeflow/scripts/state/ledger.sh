@@ -7,7 +7,13 @@
 #   - append_ledger()    Append event to ledger file
 #   - read_ledger()      Read events from ledger
 #   - tail_ledger()      Get recent events
-#   - replay_ledger()    Replay events to rebuild state
+#   - filter_ledger()    Get events by type
+#   - count_ledger()     Count events in ledger
+#   - validate_ledger()  Validate JSONL format
+
+# Source guard to prevent multiple loads
+[[ -n "${_CODEFLOW_LEDGER_LOADED:-}" ]] && return 0
+_CODEFLOW_LEDGER_LOADED=1
 
 set -euo pipefail
 
@@ -48,9 +54,14 @@ init_ledger() {
 # Append event to ledger file
 # Args: $1=ledger_file (e.g., "sessions.jsonl"), $2=event_type, $3=data (JSON key-value pairs)
 append_ledger() {
-    local ledger_file="$1"
-    local event_type="$2"
-    local data="$3"
+    local ledger_file="${1:-}"
+    local event_type="${2:-}"
+    local data="${3:-}"
+
+    if [[ -z "$ledger_file" || -z "$event_type" ]]; then
+        echo "Error: append_ledger requires ledger_file and event_type" >&2
+        return 1
+    fi
 
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -61,26 +72,55 @@ append_ledger() {
 
     # Build JSON line
     # Note: data should be pre-formatted as "key":"value","key2":"value2"
-    echo "{\"ts\":\"$timestamp\",\"e\":\"$event_type\",$data}" >> "$full_path"
+    local line
+    if [[ -n "$data" ]]; then
+        line="{\"ts\":\"$timestamp\",\"e\":\"$event_type\",$data}"
+    else
+        line="{\"ts\":\"$timestamp\",\"e\":\"$event_type\"}"
+    fi
+
+    # Use flock for parallel safety when available
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 200
+            echo "$line" >> "$full_path"
+        ) 200>"$full_path.lock"
+    else
+        echo "$line" >> "$full_path"
+    fi
 }
 
 # Append with full JSON event
 # Args: $1=ledger_file, $2=full JSON event (must include "ts" if not auto-generated)
 append_event() {
-    local ledger_file="$1"
-    local event="$2"
+    local ledger_file="${1:-}"
+    local event="${2:-}"
+
+    if [[ -z "$ledger_file" || -z "$event" ]]; then
+        echo "Error: append_event requires ledger_file and event" >&2
+        return 1
+    fi
 
     local full_path="$LEDGER_PATH/$ledger_file"
     mkdir -p "$(dirname "$full_path")"
 
     # If event doesn't have timestamp, add one
-    if ! echo "$event" | grep -q '"ts"'; then
+    if [[ "$event" != *'"ts"'* ]]; then
         local timestamp
         timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        event=$(echo "$event" | sed "s/^{/{\"ts\":\"$timestamp\",/")
+        # Prepend timestamp to JSON object
+        event="{\"ts\":\"$timestamp\",${event#\{}"
     fi
 
-    echo "$event" >> "$full_path"
+    # Use flock for parallel safety when available
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 200
+            echo "$event" >> "$full_path"
+        ) 200>"$full_path.lock"
+    else
+        echo "$event" >> "$full_path"
+    fi
 }
 
 # Read all events from ledger
@@ -208,33 +248,129 @@ backup_ledger() {
 # Validate JSONL file (check each line is valid JSON)
 # Args: $1=ledger_file
 validate_ledger() {
-    local ledger_file="$1"
+    local ledger_file="${1:-}"
     local full_path="$LEDGER_PATH/$ledger_file"
-    local errors=0
-    local line_num=0
+
+    if [[ -z "$ledger_file" ]]; then
+        echo "Error: validate_ledger requires ledger_file" >&2
+        return 1
+    fi
 
     if [[ ! -f "$full_path" ]]; then
         echo "File not found: $full_path"
         return 1
     fi
 
-    while IFS= read -r line; do
-        ((line_num++))
-        if [[ -n "$line" ]]; then
-            if ! echo "$line" | python3 -c "import sys, json; json.loads(sys.stdin.read())" 2>/dev/null; then
-                echo "Invalid JSON at line $line_num: $line"
-                ((errors++))
-            fi
-        fi
-    done < "$full_path"
+    local line_count
+    line_count=$(wc -l < "$full_path" | tr -d ' ')
 
-    if [[ $errors -eq 0 ]]; then
-        echo "Ledger valid: $ledger_file ($line_num lines)"
+    if [[ "$line_count" -eq 0 ]]; then
+        echo "Ledger valid: $ledger_file (0 lines)"
+        return 0
+    fi
+
+    # Single-process validation (much faster than per-line python3)
+    local output
+    if output=$(python3 -c "
+import sys, json
+errors = 0
+line_count = 0
+with open(sys.argv[1]) as f:
+    for i, line in enumerate(f, 1):
+        line = line.strip()
+        if line:
+            line_count += 1
+            try:
+                json.loads(line)
+            except json.JSONDecodeError:
+                print(f'Invalid JSON at line {i}: {line}')
+                errors += 1
+if errors:
+    print(f'Ledger has {errors} errors')
+    sys.exit(1)
+print(f'Ledger valid: {sys.argv[2]} ({line_count} lines)')
+" "$full_path" "$ledger_file" 2>&1); then
+        echo "$output"
         return 0
     else
-        echo "Ledger has $errors errors"
+        echo "$output"
         return 1
     fi
+}
+
+# ============================================================================
+# WORK GRAPH EVENT HELPERS
+# ============================================================================
+
+# Record epic created event
+# Args: epic_id title area_type work_type domain [is_ongoing] [priority] [file_scope] [format_id]
+#   epic_id:   ULID PK (epic-{ulid}) — used for DB FK references
+#   format_id: Human-readable ID ({AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}) — used for display/filenames
+record_epic_created() {
+    local epic_id="$1" title="$2" area_type="$3" work_type="$4" domain="$5"
+    local is_ongoing="${6:-false}" priority="${7:-normal}" file_scope="${8:-}" format_id="${9:-}"
+
+    # Escape quotes in title
+    title=$(echo "$title" | sed 's/"/\\"/g')
+
+    local ongoing_bool="false"
+    [[ "$is_ongoing" == "true" ]] && ongoing_bool="true"
+
+    local data="\"id\":\"$epic_id\",\"title\":\"$title\",\"area_type\":\"$area_type\""
+    data="$data,\"work_type\":\"$work_type\",\"domain\":\"$domain\""
+    data="$data,\"is_ongoing\":$ongoing_bool,\"priority\":\"$priority\""
+    [[ -n "$file_scope" ]] && data="$data,\"file_scope\":\"$file_scope\""
+    [[ -n "$format_id" ]] && data="$data,\"format_id\":\"$format_id\""
+
+    append_ledger "$LEDGER_WORK_GRAPH" "epic_created" "$data"
+}
+
+# Record task created event
+# Args: task_id epic_id title area_type work_type domain [status] [priority] [format_id]
+#   task_id:   ULID PK (task-{ulid}) — used for DB FK references
+#   epic_id:   ULID PK (epic-{ulid}) — parent epic reference
+#   format_id: Human-readable ID ({AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}) — used for display/filenames
+record_task_created() {
+    local task_id="$1" epic_id="$2" title="$3" area_type="$4" work_type="$5" domain="$6"
+    local status="${7:-todo}" priority="${8:-normal}" format_id="${9:-}"
+
+    # Escape quotes in title
+    title=$(echo "$title" | sed 's/"/\\"/g')
+
+    local data="\"id\":\"$task_id\",\"epic_id\":\"$epic_id\",\"title\":\"$title\""
+    data="$data,\"area_type\":\"$area_type\",\"work_type\":\"$work_type\""
+    data="$data,\"domain\":\"$domain\",\"status\":\"$status\",\"priority\":\"$priority\""
+    [[ -n "$format_id" ]] && data="$data,\"format_id\":\"$format_id\""
+
+    append_ledger "$LEDGER_WORK_GRAPH" "task_created" "$data"
+}
+
+# Record task status change event
+# Args: task_id new_status [old_status] [format_id]
+#   task_id:   ULID PK (task-{ulid})
+#   format_id: Human-readable ID ({AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}) — optional, for display
+record_task_status_changed() {
+    local task_id="$1" new_status="$2" old_status="${3:-}" format_id="${4:-}"
+
+    local data="\"task_id\":\"$task_id\",\"new_status\":\"$new_status\""
+    [[ -n "$old_status" ]] && data="$data,\"old_status\":\"$old_status\""
+    [[ -n "$format_id" ]] && data="$data,\"format_id\":\"$format_id\""
+
+    append_ledger "$LEDGER_WORK_GRAPH" "task_status_changed" "$data"
+}
+
+# Record epic status change event
+# Args: epic_id new_status [old_status] [format_id]
+#   epic_id:   ULID PK (epic-{ulid})
+#   format_id: Human-readable ID ({AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}) — optional, for display
+record_epic_status_changed() {
+    local epic_id="$1" new_status="$2" old_status="${3:-}" format_id="${4:-}"
+
+    local data="\"epic_id\":\"$epic_id\",\"new_status\":\"$new_status\""
+    [[ -n "$old_status" ]] && data="$data,\"old_status\":\"$old_status\""
+    [[ -n "$format_id" ]] && data="$data,\"format_id\":\"$format_id\""
+
+    append_ledger "$LEDGER_WORK_GRAPH" "epic_status_changed" "$data"
 }
 
 # ============================================================================
@@ -255,6 +391,10 @@ export -f log_work_claimed
 export -f log_progress
 export -f backup_ledger
 export -f validate_ledger
+export -f record_epic_created
+export -f record_task_created
+export -f record_task_status_changed
+export -f record_epic_status_changed
 
 # Export ledger file names
 export LEDGER_CONFIG

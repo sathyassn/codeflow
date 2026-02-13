@@ -58,7 +58,7 @@ run_single_test() {
     if is_python_test "$test_file"; then
         output=$($PYTHON -m pytest "$test_file" -v --tb=short 2>&1) || exit_code=$?
     else
-        output=$("$test_file" 2>&1) || exit_code=$?
+        output=$("$test_file" </dev/null 2>&1) || exit_code=$?
     fi
 
     if [[ $exit_code -eq 0 ]]; then
@@ -109,13 +109,28 @@ run_category_tests() {
 
     log_section "Category: $category"
 
-    # Check if directory has Python tests
+    local has_python=false
+    local has_bash=false
+
+    # Check for Python tests
     if [[ -f "$full_path/conftest.py" ]] || ls "$full_path"/test_*.py &>/dev/null 2>&1; then
-        # Build list of Python test files to run based on priority
+        has_python=true
+    fi
+
+    # Check for bash tests
+    local bash_tests=()
+    while IFS= read -r test_file; do
+        [[ -n "$test_file" ]] && bash_tests+=("$test_file")
+    done < <(discover_tests_in_dir "$full_path")
+    [[ ${#bash_tests[@]} -gt 0 ]] && has_bash=true
+
+    # Run Python tests if present
+    if [[ "$has_python" == "true" ]]; then
         local python_tests=()
         for test_file in "$full_path"/test_*.py; do
             [[ -f "$test_file" ]] || continue
-            local relative_path="${test_file#$testing_root/}"
+            # shellcheck disable=SC2295
+            local relative_path="${test_file#"$testing_root"/}"
             if should_run_test "$relative_path" "$mode"; then
                 python_tests+=("$test_file")
             else
@@ -150,7 +165,6 @@ run_category_tests() {
             fi
 
             if pytest_output=$($PYTHON -m pytest "${python_tests[@]}" "${pytest_args[@]}" 2>&1); then
-                # Count passed tests from pytest output
                 local passed
                 passed=$(echo "$pytest_output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' || echo 0)
                 for ((i=0; i<passed; i++)); do
@@ -158,7 +172,6 @@ run_category_tests() {
                 done
                 echo "$pytest_output" | tail -10
             else
-                # Check if failure was due to coverage threshold
                 if echo "$pytest_output" | grep -q "FAIL Required test coverage"; then
                     RUNNER_COVERAGE_FAILED="true"
                     log_error "Coverage below threshold in $category"
@@ -169,19 +182,11 @@ run_category_tests() {
                 echo "$pytest_output" | tail -20
             fi
         fi
-    else
-        # Run bash tests
-        local tests=()
-        while IFS= read -r test_file; do
-            [[ -n "$test_file" ]] && tests+=("$test_file")
-        done < <(discover_tests_in_dir "$full_path")
+    fi
 
-        if [[ ${#tests[@]} -eq 0 ]]; then
-            log_info "No tests found in $category"
-            return 0
-        fi
-
-        for test_file in "${tests[@]}"; do
+    # Run bash tests if present
+    if [[ "$has_bash" == "true" ]]; then
+        for test_file in "${bash_tests[@]}"; do
             local priority
             priority=$(get_test_priority "$test_file")
 
@@ -196,6 +201,10 @@ run_category_tests() {
                 fi
             fi
         done
+    fi
+
+    if [[ "$has_python" == "false" ]] && [[ "$has_bash" == "false" ]]; then
+        log_info "No tests found in $category"
     fi
 
     return 0
@@ -315,4 +324,37 @@ parse_runner_options() {
                 ;;
         esac
     done
+}
+
+# ============================================================================
+# PARALLEL WORKER
+# ============================================================================
+
+# Run a single category and write results to a file (for parallel execution)
+# Args: $1=category $2=mode $3=result_file
+run_category_worker() {
+    local category="$1" mode="$2" result_file="$3"
+    local log_file="${result_file%.result}.log"
+
+    # Reset counters for this isolated worker
+    PASSED_TESTS=()
+    FAILED_TESTS=()
+    SKIPPED_TESTS=()
+
+    local start_time end_time exit_code=0
+    start_time=$(date +%s)
+
+    run_category_tests "$category" "$mode" > "$log_file" 2>&1 || exit_code=$?
+
+    end_time=$(date +%s)
+
+    # Write structured results (machine-parseable)
+    {
+        echo "exit_code=$exit_code"
+        echo "passed=${#PASSED_TESTS[@]}"
+        echo "failed=${#FAILED_TESTS[@]}"
+        echo "skipped=${#SKIPPED_TESTS[@]}"
+        echo "duration=$((end_time - start_time))"
+        echo "failed_list=$(IFS=,; echo "${FAILED_TESTS[*]}")"
+    } > "$result_file"
 }

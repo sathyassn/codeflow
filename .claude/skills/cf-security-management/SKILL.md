@@ -57,7 +57,7 @@ START: What security-related situation are you handling?
     │       │
     │       └─ Got "Permission denied" or hook block?
     │           └─→ USE 🔧 handle-protected-resource
-    │               ├─ Stage to /tmp/claude/managed/protected-edits/
+    │               ├─ Stage to /tmp/claude/managed/codeflow/protected-edits/
     │               ├─ Edit the tmp file
     │               ├─ Provide copy command to user
     │               └─ If settings file → also USE 🔧 sync-settings-templates
@@ -170,28 +170,32 @@ Protected vs Not Protected:
 Procedure:
   1. DETECT blocked path and error type
 
-  2. STAGE to /tmp/claude/managed/protected-edits/{relative-path}
-     mkdir -p /tmp/claude/managed/protected-edits/{parent-dirs}
-     cp {original} /tmp/claude/managed/protected-edits/{relative-path}
+  2. STAGE to /tmp/claude/managed/codeflow/protected-edits/{relative-path}
+     mkdir -p /tmp/claude/managed/codeflow/protected-edits/{parent-dirs}
+     cp {original} /tmp/claude/managed/codeflow/protected-edits/{relative-path}
 
   3. EDIT the tmp file
-     Use Edit tool on /tmp/claude/managed/protected-edits/ path
+     Use Edit tool on /tmp/claude/managed/codeflow/protected-edits/ path
      All edits allowed in managed area
 
   4. PROVIDE combined apply command to user:
-     cp /tmp/claude/managed/protected-edits/{path} {dest} && \
+     cp /tmp/claude/managed/codeflow/protected-edits/{path} {dest} && \
      chmod +x {dest}  # if executable
 
-  5. VERIFY after user confirms execution
+  5. WAIT for user to run the copy command
+     Do NOT proceed to verification or next steps until user confirms
+     The agent CANNOT apply protected files — only the user can
+
+  6. VERIFY after user confirms execution
      Read the original file
      Confirm changes match expected
 
-  6. CLEANUP (targeted only)
-     rm /tmp/claude/managed/protected-edits/{specific-file}
+  7. CLEANUP (targeted only)
+     rm /tmp/claude/managed/codeflow/protected-edits/{specific-file}
      DO NOT delete /tmp/claude/managed/ folders
 
 Output:
-  staged_path: /tmp/claude/managed/protected-edits/{path}
+  staged_path: /tmp/claude/managed/codeflow/protected-edits/{path}
   apply_command: {combined command}
   verified: true | false
 
@@ -307,12 +311,19 @@ Output:
 
 ```text
 /tmp/claude/
-├── managed/                       # Protected container
-│   ├── protected-edits/           # For protected resource workflow
-│   │   └── .claude/hooks/...      # Staged files mirror project structure
-│   └── state/                     # For state tracking scripts
-│       └── verify-work-retry-*    # State files
-└── (unmanaged scratch space)      # Ad-hoc files, no special protection
+├── managed/                              # Protected container
+│   └── codeflow/                         # CodeFlow namespace
+│       └── protected-edits/              # For protected resource workflow
+│           └── .claude/hooks/...         # Staged files mirror project structure
+└── (unmanaged scratch space)             # Ad-hoc files, no special protection
+
+{repo-root}/
+└── .state/
+    ├── sentinels/                        # Sentinel files (was /tmp/claude/managed/sentinels)
+    │   └── skill/                        # Skill invocation sentinels
+    │       └── pathflow-pf-*             # PathFlow sentinel files
+    └── session/                          # Session state (was /tmp/claude/managed/state)
+        └── verify-work-retry-*           # State files
 ```
 
 **Protection Rules:**
@@ -320,8 +331,9 @@ Output:
 | Path | Folder Protection | Contents Protection |
 |------|-------------------|---------------------|
 | `/tmp/claude/managed/` | No delete/rename | N/A (container) |
-| `managed/protected-edits/` | No delete/rename | Full CRUD allowed |
-| `managed/state/` | No delete/rename | Create/Edit yes, Delete blocked |
+| `managed/codeflow/protected-edits/` | No delete/rename | Full CRUD allowed |
+| `.state/sentinels/skill/` | Git-ignored | Session-scoped, cleared on session end |
+| `.state/session/` | Git-ignored | Create/Edit yes, session-scoped |
 
 ## Resources
 

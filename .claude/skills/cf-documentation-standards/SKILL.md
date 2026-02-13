@@ -54,9 +54,9 @@ Found lint errors?
 |---|-----------|-------------|---------|
 | 1 | apply-standard | ENF-L1 Sentinel | Apply doc standards for file type |
 | 2 | lint-file | ENF-L1 Sentinel | Check documentation quality |
-| 3 | lint-all | ENF-L1 Sentinel | Batch lint multiple files |
+| 3 | lint-all | ENF-L3 Advisory | Batch lint multiple files |
 | 4 | fix-file | ENF-L1 Sentinel | Auto-fix lint errors |
-| 5 | validate-structure | ENF-L1 Sentinel | Verify structure compliance |
+| 5 | validate-structure | ENF-L3 Advisory | Verify structure compliance |
 | 6 | check-links | None | Find broken links |
 | 7 | generate-toc | None | Generate table of contents |
 
@@ -122,12 +122,12 @@ Output:
 
 ```text
 When: Batch documentation check (pre-commit, CI)
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (read-only batch check; individual file edits gated by lint-file sentinel)
 
 Procedure:
   1. Identify all markdown files in scope:
      - project/*.md
-     - epics/**/*.md
+     - project-management/epics/**/*.md
      - .claude/skills/**/*.md
   2. Run markdownlint on each
   3. Aggregate results
@@ -147,7 +147,7 @@ Output:
 
 ```text
 When: After lint-file finds fixable errors
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L1 Sentinel (edits gated by lint-file sentinel in enforcement-policy.json)
 
 Auto-fixable Issues:
   | Rule | Fix |
@@ -178,7 +178,7 @@ Output:
 
 ```text
 When: Before commit
-Enforcement: ENF-L1 Sentinel
+Enforcement: ENF-L3 Advisory (read-only validation; no sentinel hook)
 
 Procedure:
   1. Parse document
@@ -240,8 +240,8 @@ Output:
 | Brief | `*-brief.md` | Summary, Scope, Requirements, Timeline |
 | Runbook | `*-runbook.md` | Prerequisites, Steps, Rollback |
 | Incident | `*-incident.md` | Summary, Timeline, Impact, Resolution |
-| Epic | `epics/**/*.md` | Summary, Tasks, Acceptance Criteria |
-| Task | `epics/**/tasks/*.md` | Description, Status, Blockers |
+| Epic | `project-management/epics/**/*-epic.md` | Summary, Tasks, Acceptance Criteria |
+| Task | `project-management/epics/**/tasks/*.md` | Description, Status, Blockers |
 
 ## Operation Composition
 

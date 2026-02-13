@@ -20,10 +20,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -84,7 +83,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Bash tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -92,7 +91,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Bash tools (Edit)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -100,7 +99,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Bash tools (Write)
-result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Write tool"
 else
@@ -108,7 +107,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Bash tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -116,7 +115,7 @@ else
 fi
 
 # Test 11: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -124,7 +123,7 @@ else
 fi
 
 # Test 12: Exits 0 when empty command
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty command"
 else
@@ -132,7 +131,7 @@ else
 fi
 
 # Test 13: Allows safe commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows safe commands (ls -la)"
 else
@@ -143,7 +142,7 @@ echo ""
 echo "--- Dangerous Commands ---"
 
 # Test 14: Blocks rm -rf /
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm -rf /"
 else
@@ -151,7 +150,7 @@ else
 fi
 
 # Test 15: Blocks rm -rf /*
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /*"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /*"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm -rf /*"
 else
@@ -159,7 +158,7 @@ else
 fi
 
 # Test 16: Blocks rm -fr /
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -fr /"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -fr /"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm -fr /"
 else
@@ -167,7 +166,7 @@ else
 fi
 
 # Test 17: Allows rm on safe paths
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm /tmp/claude/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm /tmp/claude/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows rm on safe paths"
 else
@@ -178,7 +177,7 @@ echo ""
 echo "--- Privilege Escalation ---"
 
 # Test 18: Blocks sudo commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"sudo apt install foo"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"sudo apt install foo"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks sudo commands"
 else
@@ -186,7 +185,7 @@ else
 fi
 
 # Test 19: Blocks su commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"su - root"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"su - root"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks su commands"
 else
@@ -194,7 +193,7 @@ else
 fi
 
 # Test 20: Blocks doas commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"doas cat /etc/passwd"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"doas cat /etc/passwd"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks doas commands"
 else
@@ -202,7 +201,7 @@ else
 fi
 
 # Test 21: Blocks pkexec commands
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"pkexec cat /etc/shadow"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"pkexec cat /etc/shadow"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks pkexec commands"
 else
@@ -210,7 +209,7 @@ else
 fi
 
 # Test 22: Allows sudo in commit messages
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"docs: explain sudo usage\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"docs: explain sudo usage\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows sudo in commit messages"
 else
@@ -221,7 +220,7 @@ echo ""
 echo "--- Git Hook Bypass ---"
 
 # Test 23: Blocks git commit --no-verify
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit --no-verify -m test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit --no-verify -m test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks git commit --no-verify"
 else
@@ -229,7 +228,7 @@ else
 fi
 
 # Test 24: Blocks git commit -n
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -n -m test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -n -m test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks git commit -n"
 else
@@ -237,7 +236,7 @@ else
 fi
 
 # Test 25: Blocks HUSKY=0 git commit
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"HUSKY=0 git commit -m test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"HUSKY=0 git commit -m test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks HUSKY=0 git commit"
 else
@@ -245,7 +244,7 @@ else
 fi
 
 # Test 26: Blocks SKIP_HOOKS=1 git commit
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"SKIP_HOOKS=1 git commit -m test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"SKIP_HOOKS=1 git commit -m test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks SKIP_HOOKS=1 git commit"
 else
@@ -253,7 +252,7 @@ else
 fi
 
 # Test 27: Allows normal git commit
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"test commit\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"test commit\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows normal git commit"
 else
@@ -264,7 +263,7 @@ echo ""
 echo "--- Git Config Protection ---"
 
 # Test 28: Blocks git config core.hooksPath
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config core.hooksPath /dev/null"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config core.hooksPath /dev/null"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks git config core.hooksPath"
 else
@@ -272,7 +271,7 @@ else
 fi
 
 # Test 29: Allows git config user.name
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config user.name \"Test User\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config user.name \"Test User\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows git config user.name"
 else
@@ -280,7 +279,7 @@ else
 fi
 
 # Test 30: Allows git config user.email
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config user.email \"test@example.com\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"git config user.email \"test@example.com\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows git config user.email"
 else
@@ -291,7 +290,7 @@ echo ""
 echo "--- Path Protection ---"
 
 # Test 31: Blocks rm .claude/settings.json
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm .claude/settings.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm .claude/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm .claude/settings.json"
 else
@@ -299,23 +298,23 @@ else
 fi
 
 # Test 32: Blocks rm -rf .claude/hooks/codeflow/
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf .claude/hooks/codeflow/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf .claude/hooks/codeflow/"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm -rf .claude/hooks/codeflow/"
 else
     fail "Should block rm -rf .claude/hooks/codeflow/"
 fi
 
-# Test 33: Blocks chmod on .claude/hooks
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"chmod 777 .claude/hooks/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+# Test 33: Blocks chmod on .claude/hooks/codeflow (protected path)
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"chmod 777 .claude/hooks/codeflow"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
-    pass "Blocks chmod on .claude/hooks"
+    pass "Blocks chmod on .claude/hooks/codeflow"
 else
-    fail "Should block chmod on .claude/hooks"
+    fail "Should block chmod on .claude/hooks/codeflow"
 fi
 
 # Test 34: Blocks mv .codeflow/config/test.json (matches .codeflow/config/**)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"mv .codeflow/config/test.json /tmp/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"mv .codeflow/config/test.json /tmp/"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks mv .codeflow/config/* (protected path)"
 else
@@ -323,7 +322,7 @@ else
 fi
 
 # Test 35: Blocks redirect to .claude/settings.json
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"echo x > .claude/settings.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"echo x > .claude/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks redirect to .claude/settings.json"
 else
@@ -331,7 +330,7 @@ else
 fi
 
 # Test 36: Allows redirect to /tmp/claude/
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"echo x > /tmp/claude/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"echo x > /tmp/claude/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows redirect to /tmp/claude/"
 else
@@ -341,12 +340,12 @@ fi
 echo ""
 echo "--- File Operations ---"
 
-# Test 37: Blocks cp to .claude/hooks/
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"cp malicious.sh .claude/hooks/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+# Test 37: Blocks cp to .claude/hooks/codeflow/
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"cp malicious.sh .claude/hooks/codeflow/test.sh"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
-    pass "Blocks cp to .claude/hooks/"
+    pass "Blocks cp to .claude/hooks/codeflow/"
 else
-    fail "Should block cp to .claude/hooks/"
+    fail "Should block cp to .claude/hooks/codeflow/"
 fi
 
 # Test 38: Blocks tee to protected path
@@ -358,7 +357,7 @@ else
 fi
 
 # Test 39: Allows cp to /tmp/claude/
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"cp file.txt /tmp/claude/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"cp file.txt /tmp/claude/"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows cp to /tmp/claude/"
 else
@@ -377,7 +376,7 @@ echo ""
 echo "--- Tmp Protection ---"
 
 # Test 41: Blocks rm -rf /tmp/claude/managed
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /tmp/claude/managed"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /tmp/claude/managed"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks rm -rf /tmp/claude/managed"
 else
@@ -385,7 +384,7 @@ else
 fi
 
 # Test 42: Blocks mv /tmp/claude/managed
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"mv /tmp/claude/managed /tmp/elsewhere"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"mv /tmp/claude/managed /tmp/elsewhere"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks mv /tmp/claude/managed"
 else
@@ -393,7 +392,7 @@ else
 fi
 
 # Test 43: Allows operations in managed folder contents
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"touch /tmp/claude/managed/protected-edits/file.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"touch /tmp/claude/managed/codeflow/protected-edits/file.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows operations in managed folder contents"
 else
@@ -401,7 +400,7 @@ else
 fi
 
 # Test 44: Allows rm /tmp/claude/temp.txt
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm /tmp/claude/temp.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm /tmp/claude/temp.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows rm /tmp/claude/temp.txt"
 else

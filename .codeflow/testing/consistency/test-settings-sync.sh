@@ -460,7 +460,7 @@ test_settings_reference_existing_files() {
     # Get all .sh hook paths from strict.json
     local hook_paths
     hook_paths=$(jq -r '.. | objects | select(.command?) | .command // empty' "$STRICT_TEMPLATE" 2>/dev/null | \
-        grep '\.sh' | sed 's|.*bash ||' | sort -u)
+        grep '\.sh' | sed 's|.*bash ||' | sed 's|"\$CLAUDE_PROJECT_DIR"/||' | sort -u)
 
     if [[ -z "$hook_paths" ]]; then
         test_skip "Settings reference check" "No hook paths found in template"

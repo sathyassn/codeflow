@@ -185,6 +185,129 @@ test_core_security_listed() {
 }
 
 # =============================================================================
+# TESTS: DOCUMENTATION
+# =============================================================================
+
+test_module_coupling_note() {
+    test_start "Module coupling note present"
+    if grep -q "Module Coupling Note" "$LIB_DIR/cf-protection-core.sh"; then
+        test_pass
+    else
+        test_fail "Module Coupling Note not documented"
+    fi
+}
+
+test_ops_dependency_documented() {
+    test_start "cf-protection-ops.sh dependency documented"
+    if grep -q "cf-protection-ops.sh" "$LIB_DIR/cf-protection-core.sh"; then
+        test_pass
+    else
+        test_fail "Dependency on cf-protection-ops.sh not documented"
+    fi
+}
+
+test_dependency_error_message() {
+    test_start "Dependency error references cf-protection-common.sh"
+    if grep -q 'cf-protection-common.sh must be sourced before cf-protection-core.sh' "$LIB_DIR/cf-protection-core.sh"; then
+        test_pass
+    else
+        test_fail "Dependency error message incorrect"
+    fi
+}
+
+# =============================================================================
+# TESTS: FUNCTIONAL (direct sourcing)
+# =============================================================================
+
+test_read_list_file_ignores_comments() {
+    test_start "read_list_file ignores comments and blank lines"
+    local test_dir
+    test_dir=$(mktemp -d "${TMPDIR:-/tmp/claude}/cf-core-test-XXXXXX")
+    local test_list="$test_dir/test.list"
+    cat > "$test_list" <<'TESTEOF'
+# This is a comment
+path/one
+
+# Another comment
+path/two
+
+TESTEOF
+    local output
+    output=$(
+        PROJECT_ROOT="$test_dir"
+        source "$LIB_DIR/cf-protection-common.sh" 2>/dev/null || true
+        PROJECT_ROOT="$test_dir"
+        source "$LIB_DIR/cf-protection-core.sh" 2>/dev/null || true
+        read_list_file "test.list"
+    )
+    local line_count
+    line_count=$(echo "$output" | grep -c . || true)
+    if [[ "$line_count" -eq 2 ]] && echo "$output" | grep -q "path/one" && echo "$output" | grep -q "path/two"; then
+        test_pass
+    else
+        test_fail "Expected 2 paths, got $line_count: $output"
+    fi
+    rm -rf "$test_dir"
+}
+
+test_is_core_path_exact_match() {
+    test_start "is_core_path matches exact path"
+    local result
+    result=$(
+        # shellcheck disable=SC2034
+        CORE_PATHS=(".codeflow/scripts/security" ".claude/hooks/codeflow")
+        source "$LIB_DIR/cf-protection-core.sh" 2>/dev/null || true
+        if is_core_path ".codeflow/scripts/security"; then echo "match"; else echo "no"; fi
+    )
+    if [[ "$result" == *"match"* ]]; then
+        test_pass
+    else
+        test_fail "Exact core path not matched"
+    fi
+}
+
+test_is_core_path_subpath_match() {
+    test_start "is_core_path matches subpath"
+    local result
+    result=$(
+        # shellcheck disable=SC2034
+        CORE_PATHS=(".codeflow/scripts/security" ".claude/hooks/codeflow")
+        source "$LIB_DIR/cf-protection-core.sh" 2>/dev/null || true
+        if is_core_path ".codeflow/scripts/security/staging/file.sh"; then echo "match"; else echo "no"; fi
+    )
+    if [[ "$result" == *"match"* ]]; then
+        test_pass
+    else
+        test_fail "Core subpath not matched"
+    fi
+}
+
+test_is_core_path_non_core_rejected() {
+    test_start "is_core_path rejects non-core path"
+    local result
+    result=$(
+        # shellcheck disable=SC2034
+        CORE_PATHS=(".codeflow/scripts/security" ".claude/hooks/codeflow")
+        source "$LIB_DIR/cf-protection-core.sh" 2>/dev/null || true
+        if is_core_path "src/main.py"; then echo "match"; else echo "no"; fi
+    )
+    if [[ "$result" == *"no"* ]]; then
+        test_pass
+    else
+        test_fail "Non-core path incorrectly matched"
+    fi
+}
+
+test_mktemp_uses_tmpdir() {
+    test_start "remove_from_list uses TMPDIR prefix for mktemp"
+    if grep -q 'TMPDIR:-/tmp/claude' "$LIB_DIR/cf-protection-core.sh"; then
+        test_pass
+    else
+        test_fail "mktemp does not use TMPDIR prefix"
+    fi
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -208,7 +331,23 @@ main() {
     test_defines_add_to_list
     test_defines_remove_from_list
 
-    # Functional tests
+    # Documentation tests
+    echo ""
+    echo "Documentation:"
+    test_module_coupling_note
+    test_ops_dependency_documented
+    test_dependency_error_message
+
+    # Functional tests (direct sourcing)
+    echo ""
+    echo "Functional (direct):"
+    test_read_list_file_ignores_comments
+    test_is_core_path_exact_match
+    test_is_core_path_subpath_match
+    test_is_core_path_non_core_rejected
+    test_mktemp_uses_tmpdir
+
+    # Functional tests (via main script)
     echo ""
     echo "Functional (via main script):"
     test_list_shows_core_section

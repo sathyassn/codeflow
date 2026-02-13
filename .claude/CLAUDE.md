@@ -34,7 +34,7 @@ Skills are loaded from `.claude/skills/` and provide specialized capabilities:
 .codeflow/         # CodeFlow infrastructure
 .state/            # Runtime state (gitignored)
 project/           # Project documentation
-epics/             # Epic tracking
+project-management/ # Project management (epics, tracking)
 ```
 
 ## Getting Started

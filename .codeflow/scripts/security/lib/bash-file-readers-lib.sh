@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Purpose:   Shared library for detecting file-reading Bash commands
-# Usage:     source "scripts/security/enforcement/bash-file-readers-lib.sh"
-# Author:    Claude Code
-# Created:   2026-01-18
-# Version:   1.0.0
+# Purpose:      Shared library for detecting file-reading Bash commands
+# Location:     .codeflow/scripts/security/lib/bash-file-readers-lib.sh
+# Usage:        source "$REPO_ROOT/.codeflow/scripts/security/lib/bash-file-readers-lib.sh"
+# Compatibility: macOS/Linux (bash 3.2+)
+# Author:       Claude Code
+# Created:      2026-01-18
+# Version:      1.0.0
+#
+# This is a LIBRARY file - meant to be sourced, not executed directly.
 #
 # Functions:
 #   is_file_reading_command <command>  - Returns 0 if command reads files
@@ -20,6 +24,7 @@
 #   is_encoding_tool <command>         - base64, xxd, od, hexdump, strings
 #   is_archive_reader <command>        - tar -O, zcat, bzcat, unzip -p
 #   is_network_fetcher <command>       - curl file://, wget file://
+#   is_utility_tool <command>          - dd if=, tee, xargs with readers
 
 # Guard: prevent multiple sourcing
 if [[ -n "${_BASH_FILE_READERS_LIB_LOADED:-}" ]]; then
@@ -564,3 +569,13 @@ is_shell_file_reader() { is_shell_builtin "$@"; }
 is_interpreter_file_reader() { is_text_processor "$@"; }
 is_utility_file_reader() { is_utility_tool "$@"; }
 is_path_evasion_attempt() { is_path_evasion "$@"; }
+
+# ==============================================================================
+# LIBRARY GUARD
+# ==============================================================================
+# This file should be sourced, not executed directly
+if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
+    echo "Error: This is a library file. Source it instead of executing." >&2
+    echo "Usage: source \"\$(basename \"$0\")\"" >&2
+    exit 1
+fi

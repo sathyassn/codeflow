@@ -184,6 +184,43 @@ test_is_safe_path() {
     fi
 }
 
+test_validate_file_path() {
+    test_section "validate_file_path"
+
+    # Valid path should not die (run in subshell to isolate exit)
+    local output
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_file_path "src/main.js" 2>&1 && echo "OK"' 2>&1 || true)
+    if [[ "$output" == *"OK"* ]]; then
+        test_pass "Valid path passes validate_file_path"
+    else
+        test_fail "Valid path should pass validate_file_path"
+    fi
+
+    # Path traversal should die (run in subshell to isolate exit)
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_file_path "../etc/passwd" 2>&1; echo "OK"' 2>&1 || true)
+    if [[ "$output" != *"OK"* ]]; then
+        test_pass "Path traversal causes validate_file_path to die"
+    else
+        test_fail "Path traversal should cause validate_file_path to die"
+    fi
+
+    # Absolute path should die (run in subshell to isolate exit)
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_file_path "/etc/passwd" 2>&1; echo "OK"' 2>&1 || true)
+    if [[ "$output" != *"OK"* ]]; then
+        test_pass "Absolute path causes validate_file_path to die"
+    else
+        test_fail "Absolute path should cause validate_file_path to die"
+    fi
+
+    # Custom error message (run in subshell to isolate exit)
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_file_path "../bad" "Custom error" 2>&1' 2>&1 || true)
+    if [[ "$output" == *"Custom error"* ]]; then
+        test_pass "Custom error message included in output"
+    else
+        test_fail "Custom error message should be included"
+    fi
+}
+
 # ============================================================================
 # TEST: ID Validation
 # ============================================================================
@@ -237,15 +274,22 @@ test_is_valid_ulid() {
 test_is_valid_epic_id() {
     test_section "is_valid_epic_id"
 
-    # Valid epic ID
-    if is_valid_epic_id "EPC-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+    # Valid epic ID (ULID primary key format)
+    if is_valid_epic_id "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
         test_pass "Valid epic ID accepted"
     else
         test_fail "Valid epic ID should be accepted"
     fi
 
-    # Invalid prefix
-    if is_valid_epic_id "TSK-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+    # Invalid - old EPC- prefix
+    if is_valid_epic_id "EPC-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "Old EPC- format should not be valid epic ID"
+    else
+        test_pass "Old EPC- format rejected as epic ID"
+    fi
+
+    # Invalid - task prefix
+    if is_valid_epic_id "task-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
         test_fail "Task ID should not be valid epic ID"
     else
         test_pass "Task ID rejected as epic ID"
@@ -262,18 +306,101 @@ test_is_valid_epic_id() {
 test_is_valid_task_id() {
     test_section "is_valid_task_id"
 
-    # Valid task ID
-    if is_valid_task_id "TSK-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+    # Valid task ID (ULID primary key format)
+    if is_valid_task_id "task-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
         test_pass "Valid task ID accepted"
     else
         test_fail "Valid task ID should be accepted"
     fi
 
-    # Invalid prefix
-    if is_valid_task_id "EPC-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+    # Invalid - old TSK- prefix
+    if is_valid_task_id "TSK-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "Old TSK- format should not be valid task ID"
+    else
+        test_pass "Old TSK- format rejected as task ID"
+    fi
+
+    # Invalid - epic prefix
+    if is_valid_task_id "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
         test_fail "Epic ID should not be valid task ID"
     else
         test_pass "Epic ID rejected as task ID"
+    fi
+}
+
+test_is_valid_epic_format_id() {
+    test_section "is_valid_epic_format_id"
+
+    # Valid format IDs
+    if is_valid_epic_format_id "FRT-EPC-FEAT-AUTH-001"; then
+        test_pass "Valid epic format ID accepted"
+    else
+        test_fail "Valid epic format ID should be accepted"
+    fi
+
+    if is_valid_epic_format_id "XCUT-EPC-HTFX-AUTH-001"; then
+        test_pass "4-letter area epic format ID accepted"
+    else
+        test_fail "4-letter area epic format ID should be accepted"
+    fi
+
+    # Invalid - ULID primary key format
+    if is_valid_epic_format_id "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "ULID epic ID should not be valid format ID"
+    else
+        test_pass "ULID epic ID rejected as format ID"
+    fi
+
+    # Invalid - old EPC- prefix
+    if is_valid_epic_format_id "EPC-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "Old EPC-ULID should not be valid format ID"
+    else
+        test_pass "Old EPC-ULID rejected as format ID"
+    fi
+
+    # Invalid - TSK entity
+    if is_valid_epic_format_id "FRT-TSK-FEAT-AUTH-001"; then
+        test_fail "TSK entity should not be valid epic format ID"
+    else
+        test_pass "TSK entity rejected as epic format ID"
+    fi
+}
+
+test_is_valid_task_format_id() {
+    test_section "is_valid_task_format_id"
+
+    # Valid format IDs
+    if is_valid_task_format_id "FRT-TSK-FEAT-AUTH-001"; then
+        test_pass "Valid task format ID accepted"
+    else
+        test_fail "Valid task format ID should be accepted"
+    fi
+
+    if is_valid_task_format_id "INF-TSK-FIX-GENL-005"; then
+        test_pass "INF area task format ID accepted"
+    else
+        test_fail "INF area task format ID should be accepted"
+    fi
+
+    # Invalid - ULID primary key format
+    if is_valid_task_format_id "task-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "ULID task ID should not be valid format ID"
+    else
+        test_pass "ULID task ID rejected as format ID"
+    fi
+
+    # Invalid - old TSK- prefix
+    if is_valid_task_format_id "TSK-01ARZ3NDEKTSV4RRFFQ69G5FAV"; then
+        test_fail "Old TSK-ULID should not be valid format ID"
+    else
+        test_pass "Old TSK-ULID rejected as format ID"
+    fi
+
+    # Invalid - EPC entity
+    if is_valid_task_format_id "FRT-EPC-FEAT-AUTH-001"; then
+        test_fail "EPC entity should not be valid task format ID"
+    else
+        test_pass "EPC entity rejected as task format ID"
     fi
 }
 
@@ -321,6 +448,74 @@ test_is_valid_branch_name() {
         test_fail "chore/ branch should be valid"
     fi
 
+    # V4 spec prefixes that were previously untested
+    if is_valid_branch_name "plan/roadmap-q1"; then
+        test_pass "plan/ branch is valid"
+    else
+        test_fail "plan/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "ops/monitoring"; then
+        test_pass "ops/ branch is valid"
+    else
+        test_fail "ops/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "deploy/prod-v2"; then
+        test_pass "deploy/ branch is valid"
+    else
+        test_fail "deploy/ branch should be valid"
+    fi
+
+    # Git-workflow SKILL.md additional prefixes
+    if is_valid_branch_name "feature/auth-jwt"; then
+        test_pass "feature/ branch is valid (alias for feat/)"
+    else
+        test_fail "feature/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "bugfix/null-ptr"; then
+        test_pass "bugfix/ branch is valid (alias for fix/)"
+    else
+        test_fail "bugfix/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "hotfix/critical-fix"; then
+        test_pass "hotfix/ branch is valid"
+    else
+        test_fail "hotfix/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "ci/pipeline-update"; then
+        test_pass "ci/ branch is valid"
+    else
+        test_fail "ci/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "perf/query-optimize"; then
+        test_pass "perf/ branch is valid"
+    else
+        test_fail "perf/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "revert/bad-commit"; then
+        test_pass "revert/ branch is valid"
+    else
+        test_fail "revert/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "release/v2.0"; then
+        test_pass "release/ branch is valid"
+    else
+        test_fail "release/ branch should be valid"
+    fi
+
+    if is_valid_branch_name "merge/main-to-dev"; then
+        test_pass "merge/ branch is valid"
+    else
+        test_fail "merge/ branch should be valid"
+    fi
+
     # Invalid branch names
     if is_valid_branch_name "main"; then
         test_fail "main should not be valid branch name"
@@ -348,6 +543,20 @@ test_get_branch_prefix() {
 
     prefix=$(get_branch_prefix "docs/update-readme")
     assert_equals "docs" "$prefix" "get_branch_prefix extracts docs"
+
+    # New git-workflow prefixes
+    prefix=$(get_branch_prefix "hotfix/critical")
+    assert_equals "hotfix" "$prefix" "get_branch_prefix extracts hotfix"
+
+    prefix=$(get_branch_prefix "perf/optimize")
+    assert_equals "perf" "$prefix" "get_branch_prefix extracts perf"
+
+    prefix=$(get_branch_prefix "release/v2.0")
+    assert_equals "release" "$prefix" "get_branch_prefix extracts release"
+
+    # Invalid branch returns empty
+    prefix=$(get_branch_prefix "invalid-branch" || true)
+    assert_equals "" "$prefix" "get_branch_prefix returns empty for invalid"
 }
 
 # ============================================================================
@@ -382,6 +591,42 @@ test_is_valid_json() {
     else
         test_pass "Plain text rejected as JSON"
     fi
+}
+
+test_validate_json_file() {
+    test_section "validate_json_file"
+
+    local test_dir
+    test_dir=$(setup_test_dir "json-validation")
+
+    # Valid JSON file (subshell to isolate die/exit)
+    echo '{"key": "value"}' > "$test_dir/valid.json"
+    local output
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_json_file "'"$test_dir"'/valid.json" 2>&1 && echo "OK"' 2>&1 || true)
+    if [[ "$output" == *"OK"* ]]; then
+        test_pass "Valid JSON file passes validation"
+    else
+        test_fail "Valid JSON file should pass validation"
+    fi
+
+    # Invalid JSON file (subshell to isolate die/exit)
+    echo '{invalid json' > "$test_dir/invalid.json"
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_json_file "'"$test_dir"'/invalid.json" 2>&1; echo "OK"' 2>&1 || true)
+    if [[ "$output" != *"OK"* ]]; then
+        test_pass "Invalid JSON file fails validation"
+    else
+        test_fail "Invalid JSON file should fail validation"
+    fi
+
+    # Non-existent file should die via assert_file_exists (subshell)
+    output=$(bash -c 'source "'"$REPO_ROOT"'/.codeflow/scripts/shell-lib/index.sh"; validate_json_file "'"$test_dir"'/nonexistent.json" 2>&1; echo "OK"' 2>&1 || true)
+    if [[ "$output" != *"OK"* ]]; then
+        test_pass "Non-existent file fails validation"
+    else
+        test_fail "Non-existent file should fail validation"
+    fi
+
+    teardown_test_dir
 }
 
 # ============================================================================
@@ -470,11 +715,14 @@ main() {
 
     # Path validation
     test_is_safe_path
+    test_validate_file_path
 
     # ID validation
     test_is_valid_ulid
     test_is_valid_epic_id
     test_is_valid_task_id
+    test_is_valid_epic_format_id
+    test_is_valid_task_format_id
 
     # Branch validation
     test_is_valid_branch_name
@@ -482,6 +730,7 @@ main() {
 
     # JSON validation
     test_is_valid_json
+    test_validate_json_file
 
     # Command validation
     test_is_dangerous_command

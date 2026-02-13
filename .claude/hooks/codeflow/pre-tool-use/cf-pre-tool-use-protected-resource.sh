@@ -24,6 +24,26 @@
 
 set -euo pipefail
 
+
+# =============================================================================
+# HOOK INPUT PARSING (Claude Code sends JSON on stdin)
+# =============================================================================
+
+# Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+if [[ ! -t 0 ]]; then
+    _HOOK_STDIN=$(cat)
+    if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
+        _tn=$(echo "$_HOOK_STDIN" | jq -r '.tool_name // empty' 2>/dev/null)
+        [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
+        _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
+        [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # =============================================================================
 # EARLY EXIT FOR NON-EDIT/WRITE TOOLS
 # =============================================================================
@@ -38,7 +58,7 @@ fi
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
@@ -89,10 +109,10 @@ fi
 # =============================================================================
 
 # Protected edits staging area is allowed
-STAGING_AREA="/tmp/claude/managed/protected-edits"
+STAGING_AREA="/tmp/claude/managed/codeflow/protected-edits"
 
 # Check if path is in staging area (absolute or relative)
-if [[ "$FILE_PATH" == "$STAGING_AREA"/* ]] || [[ "$FILE_PATH" == /tmp/claude/managed/protected-edits/* ]]; then
+if [[ "$FILE_PATH" == "$STAGING_AREA"/* ]] || [[ "$FILE_PATH" == /tmp/claude/managed/codeflow/protected-edits/* ]]; then
     # Log allowed staging area access
     if declare -f log_protection &>/dev/null; then
         log_protection "staging_area_access" "$TOOL_NAME" "$FILE_PATH" "staging" "allowed"
@@ -212,7 +232,7 @@ Tool: $TOOL_NAME
 This file is critically protected and cannot be modified directly.
 Use the cf-security-management skill to request access.
 
-MUST: Skill('cf-security-management', args='stage-protected-edit $FILE_PATH')
+MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')
 
 Critical files require review and explicit approval.
 EOF
@@ -236,7 +256,7 @@ Tool: $TOOL_NAME
 This file has high protection level.
 Use the cf-security-management skill to request access.
 
-MUST: Skill('cf-security-management', args='stage-protected-edit $FILE_PATH')
+MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')
 EOF
     exit 2
 fi

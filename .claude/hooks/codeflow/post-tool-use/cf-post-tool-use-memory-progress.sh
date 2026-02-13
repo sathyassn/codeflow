@@ -24,15 +24,24 @@ set -euo pipefail
 # ==============================================================================
 
 readonly VERSION="1.2.0"
-readonly STATE_DIR="/tmp/claude/managed/state"
-readonly SENTINEL_DIR="/tmp/claude/managed/sentinels"
+# STATE_DIR set after REPO_ROOT resolution (session-scoped)
+# SENTINEL_DIR set after REPO_ROOT resolution (session-scoped)
 readonly EARLY_SESSION_THRESHOLD=3
 readonly CLAIM_RENEW_INTERVAL=180  # Renew claim every 3 minutes of activity
 
 # Get repo root using git (most robust) or fallback to relative path
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 readonly REPO_ROOT
+
+# Session-scoped state and sentinel directories (resolved after REPO_ROOT)
+# CODEFLOW_SESSION_ID is extracted from stdin in main()
+STATE_DIR="$REPO_ROOT/.state/session"
+SENTINEL_DIR="$REPO_ROOT/.state/sentinels/skill"
+
+# Source work-state library for active task functions
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.codeflow/scripts/state/cf-work-state.sh" 2>/dev/null || true
 
 readonly CONFIG_FILE="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 readonly INSTRUCTION_FILE="$REPO_ROOT/.codeflow/config/instructions/memory-progress.txt"
@@ -184,9 +193,15 @@ main() {
         exit 0
     fi
 
-    # Get session ID for state file naming
+    # Get session ID for state file naming and directory scoping
     session_id=$(echo "$tool_input" | jq -r '.session_id // "unknown"' 2>/dev/null)
-    state_file="$STATE_DIR/memory-progress-$session_id"
+    CODEFLOW_SESSION_ID="$session_id"
+    export CODEFLOW_SESSION_ID
+
+    # Resolve session-scoped directories
+    STATE_DIR="$REPO_ROOT/.state/session/$session_id"
+    SENTINEL_DIR="$REPO_ROOT/.state/sentinels/skill/$session_id"
+    state_file="$STATE_DIR/memory-progress"
 
     # Ensure state directory exists
     mkdir -p "$STATE_DIR"

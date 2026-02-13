@@ -8,10 +8,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh"
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -88,7 +87,7 @@ echo "--- Tool Filtering ---"
 
 # Test 9: Exits 0 for non-Skill tools
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for non-Skill tools"
 else
@@ -97,7 +96,7 @@ fi
 
 # Test 10: Exits 0 for Skill tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-git-workflow"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-git-workflow"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Skill tool"
 else
@@ -114,7 +113,7 @@ fi
 
 # Test 12: Exits 0 for Edit tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -123,7 +122,7 @@ fi
 
 # Test 13: Exits 0 for Write tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Write tool"
 else
@@ -132,7 +131,7 @@ fi
 
 # Test 14: Exits 0 for Read tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -415,7 +414,7 @@ echo "--- Functional Tests ---"
 
 # Test 47: Processes skill with args
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-git-workflow","args":"create-commit"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-git-workflow","args":"create-commit"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Processes skill with args"
 else
@@ -424,7 +423,7 @@ fi
 
 # Test 48: Handles empty skill name
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles empty skill name gracefully"
 else
@@ -433,7 +432,7 @@ fi
 
 # Test 49: Handles missing skill field
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles missing skill field gracefully"
 else
@@ -442,7 +441,7 @@ fi
 
 # Test 50: Handles malformed JSON
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='not json' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='not json' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles malformed JSON gracefully"
 else
@@ -451,7 +450,7 @@ fi
 
 # Test 51: Handles empty TOOL_INPUT
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles empty TOOL_INPUT gracefully"
 else
@@ -460,7 +459,7 @@ fi
 
 # Test 52: Handles no TOOL_NAME
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles no TOOL_NAME gracefully"
 else
@@ -469,7 +468,7 @@ fi
 
 # Test 53: Handles skill with TOOL_RESULT error
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-test"}' TOOL_RESULT='{"error":"test error"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-test"}' TOOL_RESULT='{"error":"test error"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles skill with error result"
 else
@@ -478,7 +477,7 @@ fi
 
 # Test 54: Handles skill with BLOCKED result
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-test"}' TOOL_RESULT='BLOCKED: missing sentinel' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Skill" TOOL_INPUT='{"skill":"cf-test"}' TOOL_RESULT='BLOCKED: missing sentinel' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Handles skill with BLOCKED result"
 else

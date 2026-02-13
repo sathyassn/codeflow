@@ -15,10 +15,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh"
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -169,7 +168,7 @@ echo "--- Execution Tests: Standalone Mode ---"
 # Test 17: Exits 0 when no pathflow-active flag (standalone mode)
 TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no pathflow-active flag (standalone mode)"
@@ -179,7 +178,7 @@ fi
 
 # Test 18: Exits 0 when TOOL_NAME is not Edit/Write/Bash
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -188,7 +187,7 @@ fi
 
 # Test 19: Exits 0 for Grep tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -197,7 +196,7 @@ fi
 
 # Test 20: Exits 0 for Glob tool
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Glob tool"
 else
@@ -212,8 +211,8 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-touch "$TEMP_DIR/sentinels/pathflow:pf-3-classify"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+touch "$TEMP_DIR/sentinels/pathflow-pf-3-classify"
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when PF-3 sentinel exists (Edit)"
@@ -226,8 +225,8 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-touch "$TEMP_DIR/sentinels/pathflow:pf-3-work-classification"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+touch "$TEMP_DIR/sentinels/pathflow-pf-3-work-classification"
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when PF-3 sentinel exists (Write)"
@@ -240,8 +239,8 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-touch "$TEMP_DIR/sentinels/pathflow:pf-3-done"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"test\""}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+touch "$TEMP_DIR/sentinels/pathflow-pf-3-done"
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"test\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when PF-3 sentinel exists (Bash git commit)"
@@ -258,7 +257,7 @@ TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
 # No PF-3 sentinel
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 rm -rf "$TEMP_DIR"
 if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
     pass "Exits 2 when pathflow-active but no PF-3 (Edit)"
@@ -271,7 +270,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Write" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 rm -rf "$TEMP_DIR"
 if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
     pass "Exits 2 when pathflow-active but no PF-3 (Write)"
@@ -284,7 +283,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"fix: something\""}' bash "$HOOK" 2>&1) && exit_code=0 || exit_code=$?
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"fix: something\""}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 rm -rf "$TEMP_DIR"
 if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
     pass "Exits 2 for Bash git commit when gated"
@@ -297,7 +296,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" 2>&1) || true
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1) || true
 rm -rf "$TEMP_DIR"
 if [[ "$output" == *"PathFlow"* ]] && [[ "$output" == *"PF-3"* ]]; then
     pass "Block message mentions PathFlow and PF-3"
@@ -313,7 +312,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls -la"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash ls command (not gated)"
@@ -326,7 +325,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git status"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git status"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash git status (not gated)"
@@ -339,7 +338,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state" "$TEMP_DIR/sentinels"
 touch "$TEMP_DIR/state/pathflow-active"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git diff HEAD"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" PATHFLOW_SENTINEL_DIR="$TEMP_DIR/sentinels" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git diff HEAD"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash git diff (not gated)"
@@ -352,7 +351,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 TEMP_DIR=$(mktemp -d)
 mkdir -p "$TEMP_DIR/state"
 touch "$TEMP_DIR/state/pathflow-active"
-result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Bash" TOOL_INPUT='' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="Bash" TOOL_INPUT='' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 rm -rf "$TEMP_DIR"
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash with empty input"

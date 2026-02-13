@@ -13,10 +13,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -77,7 +76,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Read tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -85,7 +84,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Read tools (Edit)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -93,7 +92,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Read tools (Write)
-result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Write tool"
 else
@@ -101,7 +100,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Read tools (Grep)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Grep tool"
 else
@@ -109,7 +108,7 @@ else
 fi
 
 # Test 11: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Read" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -117,7 +116,7 @@ else
 fi
 
 # Test 12: Exits 0 when empty file_path
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty file_path"
 else
@@ -128,7 +127,7 @@ echo ""
 echo "--- Allowed Paths (bypass checks) ---"
 
 # Test 13: Allows reading .claude/CLAUDE.md
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/CLAUDE.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/CLAUDE.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows reading .claude/CLAUDE.md"
 else
@@ -136,7 +135,7 @@ else
 fi
 
 # Test 14: Allows reading .claude/settings.json
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows reading .claude/settings.json"
 else
@@ -144,7 +143,7 @@ else
 fi
 
 # Test 15: Allows reading README.md
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"README.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"README.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows reading README.md"
 else
@@ -152,7 +151,7 @@ else
 fi
 
 # Test 16: Allows reading package.json
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"package.json"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"package.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows reading package.json"
 else
@@ -160,7 +159,7 @@ else
 fi
 
 # Test 17: Allows reading regular files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"/tmp/test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows reading regular files"
 else
@@ -171,7 +170,7 @@ echo ""
 echo "--- Always-Block Patterns ---"
 
 # Test 18: Blocks .jsonl files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/log.jsonl"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/log.jsonl"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .jsonl files"
 else
@@ -179,7 +178,7 @@ else
 fi
 
 # Test 19: Blocks .db files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"cache/data.db"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"cache/data.db"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .db files"
 else
@@ -187,7 +186,7 @@ else
 fi
 
 # Test 20: Blocks .sqlite files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/app.sqlite"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/app.sqlite"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .sqlite files"
 else
@@ -195,7 +194,7 @@ else
 fi
 
 # Test 21: Blocks .log files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"logs/app.log"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"logs/app.log"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .log files"
 else
@@ -203,7 +202,7 @@ else
 fi
 
 # Test 22: Blocks .claude/memory/** files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/memory/work/session.md"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".claude/memory/work/session.md"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .claude/memory/** files"
 else
@@ -211,7 +210,7 @@ else
 fi
 
 # Test 23: Blocks .codeflow/state/** files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".codeflow/state/sessions.db"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":".codeflow/state/sessions.db"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
     pass "Blocks .codeflow/state/** files"
 else
@@ -222,7 +221,7 @@ echo ""
 echo "--- Block Messages ---"
 
 # Test 24: Block message includes permissionDecision: deny
-HOOK_OUTPUT=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/log.jsonl"}' bash "$HOOK" 2>&1 || true)
+HOOK_OUTPUT=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/log.jsonl"}' bash "$HOOK" </dev/null 2>&1 || true)
 if [[ "$HOOK_OUTPUT" == *"permissionDecision: deny"* ]]; then
     pass "Block message includes permissionDecision: deny"
 else

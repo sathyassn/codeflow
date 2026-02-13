@@ -52,7 +52,7 @@ ADHOC_LIST=".codeflow/config/enforcement/protection/protected-adhoc.list"
 # shellcheck disable=SC2034
 AUDIT_LOG=".state/logs/security/protection-audit.log"
 
-# Core protected paths for CodeFlow V3 (hardcoded, cannot be removed)
+# Core protected paths for CodeFlow V4 (hardcoded, cannot be removed)
 # Note: .claude/CLAUDE.md is NOT protected - Claude should be able to edit it
 # shellcheck disable=SC2034
 CORE_PATHS=(

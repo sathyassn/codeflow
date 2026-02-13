@@ -432,6 +432,42 @@ test_log_section() {
     fi
 }
 
+test_log_subsection() {
+    test_section "log_subsection"
+
+    local output
+    output=$(log_subsection "Subsection Title")
+
+    if [[ "$output" == *"Subsection Title"* ]]; then
+        test_pass "log_subsection outputs title"
+    else
+        test_fail "log_subsection should output title: $output"
+    fi
+
+    if [[ "$output" == *"---"* ]]; then
+        test_pass "log_subsection has subsection markers"
+    else
+        test_fail "log_subsection should have --- markers: $output"
+    fi
+}
+
+test_no_color_support() {
+    test_section "NO_COLOR support"
+
+    # Test that NO_COLOR disables color escape codes
+    # Use a fresh bash subprocess to avoid readonly variable conflicts
+    local lib_dir
+    lib_dir="$(cd "$TESTING_DIR/../scripts/shell-lib" && pwd)"
+    local output
+    output=$(NO_COLOR=1 bash -c 'source "'"$lib_dir"'/logging.sh" && echo "${COLOR_RED}${COLOR_GREEN}${COLOR_BLUE}"' 2>/dev/null)
+
+    if [[ -z "$output" ]]; then
+        test_pass "NO_COLOR disables color escape codes"
+    else
+        test_fail "NO_COLOR should disable color escape codes but got: $output"
+    fi
+}
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -492,6 +528,8 @@ main() {
     test_log_failure
     test_log_warning
     test_log_section
+    test_log_subsection
+    test_no_color_support
 
     print_test_summary
 

@@ -110,24 +110,10 @@ fi
 
 # Try python3 yaml module first
 if command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
-    PYTHON_SCRIPT="
-import yaml
-import sys
-
-try:
-    with open('$FILE_PATH', 'r') as f:
-        yaml.safe_load(f)
-    sys.exit(0)
-except yaml.YAMLError as e:
-    print(f'YAML Error: {e}', file=sys.stderr)
-    sys.exit(1)
-"
-
     if [[ "$STRICT" == "true" ]]; then
         # Strict mode: check for duplicate keys
-        PYTHON_SCRIPT="
-import yaml
-import sys
+        PYTHON_SCRIPT='
+import yaml, sys
 
 class NoDuplicatesLoader(yaml.SafeLoader):
     pass
@@ -138,8 +124,8 @@ def check_duplicates(loader, node, deep=False):
         key = loader.construct_object(key_node, deep=deep)
         if key in mapping:
             raise yaml.constructor.ConstructorError(
-                'while constructing a mapping', node.start_mark,
-                f'found duplicate key ({key})', key_node.start_mark
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key ({key})", key_node.start_mark
             )
         mapping[key] = loader.construct_object(value_node, deep=deep)
     return mapping
@@ -150,19 +136,31 @@ NoDuplicatesLoader.add_constructor(
 )
 
 try:
-    with open('$FILE_PATH', 'r') as f:
+    with open(sys.argv[1], "r") as f:
         yaml.load(f, Loader=NoDuplicatesLoader)
     sys.exit(0)
 except yaml.YAMLError as e:
-    print(f'YAML Error: {e}', file=sys.stderr)
+    print(f"YAML Error: {e}", file=sys.stderr)
     sys.exit(1)
-"
+'
+    else
+        PYTHON_SCRIPT='
+import yaml, sys
+
+try:
+    with open(sys.argv[1], "r") as f:
+        yaml.safe_load(f)
+    sys.exit(0)
+except yaml.YAMLError as e:
+    print(f"YAML Error: {e}", file=sys.stderr)
+    sys.exit(1)
+'
     fi
 
-    if ! python3 -c "$PYTHON_SCRIPT" 2>/dev/null; then
+    if ! python3 -c "$PYTHON_SCRIPT" "$FILE_PATH" 2>/dev/null; then
         [[ "$QUIET" == "false" ]] && echo "FAIL: Invalid YAML syntax" >&2
         if [[ "$QUIET" == "false" ]]; then
-            python3 -c "$PYTHON_SCRIPT" 2>&1
+            python3 -c "$PYTHON_SCRIPT" "$FILE_PATH" 2>&1
         fi
         exit 1
     fi

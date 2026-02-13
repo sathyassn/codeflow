@@ -14,10 +14,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh"
-
-export REPO_ROOT
+# Isolation: temp dir with all state directories, git repo, config copies
+source "$TEST_DIR/../../lib/test-isolation.sh"
+HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh"
 
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -78,7 +77,7 @@ echo ""
 echo "--- Tool Filtering ---"
 
 # Test 7: Exits 0 for non-Grep tools (Read)
-result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Read" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Read tool"
 else
@@ -86,7 +85,7 @@ else
 fi
 
 # Test 8: Exits 0 for non-Grep tools (Bash)
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"ls"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Bash tool"
 else
@@ -94,7 +93,7 @@ else
 fi
 
 # Test 9: Exits 0 for non-Grep tools (Edit)
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Edit" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Edit tool"
 else
@@ -102,7 +101,7 @@ else
 fi
 
 # Test 10: Exits 0 for non-Grep tools (Write)
-result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Write" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Write tool"
 else
@@ -110,7 +109,7 @@ else
 fi
 
 # Test 11: Exits 0 for non-Grep tools (Glob)
-result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Glob" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for Glob tool"
 else
@@ -118,7 +117,7 @@ else
 fi
 
 # Test 12: Exits 0 when no TOOL_NAME
-result=$(TOOL_NAME="" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_NAME"
 else
@@ -129,7 +128,7 @@ echo ""
 echo "--- Input Validation ---"
 
 # Test 13: Exits 0 when no TOOL_INPUT
-result=$(TOOL_NAME="Grep" TOOL_INPUT="" bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no TOOL_INPUT"
 else
@@ -137,7 +136,7 @@ else
 fi
 
 # Test 14: Exits 0 when empty JSON
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when empty JSON"
 else
@@ -145,7 +144,7 @@ else
 fi
 
 # Test 15: Exits 0 when no file context (pattern only)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"test"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no file context"
 else
@@ -153,7 +152,7 @@ else
 fi
 
 # Test 16: Exits 0 when no pattern (path only)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"path":"/some/path"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"path":"/some/path"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when no pattern"
 else
@@ -161,7 +160,7 @@ else
 fi
 
 # Test 17: Exits 0 when no pattern (type only)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"type":"py"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"type":"py"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when type but no pattern"
 else
@@ -169,7 +168,7 @@ else
 fi
 
 # Test 18: Exits 0 when no pattern (glob only)
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"glob":"*.py"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"glob":"*.py"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when glob but no pattern"
 else
@@ -218,7 +217,7 @@ echo ""
 echo "--- Graceful Degradation ---"
 
 # Test 24: Exits 0 when sentinel library unavailable
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"function.*test","type":"py"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"function.*test","type":"py"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 when sentinel library unavailable"
 else
@@ -226,7 +225,7 @@ else
 fi
 
 # Test 25: Exits 0 for regular grep with path
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"test","path":"src/"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"test","path":"src/"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for regular grep with path"
 else
@@ -234,7 +233,7 @@ else
 fi
 
 # Test 26: Exits 0 for regular grep with glob
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"import","glob":"*.ts"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"import","glob":"*.ts"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for regular grep with glob"
 else
@@ -242,7 +241,7 @@ else
 fi
 
 # Test 27: Exits 0 for regular grep with type
-result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"class","type":"js"}' bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Grep" TOOL_INPUT='{"pattern":"class","type":"js"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Exits 0 for regular grep with type"
 else

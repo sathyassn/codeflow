@@ -18,5 +18,8 @@ source "$LIB_DIR/config.sh"
 source "$LIB_DIR/validation.sh"
 source "$LIB_DIR/ulid.sh"
 
-# Set library loaded flag (non-exported to avoid subshell issues)
+# Internal guard flag (non-exported to prevent subshell skip-load issues)
 _CODEFLOW_SHELL_LIB_LOADED=1
+
+# V4 spec: exported flag for external detection
+export CODEFLOW_SHELL_LIB_LOADED=1

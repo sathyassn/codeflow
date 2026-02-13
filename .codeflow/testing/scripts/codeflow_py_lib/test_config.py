@@ -218,3 +218,38 @@ class TestGetConfig:
         monkeypatch.setenv("CODEFLOW_LOG_LEVEL", "DEBUG")
         cfg = get_config()
         assert cfg.log_level == "DEBUG"
+
+
+class TestConfigFromFileEdgeCases:
+    """Tests for Config.from_file edge cases."""
+
+    def test_unknown_keys_raises_config_error(self, temp_config_dir):
+        """Should raise ConfigError for unknown config keys."""
+        config_file = temp_config_dir / ".codeflow" / "config" / "bad.json"
+        config_file.write_text(json.dumps({"unknown_key": "value"}))
+        with pytest.raises(ConfigError) as exc_info:
+            Config.from_file(config_file)
+        assert "Invalid config keys" in str(exc_info.value)
+
+    def test_non_dict_data_raises_config_error(self, temp_config_dir):
+        """Should raise ConfigError when JSON is a list instead of dict."""
+        config_file = temp_config_dir / ".codeflow" / "config" / "list.json"
+        config_file.write_text(json.dumps(["a", "b"]))
+        with pytest.raises(ConfigError) as exc_info:
+            Config.from_file(config_file)
+        assert "must be a mapping" in str(exc_info.value)
+
+    def test_empty_json_returns_defaults(self, temp_config_dir):
+        """Should return defaults for empty JSON object."""
+        config_file = temp_config_dir / ".codeflow" / "config" / "empty.json"
+        config_file.write_text("{}")
+        cfg = Config.from_file(config_file)
+        assert cfg.log_level == "INFO"
+        assert cfg.db_timeout == 5.0
+
+    def test_null_json_returns_defaults(self, temp_config_dir):
+        """Should return defaults for null JSON."""
+        config_file = temp_config_dir / ".codeflow" / "config" / "null.json"
+        config_file.write_text("null")
+        cfg = Config.from_file(config_file)
+        assert cfg.log_level == "INFO"
