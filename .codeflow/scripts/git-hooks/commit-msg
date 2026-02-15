@@ -215,6 +215,27 @@ if [ "$LINE_COUNT" -gt 1 ]; then
       echo "There should be a blank line between subject and body" >&2
     fi
 
+    # Detect blank lines between bullets (raw body check)
+    RAW_BODY=$(echo "$COMMIT_MSG" | tail -n +3)
+    if [ -n "$RAW_BODY" ]; then
+      IN_BULLETS=false
+      FOUND_BLANK_BETWEEN=false
+      while IFS= read -r raw_line; do
+        if echo "$raw_line" | grep -q '^- '; then
+          if [ "$FOUND_BLANK_BETWEEN" = "true" ]; then
+            echo -e "${RED}ERROR: Blank lines between bullets${NC}" >&2
+            echo "Bullets must be contiguous (no blank lines between them)" >&2
+            ERRORS=$((ERRORS + 1))
+            break
+          fi
+          IN_BULLETS=true
+          FOUND_BLANK_BETWEEN=false
+        elif [ -z "$raw_line" ] && [ "$IN_BULLETS" = "true" ]; then
+          FOUND_BLANK_BETWEEN=true
+        fi
+      done <<< "$RAW_BODY"
+    fi
+
     # Detect GitHub squash-merge format (asterisk bullets)
     SQUASH_MERGE_LINES=$(echo "$BODY" | grep '^[*] ' || true)
     if [ -n "$SQUASH_MERGE_LINES" ]; then
@@ -224,8 +245,8 @@ if [ "$LINE_COUNT" -gt 1 ]; then
       ERRORS=$((ERRORS + 1))
     fi
 
-    # Validate bullets-only format (no prose)
-    NON_BULLET_LINES=$(echo "$BODY" | grep -v '^[- ]' | grep -v '^$' || true)
+    # Validate bullets-only format (no prose, no continuation lines)
+    NON_BULLET_LINES=$(echo "$BODY" | grep -v '^- ' | grep -v '^$' || true)
     if [ -n "$NON_BULLET_LINES" ]; then
       cat >&2 <<EOF
 ${RED}ERROR: Body must contain only bullet points${NC}

@@ -232,7 +232,7 @@ jobs:
                 fi
 
                 # Check if line is a bullet
-                if echo "$line" | grep -qE '^\s*[-*] '; then
+                if echo "$line" | grep -qE '^- '; then
                   BULLET_COUNT=$((BULLET_COUNT + 1))
                 else
                   NON_BULLET_LINES=$((NON_BULLET_LINES + 1))
@@ -247,11 +247,30 @@ jobs:
 
               # Body must use bullet format
               if [ "$NON_BULLET_LINES" -gt 0 ]; then
-                echo -e "${RED}ERROR: Body must use bullet format (lines starting with - or *)${NC}"
+                echo -e "${RED}ERROR: Body must use bullet format (lines starting with '- ')${NC}"
                 echo "  Found $NON_BULLET_LINES non-bullet line(s)"
                 echo ""
                 COMMIT_VALID=false
               fi
+
+              # No blank lines between bullets
+              BTWN_BULLETS=false
+              BTWN_IN=false
+              while IFS= read -r bline; do
+                if echo "$bline" | grep -qE '^- '; then
+                  if [ "$BTWN_BULLETS" = "true" ]; then
+                    echo -e "${RED}ERROR: Blank lines between bullets${NC}"
+                    echo "  Bullets must be contiguous (no blank lines between them)"
+                    echo ""
+                    COMMIT_VALID=false
+                    break
+                  fi
+                  BTWN_IN=true
+                  BTWN_BULLETS=false
+                elif [ -z "$bline" ] && [ "$BTWN_IN" = "true" ]; then
+                  BTWN_BULLETS=true
+                fi
+              done <<< "$BODY"
 
               # Max 3 bullets
               if [ "$BULLET_COUNT" -gt "$MAX_BODY_BULLETS" ]; then

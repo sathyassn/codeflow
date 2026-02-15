@@ -244,6 +244,15 @@ test_message "$(printf 'feat: add auth module\n\n- One change\n- Two change\n- T
 # Invalid: squash-merge asterisk bullets
 test_message "$(printf 'feat: add auth module\n\n* First commit\n* Second commit')" 1 "Should reject asterisk bullets"
 
+# Invalid: continuation lines (wrapped bullets)
+test_message "$(printf 'feat: add auth module\n\n- Fix something for both\n  PathFlow and non-PathFlow')" 1 "Should reject continuation lines"
+
+# Invalid: blank lines between bullets
+test_message "$(printf 'feat: add auth module\n\n- First bullet\n\n- Second bullet')" 1 "Should reject blank lines between bullets"
+
+# Invalid: blank lines between three bullets
+test_message "$(printf 'feat: add auth module\n\n- One\n\n- Two\n\n- Three')" 1 "Should reject blank lines between three bullets"
+
 # ============================================================================
 # Test 12: Body line length
 # ============================================================================
