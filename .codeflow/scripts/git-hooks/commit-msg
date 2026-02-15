@@ -5,7 +5,7 @@
 # Version:   2.0.0
 #
 # This hook validates commit messages against project conventions:
-#   - Conventional commit format: type(scope): description
+#   - Conventional commit format: type: description
 #   - Config-driven rules from enforcement-policy.json
 #   - AI attribution blocking
 #   - Body format enforcement (bullets-only)
@@ -169,11 +169,11 @@ fi
 
 # Check subject format: type(scope): description OR type: description
 # VALID_TYPES loaded from config (pipe-separated)
-if ! echo "$SUBJECT" | grep -qE "^(${VALID_TYPES})(\([a-z0-9-]+\))?: .+$"; then
+if ! echo "$SUBJECT" | grep -qE "^(${VALID_TYPES}): .+$"; then
   cat >&2 <<EOF
 ${RED}ERROR: Invalid commit format${NC}
 Subject: $SUBJECT
-Required: type: description  OR  type(scope): description
+Required: type: description
 Valid types: $(echo "$VALID_TYPES" | tr '|' ', ')
 
 Delegate to cf-git-operations teammate for proper commit format,

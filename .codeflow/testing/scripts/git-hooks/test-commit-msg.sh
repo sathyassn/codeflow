@@ -4,7 +4,7 @@
 #
 # Tests the commit-msg hook functionality including:
 #   - Config-driven validation
-#   - Conventional commit format with scope support
+#   - Conventional commit format (strict type: format)
 #   - AI attribution blocking
 #   - Body format enforcement (bullets-only)
 #   - Skip conditions (merge, revert, fixup, squash)
@@ -154,13 +154,13 @@ test_message "refine: improve error handling path" 0 "Should accept refine type"
 # Test 5: Scope support
 # ============================================================================
 echo ""
-echo "--- Scope support ---"
+echo "--- Scope rejection ---"
 
-test_message "feat(api): add new endpoint for users" 0 "Should accept type with scope"
-test_message "fix(db): correct connection pool leak" 0 "Should accept scoped fix"
-test_message "docs(readme): update setup instructions" 0 "Should accept scoped docs"
-test_message "refactor(auth): simplify token logic" 0 "Should accept scoped refactor"
-test_message "fix(my-module): handle edge case input" 0 "Should accept hyphenated scope"
+test_message "feat(api): add new endpoint for users" 1 "Should reject type with scope"
+test_message "fix(db): correct connection pool leak" 1 "Should reject scoped fix"
+test_message "docs(readme): update setup instructions" 1 "Should reject scoped docs"
+test_message "refactor(auth): simplify token logic" 1 "Should reject scoped refactor"
+test_message "fix(my-module): handle edge case input" 1 "Should reject hyphenated scope"
 
 # ============================================================================
 # Test 6: Invalid commit messages

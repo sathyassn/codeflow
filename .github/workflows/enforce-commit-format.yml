@@ -158,17 +158,17 @@ jobs:
             fi
 
             # -----------------------------------------------------------
-            # 1. Subject format: type: desc  OR  type(scope): desc
+            # 1. Subject format: type: desc
             # -----------------------------------------------------------
             VALID_FORMAT=false
-            if echo "$SUBJECT" | grep -qE "^($TYPE_REGEX)(\([a-z0-9-]+\))?: .+$"; then
+            if echo "$SUBJECT" | grep -qE "^($TYPE_REGEX): .+$"; then
               VALID_FORMAT=true
             fi
 
             if [ "$VALID_FORMAT" != true ]; then
               echo -e "${RED}ERROR: Invalid commit format${NC}"
               echo "  Subject: $SUBJECT"
-              echo "  Expected: type: description  OR  type(scope): description"
+              echo "  Expected: type: description"
               echo "  Valid types: ${ALLOWED_TYPES[*]}"
               echo ""
               COMMIT_VALID=false
@@ -190,7 +190,7 @@ jobs:
             # -----------------------------------------------------------
             # 3. Minimum description length (10 chars after type:)
             # -----------------------------------------------------------
-            DESCRIPTION=$(echo "$SUBJECT" | sed 's/^[a-z]*\([^)]*\)\?: //')
+            DESCRIPTION=$(echo "$SUBJECT" | sed 's/^[a-z]*: //')
             DESC_LEN=${#DESCRIPTION}
             if [ "$DESC_LEN" -lt 10 ]; then
               echo -e "${RED}ERROR: Description too short${NC}"
@@ -311,7 +311,7 @@ jobs:
             echo -e "${RED}Validation failed${NC}"
             echo "  Some commits do not meet format requirements."
             echo ""
-            echo "  Expected format: type: description  OR  type(scope): description"
+            echo "  Expected format: type: description"
             echo "  Valid types: ${ALLOWED_TYPES[*]}"
             echo "  Max subject length: $MAX_SUBJECT_LENGTH characters"
             echo "  Body: bullet format (- or *), max $MAX_BODY_BULLETS bullets, $MAX_BODY_LINE_LENGTH-char lines"

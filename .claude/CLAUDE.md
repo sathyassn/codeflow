@@ -370,10 +370,10 @@ Task(
 
 | Sender | Receiver | Trigger | Message |
 |--------|----------|---------|---------|
-| cf-development | cf-git-operations | Code ready to commit | `"Please commit: {type}({scope}): {description}"` |
-| cf-documentation | cf-git-operations | Docs ready to commit | `"Please commit: docs({scope}): {description}"` |
-| cf-planning | cf-git-operations | Plan ready to commit | `"Please commit: plan({scope}): {description}"` |
-| cf-quality-assurance | cf-git-operations | Tests ready to commit (WS-TEST) | `"Please commit: test({scope}): {description}"` |
+| cf-development | cf-git-operations | Code ready to commit | `"Please commit: {type}: {description}"` |
+| cf-documentation | cf-git-operations | Docs ready to commit | `"Please commit: docs: {description}"` |
+| cf-planning | cf-git-operations | Plan ready to commit | `"Please commit: plan: {description}"` |
+| cf-quality-assurance | cf-git-operations | Tests ready to commit (WS-TEST) | `"Please commit: test: {description}"` |
 | cf-planning | cf-knowledge-layer | Epic/task creation | `"PLANNER: create-epic -- {title}"` |
 | Any teammate | cf-knowledge-layer | Progress update | `"{PREFIX}-UPDATE: task={id}, status={status}"` |
 | cf-review | originating teammate | Rework findings | Detailed findings with file:line references |

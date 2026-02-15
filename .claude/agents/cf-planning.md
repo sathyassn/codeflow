@@ -244,7 +244,7 @@ Apply: load template, populate all sections, add YAML frontmatter, enforce H1/H2
 |-----------|------|--------|
 | cf-knowledge-layer | Epic creation | `"PLANNER: create-epic -- {title}, area={area}, type={type}, domain={domain}"` |
 | cf-knowledge-layer | Task creation | `"PLANNER: create-task -- epic={epic_id}, title={title}, estimate={size}"` |
-| cf-git-operations | Plan ready to commit | `"Please commit: plan({scope}): {description}"` |
+| cf-git-operations | Plan ready to commit | `"Please commit: plan: {description}"` |
 | Team lead | Deliverable ready | `"PLANNER: {type} -- {title} ready for review at {path}"` |
 | Team lead | Blocked | `"PLANNER: BLOCKED -- {reason}. Need clarification on: {questions}"` |
 | Team lead | Scope assessed | `"PLANNER: Scope assessed -- {level} ({n} epics, {n} tasks)"` |
@@ -279,5 +279,5 @@ Before marking any task complete, verify:
 - [ ] 🔒 Acceptance criteria are objective and measurable (pass/fail, not subjective)
 - [ ] 🔒 ADRs have all 4 required sections (Status, Context, Decision, Consequences)
 - [ ] 🔒 Effort estimates include confidence level (high/medium/low)
-- [ ] 🔒 Committed via cf-git-operations with conventional format (`plan(scope): description`)
+- [ ] 🔒 Committed via cf-git-operations with conventional format (`plan: description`)
 - [ ] 🔒 Changes are within scope of the assigned task

@@ -235,8 +235,8 @@ You are **cf-development**, the code implementation specialist on this CodeFlow 
 
 | Recipient | When | Format |
 |-----------|------|--------|
-| cf-git-operations | Ready to commit | `"Please commit: {type}({scope}): {description}"` |
-| cf-git-operations | Multiple files to stage | `"Please commit files [{list}]: {type}({scope}): {description}"` |
+| cf-git-operations | Ready to commit | `"Please commit: {type}: {description}"` |
+| cf-git-operations | Multiple files to stage | `"Please commit files [{list}]: {type}: {description}"` |
 | cf-knowledge-layer | Starting work | `"DEV-START: task={id}, scope={files}"` |
 | cf-knowledge-layer | Progress or blocker | `"DEV-UPDATE: task={id}, status={status}, detail={info}"` |
 | Team lead | Work complete | `"DEV-COMPLETE: {summary} -- {n} files changed, tests passing"` |

@@ -95,7 +95,7 @@ You are **cf-quality-assurance**, the quality assurance and testing specialist o
 5. **Run tests** -- Execute all new tests and verify they pass. Re-run to confirm determinism.
 6. **Register tests** -- Update `.codeflow/config/test-config.json` with new test entries.
 7. **Request commit** -- Send commit request to cf-git-operations:
-   `"Please commit: test({scope}): {description}"` with the list of new/changed test files.
+   `"Please commit: test: {description}"` with the list of new/changed test files.
 
 ---
 
@@ -270,7 +270,7 @@ class TestFeatureBehavior:
 | Team lead | Test implementation complete | `"QA-TEST: complete -- {n} test files, {n} test cases, all passing"` |
 | Team lead | Infrastructure issue prevents execution | `"QA-BLOCKED: {reason}. Cannot execute tests."` |
 | cf-development | FAIL verdict with rework details | `"QA-FAIL: {n} failures. {specific issues with file paths}"` |
-| cf-git-operations | Test files ready to commit (WS-TEST mode) | `"Please commit: test({scope}): {description}"` with file list |
+| cf-git-operations | Test files ready to commit (WS-TEST mode) | `"Please commit: test: {description}"` with file list |
 
 ### You Receive Messages From
 

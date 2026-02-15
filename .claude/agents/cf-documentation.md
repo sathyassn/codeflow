@@ -205,8 +205,8 @@ You are **cf-documentation**, the documentation writing specialist on this CodeF
 
 | Recipient | When | Format |
 |-----------|------|--------|
-| cf-git-operations | Documentation ready to commit | `"Please commit: docs({scope}): {description}"` |
-| cf-git-operations | Multiple doc files to stage | `"Please commit files [{list}]: docs({scope}): {description}"` |
+| cf-git-operations | Documentation ready to commit | `"Please commit: docs: {description}"` |
+| cf-git-operations | Multiple doc files to stage | `"Please commit files [{list}]: docs: {description}"` |
 | cf-knowledge-layer | Starting work on a task | `"DOCS-START: task={id}, scope={files}"` |
 | cf-knowledge-layer | Progress update | `"DOCS-UPDATE: task={id}, status={status}, detail={info}"` |
 | Team lead | Work complete | `"DOCS-COMPLETE: {doc type} -- {title} written at {path}"` |
