@@ -3,7 +3,7 @@
 # Location: .codeflow/testing/scripts/pathflow/test-cf-pathflow-enforcement.sh
 #
 # Tests 3 hooks:
-#   - cf-session-start-pathflow-init.sh (flag creation)
+#   - cf-session-start-init.sh (flag creation)
 #   - cf-post-tool-use-pathflow-sentinel.sh (sentinel detection)
 #   - cf-pre-tool-use-pathflow-gate.sh (gate enforcement)
 #
@@ -42,10 +42,10 @@ source "$TESTING_DIR/lib/test-isolation.sh"
 STAGING_DIR="/tmp/claude/staging/hooks"
 
 # Session start init hook (new, may be in staging)
-if [[ -f "$STAGING_DIR/session-start/cf-session-start-pathflow-init.sh" ]]; then
-    INIT_HOOK="$STAGING_DIR/session-start/cf-session-start-pathflow-init.sh"
+if [[ -f "$STAGING_DIR/session-start/cf-session-start-init.sh" ]]; then
+    INIT_HOOK="$STAGING_DIR/session-start/cf-session-start-init.sh"
 else
-    INIT_HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/session-start/cf-session-start-pathflow-init.sh"
+    INIT_HOOK="$REAL_REPO_ROOT/.claude/hooks/codeflow/session-start/cf-session-start-init.sh"
 fi
 
 # Sentinel hook (new, may be in staging)
@@ -95,7 +95,7 @@ SDIR="$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
 test_init_hook_exists() {
     test_section "Init hook exists"
     if [[ -f "$INIT_HOOK" ]]; then
-        test_pass "cf-session-start-pathflow-init.sh exists"
+        test_pass "cf-session-start-init.sh exists"
     else
         test_skip "init_hook" "Hook not yet installed (in staging)"
     fi

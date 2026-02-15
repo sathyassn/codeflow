@@ -241,13 +241,8 @@
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-pathflow-init.sh",
-            "timeout": 2
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-init.sh",
+            "timeout": 15
           },
           {
             "type": "command",

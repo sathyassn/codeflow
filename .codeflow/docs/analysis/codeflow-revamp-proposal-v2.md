@@ -1164,7 +1164,7 @@ The current hook set (28 hooks) is reduced to 23. No dual-mode branching exists 
 | cf-pre-tool-use-team-guard.sh | PreToolUse | Block TeamDelete and Teammate(cleanup) during active PathFlow session. Matcher: `TeamDelete\|Teammate`. Only PF7-TSK-05 (remove pathflow-active flag) unlocks team dissolution. |
 | cf-pre-tool-use-read-delegation.sh | PreToolUse | Simplified: no mode-detection branching |
 | cf-stop-verify-work.sh | Stop | Renamed to `cf-stop-pathflow-gate.sh`. PCV enforcement removed. Logs PathFlow phase completion status for audit trail. |
-| cf-session-start-cleanup.sh | SessionStart | Simplified: clean PathFlow state only |
+| cf-session-start-init.sh | SessionStart | Consolidated from cleanup + pathflow-init. Creates directories, stale cleanup, PathFlow flag creation (v3.0.0) |
 | cf-session-start-instructions.sh | SessionStart | Updated: agent-teams model, no skill loading |
 | cf-session-end-cleanup.sh | SessionEnd | Simplified: clean PathFlow state only |
 | cf-user-prompt-submit.sh | UserPromptSubmit | Simplified: no mode-detection branching |
@@ -1175,7 +1175,7 @@ The current hook set (28 hooks) is reduced to 23. No dual-mode branching exists 
 |------|------|---------|---------|
 | cf-pre-tool-use-pathflow-task-guard.sh | PreToolUse | TaskUpdate | Validates PathFlow task transitions (PF{N}-TSK-{NN} status changes) |
 | cf-post-tool-use-pathflow-sentinel.sh | PostToolUse | TeamCreate\|Task\|SendMessage\|Bash | Automatic sentinel creation on phase/stage transition events (see Section 6.4) |
-| cf-session-start-pathflow-init.sh | SessionStart | (all) | Creates pathflow-active flag with JSON metadata at session start |
+| ~~cf-session-start-pathflow-init.sh~~ | SessionStart | (all) | ~~Consolidated into cf-session-start-init.sh~~ |
 
 **Note on PostToolUse matcher:** The `.*` regex does NOT match Agent Teams tools (TeamCreate, Task, SendMessage, TeamDelete). Explicit tool names are required. See `.codeflow/docs/research/agent-teams-hook-findings.md` for empirical validation.
 
@@ -1370,11 +1370,10 @@ The full session lifecycle from session start to session end, showing how hooks 
 SESSION START
 │
 ├─ SessionStart hooks fire:
-│  ├─ cf-session-start-cleanup.sh: Creates directories
+│  ├─ cf-session-start-init.sh (v3.0.0): Creates directories + stale cleanup + PathFlow flag
 │  │  ├─ .state/session/{SID}/
-│  │  └─ .state/sentinels/pathflow/{SID}/
-│  └─ cf-session-start-pathflow-init.sh: Creates flag
-│     └─ .state/session/{SID}/is-pathflow-active (JSON metadata)
+│  │  ├─ .state/sentinels/pathflow/{SID}/
+│  │  └─ .state/session/{SID}/is-pathflow-active (JSON metadata)
 │        └─ is_pathflow_active() now returns TRUE
 │
 ├─ Lead calls TeamCreate
@@ -1815,7 +1814,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 
 | # | Hook | V3 Status | Disposition | Notes |
 |---|------|-----------|-------------|-------|
-| 22 | cf-session-start-cleanup.sh | Active | **MODIFY** | Clean PathFlow state only |
+| 22 | cf-session-start-init.sh | Active | **MODIFY** | Consolidated from cleanup + pathflow-init (v3.0.0) |
 | 23 | cf-session-start-instructions.sh | Active | **MODIFY** | Agent-teams model, no skill loading |
 | 24 | cf-session-end-cleanup.sh | Active | **MODIFY** | Clean PathFlow state only |
 | 25 | cf-user-prompt-submit.sh | Active | **MODIFY** | No mode-detection branching |
@@ -1826,7 +1825,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 |---|------|-------------|------|---------|-------|
 | 26 | cf-pre-tool-use-pathflow-task-guard.sh | **CREATE** | PreToolUse | TaskUpdate | PathFlow task transition validation |
 | 27 | cf-post-tool-use-pathflow-sentinel.sh | **CREATE** | PostToolUse | TeamCreate\|Task\|SendMessage\|Bash | Automatic file sentinel creation on phase/stage transitions. `.*` does NOT match team tools — explicit names required (empirically validated). |
-| 28 | cf-session-start-pathflow-init.sh | **CREATE** | SessionStart | (all) | Creates pathflow-active flag file with JSON metadata (session_id, team_name, created_at, tracking_level). Runs AFTER cleanup hook. |
+| ~~28~~ | ~~cf-session-start-pathflow-init.sh~~ | ~~CREATE~~ | ~~SessionStart~~ | | ~~Consolidated into cf-session-start-init.sh (row 22)~~ |
 
 ### Summary
 

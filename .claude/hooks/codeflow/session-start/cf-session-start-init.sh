@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Purpose:   SessionStart hook for session initialization and cleanup
-# Location:  .claude/hooks/codeflow/session-start/cf-session-start-cleanup.sh
+# Purpose:   SessionStart hook for session initialization, cleanup, and PathFlow flag
+# Location:  .claude/hooks/codeflow/session-start/cf-session-start-init.sh
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   2.0.0
+# Version:   1.0.0
 #
-# This hook:
-#   - Reads session_id from stdin (Claude Code provides JSON on SessionStart)
-#   - Generates unique session ID (if not provided via stdin or env)
-#   - Creates session directories
-#   - Initializes sentinel directory
-#   - Cleans up expired sentinels using sentinel library (checks expires field)
-#   - Removes stale PathFlow sentinels from previous sessions
-#   - Removes stale is-pathflow-active flag (crash recovery)
-#   - Cleans memory-progress state files
-#   - Checks active-task.json expiry
-#   - Writes session metadata
+# This hook consolidates session setup into a single script:
+#   Section 1: Read stdin and generate session ID
+#   Section 2: Setup (REPO_ROOT, libraries)
+#   Section 3: Directory creation
+#   Section 4: Stale session cleanup
+#   Section 5: Sentinel cleanup (expires-based)
+#   Section 6: Active task context expiry
+#   Section 7: PathFlow flag creation
+#   Section 8: Session metadata
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
@@ -26,10 +24,10 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.0.0"
+readonly VERSION="1.0.0"
 
 # =============================================================================
-# STDIN READING (Claude Code provides JSON with session_id, cwd, permission_mode)
+# SECTION 1: STDIN READING AND SESSION ID
 # =============================================================================
 
 if [[ ! -t 0 ]]; then
@@ -42,13 +40,8 @@ if [[ ! -t 0 ]]; then
     fi
 fi
 
-# =============================================================================
-# SESSION ID GENERATION
-# =============================================================================
-
 # Generate session ID if not already set (via stdin or environment)
 if [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
-    # Generate ULID-like session ID
     TIMESTAMP=$(date +%s%N | cut -c1-13)
     RANDOM_PART=$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
     CODEFLOW_SESSION_ID="ses-${TIMESTAMP}${RANDOM_PART}"
@@ -56,7 +49,7 @@ fi
 export CODEFLOW_SESSION_ID
 
 # =============================================================================
-# SETUP
+# SECTION 2: SETUP
 # =============================================================================
 
 # Get repo root using git (most robust) or fallback to relative path
@@ -96,9 +89,8 @@ fi
 SESSION_STATE_DIR="$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID"
 SHARED_STATE_DIR="$REPO_ROOT/.state/session"
 
-
 # =============================================================================
-# DIRECTORY CREATION
+# SECTION 3: DIRECTORY CREATION
 # =============================================================================
 
 # Create session directories
@@ -114,6 +106,10 @@ mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID" 2>/dev/null
 mkdir -p "$SESSION_STATE_DIR" 2>/dev/null || true
 mkdir -p "$SHARED_STATE_DIR" 2>/dev/null || true
 
+# =============================================================================
+# SECTION 4: STALE SESSION CLEANUP
+# =============================================================================
+
 # Stale session cleanup (remove session dirs older than 24 hours)
 if [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
     find "$REPO_ROOT/.state/sentinels/skill" -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rm -rf {} \; 2>/dev/null || true
@@ -126,12 +122,11 @@ if [[ -d "$REPO_ROOT/.state/session" ]]; then
 fi
 
 # =============================================================================
-# SENTINEL CLEANUP (using sentinel library expires field, NOT mtime)
+# SECTION 5: SENTINEL CLEANUP (expires-based)
 # =============================================================================
 
 # Clean up expired sentinels using sentinel library (checks JSON expires field)
 if [[ -n "$SENTINEL_LIB_AVAILABLE" ]]; then
-    # Use sentinel library's proper expires-based cleanup
     sentinel_cleanup_expired > /dev/null 2>&1 || true
 else
     # Fallback: manual expires-based cleanup if sentinel library unavailable
@@ -152,24 +147,7 @@ else
 fi
 
 # =============================================================================
-# PATHFLOW STALE STATE CLEANUP
-# =============================================================================
-
-# Stale PathFlow sentinels cleaned by stale session cleanup above
-# (Each session has its own pathflow dir that gets removed after 24h)
-
-# Stale PathFlow flags cleaned by stale session cleanup above
-# (Each session's flag is in its own session dir)
-
-# =============================================================================
-# MEMORY PROGRESS CLEANUP
-# =============================================================================
-
-# Stale memory progress files cleaned by stale session cleanup above
-# (Each session's memory-progress is in its own session dir)
-
-# =============================================================================
-# ACTIVE TASK CONTEXT EXPIRY CHECK
+# SECTION 6: ACTIVE TASK CONTEXT EXPIRY
 # =============================================================================
 
 # V4: "Remove task context if expired"
@@ -185,7 +163,24 @@ if [[ -f "$(get_active_task_file)" ]]; then
 fi
 
 # =============================================================================
-# SESSION METADATA
+# SECTION 7: PATHFLOW FLAG CREATION
+# =============================================================================
+
+# Source PathFlow state library for flag creation
+_PFS_LIB="$REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
+if [[ -f "$_PFS_LIB" ]]; then
+    # shellcheck source=/dev/null
+    source "$_PFS_LIB"
+
+    # Create flag with initial metadata
+    # team_name is empty at init (updated when TeamCreate is called)
+    # tracking_level starts as "pending" (updated at PF3-CLASSIFY)
+    create_pathflow_flag "$CODEFLOW_SESSION_ID" ""
+fi
+# If library missing, skip flag creation (graceful degradation)
+
+# =============================================================================
+# SECTION 8: SESSION METADATA
 # =============================================================================
 
 SESSION_META_FILE="$REPO_ROOT/.state/logs/sessions/session-${CODEFLOW_SESSION_ID}.meta"
