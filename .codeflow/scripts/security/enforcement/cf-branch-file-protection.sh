@@ -128,7 +128,7 @@ fi
 # =============================================================================
 # PATHFLOW-CONDITIONAL BLOCK HELPER
 # =============================================================================
-# In PathFlow mode (agent-teams), instruct to message cf-gitops teammate.
+# In PathFlow mode (agent-teams), instruct to message cf-git-operations teammate.
 # In standalone mode, instruct to invoke cf-git-workflow skill.
 
 _block_branch_protection() {
@@ -138,7 +138,7 @@ _block_branch_protection() {
     if is_pathflow_active; then
         block_with_skill \
             "Branch Protection" \
-            "$reason Message your cf-gitops teammate to create a branch." \
+            "$reason Message your cf-git-operations teammate to create a branch." \
             "$pattern" \
             "git-workflow" \
             "create-branch"

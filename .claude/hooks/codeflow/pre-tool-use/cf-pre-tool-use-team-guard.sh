@@ -6,16 +6,16 @@
 #
 # This hook:
 #   - Blocks Teammate tool cleanup operation while PathFlow is active
-#   - Only applies to Teammate tool with operation="cleanup"
-#   - If not Teammate tool or not cleanup operation, allows through
-#   - If cleanup but PathFlow not active, allows cleanup
-#   - If cleanup AND PathFlow active, blocks with exit 2
-#
+#   - Blocks TeamDelete tool while PathFlow is active
+#   - If not Teammate/TeamDelete tool, allows through
+#   - If Teammate but not cleanup operation, allows through
+#   - If cleanup/TeamDelete but PathFlow not active, allows cleanup
+#   - If (cleanup OR TeamDelete) AND PathFlow active, blocks with exit 2
 # Compatibility: bash 3.2+ (macOS compatible)
 #
 # Exit codes:
-#   - 0: Operation allowed (not Teammate, not cleanup, or PathFlow not active)
-#   - 2: Operation blocked (cleanup while PathFlow active)
+#   - 0: Operation allowed (not Teammate/TeamDelete, not cleanup, or PathFlow not active)
+#   - 2: Operation blocked (cleanup/TeamDelete while PathFlow active)
 
 set -euo pipefail
 
@@ -47,7 +47,15 @@ export CODEFLOW_SESSION_ID
 # =============================================================================
 
 TOOL_NAME="${TOOL_NAME:-}"
-if [[ "$TOOL_NAME" != "Teammate" ]]; then
+
+# TeamDelete is always blocked during PathFlow (no operation check needed)
+IS_TEAM_DELETE=false
+if [[ "$TOOL_NAME" == "TeamDelete" ]]; then
+    IS_TEAM_DELETE=true
+fi
+
+# For non-Teammate and non-TeamDelete tools, allow through
+if [[ "$TOOL_NAME" != "Teammate" ]] && [[ "$IS_TEAM_DELETE" != "true" ]]; then
     exit 0
 fi
 
@@ -56,23 +64,26 @@ fi
 # =============================================================================
 
 TOOL_INPUT="${TOOL_INPUT:-}"
-if [[ -z "$TOOL_INPUT" ]]; then
-    exit 0
-fi
 
-# Extract operation from tool input
-OPERATION=""
-if command -v jq &>/dev/null; then
-    OPERATION=$(echo "$TOOL_INPUT" | jq -r '.operation // empty')
-else
-    OPERATION=$(echo "$TOOL_INPUT" | grep -oE '"operation"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"operation"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' | head -1)
-fi
+# TeamDelete skips operation check - always blocked during PathFlow
+if [[ "$IS_TEAM_DELETE" != "true" ]]; then
+    if [[ -z "$TOOL_INPUT" ]]; then
+        exit 0
+    fi
 
-# Only gate cleanup operations
-if [[ "$OPERATION" != "cleanup" ]]; then
-    exit 0
-fi
+    # Extract operation from tool input
+    OPERATION=""
+    if command -v jq &>/dev/null; then
+        OPERATION=$(echo "$TOOL_INPUT" | jq -r '.operation // empty')
+    else
+        OPERATION=$(echo "$TOOL_INPUT" | grep -oE '"operation"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"operation"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' | head -1)
+    fi
 
+    # Only gate cleanup operations for Teammate tool
+    if [[ "$OPERATION" != "cleanup" ]]; then
+        exit 0
+    fi
+fi
 # =============================================================================
 # PATHFLOW FLAG CHECK
 # =============================================================================
@@ -100,19 +111,26 @@ elif ! is_pathflow_active 2>/dev/null; then
 fi
 
 # =============================================================================
-# BLOCK: CLEANUP WHILE PATHFLOW ACTIVE
+# BLOCK: CLEANUP/DELETION WHILE PATHFLOW ACTIVE
 # =============================================================================
+
+# Determine what we're blocking for the message
+if [[ "$IS_TEAM_DELETE" == "true" ]]; then
+    BLOCKED_OP="TeamDelete"
+else
+    BLOCKED_OP="cleanup"
+fi
 
 # Log the block event
 if declare -f log_security_event &>/dev/null; then
-    log_security_event "blocked" "team_guard_cleanup" "Teammate" "cleanup" "PathFlow active - team cleanup blocked"
+    log_security_event "blocked" "team_guard_${BLOCKED_OP}" "$TOOL_NAME" "$BLOCKED_OP" "PathFlow active - team $BLOCKED_OP blocked"
 fi
 
 cat >&2 <<EOF
-BLOCKED: Team cleanup not allowed during active PathFlow
+BLOCKED: Team cleanup/deletion not allowed during active PathFlow
 Reason: PathFlow is active - team resources are still in use
-Operation: cleanup
+Operation: $BLOCKED_OP
 
-Complete the PathFlow workflow before cleaning up team resources.
+Complete the PathFlow workflow (PF7-END) before cleaning up team resources.
 EOF
 exit 2

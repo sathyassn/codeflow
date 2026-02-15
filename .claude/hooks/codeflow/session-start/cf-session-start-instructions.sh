@@ -6,7 +6,7 @@
 # Platform:  macOS/Linux
 # Version:   3.0.0
 #
-# Skills:    working-protocol, memory-management
+# Teammates: cf-knowledge-layer (memory/task ops)
 # Operation: Session initialization and Section 2 enforcement
 #
 # Config:    .codeflow/config/instructions/instructions-config.json
@@ -120,7 +120,7 @@ else
     echo "ACTIVE TASKS DETECTED: None"
     echo ""
     echo "IMPORTANT: Register work before making modifications."
-    echo "Invoke: Skill('cf-task-management', args='ensure-work-registered')"
+    echo "Delegate to cf-knowledge-layer teammate: SendMessage(recipient=\"cf-knowledge-layer\", content=\"ensure-work-registered\")"
 fi
 
 # =============================================================================

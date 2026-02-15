@@ -1,3 +1,4 @@
-🔒 Git operations require skill invocation. Protected branch? Skill('git-workflow', args='create-feature-branch name=...').
-Commit? Skill('memory-management', args='complete-work ...') THEN Skill('git-workflow', args='create-commit').
-Network (push/PR/pull)? Skill('security-management', args='sandbox-check') THEN Skill('git-workflow', args='...'). L1 enforced.
+🔒 Git operations require cf-git-operations teammate. Protected branch? SendMessage(recipient="cf-git-operations", content="create-feature-branch name=...").
+Commit? Delegate to cf-knowledge-layer for complete-work FIRST, then cf-git-operations for commit.
+Network (push/PR/pull)? cf-security validates sandbox, then cf-git-operations executes. L1 enforced.
+⛔ FORBIDDEN: Running git write commands directly. All git writes go through cf-git-operations.

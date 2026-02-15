@@ -207,12 +207,12 @@ else
     fail "Should have copy mappings configuration"
 fi
 
-# Test 24: References cf-security-management skill
+# Test 24: References cf-security teammate for sync
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "cf-security-management" "$HOOK" && grep -q "sync-settings-templates" "$HOOK"; then
-    pass "References cf-security-management skill"
+if grep -q "cf-security" "$HOOK" && grep -q "sync-settings-templates" "$HOOK"; then
+    pass "References cf-security teammate for sync"
 else
-    fail "Should reference cf-security-management skill"
+    fail "Should reference cf-security teammate for sync"
 fi
 
 # Test 25: Uses jq for JSON parsing

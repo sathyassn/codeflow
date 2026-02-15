@@ -1,1 +1,1 @@
-🔒 MUST Skill('memory-management', args='begin-work domain=... topic=... scope="..." branch=...') for meaningful work. L1 enforced: branch creation blocked without begin-work.
+🔒 MUST delegate to cf-knowledge-layer: SendMessage(recipient="cf-knowledge-layer", content="begin-work domain=... topic=... scope=... branch=...") for meaningful work. L1 enforced: branch creation blocked without begin-work.

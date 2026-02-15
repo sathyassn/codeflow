@@ -1,0 +1,113 @@
+{
+  "version": "1.0.0",
+  "phases": {
+    "PF1-INIT": {
+      "name": "Session Start",
+      "description": "Initialize session, register in DB/JSONL, spawn security teammate",
+      "tasks": [
+        "PF1-TSK-01: Initialize PathFlow session record",
+        "PF1-TSK-02: Register session in DB/JSONL with tracking_level='pending'",
+        "PF1-TSK-03: Spawn cf-security teammate"
+      ]
+    },
+    "PF2-CONTEXT": {
+      "name": "Context Awareness",
+      "description": "Load previous context, determine tracked vs untracked",
+      "tasks": [
+        "PF2-TSK-01: Spawn cf-knowledge-layer teammate",
+        "PF2-TSK-02: Query active work and session state",
+        "PF2-TSK-03: Load memory context for current work",
+        "PF2-TSK-04: Determine tracked vs untracked decision"
+      ]
+    },
+    "PF3-CLASSIFY": {
+      "name": "Work Classification",
+      "description": "Classify work, register task, create branch, activate session",
+      "tasks": [
+        "PF3-TSK-01: Classify work type and area",
+        "PF3-TSK-02: Register task in WorkGraph",
+        "PF3-TSK-03: Spawn cf-git-operations teammate",
+        "PF3-TSK-04: Create feature branch",
+        "PF3-TSK-05: Activate session: set tracking_level='tracked', populate work_type, area_type"
+      ]
+    },
+    "PF4-EXECUTE": {
+      "name": "Work Execution",
+      "description": "Execute work through configured stage pipeline",
+      "tasks": [
+        "PF4-TSK-01: Look up stage pipeline from work_type_stages",
+        "PF4-TSK-02: Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)",
+        "PF4-TSK-03: Execute WS-REV stage (universal review)",
+        "PF4-TSK-04: Execute WS-QA stage (if pipeline includes it)"
+      ]
+    },
+    "PF5-VERIFY": {
+      "name": "Work Verification",
+      "description": "Verify all stages passed and acceptance criteria met",
+      "tasks": [
+        "PF5-TSK-01: Verify all pipeline stages completed with pass verdict",
+        "PF5-TSK-02: Check acceptance criteria met"
+      ]
+    },
+    "PF6-COMPLETE": {
+      "name": "Work Completion",
+      "description": "Update task status, create PR",
+      "tasks": [
+        "PF6-TSK-01: Update task status to complete in WorkGraph",
+        "PF6-TSK-02: Create PR via cf-git-operations"
+      ]
+    },
+    "PF7-END": {
+      "name": "Session End",
+      "description": "Shutdown teammates, dissolve team, cleanup",
+      "tasks": [
+        "PF7-TSK-01: Shutdown on-demand role teammates",
+        "PF7-TSK-02: Shutdown persistent function teammates",
+        "PF7-TSK-03: Write session summary to JSONL",
+        "PF7-TSK-04: Clean up session state and temp files",
+        "PF7-TSK-05: Remove pathflow-active flag (unlocks team-guard)",
+        "PF7-TSK-06: TeamDelete (dissolve team infrastructure)"
+      ]
+    }
+  },
+  "stages": {
+    "WS-DEV": { "name": "Development", "teammate": "cf-development", "max_rework_iterations": 3 },
+    "WS-PLAN": { "name": "Planning", "teammate": "cf-planning", "max_rework_iterations": 3 },
+    "WS-DOCS": { "name": "Documentation", "teammate": "cf-documentation", "max_rework_iterations": 3 },
+    "WS-TEST": { "name": "Testing", "teammate": "cf-quality-assurance", "max_rework_iterations": 3 },
+    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3 },
+    "WS-QA": { "name": "Quality Assurance", "teammate": "cf-quality-assurance", "max_qa_retries": 2, "rework_target": "primary" }
+  },
+  "pipelines": {
+    "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
+    "FIX": ["WS-DEV", "WS-REV", "WS-QA"],
+    "HTFX": ["WS-DEV", "WS-REV"],
+    "RFCT": ["WS-DEV", "WS-REV", "WS-QA"],
+    "DOCS": ["WS-DOCS", "WS-REV"],
+    "TEST": ["WS-TEST", "WS-REV"],
+    "CHOR": ["WS-DEV", "WS-REV"],
+    "CICD": ["WS-DEV", "WS-REV", "WS-QA"],
+    "SPKE": ["WS-PLAN", "WS-REV"],
+    "PLAN": ["WS-PLAN", "WS-REV"]
+  },
+  "teammates": {
+    "persistent": {
+      "cf-security": { "spawn_phase": "PF1-INIT", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-security.md", "embeds": ["cf-security-management"] },
+      "cf-knowledge-layer": { "spawn_phase": "PF2-CONTEXT", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-knowledge-layer.md", "embeds": ["cf-memory-management", "cf-task-management", "cf-db-operations"] },
+      "cf-git-operations": { "spawn_phase": "PF3-CLASSIFY", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-git-operations.md", "embeds": ["cf-git-workflow"] }
+    },
+    "on_demand": {
+      "cf-development": { "stage": "WS-DEV", "definition": ".claude/agents/cf-development.md" },
+      "cf-planning": { "stage": "WS-PLAN", "definition": ".claude/agents/cf-planning.md" },
+      "cf-documentation": { "stage": "WS-DOCS", "definition": ".claude/agents/cf-documentation.md" },
+      "cf-review": { "stage": "WS-REV", "definition": ".claude/agents/cf-review.md" },
+      "cf-quality-assurance": { "stage": ["WS-QA", "WS-TEST"], "definition": ".claude/agents/cf-quality-assurance.md" }
+    }
+  },
+  "rework": {
+    "max_rework_iterations": 3,
+    "max_qa_retries": 2,
+    "stage_timeout_minutes": 30,
+    "escalation": "lead"
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: cf-working-protocol
-description: Provides cognitive procedures for systematic thinking, decision-making, and verification. Ensures consistent AI behavior through meta-awareness and structured reasoning. Use throughout all workflows as the foundation for agent behavior.
+description: Provides cognitive procedures for systematic thinking, decision-making, and evidence-based communication. Ensures consistent AI behavior through meta-awareness and structured reasoning. Use throughout all workflows as the foundation for agent behavior.
 ---
 
 # Working Protocol Skill
@@ -11,7 +11,7 @@ description: Provides cognitive procedures for systematic thinking, decision-mak
 
 ## Purpose
 
-**Ensures consistent, thorough AI agent behavior through meta-awareness, structured reasoning, and systematic verification.**
+**Ensures consistent, thorough AI agent behavior through meta-awareness, structured reasoning, and evidence-based communication.**
 
 ## Responsibilities
 
@@ -20,33 +20,31 @@ description: Provides cognitive procedures for systematic thinking, decision-mak
 - Classify decisions by tier and act appropriately
 - Organize responses with progressive disclosure
 - Verify claims with citations
-- Complete post-completion verification
-- NOT: Task management (that's cf-task-management)
-- NOT: Memory persistence (that's cf-memory-management)
+- NOT: Task management (via cf-knowledge-layer teammate)
+- NOT: Memory persistence (via cf-knowledge-layer teammate)
+- NOT: Work verification (via WS-REV stage with cf-review teammate)
+- NOT: Parallel execution (via native Agent Teams / TaskCreate)
 
 ## Decision Tree
 
 ```text
-Session starting?
-└── Apply 🔧 meta-awareness
+Every response (continuous):
+└── 🔧 meta-awareness (always active)
 
-Before any action?
+Before any action:
 ├── Protected operation → 🔧 think-and-act (PAC-5)
 └── General analysis → 🔧 think-and-act (THINK)
 
-Making decision?
+Making a decision:
 ├── Implementation detail → Tier 1: Document in progress
 ├── Architecture/pattern → Tier 2: Note + commit message
 └── Project-wide impact → Tier 3: ADR required
 
-Making claims?
+Making claims:
 └── 🔧 research-quality (verify with citations)
 
-Completing work?
-└── 🔧 verify-work (PCV structure)
-
-Complex multi-part task?
-└── 🔧 parallelize-work (spawn sub-agents)
+Communicating:
+└── 🔧 respond-organized (calibrate response length)
 ```
 
 ## Operations
@@ -57,27 +55,39 @@ Complex multi-part task?
 | 2 | think-and-act | ENF-L1 (PAC-5) + ENF-L3 Advisory | Structured reasoning and confirmation |
 | 3 | decide | ENF-L3 Advisory | Decision tier classification |
 | 4 | respond-organized | ENF-L3 Advisory | Progressive disclosure in responses |
-| 5 | research-quality | ENF-L2 Stop | Verify claims with citations |
-| 6 | verify-work | ENF-L2 Stop | Post-completion verification |
-| 7 | parallelize-work | ENF-L1 + ENF-L3 Advisory | Spawn sub-agents for parallel tasks |
+| 5 | research-quality | ENF-L3 Advisory | Verify claims with citations |
 
 ## Operation Details
 
 ### 🔧 meta-awareness
 
 ```text
-When: Session start and periodically during work
+When: EVERY response throughout the session (continuous, not just session start)
 Purpose: Maintain awareness of state, context, and knowledge boundaries
 Enforcement: ENF-L3 Advisory
-Markers: 🤖 (meta-awareness indicator)
+Markers: 🤖 (meta-awareness indicator, displayed at the START of every response)
 
 Procedure:
-  1. Display 🤖 at session start
+  1. Display 🤖 at the beginning of every response (compact signal, not verbose)
   2. Assess current context state
   3. Acknowledge knowledge limitations
   4. Check for active work context
      - Check active-task.json at .state/runtime/active-task.json
   5. Detect autorun context (see below)
+
+Continuous Application:
+  Meta-awareness is not a toggle. It is an always-on cognitive layer:
+  - Every response: Start with 🤖, be aware of current state, what you know, what you don't
+  - Every action: Consider whether context has shifted since last action
+  - Every claim: Know whether you're stating fact, inference, or assumption
+
+  The 🤖 marker is a compact, visible signal that meta-awareness is active.
+  It appears at the start of every response -- like a heartbeat confirming
+  the cognitive layer is engaged. This is NOT verbose meta-commentary.
+
+  Anti-pattern: Verbose meta-awareness signaling ("As I mentioned...",
+  "I'm aware that...", "Let me think about..."). The 🤖 marker replaces
+  all of that with a single compact symbol.
 
 Autorun Context Detection:
   Check for environment variables:
@@ -92,13 +102,9 @@ Autorun Context Detection:
     - Create PR when all criteria met
 
 Output: Meta-awareness acknowledgment with context state
-
   In autorun: Include task ID and acceptance criteria summary
 
 Hook: UserPromptSubmit/user-prompt-submit.sh triggers
-
-📚 Resource: [meta-awareness.md](resources/meta-awareness.md)
-   Load when: At session start or when context state is unclear
 ```
 
 ### 🔧 think-and-act
@@ -124,6 +130,15 @@ PAC-5 Checklist:
   | 4 | Consequences | What are the potential side effects? |
   | 5 | Confirmation | Should I proceed or ask for confirmation? |
 
+Tool-Specific Validations:
+  | Tool Type | Required PAC-5 Check |
+  |-----------|---------------------|
+  | Bash(git *) | Did I invoke the git workflow skill first? |
+  | Edit/Write on .sh/.py | Will I follow script standards? |
+  | Edit/Write on .md | Will I follow documentation standards? |
+  | Task (sub-agent) | Can this be parallelized with other work? |
+  | Any repeated op | Should I parallelize instead of sequential? |
+
 Thinking Budget Selection:
   | Complexity | Budget | Example |
   |------------|--------|---------|
@@ -131,6 +146,20 @@ Thinking Budget Selection:
   | Standard | Medium | Multi-file refactor |
   | Complex | Extended | Architecture decision |
   | Critical | Maximum | Security-sensitive change |
+
+Red Flags - Signs of Mindless Execution:
+  STOP and reassess if you notice:
+  1. Repetitive tool calls: Same tool type 3+ times without stepping back
+  2. Creation over editing: Creating new files when you should edit existing
+  3. Sequential tunnel vision: Processing items one-by-one when independent
+  4. Retry without change: Repeating a failed approach without new strategy
+  5. Memory over skill: Working from memory when a validated procedure exists
+  6. Skipping skill invocation: Operations without their associated skill
+
+Analysis Dimensions (apply before acting):
+  Scenarios: Does this work for one actor? Multiple? Out of order? Partial failure?
+  Users: Who benefits? Who's affected? (devs, end users, CI/CD, other agents)
+  Holistic: Second-order effects? What else changes? What dependencies?
 
 Procedure:
   1. [THINK] Articulate reasoning (budget-appropriate depth)
@@ -143,11 +172,8 @@ Output:
   [CONFIRM] (if protected) Awaiting confirmation
 
 Enforcement note: PAC-5 is behavioral guidance applied by the agent's cognitive
-  procedure. No PreToolUse hook enforces think-and-act directly — enforcement
+  procedure. No PreToolUse hook enforces think-and-act directly -- enforcement
   comes from the agent consistently applying this checklist before protected ops.
-
-📚 Resource: [think-and-act.md](resources/think-and-act.md)
-   Load when: PAC-5 triggered for protected operations or unsure of checklist application
 ```
 
 ### 🔧 decide
@@ -164,6 +190,29 @@ Decision Tiers:
   | 2 | Architecture/pattern | Note + commit message |
   | 3 | Project-wide impact | ADR required |
 
+Quick Classification:
+  | Condition | Tier | Action |
+  |-----------|------|--------|
+  | Standard practice + reversible + follows pattern | 1 | Proceed |
+  | Multiple approaches OR trade-offs exist | 2 | Recommend + confirm |
+  | Ambiguous intent OR critical impact | 3 | Ask for clarification |
+
+Edge Case Rules:
+  - T1/T2 boundary: If uncertain whether "standard practice", escalate to T2
+  - T2/T3 boundary: If user intent is unclear, escalate to T3
+  - Security decisions: ALWAYS T3, even if they seem straightforward
+  - Performance-critical: ALWAYS T3, even if they seem T1/T2
+  - Database schema changes: ALWAYS T3 (irreversible, multi-component impact)
+
+Tier Execution Patterns:
+  T1: Execute, then explain. "I refactored validation to use the standard pattern.
+      This is reversible and follows project conventions."
+  T2: Recommend with rationale. "I recommend JWT (stateless, scalable) over sessions
+      (simpler but stateful). Proceed with JWT?"
+  T3: Present options with implications. "Schema changes are irreversible. Option A
+      (add columns) breaks old clients. Option B (new table) needs migration.
+      Which aligns with your compatibility requirements?"
+
 Autorun Mode Behavior:
   In autorun context ($AUTORUN_SESSION_ID set):
     - Tier 1 & 2: Make decision autonomously, document reasoning
@@ -173,18 +222,13 @@ Autorun Mode Behavior:
 
 Procedure:
   1. Identify decision type
-  2. Classify tier based on scope
+  2. Classify tier based on scope (check edge case rules)
   3. Check if in autorun mode
   4. Apply appropriate documentation level
   5. For Tier 3 in autorun: Document decision, add to PR description
-  6. For Tier 3 interactive: Invoke cf-documentation-standards:apply-standard type=ADR
+  6. For Tier 3 interactive: Create ADR via cf-planning teammate
 
 Output: Decision with tier classification and documentation pointer
-
-Cross-skill: cf-documentation-standards (for Tier 3 ADRs)
-
-📚 Resource: [decide.md](resources/decide.md)
-   Load when: Unsure of decision tier classification or documentation requirements
 ```
 
 ### 🔧 respond-organized
@@ -194,17 +238,67 @@ When: Communicating with user
 Purpose: Progressive disclosure and measured response
 Enforcement: ENF-L3 Advisory
 
+Response Calibration Matrix:
+  | Request Type | Response Length | Structure |
+  |--------------|----------------|-----------|
+  | Simple confirmation | 1-2 sentences | Direct answer only |
+  | Simple question | 1 paragraph | Answer + brief context |
+  | Medium task | 2-3 paragraphs | Summary + key details |
+  | Complex implementation | Multiple sections | Summary / details / rationale |
+  | Analysis/planning | Structured sections | Progressive disclosure with headings |
+
+Verbosity Management:
+  Avoid:
+    - Exhaustive lists when subset suffices
+    - Repeating information already stated
+    - Over-explaining standard concepts
+    - Apologetic padding ("I apologize...", "Let me...", "Here's what I'll do...")
+    - Meta-commentary about your thinking process
+    - Stream-of-consciousness output (think first, then write)
+
+  Prefer:
+    - Direct answers
+    - Essential information only
+    - Appropriate depth for complexity
+    - Confidence without over-explanation
+
+  If user says "too verbose": Acknowledge briefly ("Understood, more concisely:"),
+  adjust calibration for rest of session. No apology loops.
+
+Reference Clarity:
+  Always include file:line references when discussing specific code:
+    Files: path/to/file.md:123
+    Functions: functionName in path/to/file.ts:456
+    Sections: docs/guide.md#section-name
+    External: [Source Name](full-url)
+
+  When line number is uncertain: Use approximate range (e.g., :100-150)
+  When file not yet read: Omit line number, note will add after reading
+
 Procedure:
-  1. Lead with summary/conclusion
-  2. Provide details in order of relevance
-  3. Use progressive disclosure for complex topics
-  4. Keep responses appropriately sized
-  5. Use formatting (headers, lists) for scanability
+  1. Read user request fully, understand scope and complexity
+  2. Determine appropriate response length from calibration matrix
+  3. Lead with summary/conclusion
+  4. Provide details in order of relevance
+  5. Use progressive disclosure for complex topics
+  6. Use formatting (headers, lists) for scanability
+  7. Include file:line references for all code mentions
 
 Output: Well-structured response with clear hierarchy
 
-📚 Resource: [respond-organized.md](resources/respond-organized.md)
-   Load when: Structuring complex responses or applying progressive disclosure
+Context-Specific Adjustments:
+  Simple questions: respond-organized only (1-2 sentences, skip other ops)
+  Complex implementations: All 5 operations, structured sections
+  Exploratory analysis: think-and-act + research-quality + respond-organized
+  Urgent fixes: All operations but faster execution, concise summary
+
+Edge Cases:
+  think-and-act wants depth vs respond-organized wants brevity:
+    → Think deeply, respond concisely. Separate thinking from response.
+  When operations conflict:
+    → Prioritize user needs over protocol strictness.
+  When protocol blocks progress:
+    → Note to user, proceed with caution.
 ```
 
 ### 🔧 research-quality
@@ -212,152 +306,105 @@ Output: Well-structured response with clear hierarchy
 ```text
 When: Before making claims or statements
 Purpose: Verify claims with citations/evidence
-Enforcement: ENF-L2 Stop
+Enforcement: ENF-L3 Advisory
+
+Research-First Mandate:
+  Research MUST be done BEFORE making claims, not after.
+  Never make claims based on assumptions.
+
+  Apply to ALL claims:
+    - Technical claims (hooks, APIs, code, specifications)
+    - Logical claims (architectural patterns, design principles)
+    - Procedural claims (workflows, processes, lifecycles)
+    - ANY "X works by..." or "Y supports..." statement
+
+  Before writing ANY claim, ask:
+    - "Did I research internal docs for this?"
+    - "Did I verify external sources if needed?"
+    - "Am I assuming based on patterns?"
+  If any answer is "no" or "unsure", STOP and research first.
+
+Research Sequence:
+  1. Internal Research (project-specific claims):
+     Sources: Project docs, codebase (Grep/Read), memory/context
+     Authority: Project docs ARE authoritative for project-specific things
+     No external validation needed for internal architecture
+
+  2. External Research (system/tool claims):
+     Sources: Official documentation (WebFetch), standards (WebSearch)
+     Required when: Claiming external system features, tool capabilities
+     Authority: Official docs are authoritative for external systems
+
+  3. Cross-Validation (mixed claims):
+     Triggers: Internal doc claims external behavior, proposing "standard practice",
+     integrating external system
+     Action: Verify both internal and external sources
+
+Source Quality:
+  | Source Type | Trustworthiness |
+  |-------------|-----------------|
+  | Official documentation | High - always prefer |
+  | Well-known org (GitHub, MDN) | High - primary sources |
+  | Established blog (reputable) | Medium - secondary validation |
+  | Stack Overflow (high votes) | Medium - quick verification |
+  | Random blog / unverified | Low/Very low - avoid |
+
+Citation Format:
+  Internal: "According to file.md:line-range, ..."
+  External: "According to [Source](URL, accessed YYYY-MM), ..."
+
+  ALWAYS cite: Technical specs, architectural patterns stated as fact,
+  system behaviors, any "X works by..." statement.
+  Optional: Well-known standard concepts (REST, Factory pattern, etc.)
+  No citation needed: Your own analysis (labeled as such), user-provided info.
+
+Link Verification:
+  MUST verify: Specific doc pages, blog posts, less common sites, critical links
+  Can skip: Well-known stable docs (react.dev, github.com/org/repo)
 
 Procedure:
   1. Identify claims being made
-  2. Verify claims against:
-     - Code analysis (for code claims)
-     - Documentation (for API claims)
-     - Memory/context (for project claims)
-  3. Cite sources for claims
-  4. Acknowledge uncertainty when present
+  2. Research: internal → external → cross-validate (as needed)
+  3. Verify claims against sources
+  4. Cite sources for claims
+  5. Acknowledge uncertainty when present
+  6. Disclose research gaps transparently
 
 Output: Verified claims with citations or uncertainty markers
 
-Enforcement note: ENF-L2 Stop is enforced via the stop hook's PCV validation.
-  The stop hook checks for the 🔍 marker and verify-work structure, which
-  implicitly requires research-quality claims to be substantiated within the
-  PCV output. No dedicated hook validates citations independently.
-
-📚 Resource: [research-quality.md](resources/research-quality.md)
-   Load when: Making technical claims or when citation format is needed
+Enforcement note: ENF-L3 Advisory. Research quality is a cognitive discipline
+  applied by the agent. No hook enforces citations directly. The cf-review
+  teammate (WS-REV stage) provides independent verification of work quality.
 ```
 
-### 🔧 verify-work
+## Common Combinations
+
+Typical operation groupings by task type:
 
 ```text
-When: Before stopping/completing agent execution
-Purpose: Post-Completion Verification (PCV) structure
-Enforcement: ENF-L2 Stop (blocks completion without proper verification)
+Planning work:
+  1. think-and-act (analyze holistically)
+  2. decide (choose approach tier)
+  3. respond-organized (structured proposal)
 
-Required Markers (by tier):
-  | Tier | Requirements |
-  |------|--------------|
-  | All | 🔍 + "verify-work" text + TIER indicator |
-  | 2+ | ARTIFACTS section (files changed) |
-  | 2+ | VERIFICATION section (requirements met) |
-  | 3 | ADVERSARIAL section (edge cases tested) |
+Implementation work:
+  1. meta-awareness (continuous)
+  2. decide (tier-classify implementation choices)
+  3. respond-organized (appropriate-length summary, file:line references)
 
-Tier Determination:
-  | Tier | Criteria | Output Depth |
-  |------|----------|--------------|
-  | 1 | Single file, no API changes | Brief summary |
-  | 2 | Multiple files, API changes | Detailed artifacts |
-  | 3 | Architecture, security-sensitive | Full adversarial testing |
+Research tasks:
+  1. research-quality (find and cite sources)
+  2. think-and-act (consider users/scenarios)
+  3. respond-organized (concise synthesis)
 
-Issue Tracking Format:
-  | Status | Marker | Meaning |
-  |--------|--------|---------|
-  | FIXED | ✅ | Issue resolved in this work |
-  | ESCALATED | ⬆️ | Escalated to user/planner |
-  | BLOCKED | 🚧 | Cannot proceed, needs intervention |
-  | DEFERRED | ⏸️ | Intentionally postponed |
+Code review:
+  1. think-and-act (who's affected? system-wide impact?)
+  2. respond-organized (measured feedback with file:line references)
 
-Output Format (TIER 1):
-  🔍 verify-work TIER 1
-
-  Single file change: {file} - {description}
-  Status: Complete
-
-Output Format (TIER 2):
-  🔍 verify-work TIER 2
-
-  ## ARTIFACTS
-  - {file1}: {change description}
-  - {file2}: {change description}
-
-  ## VERIFICATION
-  - [x] Requirement 1 met
-  - [x] Requirement 2 met
-
-  ## ISSUES
-  - ✅ FIXED: {issue description}
-  - ⬆️ ESCALATED: {issue} → {to whom}
-
-Output Format (TIER 3):
-  🔍 verify-work TIER 3
-
-  ## ARTIFACTS
-  - {file1}: {change description}
-
-  ## VERIFICATION
-  - [x] Requirement 1 met
-
-  ## ADVERSARIAL
-  - Edge case 1: {scenario} → {tested how} → {result}
-  - Edge case 2: {scenario} → {tested how} → {result}
-
-  ## ISSUES
-  - ✅ FIXED: {issue description}
-  - 🚧 BLOCKED: {issue} - {reason}
-
-Hook: Stop/stop-verify-work.sh blocks without 🔍 marker
-
-Note: On completion, active-task.json should be cleaned up
-  via cf-memory-management:complete-work.
-
-Autorun Mode:
-  In autorun context, TWO verifications occur:
-    1. THIS operation (verify-work) - Claude self-verification
-    2. Stop Hook (Haiku LLM) - External verification against acceptance criteria
-
-  Both must pass for autorun task to complete.
-
-  Acceptance criteria source: $AUTORUN_ACCEPTANCE or task metadata
-
-📚 Resource: [verify-work.md](resources/verify-work.md)
-   Load when: Completing work verification or unsure of PCV tier requirements
+All operations apply throughout the workflow, not just once:
+  - meta-awareness: Continuous (🤖 at start of every response)
+  - think-and-act: Every analysis/decision point
+  - decide: Every decision
+  - respond-organized: Every response
+  - research-quality: When citing information
 ```
-
-### 🔧 parallelize-work
-
-```text
-When: Complex multi-part tasks with 2+ independent sub-tasks
-Purpose: Spawn sub-agents for parallel execution
-Enforcement: ENF-L1 + ENF-L3 Advisory
-Markers: 🔀 (parallel work indicator)
-
-Procedure:
-  1. Identify independent sub-tasks
-  2. Display 🔀 indicator
-  3. Spawn sub-agents via Task tool
-  4. Track parallel work progress
-  5. Merge results when complete
-
-Output: Sub-agent spawned with task delegation
-
-Enforcement note: The PreToolUse hook for the Task tool validates team/agent
-  spawning constraints (e.g., pathflow-gate, team-guard). It does not enforce
-  parallelize-work as a skill operation — the agent applies this procedure
-  voluntarily when decomposing complex tasks.
-
-📚 Resource: [parallelize-work.md](resources/parallelize-work.md)
-   Load when: Planning parallel sub-agent delegation or managing concurrent tasks
-```
-
-## Resources
-
-| Resource | Purpose | When to Load |
-|----------|---------|--------------|
-| [decide.md](resources/decide.md) | Decision tier examples | When classifying decisions |
-| [verify-work.md](resources/verify-work.md) | PCV output examples | When completing verification |
-| [think-and-act.md](resources/think-and-act.md) | Protected operation checklist | When PAC-5 triggered |
-| [meta-awareness.md](resources/meta-awareness.md) | Meta-awareness guidance | At session start |
-| [research-quality.md](resources/research-quality.md) | Citation guidelines | When making claims |
-| [respond-organized.md](resources/respond-organized.md) | Response formatting | When communicating |
-| [parallelize-work.md](resources/parallelize-work.md) | Sub-agent patterns | When spawning agents |
-| [working-protocol-guide.md](resources/working-protocol-guide.md) | Full protocol walkthrough | When onboarding or reviewing procedures |
-| [context-specific-guidance.md](resources/context-specific-guidance.md) | Context-dependent behavior | When adapting protocol to specific scenarios |
-| [operation-combinations.md](resources/operation-combinations.md) | Common operation sequences | When chaining multiple operations |
-| [documentation-standards-checklist.md](resources/documentation-standards-checklist.md) | Doc standards quick check | When verifying documentation quality |

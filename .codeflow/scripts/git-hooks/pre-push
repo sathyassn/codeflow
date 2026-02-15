@@ -188,12 +188,13 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # Provide remediation with PathFlow-conditional guidance
     if is_pathflow_active; then
         cat >&2 <<'REMEDIATION'
-MUST: Message the cf-gitops teammate to create a feature branch and pull request.
+MUST: Message the cf-git-operations teammate to create a feature branch and pull request.
 Do NOT push directly to protected branches.
 REMEDIATION
     else
         cat >&2 <<'REMEDIATION'
-MUST: Skill('cf-git-workflow', args='create-branch') then Skill('cf-git-workflow', args='create-pull-request')
+MUST: Delegate to cf-git-operations teammate for branch and PR creation.
+SendMessage(recipient="cf-git-operations", content="create-branch then create-pull-request")
 Do NOT push directly to protected branches.
 REMEDIATION
     fi

@@ -248,7 +248,7 @@ BLOCKED: $category
 Reason: $reason | Pattern: $pattern
 Command: ${COMMAND:-<unknown>}
 
-MUST: Skill('cf-$skill', args='$operation')
+MUST: Delegate to cf-$skill teammate: $operation
 EOF
     exit 2
 }

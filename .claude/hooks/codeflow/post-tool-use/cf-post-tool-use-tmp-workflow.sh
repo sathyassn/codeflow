@@ -3,7 +3,7 @@
 # Location:  .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-tmp-workflow.sh
 # Hook Type: PostToolUse
 # Matcher:   Edit|Write
-# Skill:     security-management
+# Teammate:  cf-security
 # Version:   1.2.0
 #
 # Changelog:
@@ -102,7 +102,7 @@ if [[ "$IS_SETTINGS_FILE" == "true" ]]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Skill('cf-security-management', args='sync-settings-templates')\n(6) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
+    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Delegate to cf-security teammate: SendMessage(recipient="cf-security", content="sync-settings-templates after this edit")\n(6) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
   }
 }
 EOF

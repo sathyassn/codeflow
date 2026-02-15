@@ -139,8 +139,8 @@ ${RED}ERROR: AI attribution detected${NC}
 Pattern: '$pattern'
 AI attribution is not allowed in commit messages.
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
-or if in PathFlow mode, message the cf-gitops teammate.
+Delegate to cf-git-operations teammate for proper commit format,
+or use: SendMessage(recipient="cf-git-operations", content="create-commit")
 EOF
     exit 1
   fi
@@ -161,8 +161,8 @@ ${RED}ERROR: Subject line too long${NC}
 Current: $SUBJECT_LEN chars (max: $MAX_SUBJECT_LENGTH)
 Subject: $SUBJECT
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
-or if in PathFlow mode, message the cf-gitops teammate.
+Delegate to cf-git-operations teammate for proper commit format,
+or use: SendMessage(recipient="cf-git-operations", content="create-commit")
 EOF
   ERRORS=$((ERRORS + 1))
 fi
@@ -176,8 +176,8 @@ Subject: $SUBJECT
 Required: type: description  OR  type(scope): description
 Valid types: $(echo "$VALID_TYPES" | tr '|' ', ')
 
-Use Skill('cf-git-workflow', args='create-commit') for proper commit format,
-or if in PathFlow mode, message the cf-gitops teammate.
+Delegate to cf-git-operations teammate for proper commit format,
+or use: SendMessage(recipient="cf-git-operations", content="create-commit")
 EOF
   ERRORS=$((ERRORS + 1))
 fi

@@ -276,7 +276,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected Path Manipulation" \
                     "Permission change on protected path" \
                     "$path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             elif [[ "$segment" =~ git[[:space:]]+rm ]]; then
                 log_protection "path_protected" "Bash" "$path" "critical" "blocked"
@@ -284,7 +284,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected Path Deletion" \
                     "Git removal of protected path" \
                     "$path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             else
                 log_protection "path_protected" "Bash" "$path" "critical" "blocked"
@@ -292,7 +292,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected Path Deletion" \
                     "Dangerous operation on protected path" \
                     "$path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             fi
         fi
@@ -318,7 +318,7 @@ for segment in "${COMMAND_SEGMENTS[@]}"; do
                 "Protected Directory" \
                 "Cannot delete .claude directory" \
                 ".claude" \
-                "security-management" \
+                "security" \
                 "handle-protected-resource"
         fi
 
@@ -329,7 +329,7 @@ for segment in "${COMMAND_SEGMENTS[@]}"; do
                 "Protected Directory" \
                 "Cannot delete .claude directory" \
                 ".claude/" \
-                "security-management" \
+                "security" \
                 "handle-protected-resource"
         fi
 
@@ -341,7 +341,7 @@ for segment in "${COMMAND_SEGMENTS[@]}"; do
                 "Protected Directory" \
                 "Cannot delete .codeflow directory" \
                 ".codeflow" \
-                "security-management" \
+                "security" \
                 "handle-protected-resource"
         fi
 
@@ -352,7 +352,7 @@ for segment in "${COMMAND_SEGMENTS[@]}"; do
                 "Protected Directory" \
                 "Cannot delete .codeflow directory" \
                 ".codeflow/" \
-                "security-management" \
+                "security" \
                 "handle-protected-resource"
         fi
     fi
@@ -380,7 +380,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected File Overwrite" \
                     "Redirect overwrite of protected path" \
                     "> $path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             fi
             if [[ "$segment" =~ ([^0-9\&]|^)\>\>[[:space:]]*.*$regex ]]; then
@@ -389,7 +389,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected File Append" \
                     "Redirect append to protected path" \
                     ">> $path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             fi
         else
@@ -401,7 +401,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected File Overwrite" \
                     "Redirect overwrite of protected path" \
                     "> $path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             fi
             # Double >> redirect: cmd >> protected_path (append)
@@ -411,7 +411,7 @@ for path in "${PROTECTED_PATHS[@]}"; do
                     "Protected File Append" \
                     "Redirect append to protected path" \
                     ">> $path" \
-                    "security-management" \
+                    "security" \
                     "handle-protected-resource"
             fi
         fi

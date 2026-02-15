@@ -1,1 +1,1 @@
-🔒 MUST Skill('memory-management', args='load-work-context domain=...') before work. ⛔ FORBIDDEN: Raw grep on memory files.
+🔒 MUST delegate to cf-knowledge-layer: SendMessage(recipient="cf-knowledge-layer", content="load-work-context domain=...") before work. ⛔ FORBIDDEN: Raw grep on memory files, direct DB/JSONL access.

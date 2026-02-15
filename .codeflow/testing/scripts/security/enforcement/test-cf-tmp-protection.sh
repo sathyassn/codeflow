@@ -118,11 +118,11 @@ else
     fail "Should use block_with_skill function"
 fi
 
-# Test 15: References security-management skill (without cf- prefix)
-if grep -q '"security-management"' "$MODULE"; then
-    pass "References security-management skill"
+# Test 15: References security teammate (without cf- prefix)
+if grep -q '"security"' "$MODULE"; then
+    pass "References security teammate"
 else
-    fail "Should reference security-management skill (without cf- prefix)"
+    fail "Should reference security teammate (without cf- prefix)"
 fi
 
 # Test 16: References diagnose-permission-error operation

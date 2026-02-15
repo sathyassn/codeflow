@@ -331,18 +331,18 @@ else
     fail "Should include tool name in block message"
 fi
 
-# Test 33: Block message includes MUST: Skill direction
-if [[ "$HOOK_OUTPUT" == *"MUST:"* ]] && [[ "$HOOK_OUTPUT" == *"Skill"* ]]; then
-    pass "Block message includes MUST: Skill direction"
+# Test 33: Block message includes MUST: Delegate direction
+if [[ "$HOOK_OUTPUT" == *"MUST:"* ]] && [[ "$HOOK_OUTPUT" == *"Delegate"* ]]; then
+    pass "Block message includes MUST: Delegate direction"
 else
-    fail "Should include MUST: Skill direction"
+    fail "Should include MUST: Delegate direction"
 fi
 
-# Test 34: Block message mentions cf-security-management skill
-if [[ "$HOOK_OUTPUT" == *"cf-security-management"* ]]; then
-    pass "Block message mentions cf-security-management skill"
+# Test 34: Block message mentions cf-security teammate
+if [[ "$HOOK_OUTPUT" == *"cf-security"* ]]; then
+    pass "Block message mentions cf-security teammate"
 else
-    fail "Should mention cf-security-management skill"
+    fail "Should mention cf-security teammate"
 fi
 
 # Test 35: Block message suggests handle-protected-resource

@@ -8,6 +8,8 @@
 #   - Exits 0 for Teammate with operation=spawnTeam
 #   - Exits 0 for cleanup when pathflow-active missing
 #   - Exits 2 for cleanup when pathflow-active exists
+#   - Exits 0 for TeamDelete when pathflow-active missing
+#   - Exits 2 for TeamDelete when pathflow-active exists
 
 set -euo pipefail
 
@@ -282,6 +284,75 @@ if [[ "$output" == *"cleanup"* ]]; then
     pass "Block message mentions cleanup"
 else
     fail "Block message should mention cleanup"
+fi
+
+echo ""
+echo "--- Execution Tests: TeamDelete Without PathFlow ---"
+
+# Test 28: Exits 0 for TeamDelete when pathflow-active missing
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+result=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+rm -rf "$TEMP_DIR"
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Exits 0 for TeamDelete when pathflow-active missing"
+else
+    fail "Should exit 0 for TeamDelete when pathflow-active missing"
+fi
+
+echo ""
+echo "--- Execution Tests: TeamDelete With PathFlow (BLOCKED) ---"
+
+# Test 29: Exits 2 for TeamDelete when pathflow-active exists
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+rm -rf "$TEMP_DIR"
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
+    pass "Exits 2 for TeamDelete when pathflow-active exists"
+else
+    fail "Should exit 2 for TeamDelete when pathflow-active exists (got exit=$exit_code)"
+fi
+
+# Test 30: TeamDelete block message mentions TeamDelete
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) || true
+rm -rf "$TEMP_DIR"
+if [[ "$output" == *"TeamDelete"* ]]; then
+    pass "TeamDelete block message mentions TeamDelete"
+else
+    fail "TeamDelete block message should mention TeamDelete"
+fi
+
+# Test 31: TeamDelete block message mentions PF7-END
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) || true
+rm -rf "$TEMP_DIR"
+if [[ "$output" == *"PF7-END"* ]]; then
+    pass "TeamDelete block message mentions PF7-END"
+else
+    fail "TeamDelete block message should mention PF7-END"
+fi
+
+# Test 32: TeamDelete does not need operation field (always blocked during PathFlow)
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+output=$(PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" TOOL_NAME="TeamDelete" TOOL_INPUT='' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+rm -rf "$TEMP_DIR"
+if [[ $exit_code -eq 2 ]]; then
+    pass "TeamDelete blocked even with empty input"
+else
+    fail "TeamDelete should be blocked even with empty input (got exit=$exit_code)"
 fi
 
 echo ""

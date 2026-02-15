@@ -1,2 +1,2 @@
-⛔ BLOCKED: verify-work missing. 🔒 MUST Skill('working-protocol', args='verify-work'). Follow TIER selection and format EXACTLY.
+⛔ BLOCKED: verify-work missing. 🔒 MUST apply cf-working-protocol verify-work operation. Follow TIER selection and format EXACTLY.
 ⛔ FORBIDDEN: Guessing format, working from memory, skipping sections.

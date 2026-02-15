@@ -132,7 +132,7 @@ if [[ -f "$INSTRUCTIONS_CONFIG" ]] && command -v jq &>/dev/null; then
 else
     # Fallback: hardcoded instruction if config not available
     echo "<user-prompt-submit-hook>"
-    echo "MUST INVOKE Skill('cf-working-protocol') for all workflows"
+    echo "MUST follow working protocol (CLAUDE.md Section 1) for all workflows"
     echo "</user-prompt-submit-hook>"
 fi
 
@@ -157,7 +157,7 @@ fi
 if is_protected_branch "$GIT_BRANCH"; then
     echo "<user-prompt-submit-hook>"
     echo "Warning: On protected branch '$GIT_BRANCH'. Create a feature branch before changes."
-    echo "  Skill('cf-git-workflow', args='create-feature-branch name=feat/...')"
+    echo "  Delegate to cf-git-operations teammate: SendMessage(recipient=\"cf-git-operations\", content=\"create-feature-branch name=feat/...\")"
     echo "</user-prompt-submit-hook>"
 fi
 
@@ -172,7 +172,7 @@ if [[ -n "$ACTIVE_WORK" ]]; then
     echo "</user-prompt-submit-hook>"
 else
     echo "<user-prompt-submit-hook>"
-    echo "Note: No active task registered. Consider: Skill('cf-task-management', args='ensure-work-registered')"
+    echo "Note: No active task registered. Delegate to cf-knowledge-layer teammate: SendMessage(recipient=\"cf-knowledge-layer\", content=\"ensure-work-registered\")"
     echo "</user-prompt-submit-hook>"
 fi
 
@@ -196,9 +196,9 @@ fi
 if [[ "$ACTIVE_WORKTREES" -gt 0 || "$ACTIVE_SESSIONS" -gt 0 ]]; then
     echo "<user-prompt-submit-hook>"
     echo "Parallel work active:"
-    [[ "$ACTIVE_WORKTREES" -gt 0 ]] && echo "  Worktrees: $ACTIVE_WORKTREES - Skill('cf-git-workflow', args='list-worktrees')"
-    [[ "$ACTIVE_SESSIONS" -gt 0 ]] && echo "  Model sessions: $ACTIVE_SESSIONS - Skill('cf-model-orchestrator', args='list-sessions')"
-    echo "  Check conflicts: Skill('cf-model-orchestrator', args='check-scope-conflict')"
+    [[ "$ACTIVE_WORKTREES" -gt 0 ]] && echo "  Worktrees: $ACTIVE_WORKTREES - Delegate to cf-git-operations teammate: SendMessage(recipient=\"cf-git-operations\", content=\"list-worktrees\")"
+    [[ "$ACTIVE_SESSIONS" -gt 0 ]] && echo "  Model sessions: $ACTIVE_SESSIONS - Coordinate with team lead for session management"
+    echo "  Check conflicts: Coordinate with team lead for scope conflict check"
     echo "</user-prompt-submit-hook>"
 fi
 
@@ -209,7 +209,7 @@ fi
 if is_pathflow_active 2>/dev/null; then
     echo "<user-prompt-submit-hook>"
     echo "PathFlow mode active: Coordinate with teammates for specialized tasks."
-    echo "  Git operations -> cf-gitops | Code review -> cf-reviewer"
+    echo "  Git operations -> cf-git-operations | Code review -> cf-review"
     echo "</user-prompt-submit-hook>"
 fi
 

@@ -505,8 +505,8 @@ check_pattern "is_pathflow_active" "Should have is_pathflow_active function"
 check_pattern "REPO_ROOT.*:-" "Should have overridable REPO_ROOT"
 check_pattern ">&2" "Should output errors to stderr"
 check_pattern "Emergency Override" "Should have emergency override section"
-check_pattern "cf-gitops" "Should mention cf-gitops teammate for PathFlow mode"
-check_pattern "cf-git-workflow" "Should mention cf-git-workflow skill for standalone mode"
+check_pattern "cf-git-operations" "Should mention cf-git-operations teammate for PathFlow mode"
+check_pattern "Delegate to cf-git-operations" "Should mention cf-git-operations teammate delegation for standalone mode"
 check_pattern "push-overrides.log" "Should log overrides to push-overrides.log"
 
 # ============================================================================

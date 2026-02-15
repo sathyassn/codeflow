@@ -374,9 +374,9 @@ Domain: $domain
 Tool: $TOOL_NAME
 
 This domain is not in the trusted allowlist.
-Use the cf-security-management skill to request network access.
+Delegate to cf-security teammate to request network access.
 
-MUST: Skill('cf-security-management', args='request-network-access $domain')
+MUST: Delegate to cf-security teammate: SendMessage(recipient="cf-security", content="request-network-access $domain")
 
 Trusted domains are loaded from:
   .codeflow/config/enforcement/trusted-domains/${APPROVAL_MODE}.list

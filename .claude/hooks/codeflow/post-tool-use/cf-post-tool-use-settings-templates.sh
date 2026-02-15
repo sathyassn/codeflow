@@ -3,7 +3,7 @@
 # Location:  .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh
 # Hook Type: PostToolUse
 # Matcher:   Edit|Write
-# Skill:     security-management -> sync-settings-templates
+# Teammate:  cf-security (sync-settings-templates)
 #
 # Triggers when: Edit/Write to .claude/settings-templates/*.json
 #
@@ -400,7 +400,7 @@ main() {
         output_message="${output_message}1. Sync all differing sections\\n"
         output_message="${output_message}2. Verify consistency\\n"
         output_message="${output_message}3. Then provide cp commands to user\\n\\n"
-        output_message="${output_message}-> Skill('cf-security-management', args='sync-settings-templates')"
+        output_message="${output_message}-> Delegate to cf-security teammate: SendMessage(recipient=\"cf-security\", content=\"sync-settings-templates\")"
 
     else
         # All consistent - provide cp commands

@@ -54,8 +54,8 @@
       "configurable": true,
       "enabled": true,
       "examples": [
-        "git commit requires cf-git-workflow",
-        "protected edits require cf-security-management"
+        "git commit requires cf-git-operations",
+        "protected edits require cf-security"
       ]
     }
   },
@@ -371,16 +371,16 @@
         "^git\\s+ls-remote"
       ],
       "block_message": "BLOCKED: Git network operation requires sandbox bypass",
-      "skill_reference": "Skill('cf-git-workflow', args='sync-remote')",
-      "security_reference": "Skill('cf-security-management', args='sandbox-check')"
+      "teammate_reference": "Delegate to cf-git-operations: sync-remote",
+      "security_teammate": "Delegate to cf-security: sandbox-check"
     },
     "github_cli": {
       "patterns": [
         "^gh\\s+(pr|issue|release|api|workflow|run|repo|gist)\\s"
       ],
       "block_message": "BLOCKED: GitHub CLI requires sandbox bypass",
-      "skill_reference": "Skill('cf-git-workflow', args='create-pull-request')",
-      "security_reference": "Skill('cf-security-management', args='sandbox-check')"
+      "teammate_reference": "Delegate to cf-git-operations: create-pull-request",
+      "security_teammate": "Delegate to cf-security: sandbox-check"
     }
   },
   "protected_resources": {

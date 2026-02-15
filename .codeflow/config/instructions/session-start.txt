@@ -1,5 +1,5 @@
-🔒 SESSION START: 1. Review CLAUDE.md (routing, skills, memory). 2. Quick check: Skill('memory-management', args='detect-active-work').
-Active work? Offer: 1.Resume(/wf-resume) 2.Fresh. No active? "Ready for new task." WAIT for user.
-⛔ FORBIDDEN: Auto-loading context, skipping quick check, acting without CLAUDE.md.
+🔒 SESSION START: 1. Review CLAUDE.md (routing, teammates, memory). 2. TeamCreate to establish team infrastructure. 3. PF1-INIT: Spawn cf-security. 4. PF2-CONTEXT: Spawn cf-knowledge-layer, query for active work.
+Active work? Offer: 1.Resume(/cf-resume) 2.Fresh start. No active? "Ready for new task." WAIT for user.
+⛔ FORBIDDEN: Auto-loading context, skipping active work check, acting without CLAUDE.md, spawning Task sub-agents for work (use teammates).
 
-🔒 MUST Skill('memory-management', args='load-work-context domain=...') before work. ⛔ FORBIDDEN: Raw grep on memory files.
+🔒 MUST delegate to cf-knowledge-layer for all memory/context operations: SendMessage(recipient="cf-knowledge-layer", content="load-work-context domain=..."). ⛔ FORBIDDEN: Raw grep on memory files, direct DB/JSONL access.

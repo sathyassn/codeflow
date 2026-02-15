@@ -1,2 +1,2 @@
-🔒 External model (Gemini/Codex)? MUST Skill('model-orchestrator', args='execute-with-model ...') or args='spawn-session ...'.
-Check scope conflicts first: args='check-scope-conflict'. ⛔ FORBIDDEN: Spawning models without skill.
+🔒 External model (Gemini/Codex)? MUST consult cf-security first: SendMessage(recipient="cf-security", content="validate-external-model model=... scope=...").
+Check scope conflicts before delegating. ⛔ FORBIDDEN: Spawning external models without cf-security validation.

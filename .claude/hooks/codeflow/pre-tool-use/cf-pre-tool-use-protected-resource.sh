@@ -7,7 +7,7 @@
 # This hook:
 #   - Checks if Edit/Write targets protected resources
 #   - Enforces tiered protection levels (critical, high, moderate)
-#   - Requires cf-security-management skill for protected edits
+#   - Routes through cf-security teammate for protected edits
 #
 # Protected resources (from enforcement-policy.json):
 #   - Critical: settings.json, settings.local.json, CLAUDE.md
@@ -230,9 +230,9 @@ Tier: CRITICAL
 Tool: $TOOL_NAME
 
 This file is critically protected and cannot be modified directly.
-Use the cf-security-management skill to request access.
+Delegate to cf-security teammate to request access.
 
-MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')
+MUST: Delegate to cf-security teammate: SendMessage(recipient="cf-security", content="handle-protected-resource $FILE_PATH")
 
 Critical files require review and explicit approval.
 EOF
@@ -254,9 +254,9 @@ Tier: HIGH
 Tool: $TOOL_NAME
 
 This file has high protection level.
-Use the cf-security-management skill to request access.
+Delegate to cf-security teammate to request access.
 
-MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')
+MUST: Delegate to cf-security teammate: SendMessage(recipient="cf-security", content="handle-protected-resource $FILE_PATH")
 EOF
     exit 2
 fi

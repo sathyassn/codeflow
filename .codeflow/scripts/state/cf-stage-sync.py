@@ -12,7 +12,7 @@ Usage:
     # Record a stage transition
     cf-stage-sync.py --task-id FRT-TSK-FEAT-AUTH-001 --stage review --stage-status pending
     cf-stage-sync.py --task-id FRT-TSK-FEAT-AUTH-001 --stage review --stage-status complete \\
-        --agent cf-reviewer --verdict approved --notes "Code looks good"
+        --agent cf-review --verdict approved --notes "Code looks good"
 
     # Sync Tier 2 markdown from JSONL ledger data
     cf-stage-sync.py --task-id FRT-TSK-FEAT-AUTH-001 --sync-markdown
@@ -469,7 +469,7 @@ def record_stage_transition(
         task_id: Task ID (e.g., FRT-TSK-FEAT-AUTH-001)
         stage: New stage (dev, work, review, qa, done)
         stage_status: New stage status (pending, in_progress, complete, failed)
-        agent: Agent performing the stage (e.g., cf-developer)
+        agent: Agent performing the stage (e.g., cf-development)
         verdict: Stage outcome (pass, approved, changes_requested, fail)
         notes: Optional notes about the transition
         rework: Whether this is a rework iteration

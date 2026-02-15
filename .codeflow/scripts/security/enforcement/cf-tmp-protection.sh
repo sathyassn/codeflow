@@ -41,7 +41,7 @@ for folder in "${MANAGED_TMP_FOLDERS[@]}"; do
       "Managed Tmp Protection" \
       "Cannot delete/rename managed folder" \
       "$folder" \
-      "security-management" \
+      "security" \
       "diagnose-permission-error"
   fi
   # Also catch rm -rf targeting the folder
@@ -51,7 +51,7 @@ for folder in "${MANAGED_TMP_FOLDERS[@]}"; do
       "Managed Tmp Protection" \
       "Cannot delete managed folder recursively" \
       "$folder" \
-      "security-management" \
+      "security" \
       "diagnose-permission-error"
   fi
 done
@@ -62,7 +62,7 @@ if [[ "$COMMAND" =~ (rm|unlink)[[:space:]]+((-[a-zA-Z]+[[:space:]]+)*)"$STATE_FO
     "State File Protection" \
     "State files protected from deletion. User can rm manually if needed." \
     "${STATE_FOLDER}/*" \
-    "security-management" \
+    "security" \
     "diagnose-permission-error"
 fi
 

@@ -1,1 +1,1 @@
-🔒 MUST follow CLAUDE.md: Section 4 (routing), Section 5 (skills), Section 7 (memory). ⛔ FORBIDDEN: Improvising workflows, skipping skill invocation.
+🔒 MUST follow CLAUDE.md: Section 4 (PathFlow), Section 5 (teammates), Section 6 (routing). ⛔ FORBIDDEN: Improvising workflows, bypassing teammate delegation, using Task sub-agents for work.

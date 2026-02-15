@@ -1,6 +1,6 @@
 {
   "version": "3.1.0",
-  "description": "Config for behavioral instructions by hook type. UserPromptSubmit/SessionStart use text file references (long-form). PostToolUse uses inline trigger-based messages (short, contextual, just-in-time).",
+  "description": "Config for behavioral instructions by hook type. UserPromptSubmit/SessionStart use text file references (long-form). PostToolUse uses inline trigger-based messages (short, contextual, just-in-time). All instructions use teammate delegation via SendMessage, not Skill() invocations.",
   "hooks": {
     "UserPromptSubmit": {
       "working-protocol": {
@@ -11,37 +11,37 @@
       "git-workflow": {
         "file": "git-workflow.txt",
         "enabled": true,
-        "description": "Git operations require skill invocation"
+        "description": "Git operations require cf-git-operations teammate"
       },
       "model-orchestration": {
         "file": "model-orchestration.txt",
         "enabled": true,
-        "description": "External model delegation and PAC-5 checkpoint"
+        "description": "External model delegation requires cf-security validation"
       },
       "workflow-adherence": {
         "file": "workflow-adherence.txt",
         "enabled": true,
-        "description": "Ensure agent follows CLAUDE.md workflows and skill invocations"
+        "description": "Ensure agent follows CLAUDE.md workflows and teammate delegation"
       },
       "memory-progress": {
         "file": "memory-progress.txt",
         "enabled": true,
-        "description": "Periodic instruction to record work progress (decisions, milestones, user requirements)"
+        "description": "Periodic instruction to record work progress via cf-knowledge-layer"
       },
       "memory-search-related": {
         "file": "memory-search-related.txt",
         "enabled": true,
-        "description": "UserPromptSubmit: search before new work"
+        "description": "UserPromptSubmit: search via cf-knowledge-layer before new work"
       },
       "memory-work-start": {
         "file": "memory-work-start.txt",
         "enabled": true,
-        "description": "UserPromptSubmit: invoke begin-work when starting meaningful work (L1 enforced for branch creation)"
+        "description": "UserPromptSubmit: delegate begin-work to cf-knowledge-layer when starting meaningful work (L1 enforced for branch creation)"
       },
       "memory-complete-work": {
         "file": "memory-complete-work.txt",
         "enabled": true,
-        "description": "UserPromptSubmit: invoke complete-work before commits (L1 enforced cross-skill prerequisite)"
+        "description": "UserPromptSubmit: delegate complete-work to cf-knowledge-layer before commits (L1 enforced cross-skill prerequisite)"
       }
     },
     "SessionStart": {
@@ -60,37 +60,46 @@
       "_description": "Contextual just-in-time instructions triggered after specific tool operations. Uses inline messages with pattern matching. Different from UserPromptSubmit which fires at message start - these fire at the moment of action.",
       "documentation-standards": {
         "enabled": true,
-        "tools": ["Edit", "Write"],
+        "tools": [
+          "Edit",
+          "Write"
+        ],
         "file_pattern": "\\.md$",
-        "exclude_patterns": ["^\\.claude/memory/"],
-        "skill": "cf-documentation-standards",
+        "exclude_patterns": [
+          "^\\.claude/memory/"
+        ],
         "messages": {
-          "Edit": "MANDATORY: You edited a .md file. Skill('cf-documentation-standards', args='lint-file') NOW. FORBIDDEN: Proceeding without lint validation.",
-          "Write": "MANDATORY: New .md file created. VERIFY you invoked Skill('cf-documentation-standards', args='apply-standard') BEFORE creation. FORBIDDEN: Creating .md files without skill invocation."
+          "Edit": "MANDATORY: You edited a .md file. Delegate lint validation to cf-documentation teammate or apply cf-markdown-standards skill if loaded. FORBIDDEN: Proceeding without validation.",
+          "Write": "MANDATORY: New .md file created. VERIFY cf-markdown-standards were applied BEFORE creation. FORBIDDEN: Creating .md files without standards validation."
         }
       },
       "script-standards": {
         "enabled": true,
-        "tools": ["Edit", "Write"],
+        "tools": [
+          "Edit",
+          "Write"
+        ],
         "file_patterns": {
           "\\.sh$": {
             "messages": {
-              "Edit": "MANDATORY: You edited a .sh file. Skill('cf-script-standards', args='lint-shell') NOW. FORBIDDEN: Committing without shellcheck validation.",
-              "Write": "MANDATORY: New .sh file created. VERIFY you invoked Skill('cf-script-standards', args='apply-shell-standards') BEFORE creation. FORBIDDEN: Creating scripts without skill invocation."
+              "Edit": "MANDATORY: You edited a .sh file. Ensure cf-shell-standards compliance (shellcheck validation). FORBIDDEN: Committing without validation.",
+              "Write": "MANDATORY: New .sh file created. VERIFY cf-shell-standards were applied BEFORE creation. FORBIDDEN: Creating scripts without standards validation."
             }
           },
           "\\.py$": {
             "messages": {
-              "Edit": "MANDATORY: You edited a .py file. Skill('cf-script-standards', args='lint-python') NOW. FORBIDDEN: Committing without flake8 validation.",
-              "Write": "MANDATORY: New .py file created. VERIFY you invoked Skill('cf-script-standards', args='apply-python-standards') BEFORE creation. FORBIDDEN: Creating scripts without skill invocation."
+              "Edit": "MANDATORY: You edited a .py file. Ensure cf-python-standards compliance (flake8 validation). FORBIDDEN: Committing without validation.",
+              "Write": "MANDATORY: New .py file created. VERIFY cf-python-standards were applied BEFORE creation. FORBIDDEN: Creating scripts without standards validation."
             }
           }
-        },
-        "skill": "cf-script-standards"
+        }
       },
       "script-inventory-update": {
         "enabled": true,
-        "tools": ["Edit", "Write"],
+        "tools": [
+          "Edit",
+          "Write"
+        ],
         "file_patterns": {
           "^\\.codeflow/scripts/.*\\.sh$": {
             "messages": {
@@ -109,45 +118,50 @@
       },
       "script-test-coverage": {
         "enabled": true,
-        "tools": ["Write", "Edit"],
+        "tools": [
+          "Write",
+          "Edit"
+        ],
         "file_patterns": {
           "\\.sh$": {
             "messages": {
-              "Write": "TESTING REQUIRED: New script created. Skill('cf-script-standards', args='ensure-test-coverage') NOW. FORBIDDEN: Committing scripts without tests.",
-              "Edit": "TESTING REMINDER: Script edited. Consider Skill('cf-script-standards', args='ensure-test-coverage') if behavior changed. Tests should cover new/changed functionality."
+              "Write": "TESTING REQUIRED: New script created. Delegate test creation to cf-quality-assurance teammate or ensure test coverage directly. FORBIDDEN: Committing scripts without tests.",
+              "Edit": "TESTING REMINDER: Script edited. Consider delegating test updates to cf-quality-assurance if behavior changed."
             }
           },
           "\\.py$": {
             "messages": {
-              "Write": "TESTING REQUIRED: New Python script created. Skill('cf-script-standards', args='ensure-test-coverage') NOW. FORBIDDEN: Committing scripts without tests.",
-              "Edit": "TESTING REMINDER: Python script edited. Consider Skill('cf-script-standards', args='ensure-test-coverage') if behavior changed. Tests should cover new/changed functionality."
+              "Write": "TESTING REQUIRED: New Python script created. Delegate test creation to cf-quality-assurance teammate or ensure test coverage directly. FORBIDDEN: Committing scripts without tests.",
+              "Edit": "TESTING REMINDER: Python script edited. Consider delegating test updates to cf-quality-assurance if behavior changed."
             }
           }
         },
-        "skill": "cf-script-standards",
         "note": "Fires when creating or editing scripts - ensures test coverage consideration"
       },
       "code-exploration-lsp": {
         "enabled": true,
-        "tools": ["Grep"],
+        "tools": [
+          "Grep"
+        ],
         "file_pattern": "\\.py$",
         "content_pattern": "^(def |class |import |from .* import|[A-Z][a-z]+[A-Z]|[a-z_]+\\()",
-        "skill": "cf-code-exploration",
-        "message": "TIP: For Python symbol searches, prefer LSP tools (get_definition, get_references) over Grep for semantic accuracy. Skill('cf-code-exploration', args='...') for guidance."
+        "message": "TIP: For Python symbol searches, prefer LSP tools (get_definition, get_references) over Grep for semantic accuracy."
       },
       "git-worktree-status": {
         "enabled": true,
-        "tools": ["Bash"],
+        "tools": [
+          "Bash"
+        ],
         "command_pattern": "^git worktree list",
-        "skill": "cf-git-workflow",
-        "message": "TIP: Consider Skill('cf-git-workflow', args='list-worktrees') for status tracking with metadata."
+        "message": "TIP: Delegate worktree management to cf-git-operations teammate for status tracking with metadata."
       },
       "git-commit-memory": {
         "enabled": true,
-        "tools": ["Bash"],
+        "tools": [
+          "Bash"
+        ],
         "command_pattern": "^git commit",
-        "skill": "cf-memory-management",
-        "message": "JUST-IN-TIME MEMORY SYNC: You are about to commit. Skill('cf-memory-management', args='complete-work') NOW if not already done. FORBIDDEN: Committing without memory sync.",
+        "message": "JUST-IN-TIME MEMORY SYNC: You are about to commit. Delegate to cf-knowledge-layer: SendMessage(recipient=\"cf-knowledge-layer\", content=\"complete-work\") NOW if not already done. FORBIDDEN: Committing without memory sync.",
         "note": "Fires at commit time - UserPromptSubmit reminder may have been minutes/hours ago"
       }
     },
@@ -156,7 +170,7 @@
       "verify-work-block": {
         "file": "stop-verify-work.txt",
         "enabled": true,
-        "description": "Instruction shown when verify-work is missing - directs to skill invocation"
+        "description": "Instruction shown when verify-work is missing - directs to cf-working-protocol operation"
       }
     }
   }

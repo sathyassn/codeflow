@@ -3,7 +3,7 @@
 # Location:  .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh
 # Hook Type: PreToolUse
 # Matcher:   Bash
-# Skill:     git-workflow
+# Teammate:  cf-git-operations
 # Operation: create-pull-request
 #
 # Configuration: Reads from enforcement-policy.json (git_format section)
@@ -124,11 +124,11 @@ if ! echo "$COMMAND" | grep -qE "gh[[:space:]]+pr[[:space:]]+create"; then
 fi
 
 # ============================================
-# HELPER: Print skill direction block
+# HELPER: Print teammate direction block
 # ============================================
 print_skill_block() {
     cat >&2 <<'EOF'
-MUST: Skill('cf-git-workflow', args='create-pull-request') FIRST
+MUST: Delegate to cf-git-operations teammate for PR creation: SendMessage(recipient="cf-git-operations", content="create-pull-request")
 EOF
 }
 

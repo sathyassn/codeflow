@@ -144,8 +144,8 @@ METADATA_FILE="$STAGING_DIR/${SAFE_NAME}.metadata.json"
 if [[ -f "$STAGED_FILE" ]]; then
     echo "Error: A staged edit already exists for this file" >&2
     echo "Resolve the existing staged edit first:" >&2
-    echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')" >&2
-    echo "  The skill will guide you through applying or rejecting the staged edit." >&2
+    echo "  MUST: Delegate to cf-security teammate: handle-protected-resource $FILE_PATH" >&2
+    echo "  The teammate will guide you through applying or rejecting the staged edit." >&2
     exit 1
 fi
 
@@ -235,7 +235,7 @@ echo "To review diff:"
 echo "  diff \"$ORIGINAL_FILE\" \"$STAGED_FILE\""
 echo ""
 echo "Next steps - use the security management skill:"
-echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')"
-echo "  The skill will guide you through reviewing, applying, or rejecting the edit."
+echo "  MUST: Delegate to cf-security teammate: handle-protected-resource $FILE_PATH"
+echo "  The teammate will guide you through reviewing, applying, or rejecting the edit."
 
 exit 0

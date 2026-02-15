@@ -1,2 +1,2 @@
-Decision/milestone/progress this turn? 🔒 MUST Skill('memory-management', args='record-work-progress type=... content="..."').
+Decision/milestone/progress this turn? 🔒 MUST delegate to cf-knowledge-layer: SendMessage(recipient="cf-knowledge-layer", content="record-work-progress type=... content=...").
 Valid types: decision (Tier 2/3), milestone, progress, finding. ⛔ FORBIDDEN: "I'll record it later."

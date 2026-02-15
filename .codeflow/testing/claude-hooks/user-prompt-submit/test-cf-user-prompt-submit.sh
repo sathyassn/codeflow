@@ -371,12 +371,12 @@ else
     fail "Should suggest feature branch"
 fi
 
-# Test 39: Has Skill reference in protected branch warning
+# Test 39: Has teammate delegation in protected branch warning
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "Skill('cf-git-workflow'.*create-feature-branch" "$HOOK"; then
-    pass "Has Skill reference in protected branch warning"
+if grep -q "cf-git-operations.*create-feature-branch\|Delegate.*cf-git-operations" "$HOOK"; then
+    pass "Has teammate delegation in protected branch warning"
 else
-    fail "Protected branch warning should include Skill('cf-git-workflow') reference"
+    fail "Protected branch warning should include cf-git-operations delegation"
 fi
 
 echo ""
@@ -465,20 +465,20 @@ else
     fail "Should check for 'status: working' in sessions"
 fi
 
-# Test 49: References cf-model-orchestrator skill
+# Test 49: References team lead coordination for sessions
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "cf-model-orchestrator" "$HOOK"; then
-    pass "References cf-model-orchestrator skill"
+if grep -q "team lead.*session\|session management" "$HOOK"; then
+    pass "References team lead coordination for sessions"
 else
-    fail "Should reference cf-model-orchestrator skill"
+    fail "Should reference team lead for session coordination"
 fi
 
-# Test 50: References check-scope-conflict
+# Test 50: References scope conflict check
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "check-scope-conflict" "$HOOK"; then
-    pass "References check-scope-conflict"
+if grep -q "scope conflict\|check.*conflict" "$HOOK"; then
+    pass "References scope conflict check"
 else
-    fail "Should reference check-scope-conflict"
+    fail "Should reference scope conflict check"
 fi
 
 echo ""
@@ -514,8 +514,8 @@ fi
 
 # Test 54: References teammate roles
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "cf-gitops" "$HOOK" && grep -q "cf-reviewer" "$HOOK"; then
-    pass "References teammate roles (cf-gitops, cf-reviewer)"
+if grep -q "cf-git-operations" "$HOOK" && grep -q "cf-review" "$HOOK"; then
+    pass "References teammate roles (cf-git-operations, cf-review)"
 else
     fail "Should reference teammate roles"
 fi

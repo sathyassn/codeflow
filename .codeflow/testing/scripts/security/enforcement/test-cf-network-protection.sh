@@ -118,11 +118,11 @@ else
     fail "Should use jq for JSON parsing"
 fi
 
-# Test 14: References security-management skill for blocks
-if grep -q 'security-management' "$MODULE" && grep -q 'sandbox-check' "$MODULE"; then
-    pass "References security-management:sandbox-check skill"
+# Test 14: References security teammate for blocks
+if grep -q '"security"' "$MODULE" && grep -q 'sandbox-check' "$MODULE"; then
+    pass "References cf-security teammate for sandbox-check"
 else
-    fail "Should reference security-management:sandbox-check"
+    fail "Should reference cf-security teammate for sandbox-check"
 fi
 
 # Test 15: Returns 0 at end
@@ -161,18 +161,18 @@ else
     fail "Should use is_pathflow_active for mode-conditional routing"
 fi
 
-# Test 20: References cf-git-workflow skill for standalone mode
-if grep -q 'cf-git-workflow' "$MODULE"; then
-    pass "References cf-git-workflow skill for standalone mode"
+# Test 20: References cf-git-operations teammate for standalone mode
+if grep -q 'cf-git-operations' "$MODULE"; then
+    pass "References cf-git-operations teammate for standalone mode"
 else
-    fail "Should reference cf-git-workflow skill for standalone mode"
+    fail "Should reference cf-git-operations teammate for standalone mode"
 fi
 
-# Test 21: References cf-gitops teammate for PathFlow mode
-if grep -q 'cf-gitops' "$MODULE"; then
-    pass "References cf-gitops teammate for PathFlow mode"
+# Test 21: References cf-git-operations teammate for PathFlow mode
+if grep -q 'cf-git-operations' "$MODULE"; then
+    pass "References cf-git-operations teammate for PathFlow mode"
 else
-    fail "Should reference cf-gitops teammate for PathFlow mode"
+    fail "Should reference cf-git-operations teammate for PathFlow mode"
 fi
 
 # ===========================================================================
@@ -452,12 +452,12 @@ run_network_check_pathflow() {
     return $rc
 }
 
-# Test 46: Git push blocked in PathFlow mode mentions cf-gitops
+# Test 46: Git push blocked in PathFlow mode mentions cf-git-operations
 output=$(run_network_check_pathflow "git push origin main" '{}' 2>&1 || true)
-if echo "$output" | grep -q 'cf-gitops'; then
-    pass "PathFlow mode: git push block mentions cf-gitops teammate"
+if echo "$output" | grep -q 'cf-git-operations'; then
+    pass "PathFlow mode: git push block mentions cf-git-operations teammate"
 else
-    fail "PathFlow mode: git push block should mention cf-gitops teammate"
+    fail "PathFlow mode: git push block should mention cf-git-operations teammate"
 fi
 
 # Helper: Run network check in standalone mode (no PathFlow flag)
@@ -483,12 +483,12 @@ run_network_check_standalone() {
     return $?
 }
 
-# Test 47: Git push blocked in standalone mode mentions cf-git-workflow
+# Test 47: Git push blocked in standalone mode mentions cf-git-operations
 output=$(run_network_check_standalone "git push origin main" '{}' 2>&1 || true)
-if echo "$output" | grep -q 'cf-git-workflow'; then
-    pass "Standalone mode: git push block mentions cf-git-workflow skill"
+if echo "$output" | grep -q 'cf-git-operations'; then
+    pass "Standalone mode: git push block mentions cf-git-operations teammate"
 else
-    fail "Standalone mode: git push block should mention cf-git-workflow skill"
+    fail "Standalone mode: git push block should mention cf-git-operations teammate"
 fi
 
 # Cleanup

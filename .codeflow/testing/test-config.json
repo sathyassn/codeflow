@@ -53,7 +53,8 @@
         "scripts/state/test-tracking-generate.sh",
         "scripts/state/test-work-state.sh",
         "scripts/state/test-stage-sync.sh",
-        "scripts/state/test_stage_sync.py"
+        "scripts/state/test_stage_sync.py",
+        "scripts/pathflow/test-cf-pathflow-scripts.sh"
       ]
     },
     "MEDIUM": {
@@ -91,24 +92,15 @@
         "scripts/worktree/test-cf-worktree-status.sh",
         "scripts/worktree/test-cf-worktree-cleanup.sh",
         "scripts/settings/test-cf-change-approval-mode.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-bash-sentinel.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-claim-validation.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-edit-write.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-file-sentinel.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-gh-pr.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-grep-sentinel.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-protected-resource.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-read-delegation.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-security.sh",
-        "claude-hooks/pre-tool-use/test-cf-pre-tool-use-task-sentinel.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-webfetch.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-pathflow-gate.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-team-guard.sh",
-        "claude-hooks/post-tool-use/test-cf-post-tool-use-instructions.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-logging.sh",
-        "claude-hooks/post-tool-use/test-cf-post-tool-use-memory-progress.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-settings-templates.sh",
-        "claude-hooks/post-tool-use/test-cf-post-tool-use-skill.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-tmp-workflow.sh",
         "claude-hooks/session-start/test-cf-session-start-cleanup.sh",
         "claude-hooks/session-start/test-cf-session-start-instructions.sh",
@@ -116,7 +108,7 @@
         "claude-hooks/session-end/test-cf-session-end-cleanup.sh",
         "claude-hooks/session-end/test-cf-session-end-logging.sh",
         "claude-hooks/stop/test-cf-stop-logging.sh",
-        "claude-hooks/stop/test-cf-stop-verify-work.sh",
+        "claude-hooks/stop/test-cf-stop-pathflow-gate.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh"
       ]
@@ -193,6 +185,11 @@
       "directory": "scripts/state",
       "description": "State management tests",
       "language": "mixed"
+    },
+    "scripts-pathflow": {
+      "directory": "scripts/pathflow",
+      "description": "PathFlow JSONL interim script tests",
+      "language": "bash"
     },
     "scripts-security": {
       "directory": "scripts/security",
@@ -351,6 +348,11 @@
           "pattern": ".codeflow/scripts/state/*.sh",
           "tested_by": "scripts/state/test-*.sh",
           "reason": "State scripts have dedicated tests (Phase 3)"
+        },
+        {
+          "pattern": ".codeflow/scripts/pathflow/cf-pathflow-*.sh",
+          "tested_by": "scripts/pathflow/test-cf-pathflow-scripts.sh",
+          "reason": "PathFlow JSONL scripts have consolidated test file (Phase 4)"
         }
       ]
     }

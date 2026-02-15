@@ -13,7 +13,7 @@ REPORTING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 get_report_dir() {
     local repo_root
     repo_root=$(get_repo_root)
-    echo "$repo_root/.state/test-reports"
+    echo "$repo_root/.codeflow/testing/results"
 }
 
 ensure_report_dir() {

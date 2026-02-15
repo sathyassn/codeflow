@@ -228,7 +228,7 @@ disrupting teammate worktrees. Cleanup is only safe at PF-7 (teardown).
 Options:
   - Wait until PF-7 (session teardown) to clean up worktrees
   - Use --force to override this check
-  - Message cf-gitops teammate for coordinated worktree cleanup
+  - Message cf-git-operations teammate for coordinated worktree cleanup
 
 EOF
     exit 2

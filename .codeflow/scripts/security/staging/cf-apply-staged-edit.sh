@@ -147,7 +147,7 @@ if [[ -f "$METADATA_FILE" ]] && command -v jq &>/dev/null; then
     if [[ "$STORED_CHECKSUM" != "$CURRENT_CHECKSUM" ]]; then
         echo "Error: Original file has been modified since staging" >&2
         echo "The staged edit is based on an outdated version." >&2
-        echo "MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')" >&2
+        echo "MUST: Delegate to cf-security teammate: handle-protected-resource $FILE_PATH" >&2
         echo "Re-stage the edit with the current version." >&2
         exit 1
     fi
@@ -257,6 +257,6 @@ echo "File: $FILE_PATH"
 echo "Backup: $BACKUP_PATH"
 echo ""
 echo "To rollback if needed:"
-echo "  MUST: Skill('cf-security-management', args='handle-protected-resource $FILE_PATH')"
+echo "  MUST: Delegate to cf-security teammate: handle-protected-resource $FILE_PATH"
 
 exit 0

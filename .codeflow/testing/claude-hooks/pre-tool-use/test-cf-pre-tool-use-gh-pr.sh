@@ -554,21 +554,21 @@ else
 fi
 
 echo ""
-echo "--- Skill Direction ---"
+echo "--- Teammate Direction ---"
 
-# Test 56: Prints skill direction on block
-if grep -q "Skill" "$HOOK" && grep -q "cf-git-workflow" "$HOOK"; then
-    pass "Prints skill direction on block"
+# Test 56: Prints teammate direction on block
+if grep -q "cf-git-operations" "$HOOK" && grep -q "Delegate\|SendMessage" "$HOOK"; then
+    pass "Prints teammate direction on block"
 else
-    fail "Should print skill direction on block"
+    fail "Should print teammate direction on block"
 fi
 
-# Test 57: Block message includes MUST: Skill
+# Test 57: Block message includes MUST: Delegate
 HOOK_OUTPUT=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"bad\" --body \"no sections\""}' bash "$HOOK" </dev/null 2>&1 || true)
-if [[ "$HOOK_OUTPUT" == *"MUST:"* ]] && [[ "$HOOK_OUTPUT" == *"Skill"* ]]; then
-    pass "Block message includes MUST: Skill"
+if [[ "$HOOK_OUTPUT" == *"MUST:"* ]] && [[ "$HOOK_OUTPUT" == *"Delegate"* ]]; then
+    pass "Block message includes MUST: Delegate"
 else
-    fail "Should include MUST: Skill in block message"
+    fail "Should include MUST: Delegate in block message"
 fi
 
 echo ""

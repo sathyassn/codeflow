@@ -1,2 +1,2 @@
-🔒 BEFORE git commit: MUST Skill('memory-management', args='complete-work domain=... summary="..."').
-L1 enforced: commit blocked without complete-work. Stage memory files after.
+🔒 BEFORE git commit: MUST delegate to cf-knowledge-layer: SendMessage(recipient="cf-knowledge-layer", content="complete-work domain=... summary=...").
+L1 enforced: commit blocked without complete-work. cf-git-operations handles staging + commit.

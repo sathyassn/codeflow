@@ -289,8 +289,8 @@ mkdir -p "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}"
 echo "test" > "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
 
 test_blocks_with_message "echo test > src/file.txt" \
-    "cf-gitops teammate" \
-    "PathFlow mode shows cf-gitops teammate instruction"
+    "cf-git-operations teammate" \
+    "PathFlow mode shows cf-git-operations teammate instruction"
 
 # Clean up flag
 rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"

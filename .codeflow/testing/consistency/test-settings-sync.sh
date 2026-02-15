@@ -199,10 +199,10 @@ test_template_hooks_consistency() {
     if [[ "$failed" == "true" ]]; then
         echo "" >&2
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-        echo "🔒 REQUIRED: Use security-management skill" >&2
+        echo "🔒 REQUIRED: Delegate to cf-security teammate" >&2
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
         echo "" >&2
-        echo "→ Skill('cf-security-management')" >&2
+        echo "→ Delegate to cf-security teammate" >&2
         echo "→ Operation: 🔧 sync-settings-templates" >&2
         echo "" >&2
         echo "All 4 templates MUST have IDENTICAL hooks sections." >&2
@@ -323,7 +323,7 @@ test_hook_scripts_registered() {
         echo "All .claude/hooks/codeflow/**/*.sh files MUST be registered in settings templates." >&2
         echo "Unregistered hooks will NOT execute - this defeats their purpose." >&2
         echo "" >&2
-        echo "→ Skill('cf-security-management')" >&2
+        echo "→ Delegate to cf-security teammate" >&2
         echo "→ Operation: 🔧 sync-settings-templates" >&2
         echo "" >&2
         return 1
@@ -368,7 +368,7 @@ test_version_consistency() {
         echo "🔒 REQUIRED: Sync _version across templates" >&2
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
         echo "" >&2
-        echo "→ Skill('cf-security-management')" >&2
+        echo "→ Delegate to cf-security teammate" >&2
         echo "→ Operation: 🔧 sync-settings-templates" >&2
         echo "" >&2
         echo "All 4 templates MUST have the SAME _version value." >&2

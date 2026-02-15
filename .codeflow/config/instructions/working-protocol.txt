@@ -1,3 +1,3 @@
-🔒 MUST APPLY working-protocol operations: 🤖 meta-awareness, 🧠 think-and-act (PAC-5), ⚖️ decide, 📝 respond-organized, 📚 research-quality, 🔍 verify-work, 🔀 parallelize-work.
-verify-work: EVERY response (Stop hook BLOCKS). parallelize-work: 2+ independent sub-tasks → spawn agents.
-READ skill for tier/format. ⛔ FORBIDDEN: Memory-based execution, skipping parallelization check.
+🔒 MUST APPLY cf-working-protocol operations: meta-awareness (every response), think-and-act (PAC-5), decide (tier classification), respond-organized, research-quality.
+Verification: Delegate to cf-review teammate (WS-REV stage). Parallel work: Use teammates via Agent Teams, not Task sub-agents.
+⛔ FORBIDDEN: Memory-based execution, skipping teammate delegation, direct work by lead.

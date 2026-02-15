@@ -410,7 +410,7 @@ output=$(
     export COMMAND="test cmd"
     block_with_skill "test" "test reason" "pattern" "skill" "op" 2>&1 || true
 ) || true
-if echo "$output" | grep -q "MUST.*Skill"; then
+if echo "$output" | grep -q "MUST.*Delegate"; then
     pass "block_with_skill outputs skill guidance"
 else
     fail "block_with_skill should output skill guidance"

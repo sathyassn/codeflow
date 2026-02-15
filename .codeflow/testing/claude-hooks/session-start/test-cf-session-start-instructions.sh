@@ -357,12 +357,12 @@ else
     fail "Should document bash 3.2+ compatibility"
 fi
 
-# Test 38: References skills in header
+# Test 38: References teammates in header
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "working-protocol" "$HOOK" && grep -q "memory-management" "$HOOK"; then
-    pass "References skills in header"
+if grep -q "cf-knowledge-layer" "$HOOK"; then
+    pass "References teammates in header"
 else
-    fail "Should reference skills"
+    fail "Should reference teammates in header"
 fi
 
 # Test 39: No echo -e usage (portability)

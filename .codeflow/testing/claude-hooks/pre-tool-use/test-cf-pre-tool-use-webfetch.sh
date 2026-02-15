@@ -584,12 +584,12 @@ fi
 echo ""
 echo "--- Block Message Quality ---"
 
-# Test 59: Block message references cf-security-management skill
+# Test 59: Block message references cf-security teammate
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "cf-security-management" "$HOOK"; then
-    pass "Block message references cf-security-management skill"
+if grep -q "cf-security" "$HOOK"; then
+    pass "Block message references cf-security teammate"
 else
-    fail "Block message should reference cf-security-management skill"
+    fail "Block message should reference cf-security teammate"
 fi
 
 # Test 60: Block message mentions .list file path

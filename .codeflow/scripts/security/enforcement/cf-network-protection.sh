@@ -67,11 +67,11 @@ check_network_pattern() {
 
 if check_network_pattern ".network_operations.git_network.patterns"; then
     if declare -f is_pathflow_active &>/dev/null && is_pathflow_active; then
-        # PathFlow mode: route to cf-gitops teammate for git network ops
-        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). In agent-teams mode, delegate to cf-gitops teammate." "git network" "security-management" "sandbox-check"
+        # PathFlow mode: route to cf-git-operations teammate for git network ops
+        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). In PathFlow mode, delegate to cf-git-operations teammate." "git network" "security" "sandbox-check"
     else
-        # Standalone mode: invoke cf-git-workflow skill
-        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). Use cf-git-workflow:sync-remote after cf-security-management:sandbox-check." "git network" "security-management" "sandbox-check"
+        # Standalone mode: delegate to cf-security teammate
+        block_with_skill "Network Operation" "Git network operation requires sandbox bypass (dangerouslyDisableSandbox: true). Delegate to cf-security teammate for sandbox-check, then cf-git-operations for sync-remote." "git network" "security" "sandbox-check"
     fi
 fi
 
@@ -80,7 +80,7 @@ fi
 # =============================================================================
 
 if check_network_pattern ".network_operations.github_cli.patterns"; then
-    block_with_skill "Network Operation" "GitHub CLI requires sandbox bypass (dangerouslyDisableSandbox: true)" "gh cli" "security-management" "sandbox-check"
+    block_with_skill "Network Operation" "GitHub CLI requires sandbox bypass (dangerouslyDisableSandbox: true)" "gh cli" "security" "sandbox-check"
 fi
 
 # All network protection checks passed

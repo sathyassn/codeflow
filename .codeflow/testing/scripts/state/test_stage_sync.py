@@ -246,7 +246,7 @@ class TestBuildStageSection:
             {
                 "stage": "review",
                 "status": "in_progress",
-                "agent": "cf-reviewer",
+                "agent": "cf-review",
                 "started_at": "2026-01-01T12:00:00+00:00",
             },
         ]
@@ -254,7 +254,7 @@ class TestBuildStageSection:
         assert "### Stage History" in result
         assert "Development" in result
         assert "Review" in result
-        assert "cf-reviewer" in result
+        assert "cf-review" in result
         assert "| # |" in result
 
     def test_history_with_rework(self):

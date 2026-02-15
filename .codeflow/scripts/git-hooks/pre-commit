@@ -81,8 +81,8 @@ for protected in "${PROTECTED_BRANCHES[@]}"; do
         $protected)
             echo -e "${RED}${BOLD}❌ BRANCH PROTECTION: Direct commits to $CURRENT_BRANCH FORBIDDEN${NC}" >&2
             echo "" >&2
-            echo -e "${YELLOW}🔒 MUST: Use Skill('cf-git-workflow', args='create-feature-branch')${NC}" >&2
-            echo "   In PathFlow mode, message the cf-gitops teammate." >&2
+            echo -e "${YELLOW}🔒 MUST: Delegate to cf-git-operations teammate for feature branch creation.${NC}" >&2
+            echo "   SendMessage(recipient=\"cf-git-operations\", content=\"create-feature-branch\")" >&2
             echo "⛔ Do NOT commit directly to protected branches." >&2
             exit 1
             ;;
@@ -104,8 +104,8 @@ if ! echo "$CURRENT_BRANCH" | grep -qE "$BRANCH_PATTERN"; then
     echo "Format: type/slug-name (kebab-case)" >&2
     echo "Types: feat, fix, docs, refactor, test, chore, experiment, etc." >&2
     echo "" >&2
-    echo -e "${YELLOW}🔒 MUST: Skill('cf-git-workflow', args='branch-verification')${NC}" >&2
-    echo "   In PathFlow mode, message the cf-gitops teammate." >&2
+    echo -e "${YELLOW}🔒 MUST: Delegate to cf-git-operations teammate for branch verification.${NC}" >&2
+    echo "   SendMessage(recipient=\"cf-git-operations\", content=\"verify-branch-name\")" >&2
     exit 1
 fi
 
@@ -123,8 +123,8 @@ if [[ -f "$SETTINGS_SYNC_TEST" ]] && [[ -x "$SETTINGS_SYNC_TEST" ]]; then
     if ! "$SETTINGS_SYNC_TEST" 2>&1 | tail -20; then
         echo -e "${RED}${BOLD}❌ SETTINGS CONSISTENCY CHECK FAILED${NC}" >&2
         echo "" >&2
-        echo -e "${YELLOW}🔒 MUST: Skill('cf-security-management', args='sync-settings-templates')${NC}" >&2
-        echo "   In PathFlow mode, message the cf-gitops teammate." >&2
+        echo -e "${YELLOW}🔒 MUST: Delegate to cf-security teammate for settings template sync.${NC}" >&2
+        echo "   SendMessage(recipient=\"cf-security\", content=\"sync-settings-templates\")" >&2
         exit 1
     fi
     echo -e "${GREEN}✓ Settings consistency check passed${NC}"
@@ -162,8 +162,8 @@ for pattern in "${SENSITIVE_PATTERNS[@]}"; do
         echo "$MATCHES"
         echo ""
         echo "If this file is safe, add it to .gitignore." >&2
-        echo "MUST: Skill('cf-security-management', args='handle-sensitive-file')" >&2
-        echo "In PathFlow mode, message the cf-gitops teammate." >&2
+        echo "MUST: Delegate to cf-security teammate for sensitive file handling." >&2
+        echo "SendMessage(recipient=\"cf-security\", content=\"handle-sensitive-file\")" >&2
         exit 1
     fi
 done
@@ -377,8 +377,8 @@ if [[ -n "$MD_FILES" ]] && command -v markdownlint &>/dev/null; then
             echo "" >&2
             echo -e "${RED}${BOLD}❌ MARKDOWN LINTING FAILED${NC} (auto-fix attempted)" >&2
             echo "" >&2
-            echo -e "${YELLOW}🔒 MUST: Skill('cf-documentation-standards', args='lint-file')${NC}" >&2
-            echo "   In PathFlow mode, message the cf-gitops teammate." >&2
+            echo -e "${YELLOW}🔒 MUST: Delegate to cf-documentation teammate for markdown linting.${NC}" >&2
+            echo "   SendMessage(recipient=\"cf-documentation\", content=\"lint-markdown\")" >&2
             echo "Rules: .claude/skills/cf-documentation-standards/resources/lint-rules-quick-ref.md" >&2
             exit 1
         fi

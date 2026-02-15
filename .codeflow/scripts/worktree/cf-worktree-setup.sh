@@ -246,5 +246,5 @@ echo "Worktree registered in $WORKTREES_FILE"
 echo "Worktree setup complete: $WORKTREE_PATH ($BRANCH_NAME)"
 
 if [[ "$_IS_PATHFLOW" == "true" ]]; then
-    echo "  PathFlow active: cf-gitops teammate manages git operations for this worktree"
+    echo "  PathFlow active: cf-git-operations teammate manages git operations for this worktree"
 fi

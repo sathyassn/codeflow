@@ -312,11 +312,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-bash-sentinel.sh",
-            "timeout": 3
-          },
-          {
-            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
             "timeout": 3
           },
@@ -339,16 +334,6 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
             "timeout": 2
-          },
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-file-sentinel.sh",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-claim-validation.sh",
-            "timeout": 2
           }
         ]
       },
@@ -359,36 +344,6 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-webfetch.sh",
             "timeout": 2
-          }
-        ]
-      },
-      {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-grep-sentinel.sh",
-            "timeout": 3
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-read-delegation.sh",
-            "timeout": 3
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-task-sentinel.sh",
-            "timeout": 3
           }
         ]
       },
@@ -414,36 +369,6 @@
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "Skill|TaskUpdate",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-skill.sh",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|Read|Grep|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-instructions.sh",
-            "timeout": 2
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-memory-progress.sh",
-            "timeout": 2
-          }
-        ]
-      },
       {
         "matcher": "Edit|Write",
         "hooks": [
@@ -480,7 +405,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-pathflow-gate.sh",
             "timeout": 3
           },
           {
@@ -496,7 +421,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-verify-work.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-pathflow-gate.sh",
             "timeout": 3
           }
         ]
