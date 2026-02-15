@@ -47,7 +47,7 @@ if [[ -z "${PROTECTED_PATHS[*]+x}" ]]; then
 fi
 
 # Dangerous file commands (including cp which can overwrite)
-DANGEROUS_CMDS="${DANGEROUS_CMDS:-rm|unlink|mv|cp|shred|truncate}"
+DANGEROUS_CMDS="${DANGEROUS_CMDS:-rm|unlink|mv|cp|shred|truncate|touch|sed}"
 
 # Permission commands
 PERMISSION_CMDS="${PERMISSION_CMDS:-chmod|chown}"
@@ -182,7 +182,7 @@ segment_has_dangerous_op() {
     fi
 
     # Other dangerous commands (rm, mv, unlink, shred, truncate)
-    local other_dangerous="rm|unlink|mv|shred|truncate"
+    local other_dangerous="rm|unlink|mv|shred|truncate|touch|sed"
     if [[ "$segment" =~ ($other_dangerous)[[:space:]] ]]; then
         return 0
     fi

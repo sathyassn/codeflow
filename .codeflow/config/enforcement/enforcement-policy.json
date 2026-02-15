@@ -399,7 +399,9 @@
       ".codeflow/scripts/shell-lib/**",
       ".github/workflows/**",
       ".github/**",
-      ".git/hooks/**"
+      ".git/hooks/**",
+      ".state/sentinels/**",
+      ".state/session/**"
     ],
     "moderate": [
       "project/mission.md",

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Purpose:   File operation security checks (Sections 9-10)
+# Purpose:   File operation security checks (Sections 9-11)
 # Location:  .codeflow/scripts/security/enforcement/cf-file-operations.sh
 # Usage:     source "cf-file-operations.sh" (from main hook)
 #
 # This module handles:
 #   - Section 9: Indirect File Operations (cp, dd, tee, rsync, etc.)
 #   - Section 10: Glob Pattern Bypass Prevention
+#   - Section 11: Interpreter-Based File Write Detection
 #
 # Required variables (set by caller):
 #   - COMMAND: The bash command being checked
@@ -119,6 +120,34 @@ if [[ "$COMMAND" =~ (^|[[:space:]]|/)($INDIRECT_WRITE_CMDS)[[:space:]] ]]; then
     done
   fi
 fi
+
+# =============================================================================
+# SECTION 11: Interpreter-Based File Write Detection
+# =============================================================================
+# Problem: Inline code passed to interpreters (python3 -c, perl -e, etc.)
+# can write to protected paths, bypassing file operation checks.
+
+# Protected path patterns to check for in inline interpreter code
+INTERPRETER_PROTECTED_PATTERNS=('.claude/' '.state/' '.codeflow/config/' 'settings.json' 'enforcement-policy')
+
+# Check for interpreter-based file writes to protected paths
+# Detects: python3? -c, perl -e, ruby -e, node -e
+check_interpreter_write() {
+  local cmd="$1"
+
+  # Match interpreter with inline code flag
+  if [[ "$cmd" =~ (^|[[:space:]])(python3?|perl|ruby|node)[[:space:]]+-[ce][[:space:]] ]]; then
+    for pattern in "${INTERPRETER_PROTECTED_PATTERNS[@]}"; do
+      if [[ "$cmd" == *"$pattern"* ]]; then
+        block_command "Interpreter File Write" \
+          "Interpreter-based file write to protected path detected. Use Edit/Write tools instead." \
+          "$pattern"
+      fi
+    done
+  fi
+}
+
+check_interpreter_write "$COMMAND"
 
 # All file operation checks passed
 return 0

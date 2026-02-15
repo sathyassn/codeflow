@@ -60,7 +60,9 @@ if grep -q "SECTION 8" "$HOOK"; then fail "Section 8 should be removed"; else pa
 if grep -q "EXECUTION_BLOCKED_PATHS" "$HOOK"; then fail "EXECUTION_BLOCKED_PATHS should be removed"; else pass "EXECUTION_BLOCKED_PATHS removed"; fi
 if grep -q "SECTION 9" "$HOOK"; then pass "Has Section 9"; else fail "Missing Section 9"; fi
 if grep -q "SECTION 10" "$HOOK"; then pass "Has Section 10"; else fail "Missing Section 10"; fi
-if grep -q "Sections 9-10" "$HOOK"; then pass "Header says Sections 9-10"; else fail "Header should say Sections 9-10"; fi
+if grep -q "Sections 9-11" "$HOOK"; then pass "Header says Sections 9-11"; else fail "Header should say Sections 9-11"; fi
+if grep -q "SECTION 11" "$HOOK"; then pass "Has Section 11"; else fail "Missing Section 11"; fi
+if grep -q "check_interpreter_write" "$HOOK"; then pass "Has interpreter detection"; else fail "Missing interpreter detection"; fi
 if grep -q "PROTECTED_PATHS" "$HOOK"; then pass "Uses PROTECTED_PATHS"; else fail "Missing PROTECTED_PATHS"; fi
 if grep -q "block_command" "$HOOK"; then pass "Uses block_command"; else fail "Missing block_command"; fi
 if grep -q "INDIRECT_WRITE_CMDS" "$HOOK"; then pass "Uses INDIRECT_WRITE_CMDS"; else fail "Missing INDIRECT_WRITE_CMDS"; fi
