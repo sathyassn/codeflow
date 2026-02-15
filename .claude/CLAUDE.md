@@ -382,6 +382,25 @@ This should be rare for function teammates whose context is bounded.
 | /cf-doctor | lead | Diagnose infrastructure issues (direct) |
 | /cf-autorun | lead | Launch autorun session (direct) |
 
+### Stage-Gated Availability
+
+| Command | Available When | Gating Condition |
+|---------|---------------|------------------|
+| /cf-resume | Always | No prerequisites |
+| /cf-help | Always | No prerequisites |
+| /cf-approval-mode | Always | No prerequisites |
+| /cf-stack | Always | No prerequisites |
+| /cf-doctor | Always | No prerequisites |
+| /cf-autorun | No active PathFlow | pathflow-active flag must be absent |
+| /cf-plan | PF4-EXECUTE | WS-PLAN stage |
+| /cf-develop | PF4-EXECUTE | WS-DEV stage |
+| /cf-document | PF4-EXECUTE | WS-DOCS stage |
+| /cf-deploy | PF4-EXECUTE | WS-DEV stage (CICD type) |
+| /cf-review | PF4-EXECUTE | WS-REV stage |
+| /cf-test | PF4-EXECUTE | WS-QA or WS-TEST stage |
+| /cf-ship | PF5+ | PF5-VERIFY complete |
+| /cf-cleanup | PF6+ | PF6-COMPLETE or --force |
+
 ### Work Type Keywords --> Pipeline
 
 | Keywords in Request | Classified As | Pipeline |
@@ -496,7 +515,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
     post-tool-use/                # 3 scripts
     stop/                         # 2 scripts
     session-end/                  # 2 scripts
-  commands/                       # Slash command definitions (placeholder)
+  commands/                       # 14 slash command definitions (cf-*.md)
   settings.json                   # Permissions, hook config, PathFlow settings
 
 .codeflow/                        # CodeFlow infrastructure
