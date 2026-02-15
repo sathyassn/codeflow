@@ -450,7 +450,7 @@ echo "--- Error message content (behavioral) ---"
 test_prepush_with_output \
     "Force push error should mention skill remediation" \
     1 \
-    "create-pull-request" \
+    "pull request" \
     "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
     "origin" \
     "https://github.com/test/repo.git" \
