@@ -42,6 +42,11 @@
         "file": "memory-complete-work.txt",
         "enabled": true,
         "description": "UserPromptSubmit: delegate complete-work to cf-knowledge-layer before commits (L1 enforced cross-skill prerequisite)"
+      },
+      "delegation-only": {
+        "file": "delegation-only.txt",
+        "enabled": true,
+        "description": "Enforce delegation-only mode for team lead \u2014 no direct file edits or git operations"
       }
     },
     "SessionStart": {

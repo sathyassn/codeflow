@@ -1,1 +1,3 @@
 🔒 MUST follow CLAUDE.md: Section 4 (PathFlow), Section 5 (teammates), Section 6 (routing). ⛔ FORBIDDEN: Improvising workflows, bypassing teammate delegation, using Task sub-agents for work.
+
+🔒 Token-aware delegation: When a task requires reading or processing large files (>50 lines), delegate to an Explore sub-agent or teammate rather than consuming lead context tokens.
