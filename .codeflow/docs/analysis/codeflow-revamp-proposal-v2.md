@@ -49,6 +49,11 @@
    - [6.1 4-Layer Enforcement Chain](#61-4-layer-enforcement-chain)
    - [6.2 PathFlow-Gate Hook](#62-pathflow-gate-hook)
    - [6.3 Graceful Degradation](#63-graceful-degradation)
+   - [6.4 PathFlow Enforcement Mechanism](#64-pathflow-enforcement-mechanism)
+   - [6.5 STAGE-COMPLETE Protocol](#65-stage-complete-protocol)
+   - [6.6 File Sentinels vs JSONL Sentinels](#66-file-sentinels-vs-jsonl-sentinels)
+   - [6.7 JSONL Event Flow: Script Responsibilities](#67-jsonl-event-flow-script-responsibilities)
+   - [6.8 Dual-Track State: File Sentinels + JSONL Events](#68-dual-track-state-file-sentinels--jsonl-events)
 7. [End-to-End Flow Chains](#7-end-to-end-flow-chains)
    - [7.1 FEAT Flow](#71-feat-flow-full-pipeline)
    - [7.2 PLAN Flow](#72-plan-flow-design-architecture)
@@ -76,7 +81,7 @@ This proposal replaces the V3 architecture with an agent-teams-only model built 
 
 - **Agent model**: Hub-and-spoke sub-agents replaced by 3 persistent function teammates (cf-security, cf-knowledge-layer, cf-gitops) + 5 on-demand role teammates (cf-developer, cf-reviewer, cf-qa, cf-planner, cf-documenter) with direct peer communication
 - **Mode**: Agent-teams only. No dual-mode. No standalone fallback. Simple sessions are "untracked" (lead answers directly without spawning a full team). Two orthogonal properties: interactive/autorun + tracked/untracked
-- **Enforcement**: Per-skill TTL-based sentinels replaced entirely by session-scoped PathFlow sentinels backed by JSONL (interim) then SQLite (final), enforced through a single pathflow-gate hook
+- **Enforcement**: Per-skill TTL-based sentinels replaced entirely by session-scoped PathFlow file sentinels (PRIMARY, created automatically by PostToolUse hook) with JSONL events as SECONDARY fallback, enforced through a single pathflow-gate hook. SessionStart hook creates the pathflow-active flag; STAGE-COMPLETE protocol triggers work stage sentinels
 - **Session lifecycle**: Ad-hoc sessions replaced by PF1-INIT through PF7-END progressive orchestration with three-mechanism coordination (instructions + tasks + hooks)
 - **Verification**: Stop-time PCV self-check replaced by WS-REV stage with independent reviewer agent, earlier in pipeline, with rework capability
 - **Configuration**: 4 layers / 3 policies / 4 session types collapsed to tracked vs untracked. PathFlow config in a single git-tracked JSON file
@@ -85,7 +90,7 @@ This proposal replaces the V3 architecture with an agent-teams-only model built 
 - **Work types**: +PLAN (design/architecture/work items). SPKE clarified as POCs/prototypes only
 - **Area types**: +PLN (planning area). Single ongoing epic avoids meta-for-meta recursion
 - **Review**: Universal WS-REV for all 10 work types. cf-reviewer adapts criteria per work type
-- **Hooks**: 28 hooks reduced to 21. Skill sentinel hooks removed. No dual-mode branching. New pathflow-task-guard hook for PathFlow task transitions
+- **Hooks**: 28 hooks reduced to 23. Skill sentinel hooks removed. No dual-mode branching. Three new hooks: pathflow-task-guard (PathFlow task transitions), pathflow-sentinel (automatic file sentinel creation via PostToolUse), pathflow-init (flag creation at SessionStart)
 
 **What does NOT change:**
 
@@ -424,20 +429,21 @@ The session record lives in `.state/runtime/current-session-id` (file) and the `
 
 Session-scoped PathFlow sentinels replace the disruptive TTL-based skill sentinels entirely. There is no dual-mode coexistence -- skill sentinels are removed, not preserved as a fallback.
 
-| Aspect | Skill Sentinels (V3, removed) | PathFlow Sentinels (proposed) |
+| Aspect | Skill Sentinels (V3, removed) | PathFlow Sentinels (implemented) |
 |--------|-------------------------------|------------------------------|
-| Naming | `{skill}:{operation}` | `pathflow:{phase}` |
-| Example | `cf-task-management:ensure-work-registered` | `pathflow:PF3-CLASSIFY` |
+| Naming | `{skill}:{operation}` | `pathflow-{phase}` or `pathflow-ws-{stage}` |
+| Example | `cf-task-management:ensure-work-registered` | `pathflow-pf-3`, `pathflow-ws-dev` |
 | TTL | 600 seconds (expires!) | None (session-scoped) |
-| Created when | Skill operation invoked | Phase completed (written to JSONL) |
-| Quantity | ~8-12 per workflow | ~3-5 per session |
+| Created when | Skill operation invoked | Phase/stage completed (PostToolUse hook, automatic) |
+| Storage | File in sentinel directory | **PRIMARY:** File sentinel (`[[ -f file ]]`). **SECONDARY:** JSONL event (for cf-knowledge-layer maturity) |
+| Quantity | ~8-12 per workflow | ~3-7 per session (phases + work stages) |
 | Checked by | Per-skill sentinel hooks (5 hooks) | Single pathflow-gate hook |
 | Failure mode | Session blocked on expiry | Graceful degradation (advisory) |
-| Read mechanism | File existence check | JSONL tail + jq parse (interim), SQLite query (final) |
+| Read mechanism | File existence check | **PRIMARY:** File existence check (`has_sentinel()`). **SECONDARY:** JSONL tail + jq parse (fallback) |
 
 **Key simplification:** `pathflow:PF3-CLASSIFY` (work classified and registered) implicitly covers what multiple skill sentinels would check. If PF3-CLASSIFY completed, work IS registered, work IS classified, branch IS created. No separate `ensure-work-registered`, `classify-work`, or `begin-work` sentinels needed.
 
-**No mode detection needed:** Since the system is agent-teams only, there is no `pathflow-active` flag file, no mode-detection branching in hooks, and no fallback to skill sentinels. All hooks operate in PathFlow mode unconditionally.
+**Flag-based activation:** Since the system is agent-teams only, there is no dual-mode branching or fallback to skill sentinels. A `pathflow-active` flag file is created by the SessionStart pathflow-init hook and checked by `is_pathflow_active()` in enforcement hooks (pathflow-gate, team-guard, stop). The flag contains JSON metadata (session_id, team_name, created_at, tracking_level) and is removed at session end. File-based sentinels are the PRIMARY enforcement mechanism; JSONL events serve as a SECONDARY fallback for when cf-knowledge-layer matures.
 
 *Source: `.codeflow/docs/research/pathflow-v3/08-enforcement-model.md`, Sections 8.2-8.5*
 
@@ -480,6 +486,8 @@ The stop hook's PCV behavior is removed (the hook remains for phase-gate logging
 **cf-ops absorbed:** The cf-ops role is absorbed into cf-developer for CICD work type. CI/CD pipelines are code -- the developer writes them, the reviewer checks them, QA validates them. A separate ops teammate adds an unnecessary abstraction.
 
 **Ad-hoc flexibility:** The predefined roster is optimized defaults, not constraints. The lead can always spawn general-purpose teammates, specialized one-offs (security-auditor, perf-analyst), Explore sub-agents for quick lookups, or multiple instances of the same role for parallel work.
+
+**Teammate hook firing:** Teammates operate within the same session as the team lead. PostToolUse hooks fire for ALL tool calls in the session, including those from teammates. This is how the sentinel PostToolUse hook automatically creates sentinels when teammates (e.g., cf-development) send STAGE-COMPLETE messages -- the hook fires on the teammate's SendMessage call. However, `.*` regex matchers do NOT match Agent Teams tools (TeamCreate, Task, SendMessage, TeamDelete); these require explicit tool names in the matcher. Empirically validated in `.codeflow/docs/research/agent-teams-hook-findings.md`.
 
 *Source: `.codeflow/docs/research/pathflow-v3/03-teammate-model.md`, Sections 3.1-3.9*
 
@@ -535,6 +543,10 @@ Session profiles                      Derived from work_type
 | Tracking | tracked / untracked | Is work registered in WorkGraph? |
 
 In an untracked session, the lead answers the user's question directly without spawning role teammates or progressing through PF3-CLASSIFY through PF6-COMPLETE. Persistent teammates (cf-security, cf-knowledge-layer) may still be active if the session started tracked and transitioned, but for truly simple queries the lead handles everything.
+
+**Note on tracked-to-untracked transition:** Once a session is tracked, it stays tracked. The reverse does not happen. If a user changes their mind mid-session ("actually, never mind"), the session proceeds to PF7-END for clean shutdown rather than reverting to untracked. A `/cf-abandon` command to fast-track from any phase to PF7-END without creating a PR is deferred to the Go CLI.
+
+**Settings cleanup:** The `_codeflow.agent_teams` and `pathflow_mode` configuration blocks in `settings.json` are removed. The `is_pathflow_active()` function checks only the flag file (created by SessionStart hook), not settings.json. The `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable (a Claude Code platform toggle) is retained.
 
 ---
 
@@ -1023,7 +1035,7 @@ During the interim period (Period 1), all PathFlow state is written to JSONL. Ev
 {"id":"pf-05...","ts":"2026-...","type":"session_metadata","session_id":"session-01...","key":"work_type","value":"FEAT"}
 ```
 
-The pathflow-gate hook reads these events (tail + jq parse) to determine current phase and enforce progression rules. Performance is acceptable because events are session-scoped (~100 lines max per session).
+The pathflow-gate hook can read these events as a SECONDARY fallback (tail + jq parse). The PRIMARY enforcement mechanism uses file-based sentinels (see Section 6.4). JSONL events serve as an audit trail and as the future migration path to SQLite (Period 2+). Performance is acceptable because events are session-scoped (~100 lines max per session).
 
 #### 5.2.7. Seed Data Summary
 
@@ -1114,7 +1126,7 @@ Two new sections support PathFlow orchestration:
 
 ### 5.4. Hook Restructuring
 
-The current hook set (28 hooks) is reduced to 21. No dual-mode branching exists in any hook. Skill sentinel hooks are removed entirely. See [Appendix C](#appendix-c-complete-hook-disposition-table) for the complete 28-hook disposition table.
+The current hook set (28 hooks) is reduced to 23. No dual-mode branching exists in any hook. Skill sentinel hooks are removed entirely. Three new hooks are added for PathFlow enforcement: pathflow-init (SessionStart), pathflow-sentinel (PostToolUse), and pathflow-task-guard (PreToolUse). See [Appendix C](#appendix-c-complete-hook-disposition-table) for the complete disposition table.
 
 #### Hooks to REMOVE (8 total)
 
@@ -1148,7 +1160,7 @@ The current hook set (28 hooks) is reduced to 21. No dual-mode branching exists 
 
 | Hook | Type | Change |
 |------|------|--------|
-| cf-pre-tool-use-pathflow-gate.sh | PreToolUse | Now the ONLY gate (no dual-mode fallback). Reads JSONL for current phase. |
+| cf-pre-tool-use-pathflow-gate.sh | PreToolUse | Now the ONLY gate (no dual-mode fallback). Sentinel-first checking: file sentinels (PRIMARY) via `has_sentinel()`, JSONL phase lookup (SECONDARY fallback). |
 | cf-pre-tool-use-team-guard.sh | PreToolUse | Block TeamDelete and Teammate(cleanup) during active PathFlow session. Matcher: `TeamDelete\|Teammate`. Only PF7-TSK-05 (remove pathflow-active flag) unlocks team dissolution. |
 | cf-pre-tool-use-read-delegation.sh | PreToolUse | Simplified: no mode-detection branching |
 | cf-stop-verify-work.sh | Stop | Renamed to `cf-stop-pathflow-gate.sh`. PCV enforcement removed. Logs PathFlow phase completion status for audit trail. |
@@ -1157,13 +1169,17 @@ The current hook set (28 hooks) is reduced to 21. No dual-mode branching exists 
 | cf-session-end-cleanup.sh | SessionEnd | Simplified: clean PathFlow state only |
 | cf-user-prompt-submit.sh | UserPromptSubmit | Simplified: no mode-detection branching |
 
-#### Hook to CREATE (1 new)
+#### Hooks to CREATE (3 new)
 
-| Hook | Type | Purpose |
-|------|------|---------|
-| cf-pre-tool-use-pathflow-task-guard.sh | PreToolUse | Validates PathFlow task transitions (PF{N}-TSK-{NN} status changes) |
+| Hook | Type | Matcher | Purpose |
+|------|------|---------|---------|
+| cf-pre-tool-use-pathflow-task-guard.sh | PreToolUse | TaskUpdate | Validates PathFlow task transitions (PF{N}-TSK-{NN} status changes) |
+| cf-post-tool-use-pathflow-sentinel.sh | PostToolUse | TeamCreate\|Task\|SendMessage\|Bash | Automatic sentinel creation on phase/stage transition events (see Section 6.4) |
+| cf-session-start-pathflow-init.sh | SessionStart | (all) | Creates pathflow-active flag with JSON metadata at session start |
 
-#### Net result: 28 -> 21 hooks (-7)
+**Note on PostToolUse matcher:** The `.*` regex does NOT match Agent Teams tools (TeamCreate, Task, SendMessage, TeamDelete). Explicit tool names are required. See `.codeflow/docs/research/agent-teams-hook-findings.md` for empirical validation.
+
+#### Net result: 28 -> 23 hooks (-5)
 
 ### 5.5. Agent Definition Files
 
@@ -1290,25 +1306,38 @@ Layer 4: Stop Hook (session-level)
 
 ### 6.2. PathFlow-Gate Hook
 
-The pathflow-gate hook is the single enforcement point for PathFlow phase progression. It replaces the 5 skill sentinel hooks with one hook that checks JSONL (interim) or SQLite (final) for the current session phase.
+The pathflow-gate hook is the single enforcement point for PathFlow phase progression. It replaces the 5 skill sentinel hooks with one hook that uses file-based sentinels as the PRIMARY check and JSONL events as a SECONDARY fallback.
 
-**Logic:**
+**Logic (sentinel-first):**
 
 ```text
 pathflow-gate hook fires on Edit|Write|Bash:
-  1. Read current session_id from .state/runtime/current-session-id
-  2. If no session_id -> ALLOW (untracked session, no enforcement)
-  3. Read latest phase_transition event from JSONL (tail + jq)
-  4. If phase < PF4-EXECUTE and tool is Edit/Write:
-       -> BLOCK "Cannot modify files before PF4-EXECUTE (current: {phase})"
-  5. If phase < PF4-EXECUTE and tool is Bash with git commit:
-       -> BLOCK "Cannot commit before PF4-EXECUTE (current: {phase})"
-  6. If phase < PF6-COMPLETE and tool is Bash with git push/gh pr:
-       -> BLOCK "Cannot push/PR before PF6-COMPLETE (current: {phase})"
-  7. Otherwise -> ALLOW
+  1. Tool is Edit/Write/Bash?  No -> exit 0 (allow)
+  2. Bash but not git commit/push/PR?  -> exit 0 (allow)
+  3. is_pathflow_active()?  No -> exit 0 (not in PathFlow, allow all)
+  4. Source cf-pathflow-state.sh library
+  5. Gate check (sentinel-first):
+     - Edit/Write or git commit:
+         has_sentinel("pf-3")?  Yes -> ALLOW.  No -> BLOCK (exit 2)
+         "PathFlow gate: Edit/Write requires PF3-CLASSIFY (branch creation)"
+     - git push/PR (gh pr create):
+         has_sentinel("ws-rev")?  Yes -> ALLOW.  No -> BLOCK (exit 2)
+         "PathFlow gate: PR requires WS-REV completion"
+  6. Fallback: existing JSONL phase lookup (secondary, for cf-knowledge-layer maturity)
 ```
 
-**Interim read path (Period 1):** JSONL tail + jq parse. O(n) but ~100 lines max.
+**Block message format (stderr, exit 2):**
+
+```text
+BLOCKED: PathFlow gate - prerequisite not met
+Reason: Edit/Write requires PF3-CLASSIFY (branch creation). No pathflow-pf-3 sentinel.
+Complete earlier phases before this operation.
+Current sentinels: pathflow-pf-1, pathflow-pf-2
+```
+
+**Primary read path:** File sentinel check (`[[ -f sentinel_file ]]`). O(1), no parsing, no dependencies.
+
+**Secondary read path:** JSONL tail + jq parse. Preserved as fallback for when cf-knowledge-layer writes phase_transition events.
 
 **Final read path (Period 2+):** SQLite indexed query. O(1) lookup.
 
@@ -1332,6 +1361,218 @@ Advisory only:
 ```
 
 **Philosophy:** A session should never be BLOCKED by an enforcement system failure. No standalone fallback exists -- if PathFlow enforcement fails, behavioral enforcement (Layer 1) continues.
+
+### 6.4. PathFlow Enforcement Mechanism
+
+The full session lifecycle from session start to session end, showing how hooks create state and enforce progression. The diagram shows **both tracks** side by side: file sentinels (created automatically by PostToolUse hooks) and JSONL events (created by cf-knowledge-layer calling pathflow scripts).
+
+```text
+SESSION START
+│
+├─ SessionStart hooks fire:
+│  ├─ cf-session-start-cleanup.sh: Creates directories
+│  │  ├─ .state/session/{SID}/
+│  │  └─ .state/sentinels/pathflow/{SID}/
+│  └─ cf-session-start-pathflow-init.sh: Creates flag
+│     └─ .state/session/{SID}/is-pathflow-active (JSON metadata)
+│        └─ is_pathflow_active() now returns TRUE
+│
+├─ Lead calls TeamCreate
+│  └─ PostToolUse (tool_name=TeamCreate)
+│     ├─ FILE: Sentinel hook creates pathflow-pf-1
+│     └─ JSONL: (none yet — cf-knowledge-layer not spawned)
+│
+├─ PF1-INIT: Lead spawns cf-security
+│  └─ PostToolUse (tool_name=Task)
+│     └─ name != "cf-knowledge-layer" → no sentinel
+│
+├─ PF2-CONTEXT: Lead spawns cf-knowledge-layer
+│  └─ PostToolUse (tool_name=Task)
+│     ├─ FILE: Sentinel hook creates pathflow-pf-2
+│     └─ JSONL: cf-knowledge-layer calls cf-pathflow-session-register.sh
+│        └─ Writes session_metadata event (tracking_level=pending)
+│
+├─ GATE TEST: Edit/Write attempted (BEFORE PF3)
+│  └─ PreToolUse pathflow-gate
+│     ├─ is_pathflow_active()? TRUE ✓
+│     ├─ has_sentinel("pf-3")? FALSE ✗
+│     └─ exit 2 → BLOCKED ✓
+│
+├─ PF3-CLASSIFY: cf-git-operations runs git checkout -b
+│  └─ PostToolUse (tool_name=Bash, command matches git checkout -b)
+│     ├─ FILE: Sentinel hook creates pathflow-pf-3
+│     └─ JSONL: cf-knowledge-layer calls:
+│        ├─ cf-pathflow-phase-transition.sh (PF3-CLASSIFY, completed)
+│        ├─ cf-pathflow-session-metadata.sh (work_type, area_type)
+│        ├─ cf-pathflow-session-metadata.sh (branch)
+│        └─ cf-pathflow-session-metadata.sh (tracking_level=tracked)
+│
+├─ GATE TEST: Edit/Write now allowed
+│  └─ PreToolUse pathflow-gate
+│     ├─ has_sentinel("pf-3")? TRUE ✓
+│     └─ exit 0 → ALLOWED ✓
+│
+├─ PF4-EXECUTE: Work pipeline
+│  ├─ WS-DEV: cf-development works
+│  │  └─ SendMessage("STAGE-COMPLETE: WS-DEV")
+│  │     ├─ FILE: Sentinel hook creates pathflow-ws-dev
+│  │     └─ JSONL: cf-knowledge-layer calls cf-pathflow-stage-transition.sh
+│  ├─ WS-REV: cf-review works
+│  │  └─ SendMessage("STAGE-COMPLETE: WS-REV")
+│  │     ├─ FILE: Sentinel hook creates pathflow-ws-rev
+│  │     └─ JSONL: cf-knowledge-layer calls cf-pathflow-stage-transition.sh
+│  └─ WS-QA: cf-quality-assurance works
+│     └─ SendMessage("STAGE-COMPLETE: WS-QA")
+│        ├─ FILE: Sentinel hook creates pathflow-ws-qa
+│        └─ JSONL: cf-knowledge-layer calls cf-pathflow-stage-transition.sh
+│
+├─ PR GATE: gh pr create attempted
+│  └─ PreToolUse pathflow-gate
+│     ├─ has_sentinel("ws-rev")? TRUE ✓
+│     └─ exit 0 → ALLOWED ✓
+│
+├─ PF6-COMPLETE: cf-git-operations creates PR
+│  └─ PostToolUse (tool_name=Bash, command matches gh pr create)
+│     ├─ FILE: Sentinel hook creates pathflow-pf-6
+│     └─ JSONL: cf-knowledge-layer calls cf-pathflow-phase-transition.sh
+│
+├─ TEAM-GUARD: TeamDelete attempted during active session
+│  └─ PreToolUse team-guard fires
+│     ├─ is_pathflow_active()? → TRUE
+│     └─ exit 2 → BLOCKED (team dissolution prevented)
+│
+├─ PF7-END: Shutdown + cleanup
+│  ├─ Lead shuts down all teammates (SendMessage type=shutdown_request)
+│  ├─ Lead removes pathflow-active flag → team-guard unlocked
+│  ├─ Lead calls TeamDelete → allowed (flag removed)
+│  └─ SessionEnd hooks fire:
+│     ├─ cf-session-end-cleanup.sh:
+│     │  ├─ Removes .state/sentinels/pathflow/{SID}/ (all sentinels)
+│     │  └─ Removes .state/session/{SID}/ (flag + state)
+│     └─ is_pathflow_active() now returns FALSE
+│
+SESSION END (clean state)
+```
+
+**Key design properties:**
+
+| Property | Mechanism |
+|----------|-----------|
+| Flag creation is automatic | SessionStart hook, every session |
+| Sentinel creation is automatic | PostToolUse hook, on phase/stage transition events |
+| Enforcement is file-based | `[[ -f file ]]` checks, no parsing, no external dependencies |
+| State is session-scoped | All sentinels in `.state/sentinels/pathflow/{SID}/`, cleaned at session end |
+| Idempotent | `touch` on existing sentinel is a no-op |
+| Graceful degradation | If sentinel creation fails, instructions + task graph still provide ordering |
+
+### 6.5. STAGE-COMPLETE Protocol
+
+On-demand role teammates signal work stage completion by including `STAGE-COMPLETE: WS-{STAGE}` in their final SendMessage to the team lead. This triggers automatic sentinel creation via the PostToolUse sentinel hook.
+
+**Message format:**
+
+```text
+STAGE-COMPLETE: WS-{STAGE}
+```
+
+Where `{STAGE}` is one of: `DEV`, `REV`, `QA`, `TEST`, `PLAN`, `DOCS`.
+
+**Protocol participants:**
+
+| Teammate | Message on Completion |
+|----------|----------------------|
+| cf-development | `"STAGE-COMPLETE: WS-DEV"` in final message to lead |
+| cf-review | `"STAGE-COMPLETE: WS-REV"` in final message to lead |
+| cf-quality-assurance | `"STAGE-COMPLETE: WS-QA"` or `"STAGE-COMPLETE: WS-TEST"` |
+| cf-documentation | `"STAGE-COMPLETE: WS-DOCS"` in final message to lead |
+| cf-planning | `"STAGE-COMPLETE: WS-PLAN"` in final message to lead |
+
+**Detection by sentinel hook:** When the PostToolUse hook fires for `tool_name=SendMessage`, it parses `tool_input.content` for the `STAGE-COMPLETE: WS-` pattern and creates the corresponding sentinel file (e.g., `pathflow-ws-dev`, `pathflow-ws-rev`).
+
+**How teammate tool calls are detected:** Teammates share the same session as the lead. PostToolUse hooks fire for ALL tool calls in the session, including teammate calls. When cf-development calls `SendMessage(content="STAGE-COMPLETE: WS-DEV")`, the sentinel hook fires and creates the sentinel.
+
+### 6.6. File Sentinels vs JSONL Sentinels
+
+File-based sentinels are the PRIMARY enforcement mechanism. JSONL events are preserved as a SECONDARY fallback. This is a deliberate design decision.
+
+| Criterion | File Sentinels (PRIMARY) | JSONL Events (SECONDARY) |
+|-----------|-------------------------|--------------------------|
+| Creation | `touch file` (atomic, always works) | `jq -nc ... >> file` (needs jq, correct JSON) |
+| Check | `[[ -f file ]]` (fast, no parsing) | `tail + jq select` (slow, fragile) |
+| Dependencies | None | jq, correct JSON, session filtering |
+| Writer | PostToolUse hook (automatic, reliable) | cf-knowledge-layer teammate (requires teammate to be alive, follow instructions) |
+| Cleanup | `rm -rf dir/` (session-end already does this) | Events persist in ledger (audit trail) |
+
+**Why file sentinels as primary:**
+
+1. **Zero dependencies.** File existence checks require no external tools (no jq, no JSON parsing, no session ID filtering).
+2. **Automatic creation.** PostToolUse hooks fire reliably for all tool calls. No dependency on teammate instructions being followed.
+3. **Fast.** `[[ -f file ]]` is O(1) with no I/O beyond stat. JSONL parsing is O(n) even when bounded.
+4. **Existing infrastructure.** Session-start already creates the sentinel directory. Session-end already removes it. No new cleanup logic needed.
+
+**Why JSONL is preserved:**
+
+1. **Audit trail.** JSONL events provide a durable, append-only record of phase transitions that survives session end.
+2. **cf-knowledge-layer maturity.** When cf-knowledge-layer starts writing `phase_transition` events reliably, the JSONL-based check in pathflow-gate becomes a secondary verification mechanism.
+3. **Future SQLite migration.** Period 2+ replaces JSONL reads with SQLite indexed queries. The event schema is preserved for this transition.
+
+**Coexistence:** Both mechanisms work independently. File sentinels provide fast, reliable enforcement. JSONL events provide audit and future migration path. Neither depends on the other.
+
+**Conflict resolution:** If file sentinel and JSONL event disagree (e.g., sentinel exists but JSONL event missing, or vice versa), file sentinel is authoritative for enforcement decisions. The pathflow-gate hook checks ONLY file sentinels via `has_sentinel()`. JSONL events are checked only as a commented-out fallback in the gate hook (preserved for when cf-knowledge-layer matures). A missing JSONL event does NOT block work; a missing file sentinel DOES.
+
+### 6.7. JSONL Event Flow: Script Responsibilities
+
+This section maps WHO calls WHICH script, WHEN, and what JSONL event type is produced. All JSONL scripts live in `.codeflow/scripts/pathflow/` and write to `pathflow-events.jsonl` via the `ledger.sh` library.
+
+| Phase | Event | Script Called | Caller | JSONL Event Type |
+|-------|-------|--------------|--------|------------------|
+| PF1-INIT | Session registration | `cf-pathflow-session-register.sh` | cf-knowledge-layer | `session_metadata` (tracking_level=pending) |
+| PF1-INIT | Phase entered | `cf-pathflow-phase-transition.sh` | cf-knowledge-layer | `phase_transition` (PF1-INIT, entered) |
+| PF1-INIT | Phase completed | `cf-pathflow-phase-transition.sh` | cf-knowledge-layer | `phase_transition` (PF1-INIT, completed) |
+| PF2-CONTEXT | Phase transitions | `cf-pathflow-phase-transition.sh` | cf-knowledge-layer | `phase_transition` |
+| PF3-CLASSIFY | Work type set | `cf-pathflow-session-metadata.sh` | cf-knowledge-layer | `session_metadata` (work_type, area_type) |
+| PF3-CLASSIFY | Branch set | `cf-pathflow-session-metadata.sh` | cf-knowledge-layer | `session_metadata` (branch) |
+| PF3-CLASSIFY | Tracking activated | `cf-pathflow-session-metadata.sh` | cf-knowledge-layer | `session_metadata` (tracking_level=tracked) |
+| PF4-EXECUTE | Stage transitions | `cf-pathflow-stage-transition.sh` | cf-knowledge-layer | `stage_transition` |
+| PF4-EXECUTE | Task updates | `cf-pathflow-task-update.sh` | cf-knowledge-layer | `pathflow_task_update` |
+| PF5-PF7 | Phase transitions | `cf-pathflow-phase-transition.sh` | cf-knowledge-layer | `phase_transition` |
+
+**Key principle:** In Phase 4 implementation, file sentinels are PRIMARY and SUFFICIENT for enforcement. JSONL writing by cf-knowledge-layer provides an audit trail and future SQLite rebuild capability. If cf-knowledge-layer fails to write JSONL, enforcement is NOT degraded -- file sentinels still work. The JSONL scripts are called by cf-knowledge-layer via `Bash` tool calls; the scripts source `ledger.sh` for append operations with flock-based parallel safety.
+
+### 6.8. Dual-Track State: File Sentinels + JSONL Events
+
+File sentinels and JSONL events represent the same logical transitions through two independent mechanisms with different timing, writers, and purposes.
+
+**Timing relationship:**
+
+| Aspect | File Sentinels | JSONL Events |
+|--------|---------------|--------------|
+| **Created by** | PostToolUse hook (automatic, zero teammate involvement) | cf-knowledge-layer calling pathflow scripts (teammate-driven) |
+| **Trigger** | Tool call completion (TeamCreate, Task, Bash, SendMessage) | cf-knowledge-layer processing teammate messages or lead instructions |
+| **Timing** | Immediate (fires on every matching tool call) | Delayed (depends on cf-knowledge-layer receiving and processing the event) |
+| **Reliability** | High (hooks fire reliably, `touch` always succeeds) | Medium (depends on teammate being alive, following instructions, jq available) |
+| **Persistence** | Session-scoped (cleaned up at session end) | Permanent (append-only ledger survives session end) |
+| **Purpose** | Enforcement (pathflow-gate checks these) | Audit trail + future SQLite rebuild |
+
+**Both happen for the same logical event but through different mechanisms:**
+
+```text
+cf-development sends "STAGE-COMPLETE: WS-DEV"
+    │
+    ├─ PostToolUse hook fires (automatic, immediate)
+    │  └─ Sentinel hook: touch .state/sentinels/pathflow/{SID}/pathflow-ws-dev
+    │     └─ Enforcement: has_sentinel("ws-dev") → TRUE
+    │
+    └─ Lead/cf-knowledge-layer processes the message (teammate-driven, delayed)
+       └─ Calls: cf-pathflow-stage-transition.sh -s {SID} -g WS-DEV -t complete
+          └─ Audit: {"type":"stage_transition","stage":"WS-DEV","status":"complete"}
+```
+
+**Authoritative resolution:**
+
+- File sentinel is authoritative for **enforcement** (PRIMARY). The pathflow-gate hook checks ONLY file sentinels.
+- JSONL is authoritative for **audit/rebuild** (audit trail). JSONL events provide the durable record for post-session analysis and future SQLite migration.
+- If they disagree: file sentinel wins for enforcement decisions. A missing JSONL event never blocks work.
 
 ---
 
@@ -1526,7 +1767,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 | **Pipeline** | Ordered stage sequence per work type (in pathflow-config.json) |
 | **Function Teammate** | Persistent: cf-security, cf-knowledge-layer, cf-gitops |
 | **Role Teammate** | On-demand: cf-developer, cf-planner, cf-documenter, cf-reviewer, cf-qa |
-| **PathFlow Sentinel** | Session-scoped, no-TTL JSONL marker checked by pathflow-gate |
+| **PathFlow Sentinel** | Session-scoped, no-TTL file marker (PRIMARY) checked by pathflow-gate via `has_sentinel()`. JSONL events serve as SECONDARY fallback. Created automatically by PostToolUse hook on phase/stage transitions. |
 | **Tracked Session** | Work registered in WorkGraph, full PF1-PF7 lifecycle |
 | **Untracked Session** | Lead answers directly, skips PF3-PF6 |
 | **Agent-Teams Only** | Single mode. No standalone/dual-mode fallback. |
@@ -1543,7 +1784,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 | 3 | cf-pre-tool-use-edit-write.sh | Active | **KEEP** | Edit\|Write | File scope checks |
 | 4 | cf-pre-tool-use-gh-pr.sh | Active | **KEEP** | Bash | PR format enforcement |
 | 5 | cf-pre-tool-use-webfetch.sh | Active | **KEEP** | WebFetch | URL validation |
-| 6 | cf-pre-tool-use-pathflow-gate.sh | New | **MODIFY** | Edit\|Write\|Bash | PathFlow phase enforcement (JSONL/SQLite) |
+| 6 | cf-pre-tool-use-pathflow-gate.sh | New | **MODIFY** | Edit\|Write\|Bash | PathFlow phase enforcement. **PRIMARY:** file sentinel check (`has_sentinel()`). **SECONDARY:** JSONL/SQLite fallback. |
 | 7 | cf-pre-tool-use-team-guard.sh | New | **MODIFY** | TeamDelete\|Teammate | Block team dissolution during active PathFlow session |
 | 8 | cf-pre-tool-use-read-delegation.sh | Active | **MODIFY** | Read | Simplified, no mode branching |
 | 9 | cf-pre-tool-use-bash-sentinel.sh | Active | **REMOVE** | Bash | Skill sentinels eliminated |
@@ -1581,9 +1822,11 @@ PF7-END -> minimal cleanup, session logged as untracked
 
 ### New Hooks
 
-| # | Hook | Disposition | Matcher | Notes |
-|---|------|-------------|---------|-------|
-| 26 | cf-pre-tool-use-pathflow-task-guard.sh | **CREATE** | TaskUpdate | PathFlow task transition validation |
+| # | Hook | Disposition | Type | Matcher | Notes |
+|---|------|-------------|------|---------|-------|
+| 26 | cf-pre-tool-use-pathflow-task-guard.sh | **CREATE** | PreToolUse | TaskUpdate | PathFlow task transition validation |
+| 27 | cf-post-tool-use-pathflow-sentinel.sh | **CREATE** | PostToolUse | TeamCreate\|Task\|SendMessage\|Bash | Automatic file sentinel creation on phase/stage transitions. `.*` does NOT match team tools — explicit names required (empirically validated). |
+| 28 | cf-session-start-pathflow-init.sh | **CREATE** | SessionStart | (all) | Creates pathflow-active flag file with JSON metadata (session_id, team_name, created_at, tracking_level). Runs AFTER cleanup hook. |
 
 ### Summary
 
@@ -1592,9 +1835,9 @@ PF7-END -> minimal cleanup, session logged as untracked
 | KEEP (unchanged) | 10 |
 | MODIFY | 8 |
 | REMOVE | 8 |
-| CREATE | 1 |
-| **Net total** | **21** (down from 28, net -7) |
+| CREATE | 3 |
+| **Net total** | **23** (down from 28, net -5) |
 
 ---
 
-*End of proposal v2. All 9 errors from v1 corrected. Pending approval before proceeding to V4 spec updates and Phase 4 implementation.*
+*End of proposal v2. All 9 errors from v1 corrected. Updated 2026-02-15 with enforcement hardening: file sentinels as PRIMARY enforcement, STAGE-COMPLETE protocol, PathFlow enforcement mechanism lifecycle, SessionStart pathflow-init hook, PostToolUse sentinel hook, pathflow-active flag documentation, JSONL event flow script mapping (Section 6.7), dual-track state documentation (Section 6.8), teammate hook firing clarification (Section 3.5), and conflict resolution rule (Section 6.6).*
