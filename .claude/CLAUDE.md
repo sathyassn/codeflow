@@ -392,6 +392,38 @@ If a persistent teammate's context fills up (auto-compaction at ~95%):
 
 This should be rare for function teammates whose context is bounded.
 
+### Teammate Name Preservation
+
+When recycling a persistent teammate, ALWAYS reuse the SAME name.
+
+| Do | Do Not |
+|----|--------|
+| Shutdown cf-git-operations, respawn as cf-git-operations | Spawn cf-git-operations-2 |
+| Use name="cf-git-operations" in Task() | Use name="cf-git-operations-2" |
+
+Multiple instances with numbered suffixes (-2, -3) create confusion, break task assignment, and violate the single-instance-per-role principle.
+
+Before respawning, verify the old teammate is fully shut down (check tmux pane status).
+
+### Teammate Shutdown Protocol
+
+When shutting down a teammate, the lead MUST verify the tmux pane is properly terminated.
+
+**Shutdown sequence:**
+
+1. Send shutdown request: SendMessage(type="shutdown_request", recipient="{name}", content="Work complete")
+2. Wait for shutdown confirmation
+3. Verify tmux pane is dead: tmux list-panes -a | grep {pane_id}
+4. If pane still exists, kill it: tmux kill-pane -t {pane_id}
+
+**Before respawning a persistent teammate:**
+
+1. Read team config to get the old teammate tmuxPaneId
+2. If pane exists, kill it first: tmux kill-pane -t {old_pane_id}
+3. Then spawn the new instance with the SAME name (see Name Preservation above)
+
+NEVER spawn a new teammate while the old tmux pane is still alive. This causes zombie processes, resource leaks, and numbered name suffixes.
+
 ---
 
 ## 6. Task Routing
@@ -507,7 +539,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 
 | Event | Count | Scripts |
 |-------|-------|---------|
-| SessionStart | 3 | cleanup, instructions, logging |
+| SessionStart | 3 | init, instructions, logging |
 | UserPromptSubmit | 2 | validation, logging |
 | PreToolUse | 7 | pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch |
 | PostToolUse | 3 | logging, settings-templates, tmp-workflow |
