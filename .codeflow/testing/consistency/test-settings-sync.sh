@@ -418,9 +418,9 @@ test_env_consistency() {
     return 0
 }
 
-# TEST 6: _codeflow section present across templates
+# TEST 6: _codeflow section removed across templates (dead code cleanup)
 test_codeflow_section() {
-    test_section "_codeflow Section Presence"
+    test_section "_codeflow Section Absence"
 
     local templates=("$STRICT_TEMPLATE" "$STANDARD_TEMPLATE" "$AUTONOMOUS_TEMPLATE" "$PERMISSIVE_TEMPLATE")
     local template_names=("strict.json" "standard.json" "autonomous.json" "permissive.json")
@@ -430,19 +430,11 @@ test_codeflow_section() {
         local codeflow_section
         codeflow_section=$(jq '._codeflow // empty' "${templates[$i]}" 2>/dev/null)
 
-        if [[ -z "$codeflow_section" ]]; then
-            test_fail "${template_names[$i]} MUST have _codeflow section" "_codeflow section is missing"
+        if [[ -n "$codeflow_section" ]]; then
+            test_fail "${template_names[$i]} should NOT have _codeflow section (dead code)" "_codeflow section still present"
             failed=true
         else
-            # Check agent_teams key exists
-            local agent_teams
-            agent_teams=$(jq -r '._codeflow.agent_teams // empty' "${templates[$i]}" 2>/dev/null)
-            if [[ -z "$agent_teams" ]]; then
-                test_fail "${template_names[$i]} _codeflow MUST have agent_teams key" "agent_teams is missing"
-                failed=true
-            else
-                test_pass "${template_names[$i]} has _codeflow.agent_teams: $agent_teams"
-            fi
+            test_pass "${template_names[$i]} has no _codeflow section (cleanup confirmed)"
         fi
     done
 
