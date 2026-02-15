@@ -290,6 +290,10 @@ Escalate to team lead when:
 - Max retry limit (2) reached without achieving PASS
 - Acceptance criteria are ambiguous or untestable
 
+### Stage Completion Protocol
+
+When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate mode) or `STAGE-COMPLETE: WS-TEST` (test implementation mode) in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+
 ## Quality Checklist
 
 Before marking any task complete, verify:

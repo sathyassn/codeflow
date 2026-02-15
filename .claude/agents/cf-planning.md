@@ -262,6 +262,10 @@ Apply: load template, populate all sections, add YAML frontmatter, enforce H1/H2
 
 Escalate to team lead when: requirements too ambiguous, conflicting constraints requiring product decision, scope exceeds single PR/session, spike recommended before planning can continue.
 
+### Stage Completion Protocol
+
+When your work stage is complete, include `STAGE-COMPLETE: WS-PLAN` in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+
 ## Quality Checklist
 
 Before marking any task complete, verify:

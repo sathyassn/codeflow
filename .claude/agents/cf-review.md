@@ -200,6 +200,10 @@ A verdict of `APPROVED` may include MINOR and NOTE findings. Any CRITICAL or MAJ
 | Team lead | Review assignment | Task description with mode, scope, files changed, and acceptance criteria |
 | Team lead | Re-review request | Updated scope after rework with iteration count |
 
+### Stage Completion Protocol
+
+When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+
 ## Quality Checklist
 
 Before delivering any verdict, verify:
