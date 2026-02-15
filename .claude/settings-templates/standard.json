@@ -22,37 +22,6 @@
     "approvalMode": "standard",
     "untrustedAction": "ask"
   },
-  "_verify_work_config": {
-    "_note": "Stop hook reads this config for verify-work enforcement.",
-    "maxRetries": 1
-  },
-  "_read_delegation_config": {
-    "_note": "Read delegation hook configuration. Local settings override project settings.",
-    "enabled": true,
-    "thresholdRules": [
-      {
-        "pattern": "**/*",
-        "maxLines": 50
-      }
-    ],
-    "alwaysBlockEnabled": true,
-    "alwaysBlockPatterns": [
-      ".claude/memory/**",
-      "docs/**"
-    ],
-    "allowedPaths": [
-      ".claude/CLAUDE.md",
-      "PROJECT.md",
-      ".claude/settings.json",
-      ".claude/settings.local.json"
-    ],
-    "delegationTarget": "cf-general-purpose"
-  },
-  "_codeflow": {
-    "agent_teams": "auto",
-    "_agent_teams_values": "auto | always | never",
-    "_agent_teams_description": "Agent-teams mode: auto (detect from context), always (force agent-teams mode), never (standalone mode)"
-  },
   "_plugins_note": {
     "_note": "Plugin config. IDENTICAL across all templates (like hooks).",
     "behavior": "OVERRIDE - settings.local.json enabledPlugins REPLACES settings.json",
@@ -278,6 +247,11 @@
           },
           {
             "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-pathflow-init.sh",
+            "timeout": 2
+          },
+          {
+            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
             "timeout": 2
           },
@@ -358,7 +332,7 @@
         ]
       },
       {
-        "matcher": "Teammate",
+        "matcher": "Teammate|TeamDelete",
         "hooks": [
           {
             "type": "command",
@@ -369,6 +343,16 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "TeamCreate|Task|SendMessage|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-pathflow-sentinel.sh",
+            "timeout": 2
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [
