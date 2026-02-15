@@ -8,6 +8,7 @@
 #   - Section 2: Force Push Prevention (--force, -f)
 #   - Section 3: Hook Path Manipulation (core.hooksPath, env vars)
 #   - Section 4: Git Hooks Directory Protection (.git/hooks)
+#   - Section 5: Protected Branch Operations (merge, cherry-pick, rebase, reset)
 #
 # SECTION OWNERSHIP: This script is the AUTHORITATIVE owner of Sections 1-4.
 # cf-hook-bypass.sh duplicates these checks (git -c core.hooksPath,
@@ -135,6 +136,84 @@ fi
 # Writing to .git/hooks via redirect
 if [[ "$COMMAND" =~ \>[[:space:]]*\.git/hooks ]]; then
   block_command "Hook Manipulation" "Redirect to .git/hooks" "> .git/hooks"
+fi
+
+
+# =============================================================================
+# SECTION 5: Protected Branch Operations (merge, cherry-pick, rebase, reset)
+# =============================================================================
+# PR-only workflow: no direct merges, cherry-picks, rebases, or resets on
+# protected branches (main, master, release/*, production).
+# These bypass pre-commit hooks (especially fast-forward merges).
+
+# Get current branch
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+
+# Load protected branches from config
+PROT_BRANCHES=()
+if [[ -n "${CONFIG:-}" && -f "$CONFIG" ]] && command -v jq &>/dev/null; then
+    while IFS= read -r pb; do
+        [[ -n "$pb" ]] && PROT_BRANCHES+=("$pb")
+    done < <(jq -r '.protected_branches[]? // empty' "$CONFIG" 2>/dev/null)
+fi
+[[ ${#PROT_BRANCHES[@]} -eq 0 ]] && PROT_BRANCHES=("main" "master" "release/*" "production")
+
+# Check if current branch is protected
+_on_protected_branch() {
+    local branch="$1"
+    [[ -z "$branch" ]] && return 1
+    for pb in "${PROT_BRANCHES[@]}"; do
+        if [[ "$branch" == "$pb" ]]; then
+            return 0
+        fi
+        # Wildcard support (e.g., release/*)
+        if [[ "$pb" == *"*"* ]]; then
+            local pattern="${pb//\*/.*}"
+            if [[ "$branch" =~ ^${pattern}$ ]]; then
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+# 5a. Block git merge on protected branches
+if [[ "$COMMAND" =~ ^git[[:space:]]+merge([[:space:]]|$) ]]; then
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Protected Branch" "Merge to protected branch '$CURRENT_BRANCH' blocked" "git merge on $CURRENT_BRANCH"
+    fi
+fi
+
+# 5b. Block git cherry-pick on protected branches
+if [[ "$COMMAND" =~ ^git[[:space:]]+cherry-pick([[:space:]]|$) ]]; then
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Protected Branch" "Cherry-pick to protected branch '$CURRENT_BRANCH' blocked" "git cherry-pick on $CURRENT_BRANCH"
+    fi
+fi
+
+# 5c. Block git rebase on protected branches (history rewrite)
+if [[ "$COMMAND" =~ ^git[[:space:]]+rebase([[:space:]]|$) ]]; then
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Protected Branch" "Rebase on protected branch '$CURRENT_BRANCH' blocked" "git rebase on $CURRENT_BRANCH"
+    fi
+fi
+
+# 5d. Block git reset on protected branches
+if [[ "$COMMAND" =~ ^git[[:space:]]+reset([[:space:]]|$) ]]; then
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Protected Branch" "Reset on protected branch '$CURRENT_BRANCH' blocked" "git reset on $CURRENT_BRANCH"
+    fi
+fi
+
+# 5e. Block git checkout to protected branch with merge intent
+# Catches: git checkout main && git merge (piped/chained commands)
+if [[ "$COMMAND" =~ git[[:space:]]+checkout[[:space:]]+(main|master|production)[[:space:]]*(\&\&|;|\|)[[:space:]]*git[[:space:]]+(merge|cherry-pick|rebase|reset) ]]; then
+    block_command "Protected Branch" "Chained checkout+merge to protected branch blocked" "checkout && merge"
+fi
+
+# 5f. Block git switch to protected branch with merge intent
+if [[ "$COMMAND" =~ git[[:space:]]+switch[[:space:]]+(main|master|production)[[:space:]]*(\&\&|;|\|)[[:space:]]*git[[:space:]]+(merge|cherry-pick|rebase|reset) ]]; then
+    block_command "Protected Branch" "Chained switch+merge to protected branch blocked" "switch && merge"
 fi
 
 # All git protection checks passed

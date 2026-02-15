@@ -82,6 +82,7 @@
         "scripts/security/test-cf-promote-protection.sh",
         "scripts/security/test-cf-validate-shell.sh",
         "scripts/security/test-cf-validate-python.sh",
+        "scripts/security/test-main-branch-protection.sh",
         "scripts/security/test-cf-validate-json.sh",
         "scripts/security/test-cf-validate-yaml.sh",
         "scripts/git-hooks/test-pre-commit.sh",
