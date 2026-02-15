@@ -71,6 +71,10 @@ dist/
 build/
 *.egg-info/
 
+# Claude Code plan files (ephemeral, session-specific)
+.claude/plans/*
+!.claude/plans/.gitkeep
+
 # Test artifacts
 .codeflow/testing/results/
 .codeflow/testing/coverage/
