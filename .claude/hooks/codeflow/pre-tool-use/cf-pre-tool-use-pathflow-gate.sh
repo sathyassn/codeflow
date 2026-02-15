@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# Purpose:   PreToolUse hook for PathFlow gate enforcement (JSONL-backed)
+# Purpose:   PreToolUse hook for PathFlow gate enforcement (sentinel-backed)
 # Location:  .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh
 # Hook Type: PreToolUse
 # Matcher:   Edit|Write|Bash
 #
 # This hook:
-#   - Blocks Edit/Write when PathFlow is active but phase < PF4-EXECUTE
-#   - Blocks Bash(git commit) when phase < PF4-EXECUTE
-#   - Blocks Bash(git push/gh pr) when phase < PF6-COMPLETE
-#   - Reads phase from JSONL ledger (interim) or SQLite (future)
+#   - Blocks Edit/Write when PathFlow is active but PF3-CLASSIFY not reached
+#   - Blocks Bash(git commit) when PF3-CLASSIFY not reached
+#   - Blocks Bash(git push/gh pr) when WS-REV not completed
+#   - Uses file sentinels (primary) for fast, reliable enforcement
 #   - Graceful degradation: ALLOW on any enforcement system failure
+#
+# Sentinel check (primary enforcement):
+#   Edit/Write, git commit → has_sentinel("pf-3")? Allow/Block
+#   git push, gh pr        → has_sentinel("ws-rev")? Allow/Block
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
 # Exit codes:
 #   - 0: Operation allowed
-#   - 2: Operation blocked (phase requirement not met)
+#   - 2: Operation blocked (prerequisite sentinel not met)
 
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="2.0.0"
+VERSION="3.0.0"
 
 
 # =============================================================================
@@ -96,9 +100,9 @@ fi
 # =============================================================================
 
 # Determine what type of gated operation this is:
-#   edit_write  - Edit/Write tool (requires PF4)
-#   git_commit  - Bash with git commit (requires PF4)
-#   git_push_pr - Bash with git push or gh pr (requires PF6)
+#   edit_write  - Edit/Write tool (requires pf-3 sentinel)
+#   git_commit  - Bash with git commit (requires pf-3 sentinel)
+#   git_push_pr - Bash with git push or gh pr (requires ws-rev sentinel)
 #   ungated     - Bash with other commands (always allowed)
 
 GATE_TYPE="edit_write"
@@ -132,102 +136,111 @@ if [[ "$TOOL_NAME" == "Bash" ]]; then
 fi
 
 # =============================================================================
-# PHASE LOOKUP (JSONL-backed)
+# SENTINEL-BASED ENFORCEMENT (primary)
 # =============================================================================
 
-# Map phase name to numeric level for comparison
-phase_to_num() {
-    case "$1" in
-        PF1*) echo 1 ;;
-        PF2*) echo 2 ;;
-        PF3*) echo 3 ;;
-        PF4*) echo 4 ;;
-        PF5*) echo 5 ;;
-        PF6*) echo 6 ;;
-        PF7*) echo 7 ;;
-        *) echo 0 ;;
-    esac
-}
-
-# Read session ID for JSONL filtering
-SESSION_ID_FILE="${PATHFLOW_SESSION_ID_FILE:-$REPO_ROOT/.state/runtime/current-session-id}"
-if [[ ! -f "$SESSION_ID_FILE" ]]; then
-    # No tracked session - allow (graceful degradation)
-    exit 0
+# Source pathflow state library for sentinel functions
+_PFS_LIB="$REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
+if [[ -f "$_PFS_LIB" ]]; then
+    # shellcheck source=/dev/null
+    source "$_PFS_LIB"
 fi
 
-CURRENT_SESSION_ID=$(cat "$SESSION_ID_FILE" 2>/dev/null) || true
-if [[ -z "$CURRENT_SESSION_ID" ]]; then
-    # Empty session ID - allow (graceful degradation)
-    exit 0
-fi
-
-# Read latest phase_transition event from JSONL
-JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/ledger/pathflow-events.jsonl}"
-if [[ ! -f "$JSONL_FILE" ]]; then
-    # No JSONL file - allow (graceful degradation)
-    exit 0
-fi
-
-if ! command -v jq &>/dev/null; then
-    # No jq available - allow (graceful degradation)
-    exit 0
-fi
-
-# Get the latest phase_transition event for this session
-# Performance: tail -100 is sufficient (~100 events max per session)
-CURRENT_PHASE=$(tail -100 "$JSONL_FILE" 2>/dev/null | \
-    jq -r "select(.type==\"phase_transition\" and .session_id==\"$CURRENT_SESSION_ID\") | .phase" 2>/dev/null | \
-    tail -1) || true
-
-if [[ -z "$CURRENT_PHASE" ]]; then
-    # No phase info found - allow (graceful degradation)
-    exit 0
-fi
-
-PHASE_NUM=$(phase_to_num "$CURRENT_PHASE")
-
-# =============================================================================
-# PHASE GATE ENFORCEMENT
-# =============================================================================
-
-# Edit/Write and git commit require PF4-EXECUTE (phase_num >= 4)
-# git push/gh pr require PF6-COMPLETE (phase_num >= 6)
-
-REQUIRED_PHASE=""
-REQUIRED_NUM=0
+# Determine required sentinel based on gate type
+REQUIRED_SENTINEL=""
+REQUIRED_DESC=""
 
 case "$GATE_TYPE" in
     edit_write|git_commit)
-        REQUIRED_PHASE="PF4-EXECUTE"
-        REQUIRED_NUM=4
+        REQUIRED_SENTINEL="pf-3"
+        REQUIRED_DESC="PF3-CLASSIFY (branch creation)"
         ;;
     git_push_pr)
-        REQUIRED_PHASE="PF6-COMPLETE"
-        REQUIRED_NUM=6
+        REQUIRED_SENTINEL="ws-rev"
+        REQUIRED_DESC="WS-REV (review completed)"
         ;;
 esac
 
-if [[ $PHASE_NUM -ge $REQUIRED_NUM ]]; then
-    # Phase requirement met - allow
-    exit 0
-fi
+# Check sentinel
+if [[ -n "$REQUIRED_SENTINEL" ]] && declare -f has_sentinel &>/dev/null; then
+    if has_sentinel "$REQUIRED_SENTINEL"; then
+        # Sentinel exists — prerequisite met, allow
+        exit 0
+    fi
 
-# =============================================================================
-# BLOCK: PHASE REQUIREMENT NOT MET
-# =============================================================================
+    # Sentinel missing — prerequisite not met, block
+    # Collect current sentinels for diagnostic message
+    CURRENT_SENTINELS=""
+    if declare -f list_sentinels &>/dev/null; then
+        CURRENT_SENTINELS=$(list_sentinels | tr '\n' ', ' | sed 's/,$//')
+    fi
 
-# Log the block event
-if declare -f log_security_event &>/dev/null; then
-    log_security_event "blocked" "pathflow_gate_phase" "$TOOL_NAME" "${COMMAND:-$TOOL_NAME}" "Phase $CURRENT_PHASE < $REQUIRED_PHASE"
-fi
+    # Log the block event
+    if declare -f log_security_event &>/dev/null; then
+        log_security_event "blocked" "pathflow_gate_sentinel" "$TOOL_NAME" "${COMMAND:-$TOOL_NAME}" "Missing sentinel: pathflow-$REQUIRED_SENTINEL"
+    fi
 
-cat >&2 <<EOF
-BLOCKED: PathFlow gate - phase requirement not met
-Reason: Current phase is $CURRENT_PHASE but $REQUIRED_PHASE is required
+    cat >&2 <<EOF
+BLOCKED: PathFlow gate - prerequisite not met
+Reason: $GATE_TYPE requires $REQUIRED_DESC. No pathflow-$REQUIRED_SENTINEL sentinel found.
 Tool: $TOOL_NAME
 Gate: $GATE_TYPE
 
 Complete earlier phases before this operation.
+Current sentinels: ${CURRENT_SENTINELS:-none}
 EOF
-exit 2
+    exit 2
+fi
+
+# =============================================================================
+# FALLBACK: GRACEFUL DEGRADATION
+# =============================================================================
+
+# If sentinel library is not available, allow (graceful degradation).
+# The JSONL-based phase lookup below is preserved as a commented reference
+# for when cf-knowledge-layer starts writing phase_transition events.
+exit 0
+
+# =============================================================================
+# JSONL PHASE LOOKUP (secondary, commented fallback)
+# =============================================================================
+# When cf-knowledge-layer writes phase_transition events to JSONL, this section
+# can be uncommented to provide a secondary enforcement mechanism.
+#
+# # Map phase name to numeric level for comparison
+# phase_to_num() {
+#     case "$1" in
+#         PF1*) echo 1 ;; PF2*) echo 2 ;; PF3*) echo 3 ;; PF4*) echo 4 ;;
+#         PF5*) echo 5 ;; PF6*) echo 6 ;; PF7*) echo 7 ;; *) echo 0 ;;
+#     esac
+# }
+#
+# SESSION_ID_FILE="${PATHFLOW_SESSION_ID_FILE:-$REPO_ROOT/.state/runtime/current-session-id}"
+# [[ ! -f "$SESSION_ID_FILE" ]] && exit 0
+# CURRENT_SESSION_ID=$(cat "$SESSION_ID_FILE" 2>/dev/null) || true
+# [[ -z "$CURRENT_SESSION_ID" ]] && exit 0
+#
+# JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/ledger/pathflow-events.jsonl}"
+# [[ ! -f "$JSONL_FILE" ]] && exit 0
+# command -v jq &>/dev/null || exit 0
+#
+# CURRENT_PHASE=$(tail -100 "$JSONL_FILE" 2>/dev/null | \
+#     jq -r "select(.type==\"phase_transition\" and .session_id==\"$CURRENT_SESSION_ID\") | .phase" 2>/dev/null | \
+#     tail -1) || true
+# [[ -z "$CURRENT_PHASE" ]] && exit 0
+#
+# PHASE_NUM=$(phase_to_num "$CURRENT_PHASE")
+# REQUIRED_PHASE="" REQUIRED_NUM=0
+# case "$GATE_TYPE" in
+#     edit_write|git_commit) REQUIRED_PHASE="PF4-EXECUTE"; REQUIRED_NUM=4 ;;
+#     git_push_pr) REQUIRED_PHASE="PF6-COMPLETE"; REQUIRED_NUM=6 ;;
+# esac
+# [[ $PHASE_NUM -ge $REQUIRED_NUM ]] && exit 0
+#
+# cat >&2 <<EOF
+# BLOCKED: PathFlow gate - phase requirement not met
+# Reason: Current phase is $CURRENT_PHASE but $REQUIRED_PHASE is required
+# Tool: $TOOL_NAME | Gate: $GATE_TYPE
+# Complete earlier phases before this operation.
+# EOF
+# exit 2
