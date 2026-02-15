@@ -84,6 +84,15 @@ Every session follows this initialization sequence.
 - Proceeding to PF3 without explicit tracking decision
 - Spawning role teammates before their phase
 
+### Scenario Navigator
+
+| I want to... | Start at | Key sections |
+|--------------|----------|-------------|
+| Start a new feature | Section 3 (Session Start) | -> Section 4 (PathFlow) -> Section 5 (Teammates) |
+| Resume previous work | /cf-resume | -> Section 11 (Recovery) |
+| Understand the pipeline | Section 4 (Work Type Pipelines) | -> Section 4 (Work Stages) |
+| Fix a stuck session | Section 11 (Help and Recovery) | -> Section 4 (Rework Limits) |
+
 ---
 
 ## 4. PathFlow Session Management
@@ -98,13 +107,25 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 
 | Phase | What Happens | Teammate Spawned | Key Outputs |
 |-------|-------------|------------------|-------------|
-| **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag, spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag |
+| **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag (JSON), pathflow-pf-1 sentinel |
 | **PF2-CONTEXT** | Spawn cf-knowledge-layer, query active work, load memory context, determine tracked vs untracked | cf-knowledge-layer (persistent) | Active work state, tracking decision |
 | **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow:pf-3 sentinel |
 | **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type (see Work Type Pipelines below) | Role teammates (on-demand, per stage) | Code, docs, tests, reviews |
 | **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
 | **PF6-COMPLETE** | cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated |
 | **PF7-END** | Shutdown all teammates, write session summary to JSONL, remove pathflow-active flag, TeamDelete | None (shutting down) | Clean session end |
+
+### Quick-Reference Phase Map
+
+| Phase | Gate (what must exist) | Creates (sentinel) | Key Action |
+|-------|----------------------|-------------------|------------|
+| PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security |
+| PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer |
+| PF3-CLASSIFY | pf-2 | pathflow-pf-3 | Create branch (UNLOCKS Edit/Write) |
+| PF4-EXECUTE | pf-3 | pathflow-ws-* | Run work pipeline |
+| PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria |
+| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR |
+| PF7-END | pf-6 | (cleanup) | Shutdown, remove flag |
 
 ### Phase Task IDs
 
@@ -144,6 +165,19 @@ This is not a guideline -- it is your operating mode. Every piece of work flows 
 **Permitted read-only actions:** Reading files for verification, reading agent definitions, reading PROJECT.md/CLAUDE.md, team management commands (TeamCreate, SendMessage, TaskCreate).
 
 ⛔ **If you catch yourself about to use Edit, Write, or Bash for anything other than reading -- STOP and delegate to the appropriate teammate.**
+
+> -> See Section 5 for spawn patterns and teammate coordination
+
+### Token-Aware Delegation
+
+The lead's context window is shared with ALL teammates. Protect it:
+
+| Action | Instead Of | Do This |
+|--------|-----------|---------|
+| Read large files (>50 lines) | Read tool | Delegate to Explore sub-agent |
+| Search codebase | Multiple Grep calls | Spawn Explore sub-agent |
+| Complex analysis | Reading + reasoning | Delegate to cf-planning |
+| Bulk file changes | Multiple Edit calls | Delegate to cf-development |
 
 ### Sub-Agent Policy
 
@@ -189,6 +223,8 @@ The work type determines which stages execute during PF4-EXECUTE:
 | WS-REV | cf-review | Independent review (adapts per work type: CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW) |
 | WS-QA | cf-quality-assurance | Integration testing, acceptance verification (quality gate) |
 | WS-TEST | cf-quality-assurance | Primary test implementer (when tests ARE the deliverable) |
+
+> -> See Section 5 for peer-to-peer messaging patterns
 
 ### Session Boundary
 
@@ -271,6 +307,9 @@ The predefined roster above represents optimized defaults, not constraints. The 
 | Specialized one-off | Domain expertise needed | security-auditor, migration-helper |
 | Explore sub-agent | Quick read-only lookups | Codebase search during PF3 |
 | Multiple instances | Parallel work on same role | developer-frontend + developer-backend |
+| Bulk operations | Large-scale file changes | bulk-renamer for cross-codebase updates |
+| Research agent | External investigation | api-researcher for third-party docs |
+| Secondary developer | Parallel implementation | cf-development-2 for independent subtasks |
 
 ### Agent Definitions
 
@@ -415,6 +454,15 @@ This should be rare for function teammates whose context is bounded.
 | test, write tests, add coverage | TEST | WS-TEST --> WS-REV |
 | plan, design, architect, analyze | PLAN | WS-PLAN --> WS-REV |
 | spike, investigate, prototype, POC | SPKE | WS-PLAN --> WS-REV |
+
+### Exploration and Research Routing
+
+| Request Type | Route To | Example |
+|-------------|----------|---------|
+| Quick file lookup | Explore sub-agent (Task tool) | "Find where X is defined" |
+| Codebase analysis | cf-planning (WS-PLAN) | "Analyze the hook architecture" |
+| External research | Explore sub-agent with WebSearch | "What does Claude Code support?" |
+| Design investigation | cf-planning (SPKE pipeline) | "Investigate approaches for X" |
 
 ---
 
@@ -607,6 +655,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Handle user communication | Run tests directly |
 | Make routing and tracking decisions | Bypass PathFlow phases |
 | Read files for verification | Modify `.state/` files directly |
+| Delegate token-heavy operations | Read large files directly in lead context |
 
 ### Enforcement Model
 
@@ -619,6 +668,8 @@ Three complementary mechanisms provide defense-in-depth:
 | **Hooks** | PreToolUse hooks block violations at tool-call level | Edge cases where instructions are ignored |
 
 **Sentinel system:** PathFlow sentinels (`pathflow:pf-3`, `pathflow:ws-dev-done`, etc.) are session-scoped, no TTL, created when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations.
+
+> -> See Section 4 (Phase Progression) for sentinel details
 
 ### PR Workflow
 
