@@ -37,6 +37,11 @@ run_all_tests_parallel() {
     # shellcheck disable=SC2064  # Intentional: expand $results_dir now, not at signal time
     trap "rm -rf '$results_dir'" EXIT
 
+    # Initialize coverage collection directory for parallel workers
+    if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
+        export _COV_RESULTS_DIR="$results_dir"
+    fi
+
     # Collect categories
     local -a categories=()
     while IFS= read -r cat; do
@@ -86,6 +91,11 @@ run_all_tests_parallel() {
 
         # Launch category worker in background (sequential within category)
         (
+            # Each worker writes coverage to its own file (avoids race conditions)
+            # shellcheck disable=SC2030  # Intentional: subshell isolation per worker
+            if [[ -n "${_COV_RESULTS_DIR:-}" ]]; then
+                export COVERAGE_FILE="${_COV_RESULTS_DIR}/.coverage.${category}"
+            fi
             run_category_worker "$category" "$mode" "$results_dir/${category}.result"
         ) &
         active_pids+=($!)
@@ -117,6 +127,35 @@ run_all_tests_parallel() {
     echo ""
     _aggregate_all_results "$results_dir" "${categories[@]}"
 
+    # Check aggregate Python coverage after all parallel workers complete
+    if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
+        # shellcheck disable=SC2086  # Intentional: glob expansion for coverage files
+        local -a cov_files=()
+        for f in "$results_dir"/.coverage.*; do
+            [[ -f "$f" ]] && cov_files+=("$f")
+        done
+        if [[ ${#cov_files[@]} -gt 0 ]]; then
+            local fail_under
+            fail_under=$(get_python_coverage_threshold)
+            # Combine per-worker coverage data into single report
+            # shellcheck disable=SC2031  # Intentional: separate from subshell workers above
+            export COVERAGE_FILE="${results_dir}/.coverage"
+            $PYTHON -m coverage combine "${cov_files[@]}" 2>/dev/null || true
+            echo ""
+            log_section "Aggregate Python Coverage"
+            local cov_output
+            if cov_output=$($PYTHON -m coverage report --fail-under="$fail_under" 2>&1); then
+                echo "$cov_output" | tail -20
+            else
+                echo "$cov_output" | tail -20
+                RUNNER_COVERAGE_FAILED="true"
+                log_error "Coverage below ${fail_under}% threshold"
+            fi
+        else
+            log_warn "No coverage data collected (no Python tests ran or pytest-cov not installed)"
+        fi
+    fi
+
     local end_time
     end_time=$(date +%s)
     local duration=$((end_time - RUNNER_START_TIME))
@@ -124,7 +163,7 @@ run_all_tests_parallel() {
     print_runner_summary "$duration"
 
     # Cleanup handled by trap
-    [[ ${#FAILED_TESTS[@]} -eq 0 ]]
+    [[ ${#FAILED_TESTS[@]} -eq 0 && "$RUNNER_COVERAGE_FAILED" != "true" ]]
 }
 
 # ============================================================================

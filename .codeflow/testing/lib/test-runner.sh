@@ -155,13 +155,17 @@ run_category_tests() {
             local pytest_output
             local pytest_args=("-v" "--tb=short")
 
-            # Add coverage flags if coverage is enabled
+            # Add coverage flags if coverage is enabled and pytest-cov is available
             if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
-                local fail_under
-                fail_under=$(get_coverage_threshold fail_under)
-                local cov_source="${TESTING_ROOT}/../scripts"
-                pytest_args+=("--cov=$cov_source" "--cov-report=term-missing" "--cov-fail-under=$fail_under")
-                log_info "Coverage enabled: fail_under=${fail_under}%"
+                if $PYTHON -c "import pytest_cov" 2>/dev/null; then
+                    # Aggregate coverage: collect data per-category, check threshold once at end
+                    local cov_source
+                    cov_source=$(cd "${TESTING_ROOT}/../scripts" 2>/dev/null && pwd)
+                    pytest_args+=("--cov=$cov_source" "--cov-config=${TESTING_ROOT}/.coveragerc" "--cov-report=" "--cov-append")
+                    log_info "Coverage: collecting data for $category"
+                else
+                    log_warn "pytest-cov not installed, skipping coverage (pip install pytest-cov)"
+                fi
             fi
 
             if pytest_output=$($PYTHON -m pytest "${python_tests[@]}" "${pytest_args[@]}" 2>&1); then
@@ -172,12 +176,6 @@ run_category_tests() {
                 done
                 echo "$pytest_output" | tail -10
             else
-                if echo "$pytest_output" | grep -q "FAIL Required test coverage"; then
-                    RUNNER_COVERAGE_FAILED="true"
-                    log_error "Coverage below threshold in $category"
-                    echo "$pytest_output" | grep -A2 "TOTAL" | head -5
-                    echo "$pytest_output" | grep "FAIL Required" | head -1
-                fi
                 FAILED_TESTS+=("$category (pytest)")
                 echo "$pytest_output" | tail -20
             fi
@@ -227,11 +225,38 @@ run_all_tests() {
     log_info "Priorities: $(get_mode_priorities "$mode")"
     echo ""
 
+    # Initialize aggregate coverage collection
+    if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
+        COVERAGE_FILE="${TESTING_ROOT}/.coverage"
+        export COVERAGE_FILE
+        rm -f "$COVERAGE_FILE" 2>/dev/null || true
+    fi
+
     for category in $(list_categories); do
         run_category_tests "$category" "$mode" || {
             [[ "$RUNNER_STOP_ON_FAIL" == "true" ]] && break
         }
     done
+
+    # Check aggregate Python coverage after all categories complete
+    if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then
+        if [[ -f "${COVERAGE_FILE:-}" ]]; then
+            local fail_under
+            fail_under=$(get_python_coverage_threshold)
+            echo ""
+            log_section "Aggregate Python Coverage"
+            local cov_output
+            if cov_output=$($PYTHON -m coverage report --fail-under="$fail_under" 2>&1); then
+                echo "$cov_output" | tail -20
+            else
+                echo "$cov_output" | tail -20
+                RUNNER_COVERAGE_FAILED="true"
+                log_error "Coverage below ${fail_under}% threshold"
+            fi
+        else
+            log_warn "No coverage data collected (no Python tests ran or pytest-cov not installed)"
+        fi
+    fi
 
     local end_time
     end_time=$(date +%s)
@@ -239,7 +264,7 @@ run_all_tests() {
 
     print_runner_summary "$duration"
 
-    [[ ${#FAILED_TESTS[@]} -eq 0 ]]
+    [[ ${#FAILED_TESTS[@]} -eq 0 && "$RUNNER_COVERAGE_FAILED" != "true" ]]
 }
 
 # ============================================================================
@@ -261,7 +286,7 @@ print_runner_summary() {
     # Show coverage status if coverage was enabled
     if [[ "$RUNNER_WITH_COVERAGE" == "true" ]]; then
         local threshold
-        threshold=$(get_coverage_threshold fail_under)
+        threshold=$(get_python_coverage_threshold)
         if [[ "$RUNNER_COVERAGE_FAILED" == "true" ]]; then
             echo -e "  ${RED}Coverage:${NC} BELOW ${threshold}% threshold"
         else
@@ -278,7 +303,7 @@ print_runner_summary() {
         done
         echo ""
         if [[ "$RUNNER_COVERAGE_FAILED" == "true" ]]; then
-            echo -e "${RED}FAILED (coverage below $(get_coverage_threshold fail_under)%)${NC}"
+            echo -e "${RED}FAILED (coverage below $(get_python_coverage_threshold)%)${NC}"
         else
             echo -e "${RED}FAILED${NC}"
         fi

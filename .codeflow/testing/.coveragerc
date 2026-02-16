@@ -13,6 +13,11 @@ omit =
     */test_*.py
     */.venv/*
     */conftest.py
+    # CLI entry point scripts are integration-tested via subprocess (not importable as
+    # modules by pytest), so coverage.py cannot measure them. They follow the cf-*.py
+    # naming convention. Exclude them from line coverage; bash integration tests validate
+    # their behavior.
+    */cf-*.py
 
 # Enable branch coverage
 branch = True
