@@ -588,11 +588,11 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
     cf-quality-assurance.md
   skills/                         # 1 active skill
     cf-working-protocol/          # Team lead cognitive procedures
-  hooks/codeflow/                 # 19 hook scripts by event type
+  hooks/codeflow/                 # 20 hook scripts by event type
     session-start/                # 3 scripts
     user-prompt-submit/           # 2 scripts
     pre-tool-use/                 # 7 scripts
-    post-tool-use/                # 3 scripts
+    post-tool-use/                # 4 scripts
     stop/                         # 2 scripts
     session-end/                  # 2 scripts
   commands/                       # 14 slash command definitions (cf-*.md)
