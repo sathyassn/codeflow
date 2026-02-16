@@ -75,6 +75,8 @@ mkdir -p "$TEST_REPO_ROOT/.state/db"
 # Initialize as git repo (hooks call git branch, git status, etc.)
 git -C "$TEST_REPO_ROOT" init -q 2>/dev/null || true
 git -C "$TEST_REPO_ROOT" commit --allow-empty -m "init" -q 2>/dev/null || true
+# Create non-protected branch so tests aren't affected by real repo's branch
+git -C "$TEST_REPO_ROOT" checkout -b test-branch -q 2>/dev/null || true
 
 # Copy real config and scripts so hooks can read enforcement policy, modules, etc.
 mkdir -p "$TEST_REPO_ROOT/.codeflow"

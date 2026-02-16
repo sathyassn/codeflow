@@ -34,7 +34,7 @@ run_edit_write() {
     local json_input="{\"file_path\": \"$file_path\"}"
 
     local output exit_code
-    output=$(TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+    output=$(cd "$TEST_REPO_ROOT" && TOOL_NAME="$tool_name" TOOL_INPUT="$json_input" bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 
     HOOK_OUTPUT="$output"
     HOOK_EXIT_CODE=$exit_code

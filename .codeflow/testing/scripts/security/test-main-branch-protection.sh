@@ -272,8 +272,13 @@ test_bash_command "git checkout feat/branch" \
 test_bash_command "git checkout main" \
     "Allow: checkout main alone (read-only)" "allowed"
 
-test_bash_command "git merge feat/branch" \
-    "Allow: merge on non-protected branch" "allowed"
+_current_branch=$(git branch --show-current 2>/dev/null || echo "")
+if [[ "$_current_branch" == "main" || "$_current_branch" == "master" ]]; then
+    skip "Merge-allowed test skipped (on protected branch '$_current_branch')"
+else
+    test_bash_command "git merge feat/branch" \
+        "Allow: merge on non-protected branch" "allowed"
+fi
 
 # ============================================================================
 # Test 10: Hook path manipulation blocked
