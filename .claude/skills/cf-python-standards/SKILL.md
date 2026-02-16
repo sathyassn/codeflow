@@ -196,7 +196,7 @@ Common Patterns:
   | File I/O       | Always use with-statement context managers                        |
   | Exit codes     | 0=success, 1=error, 2=bad args, 3=not found                      |
 
-  Expanded examples: resources/python-essentials.md
+See also: resources/python-essentials.md
 
 Anti-Patterns:
 
@@ -240,7 +240,7 @@ Lint / Format Rules:
 
   Inline suppression: # noqa: F401 -- always include a reason comment.
 
-  Full lint rule reference: resources/python-essentials.md
+See also: resources/python-essentials.md
 
 Procedure:
   1. Run ruff check on the script (or flake8 as fallback)
@@ -252,3 +252,9 @@ Procedure:
 
 Output: Clean lint output with no errors or justified suppressions only
 ```
+
+## Resources
+
+| Resource | Purpose |
+|----------|---------|
+| `resources/python-essentials.md` | Expanded pattern examples, lint rules reference |

@@ -82,7 +82,7 @@ Procedure:
 
 Output: Document type classification (ADR, Brief, Epic, Task, Runbook, Guide, Skill, Agent)
 
-Resources: resources/document-type-decision-tree.md for the full decision flowchart
+See also: resources/document-type-decision-tree.md
 ```
 
 ### 🔧 apply-template
@@ -187,7 +187,7 @@ Procedure:
 
 Output: List of violations found (or clean pass)
 
-Resources: resources/lint-rules-quick-ref.md for before/after examples
+See also: resources/lint-rules-quick-ref.md
 ```
 
 ### 🔧 fix-violations
@@ -225,3 +225,11 @@ Procedure:
 
 Output: Clean document with all violations resolved
 ```
+
+## Resources
+
+| Resource | Purpose |
+|----------|---------|
+| `resources/document-type-decision-tree.md` | Full decision flowchart for document type classification |
+| `resources/lint-rules-quick-ref.md` | Lint rule before/after examples |
+| `resources/templates/` | Document templates (ADR, brief, epic, task, runbook) |
