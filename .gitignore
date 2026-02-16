@@ -3,7 +3,7 @@
 
 # State files - Untracked (machine-specific, regeneratable)
 # coordination/, logs/, runtime/ are untracked
-# ledger/ is tracked (Tier 0 rebuild authority)
+# ledger/ is tracked (Tier 0) except pathflow-events (session telemetry)
 .state/coordination/
 .state/logs/
 .state/runtime/
@@ -14,6 +14,7 @@
 .state/db/schema.sql
 .state/backups/
 .state/ledger/*.lock
+.state/ledger/pathflow-events.jsonl
 # Sentinel and session state (session-scoped, not persistent)
 .state/sentinels/skill/*
 !.state/sentinels/skill/.gitkeep
