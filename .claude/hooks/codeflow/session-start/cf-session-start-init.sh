@@ -4,16 +4,17 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.2.0
+# Version:   1.3.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
 #   Section 2: Setup (REPO_ROOT, libraries)
 #   Section 3: Directory creation
-#   Section 4: Stale session cleanup
+#   Section 4: Stale session cleanup (config-driven)
 #   Section 5: Sentinel cleanup (expires-based)
 #   Section 6: Active task context expiry
-#   Section 7: PathFlow flag creation
+#   Section 7: PathFlow flag creation (with guard)
+#   Section 7b: Sentinel recovery (context overflow)
 #   Section 8: Session metadata
 #   Section 9: Stale team detection
 #
@@ -25,7 +26,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.2.0"
+readonly VERSION="1.3.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -132,18 +133,75 @@ mkdir -p "$SESSION_STATE_DIR" 2>/dev/null || true
 mkdir -p "$SHARED_STATE_DIR" 2>/dev/null || true
 
 # =============================================================================
-# SECTION 4: STALE SESSION CLEANUP
+# SECTION 4: STALE SESSION CLEANUP (config-driven)
 # =============================================================================
 
-# Stale session cleanup (remove session dirs older than 24 hours)
-if [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
-    find "$REPO_ROOT/.state/sentinels/skill" -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rm -rf {} \; 2>/dev/null || true
+# Read cleanup config from enforcement-policy.json (fallback to defaults)
+_STALE_THRESHOLD_HOURS=24
+_PRESERVE_PATHFLOW_ACTIVE="true"
+_CLEAN_SESSION_DIRS="true"
+_CLEAN_PATHFLOW_SENTINELS="true"
+_CLEAN_SKILL_SENTINELS="true"
+
+if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
+    _cfg_hours=$(jq -r '.cleanup.stale_threshold_hours // 24' "$CONFIG" 2>/dev/null) || true
+    case "${_cfg_hours:-}" in
+        ''|*[!0-9]*) _cfg_hours=24 ;;
+    esac
+    _STALE_THRESHOLD_HOURS="$_cfg_hours"
+
+    _cfg_preserve=$(jq -r '.cleanup.preserve_pathflow_active // true' "$CONFIG" 2>/dev/null) || true
+    [[ "$_cfg_preserve" == "true" ]] && _PRESERVE_PATHFLOW_ACTIVE="true" || _PRESERVE_PATHFLOW_ACTIVE="false"
+
+    _cfg_sd=$(jq -r '.cleanup.targets.session_dirs // true' "$CONFIG" 2>/dev/null) || true
+    [[ "$_cfg_sd" == "false" ]] && _CLEAN_SESSION_DIRS="false"
+
+    _cfg_pf=$(jq -r '.cleanup.targets.pathflow_sentinels // true' "$CONFIG" 2>/dev/null) || true
+    [[ "$_cfg_pf" == "false" ]] && _CLEAN_PATHFLOW_SENTINELS="false"
+
+    _cfg_sk=$(jq -r '.cleanup.targets.skill_sentinels // true' "$CONFIG" 2>/dev/null) || true
+    [[ "$_cfg_sk" == "false" ]] && _CLEAN_SKILL_SENTINELS="false"
 fi
-if [[ -d "$REPO_ROOT/.state/sentinels/pathflow" ]]; then
-    find "$REPO_ROOT/.state/sentinels/pathflow" -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rm -rf {} \; 2>/dev/null || true
+
+# Convert hours to minutes for find -mmin
+_STALE_THRESHOLD_MIN=$(( _STALE_THRESHOLD_HOURS * 60 ))
+
+# Helper: check if a session dir has an active pathflow flag
+_has_active_flag() {
+    local dir="$1"
+    local sid
+    sid=$(basename "$dir")
+    [[ -f "$REPO_ROOT/.state/session/$sid/is-pathflow-active" ]]
+}
+
+if [[ "$_CLEAN_SKILL_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
+    while IFS= read -r _stale_dir; do
+        [[ -z "$_stale_dir" ]] && continue
+        _stale_sid=$(basename "$_stale_dir")
+        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
+            continue
+        fi
+        rm -rf "$_stale_dir" 2>/dev/null || true
+    done < <(find "$REPO_ROOT/.state/sentinels/skill" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
 fi
-if [[ -d "$REPO_ROOT/.state/session" ]]; then
-    find "$REPO_ROOT/.state/session" -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rm -rf {} \; 2>/dev/null || true
+if [[ "$_CLEAN_PATHFLOW_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/pathflow" ]]; then
+    while IFS= read -r _stale_dir; do
+        [[ -z "$_stale_dir" ]] && continue
+        _stale_sid=$(basename "$_stale_dir")
+        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
+            continue
+        fi
+        rm -rf "$_stale_dir" 2>/dev/null || true
+    done < <(find "$REPO_ROOT/.state/sentinels/pathflow" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
+fi
+if [[ "$_CLEAN_SESSION_DIRS" == "true" ]] && [[ -d "$REPO_ROOT/.state/session" ]]; then
+    while IFS= read -r _stale_dir; do
+        [[ -z "$_stale_dir" ]] && continue
+        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && [[ -f "$_stale_dir/is-pathflow-active" ]]; then
+            continue
+        fi
+        rm -rf "$_stale_dir" 2>/dev/null || true
+    done < <(find "$REPO_ROOT/.state/session" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
 fi
 
 # =============================================================================
@@ -197,12 +255,41 @@ if [[ -f "$_PFS_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$_PFS_LIB"
 
-    # Create flag with initial metadata
-    # team_name is empty at init (updated when TeamCreate is called)
-    # tracking_level starts as "pending" (updated at PF3-CLASSIFY)
-    create_pathflow_flag "$CODEFLOW_SESSION_ID" ""
+    # Guard: only create flag if it doesn't already exist
+    # Prevents teammate spawns from resetting tracking_level to "pending"
+    if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]]; then
+        echo "SessionStart: PathFlow flag already exists, preserving" >&2
+    else
+        # Create flag with initial metadata
+        # team_name is empty at init (updated when TeamCreate is called)
+        # tracking_level starts as "pending" (updated at PF3-CLASSIFY)
+        create_pathflow_flag "$CODEFLOW_SESSION_ID" ""
+    fi
 fi
 # If library missing, skip flag creation (graceful degradation)
+
+# =============================================================================
+# SECTION 7b: SENTINEL RECOVERY
+# =============================================================================
+# If pathflow flag exists but sentinel dir is empty, this is likely a context
+# overflow recovery. Recreate pf-1, pf-2, pf-3 sentinels so the pathflow-gate
+# hook doesn't block Edit/Write operations.
+
+_PF_SENTINEL_DIR="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
+if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]] && [[ -d "$_PF_SENTINEL_DIR" ]]; then
+    # Check if sentinel dir has any pathflow-* files
+    _sentinel_count=0
+    for _sf in "$_PF_SENTINEL_DIR"/pathflow-*; do
+        [[ -f "$_sf" ]] && _sentinel_count=$(( _sentinel_count + 1 ))
+    done
+
+    if [[ "$_sentinel_count" -eq 0 ]] && type create_sentinel &>/dev/null; then
+        create_sentinel "pf-1"
+        create_sentinel "pf-2"
+        create_sentinel "pf-3"
+        echo "SessionStart: Recovered PathFlow sentinels (pf-1, pf-2, pf-3)" >&2
+    fi
+fi
 
 # =============================================================================
 # SECTION 8: SESSION METADATA

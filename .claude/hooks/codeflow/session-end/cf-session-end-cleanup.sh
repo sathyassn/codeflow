@@ -111,6 +111,37 @@ if [[ -f "$SECURITY_LIB" ]]; then
     fi
 fi
 
+# =============================================================================
+# TEAM-AWARENESS GUARD
+# =============================================================================
+# If an active team exists with members in this repo, this SessionEnd event
+# is likely a teammate shutdown — NOT a full session end. Skip cleanup to
+# avoid destroying shared state (env file, sentinels, pathflow flag).
+
+_TEAMS_DIR="${HOME}/.claude/teams"
+if [[ -d "$_TEAMS_DIR" ]] && command -v jq &>/dev/null; then
+    for _team_config in "$_TEAMS_DIR"/*/config.json; do
+        [[ -f "$_team_config" ]] || continue
+
+        _member_count=$(jq -r '.members | length // 0' "$_team_config" 2>/dev/null) || continue
+        case "$_member_count" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        [[ "$_member_count" -eq 0 ]] && continue
+
+        # Check if any member's cwd matches this repo
+        _idx=0
+        while [[ "$_idx" -lt "$_member_count" ]]; do
+            _member_cwd=$(jq -r ".members[$_idx].cwd // empty" "$_team_config" 2>/dev/null) || true
+            if [[ "${_member_cwd:-}" == "$REPO_ROOT"* ]]; then
+                echo "SessionEnd: Team active, skipping cleanup for teammate shutdown" >&2
+                exit 0
+            fi
+            _idx=$(( _idx + 1 ))
+        done
+    done
+fi
+
 # Track cleanup stats for output
 _sentinels_cleaned=0
 _task_preserved="false"

@@ -718,5 +718,14 @@
       "preserve_active_task": true,
       "log_session_end": true
     }
+  },
+  "cleanup": {
+    "stale_threshold_hours": 24,
+    "preserve_pathflow_active": true,
+    "targets": {
+      "session_dirs": true,
+      "pathflow_sentinels": true,
+      "skill_sentinels": true
+    }
   }
 }

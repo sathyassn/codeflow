@@ -75,6 +75,8 @@ fi
 CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 export CODEFLOW_SESSION_ID
 
+echo "PostToolUse[sentinel]: hook start, tool=$TOOL_NAME, session=$CODEFLOW_SESSION_ID" >&2
+
 # =============================================================================
 # PATHFLOW CHECK — early exit if not active
 # =============================================================================
@@ -85,9 +87,13 @@ export LIB_DIR
 if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
     # shellcheck source=/dev/null
     source "$LIB_DIR/security-lib.sh"
+else
+    echo "PostToolUse[sentinel]: security-lib.sh not found, skipping" >&2
+    exit 0
 fi
 
 if ! is_pathflow_active 2>/dev/null; then
+    echo "PostToolUse[sentinel]: pathflow not active, skipping" >&2
     exit 0
 fi
 
@@ -97,10 +103,14 @@ fi
 
 _PFS_LIB="$REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
 if [[ ! -f "$_PFS_LIB" ]]; then
+    echo "PostToolUse[sentinel]: pathflow-state lib not found at $_PFS_LIB, skipping" >&2
     exit 0
 fi
 # shellcheck source=/dev/null
-source "$_PFS_LIB"
+if ! source "$_PFS_LIB"; then
+    echo "PostToolUse[sentinel]: failed to source pathflow-state lib" >&2
+    exit 0
+fi
 
 # =============================================================================
 # SENTINEL DETECTION
@@ -110,7 +120,11 @@ case "$TOOL_NAME" in
 
     TeamCreate)
         # PF1-INIT: Team infrastructure created
-        create_sentinel "pf-1"
+        if create_sentinel "pf-1"; then
+            echo "PostToolUse[sentinel]: created sentinel pf-1" >&2
+        else
+            echo "PostToolUse[sentinel]: FAILED to create sentinel pf-1" >&2
+        fi
         ;;
 
     Task)
@@ -118,7 +132,11 @@ case "$TOOL_NAME" in
         if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
             _task_name=$(echo "$TOOL_INPUT" | jq -r '.name // empty' 2>/dev/null) || true
             if [[ "${_task_name:-}" == *"cf-knowledge-layer"* ]]; then
-                create_sentinel "pf-2"
+                if create_sentinel "pf-2"; then
+                    echo "PostToolUse[sentinel]: created sentinel pf-2" >&2
+                else
+                    echo "PostToolUse[sentinel]: FAILED to create sentinel pf-2" >&2
+                fi
             fi
         fi
         ;;
@@ -131,15 +149,27 @@ case "$TOOL_NAME" in
             if [[ -n "${_command:-}" ]]; then
                 # Check for git branch creation (new branch)
                 if echo "$_command" | grep -qE 'git\s+(checkout\s+-b|switch\s+-c)\s'; then
-                    create_sentinel "pf-3"
+                    if create_sentinel "pf-3"; then
+                        echo "PostToolUse[sentinel]: created sentinel pf-3" >&2
+                    else
+                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-3" >&2
+                    fi
                 fi
                 # Check for switching to an existing feature branch (resume flow)
                 if echo "$_command" | grep -qE 'git\s+(checkout|switch)\s+(feat|fix|plan|docs|refactor|test|chore|ci|experiment|hotfix)/'; then
-                    create_sentinel "pf-3"
+                    if create_sentinel "pf-3"; then
+                        echo "PostToolUse[sentinel]: created sentinel pf-3 (resume)" >&2
+                    else
+                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-3 (resume)" >&2
+                    fi
                 fi
                 # Check for PR creation
                 if echo "$_command" | grep -qE 'gh\s+pr\s+create'; then
-                    create_sentinel "pf-6"
+                    if create_sentinel "pf-6"; then
+                        echo "PostToolUse[sentinel]: created sentinel pf-6" >&2
+                    else
+                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-6" >&2
+                    fi
                 fi
             fi
         fi
@@ -155,7 +185,11 @@ case "$TOOL_NAME" in
                     _stage="${BASH_REMATCH[1]}"
                     # Convert to lowercase for sentinel name
                     _stage_lower=$(echo "$_stage" | tr '[:upper:]' '[:lower:]')
-                    create_sentinel "ws-${_stage_lower}"
+                    if create_sentinel "ws-${_stage_lower}"; then
+                        echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
+                    else
+                        echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
+                    fi
                 fi
             fi
         fi
