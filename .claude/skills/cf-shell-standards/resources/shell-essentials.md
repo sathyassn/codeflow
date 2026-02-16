@@ -1,8 +1,11 @@
 # Shell Essentials Reference
 
-**Purpose:** Expanded examples and full lint rules for shell scripting. Companion to the cf-shell-standards skill.
+> Companion resource for the cf-shell-standards skill operations.
+> Primary operations expanded here: **apply-structure**, **apply-conventions**, **apply-patterns**, **validate-script**.
 
-## File Structure Template
+**Purpose:** Expanded examples and full lint rules for shell scripting.
+
+## File Structure Template (apply-structure)
 
 ```bash
 #!/usr/bin/env bash
@@ -52,7 +55,7 @@ main() {
 main "$@"
 ```
 
-## Library File Template
+## Library File Template (apply-structure)
 
 ```bash
 #!/usr/bin/env bash
@@ -76,7 +79,7 @@ my_lib_function() {
 }
 ```
 
-## Naming Conventions
+## Naming Conventions (apply-conventions)
 
 | Element | Convention | Example |
 |---------|------------|---------|
@@ -87,7 +90,7 @@ my_lib_function() {
 | Functions | snake_case | `process_file()` |
 | Source guard vars | `_LOADED_` prefix | `_MY_LIB_LOADED` |
 
-## Required Flags
+## Required Flags (apply-structure)
 
 **Mandatory for all executable scripts:**
 
@@ -105,7 +108,7 @@ my_lib_function() {
 | `-q, --quiet` | Scripts used in automation |
 | `--no-color` | Scripts with colored output |
 
-## Exit Codes
+## Exit Codes (apply-structure)
 
 | Code | Meaning |
 |------|---------|
@@ -114,7 +117,7 @@ my_lib_function() {
 | 2 | Invalid arguments |
 | 3 | Resource not found |
 
-## Error Handling Patterns
+## Error Handling Patterns (apply-patterns)
 
 ### Basic Error Output
 
@@ -157,7 +160,7 @@ let "count += 1" || true
 command -v git &> /dev/null || { echo "Error: git not found" >&2; exit 1; }
 ```
 
-## Variable Handling
+## Variable Handling (apply-patterns)
 
 ### Declare and Assign Separately
 
@@ -201,7 +204,7 @@ if [[ ${#items[@]} -gt 0 ]]; then
 fi
 ```
 
-## JSON Output Patterns
+## JSON Output Patterns (apply-patterns)
 
 ### Simple JSON with jq
 
@@ -231,7 +234,7 @@ for item in "${items[@]}"; do
 done
 ```
 
-## OS-Agnostic Patterns
+## OS-Agnostic Patterns (apply-patterns)
 
 ### OS Detection
 
@@ -265,7 +268,7 @@ esac
 | Base64 decode | `base64 -D` | `base64 -d` |
 | Readlink (absolute) | `readlink` (no -f) | `readlink -f` |
 
-## Terminal-Aware Colors
+## Terminal-Aware Colors (apply-patterns)
 
 ```bash
 if [[ -t 1 ]]; then
@@ -285,7 +288,7 @@ echo -e "${RED}Error:${NC} something failed"
 echo -e "${GREEN}OK:${NC} tests passed"
 ```
 
-## Bash 3.2 Compatibility Guide
+## Bash 3.2 Compatibility Guide (apply-conventions)
 
 macOS ships Bash 3.2. All scripts must avoid Bash 4+ features.
 
@@ -356,7 +359,7 @@ command |& grep "error"
 command 2>&1 | grep "error"
 ```
 
-## ShellCheck Reference
+## ShellCheck Reference (validate-script)
 
 ### Running ShellCheck
 
@@ -527,7 +530,7 @@ else
 fi
 ```
 
-## Anti-Patterns (Expanded)
+## Anti-Patterns (apply-patterns)
 
 ### Never Use `\!` in Scripts
 
@@ -582,7 +585,7 @@ done < file
 echo "$count"  # Correct value
 ```
 
-## Quick Checklist
+## Quick Checklist (validate-script)
 
 Before requesting commit of any `.sh` file:
 

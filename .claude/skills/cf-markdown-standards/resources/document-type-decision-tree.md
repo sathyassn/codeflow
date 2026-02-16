@@ -1,5 +1,7 @@
 # Document Type Decision Tree
 
+> Companion resource for the **classify-document** operation in the cf-markdown-standards skill.
+
 **Purpose:** Determine the correct template and standard for new `.md` files.
 
 **Rule:** Use this decision tree BEFORE creating any new `.md` file. Do not guess the document type.

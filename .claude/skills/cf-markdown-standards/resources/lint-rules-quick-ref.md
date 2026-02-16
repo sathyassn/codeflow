@@ -1,5 +1,7 @@
 # Markdownlint Rules Quick Reference
 
+> Companion resource for the **validate-structure** and **fix-violations** operations in the cf-markdown-standards skill.
+
 **Purpose:** Detailed lint rule explanations with before/after examples.
 
 **Config:** `.markdownlint.json`

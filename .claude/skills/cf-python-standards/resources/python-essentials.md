@@ -1,10 +1,13 @@
 # Python Essentials Reference
 
-**Purpose:** Expanded examples and full lint rules reference for Python scripts. Companion to the [cf-python-standards SKILL.md](../SKILL.md).
+> Companion resource for the cf-python-standards skill operations.
+> Primary operations expanded here: **apply-structure**, **apply-conventions**, **apply-patterns**, **validate-script**.
+
+**Purpose:** Expanded examples and full lint rules reference for Python scripts.
 
 ---
 
-## Full Script Template (Annotated)
+## Full Script Template (apply-structure)
 
 ```python
 #!/usr/bin/env python3
@@ -102,7 +105,7 @@ if __name__ == "__main__":
 
 ---
 
-## Library Module Template
+## Library Module Template (apply-structure)
 
 Library modules (imported, not executed directly) omit the shebang and argparse:
 
@@ -158,7 +161,7 @@ class DataProcessor:
 
 ---
 
-## Type Hint Patterns
+## Type Hint Patterns (apply-conventions)
 
 ### Basic Signatures
 
@@ -220,7 +223,7 @@ Use `TYPE_CHECKING` for imports only needed by type checkers, avoiding runtime i
 
 ---
 
-## Docstring Style (Google)
+## Docstring Style (apply-conventions)
 
 ### Function Docstring
 
@@ -270,7 +273,7 @@ def is_empty(value: str) -> bool:
 
 ---
 
-## Error Handling Patterns
+## Error Handling Patterns (apply-patterns)
 
 ### Specific Exceptions
 
@@ -328,7 +331,7 @@ with (
 
 ---
 
-## JSON Handling Patterns
+## JSON Handling Patterns (apply-patterns)
 
 ### Load and Save
 
@@ -377,7 +380,7 @@ def read_jsonl(path: Path) -> list[dict]:
 
 ---
 
-## Argument Parsing Patterns
+## Argument Parsing Patterns (apply-patterns)
 
 ### Subcommands
 
@@ -420,7 +423,7 @@ if not args.input_file.exists():
 
 ---
 
-## Logging Configuration
+## Logging Configuration (apply-patterns)
 
 ### Basic Setup
 
@@ -460,7 +463,7 @@ except Exception:
 
 ---
 
-## Full Lint Rules Reference
+## Full Lint Rules Reference (validate-script)
 
 ### ruff / flake8 Error Codes
 
