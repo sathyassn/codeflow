@@ -166,17 +166,22 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 1. Verify all commits are pushed: `git status -sb` (check ahead count)
 2. If unpushed commits exist: run sync-remote push first
 3. Check for uncommitted changes: warn requester if present
-4. Compose PR title and body following format above
-5. Execute PR creation:
+4. **Update project memory before PR:**
+   a. Message cf-knowledge-layer: `"update-memory summary={work_summary} pr_branch={branch}"`
+   b. cf-knowledge-layer updates MEMORY.md with: PR number (pending), branch, work summary, key decisions
+   c. Commit memory update: stage and commit as `chore: update project memory for {branch}`
+   d. Push the memory commit
+5. Compose PR title and body following format above
+6. Execute PR creation:
 
    ```text
    gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base main
    ```
 
-6. Capture PR URL and number from output
-7. Report to team lead: `"PR #{number} created: {url}"`
+7. Capture PR URL and number from output
+8. Report to team lead: `"PR #{number} created: {url}"`
 
-**On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry.
+**On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry. Memory update fails: proceed with PR creation (memory is advisory, not blocking).
 
 ### Step 4: Sync Remote
 
