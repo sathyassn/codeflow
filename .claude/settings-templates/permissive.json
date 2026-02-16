@@ -316,7 +316,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write|Bash",
+        "matcher": "Edit|Write|Bash|Task",
         "hooks": [
           {
             "type": "command",

@@ -2,14 +2,15 @@
 # Test: cf-pre-tool-use-pathflow-gate.sh
 # Location: .codeflow/testing/claude-hooks/pre-tool-use/test-cf-pre-tool-use-pathflow-gate.sh
 #
-# Tests PathFlow gate hook (v3.0.0 - sentinel-backed enforcement):
+# Tests PathFlow gate hook (v4.0.0 - sentinel-backed enforcement):
 #   - File exists, executable, shellcheck, headers, strict mode, VERSION
 #   - Exits 0 when no pathflow-active flag (standalone mode)
 #   - Exits 0 when TOOL_NAME is not Edit/Write/Bash
 #   - Sentinel-based gating: Edit/Write blocked without pf-3 sentinel
 #   - Sentinel-based gating: git commit blocked without pf-3 sentinel
 #   - Sentinel-based gating: git push/gh pr blocked without ws-rev sentinel
-#   - Graceful degradation: ALLOW when sentinel library unavailable
+#   - Graceful degradation: non-critical gates ALLOW, critical gates BLOCK
+#   - Session-unknown early check: critical gates BLOCK immediately
 #   - Exits 0 for non-gated Bash commands
 
 set -euo pipefail
@@ -26,7 +27,7 @@ TESTS_FAILED=0
 pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
 fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 
-echo "=== Testing cf-pre-tool-use-pathflow-gate.sh (v3 sentinel) ==="
+echo "=== Testing cf-pre-tool-use-pathflow-gate.sh (v4 sentinel) ==="
 echo ""
 
 # =============================================================================
@@ -92,12 +93,12 @@ else
     fail "Should use set -euo pipefail"
 fi
 
-# Test 6: Has VERSION constant (v3.0.0)
+# Test 6: Has VERSION constant (v4.0.0)
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'VERSION="3.0.0"' "$HOOK"; then
-    pass "Has VERSION 3.0.0"
+if grep -q 'VERSION="4.0.0"' "$HOOK"; then
+    pass "Has VERSION 4.0.0"
 else
-    fail "Should have VERSION 3.0.0"
+    fail "Should have VERSION 4.0.0"
 fi
 
 # Test 7: Has Hook Type header
@@ -265,16 +266,16 @@ else
     fail "Should exit 0 for git commit when sentinel library not available"
 fi
 
-# Test 25: Graceful degradation for git push too
+# Test 25: Graceful degradation BLOCKS git push (critical gate)
 TESTS_RUN=$((TESTS_RUN + 1))
 flag_file="$TEST_TMPDIR/pf-active-25"
 touch "$flag_file"
 degraded_root=$(create_degraded_root)
-result=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-25" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push origin main"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
-if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Graceful degradation: git push when sentinel library missing"
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-25" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push origin main"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
+    pass "Graceful degradation: git push BLOCKED (critical gate)"
 else
-    fail "Should exit 0 for git push when sentinel library not available"
+    fail "Should block git push when sentinel library not available (got exit=$exit_code)"
 fi
 
 # Test 26: Graceful degradation preserves non-gated command behavior
@@ -530,6 +531,84 @@ if [[ $exit_code -eq 2 ]]; then
     pass "Different session's sentinels don't affect current session"
 else
     fail "Should not use another session's sentinels (got exit=$exit_code)"
+fi
+
+echo ""
+echo "--- Execution Tests: Session Unknown Early Check ---"
+
+# Test 46: BLOCKS git push when session ID is "unknown" (early check)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-46"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="unknown" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push origin main"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"session state unknown"* ]]; then
+    pass "Blocks git push when session ID is unknown"
+else
+    fail "Should block git push when session ID is unknown (got exit=$exit_code)"
+fi
+
+# Test 47: BLOCKS gh pr when session ID is "unknown" (early check)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-47"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="unknown" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test\""}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"session state unknown"* ]]; then
+    pass "Blocks gh pr when session ID is unknown"
+else
+    fail "Should block gh pr when session ID is unknown (got exit=$exit_code)"
+fi
+
+# Test 48: ALLOWS Edit when session ID is "unknown" (non-critical, degraded root)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-48"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+result=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="unknown" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows Edit when session ID is unknown (non-critical)"
+else
+    fail "Should allow Edit when session ID is unknown"
+fi
+
+# Test 49: ALLOWS git commit when session ID is "unknown" (non-critical, degraded root)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-49"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+result=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="unknown" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"fix: test\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows git commit when session ID is unknown (non-critical)"
+else
+    fail "Should allow git commit when session ID is unknown"
+fi
+
+echo ""
+echo "--- Execution Tests: Graceful Degradation - Role Teammate Spawn ---"
+
+# Test 50: Graceful degradation BLOCKS role teammate spawn (critical gate)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-50"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-50" TOOL_NAME="Task" TOOL_INPUT='{"prompt":"Read .claude/agents/cf-development.md","name":"cf-development","description":"Spawn cf-development"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
+    pass "Graceful degradation: role teammate spawn BLOCKED (critical gate)"
+else
+    fail "Should block role teammate spawn when sentinel library not available (got exit=$exit_code)"
+fi
+
+# Test 51: BLOCKS role teammate spawn when session ID is "unknown" (early check)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-51"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="unknown" TOOL_NAME="Task" TOOL_INPUT='{"prompt":"Read .claude/agents/cf-development.md","name":"cf-development","description":"Spawn cf-development"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"session state unknown"* ]]; then
+    pass "Blocks role teammate spawn when session ID is unknown"
+else
+    fail "Should block role teammate spawn when session ID is unknown (got exit=$exit_code)"
 fi
 
 echo ""

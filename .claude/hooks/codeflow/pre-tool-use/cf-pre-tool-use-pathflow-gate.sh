@@ -10,7 +10,8 @@
 #   - Blocks Bash(git push/gh pr) when WS-REV not completed
 #   - Blocks Task(role teammate spawn) when PF3-CLASSIFY not reached
 #   - Uses file sentinels (primary) for fast, reliable enforcement
-#   - Graceful degradation: ALLOW on any enforcement system failure
+#   - Graceful degradation: critical gates BLOCK, non-critical gates ALLOW
+#     when enforcement state is unknown
 #
 # Sentinel check (primary enforcement):
 #   Edit/Write, git commit → has_sentinel("pf-3")? Allow/Block
@@ -191,6 +192,29 @@ if [[ "$TOOL_NAME" != "Task" ]]; then
 fi
 
 # =============================================================================
+# EARLY CHECK: SESSION STATE UNKNOWN + CRITICAL GATE
+# =============================================================================
+
+# If session ID is "unknown", sentinel checks will fail (sentinel directory
+# won't exist). For critical gates, block immediately with a clear message
+# rather than falling through to graceful degradation.
+if [[ "$CODEFLOW_SESSION_ID" == "unknown" ]]; then
+    case "$GATE_TYPE" in
+        git_push_pr|role_teammate_spawn)
+            echo "BLOCKED: PathFlow gate - session state unknown" >&2
+            echo "Reason: Cannot verify prerequisites (session ID not registered)" >&2
+            echo "Tool: $TOOL_NAME" >&2
+            echo "Gate: $GATE_TYPE" >&2
+            echo "" >&2
+            echo "Ensure PathFlow session is properly initialized (PF1-INIT) before push/PR/teammate spawn." >&2
+            exit 2
+            ;;
+    esac
+    # Non-critical gates with unknown session: fall through to sentinel check
+    # (which will reach graceful degradation and allow)
+fi
+
+# =============================================================================
 # SENTINEL-BASED ENFORCEMENT (primary)
 # =============================================================================
 
@@ -257,10 +281,24 @@ fi
 # FALLBACK: GRACEFUL DEGRADATION
 # =============================================================================
 
-# If sentinel library is not available, allow (graceful degradation).
-# The JSONL-based phase lookup below is preserved as a commented reference
-# for when cf-knowledge-layer starts writing phase_transition events.
-exit 0
+# Sentinel library not available -- enforcement state is unknown.
+# Critical gates (git push/PR, role teammate spawn) default to BLOCK to prevent
+# bypassing prerequisites when infrastructure fails.
+# Non-critical gates (edit/write, git commit) default to ALLOW to avoid halting
+# development work.
+case "$GATE_TYPE" in
+    git_push_pr|role_teammate_spawn)
+        echo "BLOCKED: Cannot verify prerequisites (sentinel library unavailable)" >&2
+        echo "Ensure PathFlow session is properly initialized before push/PR/teammate spawn." >&2
+        echo "Tool: $TOOL_NAME" >&2
+        echo "Gate: $GATE_TYPE" >&2
+        exit 2
+        ;;
+    *)
+        # Non-critical: allow with degraded enforcement
+        exit 0
+        ;;
+esac
 
 # =============================================================================
 # JSONL PHASE LOOKUP (secondary, commented fallback)
