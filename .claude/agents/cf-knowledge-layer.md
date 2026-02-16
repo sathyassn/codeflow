@@ -119,12 +119,11 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 2. Load associated task from tasks table (by task_id FK)
 3. Load associated epic from epics table (by epic_id FK)
 4. Query recent memory_events: `SELECT * FROM memory_events WHERE work_id = '{id}' ORDER BY created_at DESC LIMIT 50`
-5. Read domain context file: `.claude/memory/{domain}/current-work.md`
-6. Read task markdown: `project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md`
-7. Compile context summary: work_id, task_id, scope, branch, progress events, remaining deliverables
-8. Report loaded context to team lead
+5. Read task markdown: `project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md`
+6. Compile context summary: work_id, task_id, scope, branch, progress events, remaining deliverables
+7. Report loaded context to team lead
 
-**Four-tier loading priority:** active-task.json (hot) -> SQLite active_work (warm) -> JSONL ledger (cold) -> memory markdown (archive).
+**Three-tier loading priority:** active-task.json (hot) -> SQLite active_work (warm) -> JSONL ledger (cold/authoritative).
 
 #### Step 3: Begin Work
 
@@ -176,12 +175,11 @@ Event types:
 1. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
 2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-4. Archive domain context to `.claude/memory/{domain}/current-work.md` (overwrite with completion summary)
-5. Append completion event to `.state/ledger/pathflow-events.jsonl`
-6. Record completion memory_event (event_type='milestone', data includes deliverables summary)
-7. Update `.state/runtime/active-task.json` status to "completed", then delete the file
-8. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
-9. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
+4. Append completion event to `.state/ledger/pathflow-events.jsonl`
+5. Record completion memory_event (event_type='milestone', data includes deliverables summary)
+6. Update `.state/runtime/active-task.json` status to "completed", then delete the file
+7. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
+8. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
 
 #### Memory Lifecycle Management
 

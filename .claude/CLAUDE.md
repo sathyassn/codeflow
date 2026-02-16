@@ -721,7 +721,6 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/runtime/current-session-id` | Current session ID reference |
 | `.state/ledger/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/is-pathflow-active` | Flag file: PathFlow session is active |
-| `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
 ---
 
