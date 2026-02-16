@@ -177,7 +177,6 @@ _has_active_flag() {
 if [[ "$_CLEAN_SKILL_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
     while IFS= read -r _stale_dir; do
         [[ -z "$_stale_dir" ]] && continue
-        _stale_sid=$(basename "$_stale_dir")
         if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
             continue
         fi
@@ -187,7 +186,6 @@ fi
 if [[ "$_CLEAN_PATHFLOW_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/pathflow" ]]; then
     while IFS= read -r _stale_dir; do
         [[ -z "$_stale_dir" ]] && continue
-        _stale_sid=$(basename "$_stale_dir")
         if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
             continue
         fi
@@ -257,8 +255,11 @@ if [[ -f "$_PFS_LIB" ]]; then
 
     # Guard: only create flag if it doesn't already exist
     # Prevents teammate spawns from resetting tracking_level to "pending"
+    # Track whether flag pre-existed for Section 7b recovery decision
+    _IS_RECOVERY="false"
     if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]]; then
         echo "SessionStart: PathFlow flag already exists, preserving" >&2
+        _IS_RECOVERY="true"
     else
         # Create flag with initial metadata
         # team_name is empty at init (updated when TeamCreate is called)
@@ -271,12 +272,13 @@ fi
 # =============================================================================
 # SECTION 7b: SENTINEL RECOVERY
 # =============================================================================
-# If pathflow flag exists but sentinel dir is empty, this is likely a context
-# overflow recovery. Recreate pf-1, pf-2, pf-3 sentinels so the pathflow-gate
-# hook doesn't block Edit/Write operations.
+# If pathflow flag PRE-EXISTED this session start (genuine recovery from context
+# overflow or teammate join) and sentinel dir is empty, recreate pf-1, pf-2, pf-3
+# sentinels so the pathflow-gate hook doesn't block Edit/Write operations.
+# Fresh sessions (_IS_RECOVERY=false) skip this to preserve pf-3 enforcement.
 
 _PF_SENTINEL_DIR="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
-if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]] && [[ -d "$_PF_SENTINEL_DIR" ]]; then
+if [[ "$_IS_RECOVERY" == "true" ]] && [[ -d "$_PF_SENTINEL_DIR" ]]; then
     # Check if sentinel dir has any pathflow-* files
     _sentinel_count=0
     for _sf in "$_PF_SENTINEL_DIR"/pathflow-*; do
