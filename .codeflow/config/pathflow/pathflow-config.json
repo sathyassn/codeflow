@@ -109,5 +109,82 @@
     "max_qa_retries": 2,
     "stage_timeout_minutes": 30,
     "escalation": "lead"
+  },
+  "task_tracker": {
+    "mirroring": {
+      "enabled": true,
+      "source_of_truth": "jsonl",
+      "mirror_target": "task_tracker",
+      "description": "Task tracker entries are visual mirrors of PathFlow state. JSONL/SQLite is authoritative. Task tracker is derived and disposable."
+    },
+    "phase_templates": {
+      "PF1-INIT": {
+        "subject": "PF1-INIT: Initialize session",
+        "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
+        "activeForm": "Initializing PathFlow session"
+      },
+      "PF2-CONTEXT": {
+        "subject": "PF2-CONTEXT: Load context",
+        "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
+        "activeForm": "Loading session context"
+      },
+      "PF3-CLASSIFY": {
+        "subject": "PF3-CLASSIFY: Classify and register work",
+        "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+        "activeForm": "Classifying work and creating branch"
+      },
+      "PF4-EXECUTE": {
+        "subject": "PF4-EXECUTE: Run work pipeline",
+        "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+        "activeForm": "Executing work pipeline"
+      },
+      "PF5-VERIFY": {
+        "subject": "PF5-VERIFY: Verify acceptance criteria",
+        "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+        "activeForm": "Verifying acceptance criteria"
+      },
+      "PF6-COMPLETE": {
+        "subject": "PF6-COMPLETE: Create PR and finalize",
+        "description": "Create PR via cf-git-operations, mark task complete. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+        "activeForm": "Creating PR and finalizing work"
+      },
+      "PF7-END": {
+        "subject": "PF7-END: End session",
+        "description": "Shutdown teammates, write session summary, cleanup. Phase: {phase_id}, Session: {session_id}.",
+        "activeForm": "Ending PathFlow session"
+      }
+    },
+    "stage_templates": {
+      "WS-DEV": {
+        "subject": "WS-DEV: Development ({task_id})",
+        "description": "Code implementation and unit tests. Stage: {stage_id}, Teammate: cf-development, Task: {task_id}, Iteration: {iteration}.",
+        "activeForm": "Implementing code changes"
+      },
+      "WS-PLAN": {
+        "subject": "WS-PLAN: Planning ({task_id})",
+        "description": "Design, architecture, and analysis. Stage: {stage_id}, Teammate: cf-planning, Task: {task_id}, Iteration: {iteration}.",
+        "activeForm": "Creating design and plan"
+      },
+      "WS-DOCS": {
+        "subject": "WS-DOCS: Documentation ({task_id})",
+        "description": "Documentation writing and updates. Stage: {stage_id}, Teammate: cf-documentation, Task: {task_id}, Iteration: {iteration}.",
+        "activeForm": "Writing documentation"
+      },
+      "WS-TEST": {
+        "subject": "WS-TEST: Testing ({task_id})",
+        "description": "Test implementation as primary deliverable. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Iteration: {iteration}.",
+        "activeForm": "Implementing tests"
+      },
+      "WS-REV": {
+        "subject": "WS-REV: Review ({task_id})",
+        "description": "Independent review of completed work. Stage: {stage_id}, Teammate: cf-review, Mode: {review_mode}, Task: {task_id}, Iteration: {iteration}.",
+        "activeForm": "Reviewing work"
+      },
+      "WS-QA": {
+        "subject": "WS-QA: Quality Assurance ({task_id})",
+        "description": "Integration testing and acceptance verification. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Retry: {retry}.",
+        "activeForm": "Running quality assurance checks"
+      }
+    }
   }
 }

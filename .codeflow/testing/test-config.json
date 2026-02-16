@@ -15,7 +15,8 @@
         "scripts/db/test_v4_schema.sh",
         "scripts/db/test-schema-restructure.sh",
         "consistency/test-settings-sync.sh",
-        "consistency/test-config-consistency.sh"
+        "consistency/test-config-consistency.sh",
+        "consistency/test-pathflow-task-tracker-config.sh"
       ]
     },
     "HIGH": {

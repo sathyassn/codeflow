@@ -302,6 +302,27 @@ In autorun mode (no human present), phase transitions happen automatically:
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
 
+### Task Tracker Mirroring
+
+PathFlow phases and work stages are mirrored into Claude Code's internal task tracker (TaskCreate/TaskUpdate/TaskList) for UI visibility. These entries are **visual mirrors only** -- JSONL/SQLite remains the authoritative source of truth.
+
+**How it works:**
+
+1. The lead creates a TaskCreate entry when **entering** each phase or stage, using templates from `pathflow-config.json` `task_tracker` section
+2. The lead calls TaskUpdate (status=`completed`) when **leaving** each phase or stage
+3. Template placeholders (`{phase_id}`, `{task_id}`, `{session_id}`, etc.) are substituted with actual values at creation time
+
+**Phase mirroring:** On entering PF1 through PF7, the lead creates a task using `task_tracker.phase_templates.{PHASE}` with subject, description, and activeForm from the template.
+
+**Stage mirroring:** On entering WS-DEV, WS-PLAN, etc., the lead creates a task using `task_tracker.stage_templates.{STAGE}` with subject, description, and activeForm from the template.
+
+**Key rules:**
+
+- Task tracker entries are disposable -- if lost, no data is lost (JSONL has the record)
+- Only the team lead creates/updates task tracker entries (not teammates)
+- cf-knowledge-layer is NOT responsible for task tracker operations
+- Task tracker entries should reflect current PathFlow state but are never consulted as source of truth
+
 ---
 
 ## 5. Teammate Coordination

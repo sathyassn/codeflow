@@ -382,6 +382,28 @@ Internal operations called by Parts 1 and 2.
 | cf-planning | Epic/task creation requests | Run create-epic, create-task |
 | cf-git-operations | Commit/PR confirmations | Run record-work-progress with milestone |
 
+### Task Tracker Mirroring Coordination
+
+The team lead mirrors PathFlow phase/stage transitions into Claude Code's internal task tracker (TaskCreate/TaskUpdate) for UI visibility. This is a **lead-only responsibility** -- cf-knowledge-layer does NOT create or update task tracker entries.
+
+**Relationship to WorkGraph:**
+
+- Task tracker entries are derived mirrors of JSONL/SQLite state
+- If task tracker and JSONL/SQLite conflict, JSONL/SQLite is always correct
+- cf-knowledge-layer does not read from or depend on task tracker state
+- Phase/stage transition events in JSONL (`pathflow-events.jsonl`) are the authoritative record, regardless of task tracker state
+
+**What cf-knowledge-layer provides:**
+
+- Phase/stage transition recording (existing `record-phase-transition` and `record-stage-transition` operations) -- these remain unchanged
+- Session metadata that the lead may reference when populating task tracker templates
+
+**What cf-knowledge-layer does NOT do:**
+
+- Create or update TaskCreate/TaskUpdate entries (lead does this directly)
+- Validate task tracker state against JSONL
+- Reconcile task tracker entries with WorkGraph records
+
 ### You Send Messages To
 
 | Recipient | When | Format |
