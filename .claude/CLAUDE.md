@@ -127,6 +127,35 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 | PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR |
 | PF7-END | pf-6 | (cleanup) | Shutdown, remove flag |
 
+### Phase Gate Enforcement
+
+PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
+
+**Hook-enforced gates (automatic, blocks violations):**
+
+| Gate | Sentinel Required | Blocks | Hook |
+|------|-------------------|--------|------|
+| Edit/Write before PF3 | `pf-3` | Edit, Write tools | `cf-pre-tool-use-pathflow-gate.sh` |
+| git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
+| git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
+| Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
+| TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
+
+**Instruction-enforced gates (proportionate, not hook-enforced):**
+
+| Gate | Instruction | Why Not Hook-Enforced |
+|------|-------------|----------------------|
+| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- PF1 is trivial initialization |
+| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Low risk -- PF2 is context loading |
+| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Caught by review finding no work to review |
+
+**Not enforced (acceptable risk):**
+
+| Transition | Why Acceptable |
+|------------|---------------|
+| PF5 before PF6 | cf-git-operations checks review status independently |
+| PF6 before PF7 | PF7 is cleanup only -- no harm in early cleanup |
+
 ### Phase Task IDs
 
 Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from `pathflow-config.json`. These are ephemeral -- created at phase entry, disposed at PF7-END. Distinct from project tasks in the `tasks` table.
@@ -348,6 +377,44 @@ Task(
 | WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}."` |
 | WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Acceptance criteria: {criteria}. Run: bash .codeflow/testing/run-all-tests.sh --mode standard"` |
 | WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Target: {coverage}. Framework: {shell/pytest}."` |
+
+### Task Specification Quality
+
+🔒 **Every spawn prompt and task assignment MUST include numbered acceptance criteria.**
+
+Vague instructions like "fix the bug" or "update the docs" are insufficient. Acceptance criteria must be specific enough that cf-review can verify each one with a PASS/FAIL verdict.
+
+**Mandatory template for all task assignments:**
+
+```text
+Task: {specific action verb + what to do}
+Scope: {exact files/directories to modify}
+Acceptance:
+  1. {specific, measurable criterion with file:line if applicable}
+  2. {specific, measurable criterion}
+  ...
+Tests: {what tests must pass, what new tests to add}
+Edge cases: {what to watch for, known pitfalls}
+```
+
+**Example (good):**
+
+```text
+Task: Add input validation to the session-start hook
+Scope: .claude/hooks/codeflow/session-start/cf-session-start-init.sh
+Acceptance:
+  1. Hook validates session_id format matches "ses-{13-digit-timestamp}{12-hex-chars}"
+  2. Invalid session_id triggers warning to stderr (not block)
+  3. Existing tests in test-session-start-init.sh still pass
+Tests: Add 2 new test cases to test-session-start-init.sh (valid format, invalid format)
+Edge cases: Empty session_id (already handled), non-ASCII characters in stdin
+```
+
+**Example (bad -- do NOT do this):**
+
+```text
+Fix the session start hook to validate things better.
+```
 
 **Stage transition spawning:** When a stage completes (e.g., WS-DEV done), the lead:
 
@@ -758,6 +825,28 @@ Three complementary mechanisms provide defense-in-depth:
 | Hook blocking unexpectedly | Read hook message, address the condition it reports |
 | Team accidentally dissolved | Unrecoverable -- session must end, work restarted from scratch |
 | Enforcement degraded | Log degradation, continue with instructions + task graph (advisory mode) |
+
+### Context Overflow Recovery
+
+When Claude Code's context window overflows mid-session, the conversation continues from a new context. Teammates may be dead but team config retains stale entries.
+
+**Detection signals:**
+
+- "This session is being continued from a previous conversation" preamble from Claude Code
+- Team config exists at `~/.claude/teams/{team-name}/config.json` with members whose tmux panes are dead
+- Numbered suffix spawn attempts (e.g., cf-git-operations-2) because old entries still exist
+- Teammates unresponsive to SendMessage (messages silently accepted but never delivered)
+
+**Recovery procedure:**
+
+1. **Detect stale team** -- Read team config at `~/.claude/teams/{team-name}/config.json`
+2. **Check pane health** -- For each member, verify tmux pane is alive: `tmux list-panes -a | grep {paneId}`
+3. **Clean stale entries** -- Remove members with dead panes from team config (or delete the config and re-create the team)
+4. **Respawn persistent teammates** -- Respawn cf-security, cf-knowledge-layer, and cf-git-operations with the SAME names and agent types. Include re-orientation context in spawn prompts.
+5. **Re-read pathflow state** -- Check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/ledger/pathflow-events.jsonl` to determine current phase
+6. **Determine current phase** -- Map sentinel state to phase (e.g., pf-3 exists but no ws-dev-done means PF4-EXECUTE in progress) and continue from that phase
+
+**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately check for stale team state before proceeding with any work. The SessionStart hook will output a warning if stale team configs are detected.
 
 ### Graceful Degradation
 

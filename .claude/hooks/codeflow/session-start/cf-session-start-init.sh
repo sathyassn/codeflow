@@ -4,7 +4,7 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.0.0
+# Version:   1.1.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
@@ -15,6 +15,7 @@
 #   Section 6: Active task context expiry
 #   Section 7: PathFlow flag creation
 #   Section 8: Session metadata
+#   Section 9: Stale team detection
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
@@ -24,7 +25,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -201,6 +202,60 @@ if command -v jq &>/dev/null; then
         --arg user "${USER:-unknown}" \
         '{session_id: $session_id, started_at: $started_at, started_epoch: $started_epoch, repo_root: $repo_root, git_branch: $git_branch, git_commit: $git_commit, user: $user}' \
         > "$SESSION_META_FILE" 2>/dev/null || true
+fi
+
+# =============================================================================
+# SECTION 9: STALE TEAM DETECTION
+# =============================================================================
+
+# Check for stale team configs (teams with dead tmux panes).
+# This detects context overflow recovery situations where teammates died
+# but team config still references them.
+# Advisory only (exit 0) -- outputs warning to stderr for lead awareness.
+
+_TEAMS_DIR="${HOME}/.claude/teams"
+if [[ -d "$_TEAMS_DIR" ]] && command -v jq &>/dev/null; then
+    for _team_config in "$_TEAMS_DIR"/*/config.json; do
+        [[ -f "$_team_config" ]] || continue
+
+        _team_dir=$(dirname "$_team_config")
+        _team_name=$(basename "$_team_dir")
+        _stale_count=0
+        _total_count=0
+
+        # Parse member pane IDs from team config
+        _member_count=$(jq -r '.members | length // 0' "$_team_config" 2>/dev/null) || continue
+        # Validate member_count is a number
+        case "$_member_count" in
+            ''|*[!0-9]*) continue ;;
+        esac
+
+        if [[ "$_member_count" -eq 0 ]]; then
+            continue
+        fi
+
+        _idx=0
+        while [[ "$_idx" -lt "$_member_count" ]]; do
+            _total_count=$(( _total_count + 1 ))
+            _pane_id=$(jq -r ".members[$_idx].tmuxPaneId // empty" "$_team_config" 2>/dev/null) || true
+
+            if [[ -n "$_pane_id" ]]; then
+                # Check if tmux pane is alive
+                if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -q "^${_pane_id}$"; then
+                    _stale_count=$(( _stale_count + 1 ))
+                fi
+            else
+                _stale_count=$(( _stale_count + 1 ))
+            fi
+
+            _idx=$(( _idx + 1 ))
+        done
+
+        if [[ "$_stale_count" -gt 0 ]]; then
+            echo "WARNING: STALE TEAM DETECTED: Team '${_team_name}' has ${_stale_count}/${_total_count} members with dead panes." >&2
+            echo "Recovery needed: See CLAUDE.md Section 11 (Context Overflow Recovery)" >&2
+        fi
+    done
 fi
 
 # =============================================================================

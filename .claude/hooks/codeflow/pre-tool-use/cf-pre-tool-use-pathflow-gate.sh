@@ -2,18 +2,20 @@
 # Purpose:   PreToolUse hook for PathFlow gate enforcement (sentinel-backed)
 # Location:  .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh
 # Hook Type: PreToolUse
-# Matcher:   Edit|Write|Bash
+# Matcher:   Edit|Write|Bash|Task
 #
 # This hook:
 #   - Blocks Edit/Write when PathFlow is active but PF3-CLASSIFY not reached
 #   - Blocks Bash(git commit) when PF3-CLASSIFY not reached
 #   - Blocks Bash(git push/gh pr) when WS-REV not completed
+#   - Blocks Task(role teammate spawn) when PF3-CLASSIFY not reached
 #   - Uses file sentinels (primary) for fast, reliable enforcement
 #   - Graceful degradation: ALLOW on any enforcement system failure
 #
 # Sentinel check (primary enforcement):
 #   Edit/Write, git commit → has_sentinel("pf-3")? Allow/Block
 #   git push, gh pr        → has_sentinel("ws-rev")? Allow/Block
+#   Task(role teammate)    → has_sentinel("pf-3")? Allow/Block
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
@@ -24,7 +26,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="3.0.0"
+VERSION="4.0.0"
 
 
 # =============================================================================
@@ -51,7 +53,7 @@ export CODEFLOW_SESSION_ID
 # =============================================================================
 
 TOOL_NAME="${TOOL_NAME:-}"
-if [[ "$TOOL_NAME" != "Edit" ]] && [[ "$TOOL_NAME" != "Write" ]] && [[ "$TOOL_NAME" != "Bash" ]]; then
+if [[ "$TOOL_NAME" != "Edit" ]] && [[ "$TOOL_NAME" != "Write" ]] && [[ "$TOOL_NAME" != "Bash" ]] && [[ "$TOOL_NAME" != "Task" ]]; then
     exit 0
 fi
 
@@ -96,6 +98,56 @@ if [[ -f "$LIB_DIR/security-lib.sh" ]]; then
 fi
 
 # =============================================================================
+# TASK TOOL: CHECK FOR ROLE TEAMMATE SPAWN
+# =============================================================================
+
+# Role teammates that require pf-3 sentinel before spawning.
+# Function teammates (cf-security, cf-knowledge-layer, cf-git-operations) are
+# excluded because they spawn at PF1/PF2/PF3 before pf-3 exists.
+ROLE_TEAMMATES="cf-development cf-planning cf-documentation cf-review cf-quality-assurance"
+
+if [[ "$TOOL_NAME" == "Task" ]]; then
+    TOOL_INPUT="${TOOL_INPUT:-}"
+    if [[ -z "$TOOL_INPUT" ]]; then
+        exit 0
+    fi
+
+    # Extract the prompt/description from the Task tool input to check for role teammates
+    _task_text=""
+    if command -v jq &>/dev/null; then
+        _task_prompt=$(echo "$TOOL_INPUT" | jq -r '.prompt // empty' 2>/dev/null) || true
+        _task_name=$(echo "$TOOL_INPUT" | jq -r '.name // empty' 2>/dev/null) || true
+        _task_desc=$(echo "$TOOL_INPUT" | jq -r '.description // empty' 2>/dev/null) || true
+        _task_text="${_task_prompt} ${_task_name} ${_task_desc}"
+    fi
+
+    if [[ -z "$_task_text" ]]; then
+        exit 0
+    fi
+
+    # Check if the Task spawn references a role teammate
+    _is_role_spawn=""
+    _matched_role=""
+    for _role in $ROLE_TEAMMATES; do
+        if echo "$_task_text" | grep -q "$_role"; then
+            _is_role_spawn="true"
+            _matched_role="$_role"
+            break
+        fi
+    done
+
+    if [[ -z "$_is_role_spawn" ]]; then
+        # Not a role teammate spawn -- allow (could be function teammate or explore sub-agent)
+        exit 0
+    fi
+
+    # It IS a role teammate spawn -- check pf-3 sentinel
+    GATE_TYPE="role_teammate_spawn"
+    COMMAND="Task(spawn ${_matched_role})"
+    # Fall through to sentinel check below
+fi
+
+# =============================================================================
 # BASH TOOL: CLASSIFY GATED OPERATION
 # =============================================================================
 
@@ -103,35 +155,38 @@ fi
 #   edit_write  - Edit/Write tool (requires pf-3 sentinel)
 #   git_commit  - Bash with git commit (requires pf-3 sentinel)
 #   git_push_pr - Bash with git push or gh pr (requires ws-rev sentinel)
+#   role_teammate_spawn - Task tool spawning role teammate (requires pf-3 sentinel)
 #   ungated     - Bash with other commands (always allowed)
 
-GATE_TYPE="edit_write"
-COMMAND=""
+if [[ "$TOOL_NAME" != "Task" ]]; then
+    GATE_TYPE="edit_write"
+    COMMAND=""
 
-if [[ "$TOOL_NAME" == "Bash" ]]; then
-    TOOL_INPUT="${TOOL_INPUT:-}"
-    if [[ -z "$TOOL_INPUT" ]]; then
-        exit 0
-    fi
+    if [[ "$TOOL_NAME" == "Bash" ]]; then
+        TOOL_INPUT="${TOOL_INPUT:-}"
+        if [[ -z "$TOOL_INPUT" ]]; then
+            exit 0
+        fi
 
-    if command -v jq &>/dev/null; then
-        COMMAND=$(echo "$TOOL_INPUT" | jq -r '.command // empty')
-    else
-        COMMAND=$(echo "$TOOL_INPUT" | grep -oE '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' | head -1)
-    fi
+        if command -v jq &>/dev/null; then
+            COMMAND=$(echo "$TOOL_INPUT" | jq -r '.command // empty')
+        else
+            COMMAND=$(echo "$TOOL_INPUT" | grep -oE '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' | head -1)
+        fi
 
-    if [[ -z "$COMMAND" ]]; then
-        exit 0
-    fi
+        if [[ -z "$COMMAND" ]]; then
+            exit 0
+        fi
 
-    # Classify the bash command
-    if echo "$COMMAND" | grep -qE '(^|\s|&&|\|)(git\s+push|gh\s+pr)(\s|$)'; then
-        GATE_TYPE="git_push_pr"
-    elif echo "$COMMAND" | grep -qE '(^|\s|&&|\|)git\s+commit(\s|$)'; then
-        GATE_TYPE="git_commit"
-    else
-        # Non-gated bash command
-        exit 0
+        # Classify the bash command
+        if echo "$COMMAND" | grep -qE '(^|\s|&&|\|)(git\s+push|gh\s+pr)(\s|$)'; then
+            GATE_TYPE="git_push_pr"
+        elif echo "$COMMAND" | grep -qE '(^|\s|&&|\|)git\s+commit(\s|$)'; then
+            GATE_TYPE="git_commit"
+        else
+            # Non-gated bash command
+            exit 0
+        fi
     fi
 fi
 
@@ -151,7 +206,7 @@ REQUIRED_SENTINEL=""
 REQUIRED_DESC=""
 
 case "$GATE_TYPE" in
-    edit_write|git_commit)
+    edit_write|git_commit|role_teammate_spawn)
         REQUIRED_SENTINEL="pf-3"
         REQUIRED_DESC="PF3-CLASSIFY (branch creation)"
         ;;
@@ -180,9 +235,15 @@ if [[ -n "$REQUIRED_SENTINEL" ]] && declare -f has_sentinel &>/dev/null; then
         log_security_event "blocked" "pathflow_gate_sentinel" "$TOOL_NAME" "${COMMAND:-$TOOL_NAME}" "Missing sentinel: pathflow-$REQUIRED_SENTINEL"
     fi
 
+    # Customize block message for role teammate spawns
+    _block_reason="$GATE_TYPE requires $REQUIRED_DESC. No pathflow-$REQUIRED_SENTINEL sentinel found."
+    if [[ "$GATE_TYPE" == "role_teammate_spawn" ]]; then
+        _block_reason="Cannot spawn role teammates before PF3-CLASSIFY. Create a feature branch first. No pathflow-$REQUIRED_SENTINEL sentinel found."
+    fi
+
     cat >&2 <<EOF
 BLOCKED: PathFlow gate - prerequisite not met
-Reason: $GATE_TYPE requires $REQUIRED_DESC. No pathflow-$REQUIRED_SENTINEL sentinel found.
+Reason: $_block_reason
 Tool: $TOOL_NAME
 Gate: $GATE_TYPE
 
