@@ -523,6 +523,81 @@ Procedure:
 
 ---
 
+### Part 4: PathFlow Event Recording
+
+These operations write phase and stage transitions to the PathFlow JSONL ledger. They are the bridge between PathFlow orchestration (led by the team lead) and the persistent audit trail.
+
+**Scripts location:** `.codeflow/scripts/pathflow/`
+
+#### 🔧 record-phase-transition
+
+**When:** At every PathFlow phase boundary (PF1 through PF7).
+**Purpose:** Write a phase_transition event to the JSONL ledger for audit and recovery.
+
+Procedure:
+
+1. Obtain the current session ID from `.state/runtime/current-session-id`
+2. On phase entry, run:
+   `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t entered`
+3. On phase completion, run:
+   `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t completed`
+4. Valid phases: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
+5. Valid statuses: entered, completed, skipped
+6. Report: `"KNOWLEDGE: record-phase-transition - $PHASE $STATUS recorded"`
+
+#### 🔧 record-stage-transition
+
+**When:** During PF4-EXECUTE when work stages start, complete, or fail.
+**Purpose:** Write a stage_transition event to the JSONL ledger.
+
+Procedure:
+
+1. Obtain the current session ID from `.state/runtime/current-session-id`
+2. On stage start:
+   `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t in_progress -i $ITERATION`
+3. On stage completion with verdict:
+   `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t complete -v $VERDICT`
+4. Valid stages: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
+5. Valid statuses: pending, in_progress, complete, failed
+6. Valid verdicts (for complete status): pass, fail, approved, changes_requested
+7. Report: `"KNOWLEDGE: record-stage-transition - $STAGE $STATUS recorded"`
+
+#### 🔧 register-pathflow-session
+
+**When:** During PF1-INIT to register the session in the JSONL ledger.
+**Purpose:** Create the initial session_metadata events (tracking_level=pending, interaction_mode).
+
+Procedure:
+
+1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-register.sh -s $SID [-m interactive|autorun]`
+2. This writes two events: tracking_level=pending and interaction_mode
+3. Report: `"KNOWLEDGE: register-pathflow-session - Session $SID registered"`
+
+#### 🔧 record-session-metadata
+
+**When:** At PF3-CLASSIFY (work_type, area_type, branch, tracking_level=tracked) and whenever session properties change.
+**Purpose:** Write session metadata key-value pairs to the JSONL ledger.
+
+Procedure:
+
+1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-metadata.sh -s $SID -k $KEY -v $VALUE`
+2. Known keys: work_type, area_type, tracking_level, branch, task_id, interaction_mode
+3. Report: `"KNOWLEDGE: record-session-metadata - $KEY=$VALUE recorded"`
+
+#### 🔧 record-pathflow-task-update
+
+**When:** When PathFlow phase tasks (PFn-TSK-nn) change status.
+**Purpose:** Write pathflow_task_update events for ephemeral session-scoped tasks.
+
+Procedure:
+
+1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-task-update.sh -s $SID -k $TASK_ID -t $STATUS`
+2. Task ID format: PFn-TSK-nn (e.g., PF3-TSK-01)
+3. Valid statuses: pending, in_progress, completed, skipped, blocked
+4. Report: `"KNOWLEDGE: record-pathflow-task-update - $TASK_ID $STATUS recorded"`
+
+---
+
 ## Communication
 
 ### You Receive Messages From
@@ -530,6 +605,7 @@ Procedure:
 | Sender | What | Expected Action |
 |--------|------|-----------------|
 | Team lead | Task assignments, work queries, lifecycle commands | Execute requested SOP, report result |
+| Team lead | Phase/stage transitions | Run record-phase-transition or record-stage-transition |
 | cf-development | Progress updates, file change batches | Run record-work-progress |
 | cf-review | Review verdicts (approved/changes_requested) | Run update-task with status change |
 | cf-quality-assurance | Test results (pass/fail, coverage) | Run record-work-progress, update-task |

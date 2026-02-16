@@ -60,6 +60,9 @@ register_session() {
     event_id=$(generate_event_id)
 
     # Write tracking_level=pending event
+    local ts
+    ts="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+
     local event
     event=$(jq -c -n \
         --arg id "$event_id" \
@@ -67,7 +70,8 @@ register_session() {
         --arg session_id "$session_id" \
         --arg key "tracking_level" \
         --arg value "pending" \
-        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value}')
+        --arg ts "$ts" \
+        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
     append_event "$PATHFLOW_LEDGER" "$event"
 
@@ -81,7 +85,8 @@ register_session() {
         --arg session_id "$session_id" \
         --arg key "interaction_mode" \
         --arg value "$mode" \
-        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value}')
+        --arg ts "$ts" \
+        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
     append_event "$PATHFLOW_LEDGER" "$mode_event"
 

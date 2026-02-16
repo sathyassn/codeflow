@@ -78,7 +78,8 @@ record_task_update() {
         --arg session_id "$session_id" \
         --arg task_id "$task_id" \
         --arg status "$status" \
-        '{id: $id, type: $type, session_id: $session_id, task_id: $task_id, status: $status}')
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+        '{id: $id, type: $type, session_id: $session_id, task_id: $task_id, status: $status, ts: $ts}')
 
     append_event "$PATHFLOW_LEDGER" "$event"
 

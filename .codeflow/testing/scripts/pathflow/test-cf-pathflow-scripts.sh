@@ -302,6 +302,43 @@ test_phase_transition_invalid_status() {
     teardown_pathflow_test
 }
 
+test_phase_transition_skipped() {
+    test_section "phase-transition: skipped status"
+
+    setup_pathflow_test
+
+    local output
+    output=$("$PATHFLOW_DIR/cf-pathflow-phase-transition.sh" -s "SES-PH003" -p "PF5-VERIFY" -t "skipped")
+
+    assert_contains "$output" '"transition":"skipped"' "Output transition is skipped"
+
+    local event
+    event=$(last_event)
+    assert_contains "$event" '"status":"skipped"' "JSONL status is skipped"
+    assert_contains "$event" '"phase":"PF5-VERIFY"' "Phase is PF5-VERIFY"
+
+    teardown_pathflow_test
+}
+
+test_phase_transition_timestamp() {
+    test_section "phase-transition: timestamp present"
+
+    setup_pathflow_test
+
+    "$PATHFLOW_DIR/cf-pathflow-phase-transition.sh" -s "SES-PHTS" -p "PF1-INIT" -t "entered" >/dev/null
+
+    local event
+    event=$(last_event)
+    assert_contains "$event" '"ts":"' "Event has timestamp"
+
+    # Validate ISO8601 format
+    local ts
+    ts=$(json_field "$event" "ts")
+    assert_matches "$ts" "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}" "Timestamp is ISO8601 format"
+
+    teardown_pathflow_test
+}
+
 test_phase_transition_missing_args() {
     test_section "phase-transition: missing args"
 
@@ -444,6 +481,60 @@ test_stage_transition_default_iteration() {
     local event
     event=$(last_event)
     assert_contains "$event" '"iteration":1' "Default iteration is 1"
+
+    teardown_pathflow_test
+}
+
+test_stage_transition_pending() {
+    test_section "stage-transition: pending status"
+
+    setup_pathflow_test
+
+    local output
+    output=$("$PATHFLOW_DIR/cf-pathflow-stage-transition.sh" -s "SES-STPND" -g "WS-DEV" -t "pending")
+
+    assert_contains "$output" '"status":"recorded"' "Pending status accepted"
+    assert_contains "$output" '"transition":"pending"' "Output has transition=pending"
+
+    local event
+    event=$(last_event)
+    assert_contains "$event" '"status":"pending"' "JSONL has status=pending"
+
+    teardown_pathflow_test
+}
+
+test_stage_transition_failed() {
+    test_section "stage-transition: failed status"
+
+    setup_pathflow_test
+
+    local output
+    output=$("$PATHFLOW_DIR/cf-pathflow-stage-transition.sh" -s "SES-STFAIL" -g "WS-QA" -t "failed")
+
+    assert_contains "$output" '"status":"recorded"' "Failed status accepted"
+    assert_contains "$output" '"transition":"failed"' "Output has transition=failed"
+
+    local event
+    event=$(last_event)
+    assert_contains "$event" '"status":"failed"' "JSONL has status=failed"
+
+    teardown_pathflow_test
+}
+
+test_stage_transition_timestamp() {
+    test_section "stage-transition: timestamp present"
+
+    setup_pathflow_test
+
+    "$PATHFLOW_DIR/cf-pathflow-stage-transition.sh" -s "SES-STTS" -g "WS-DEV" -t "in_progress" >/dev/null
+
+    local event
+    event=$(last_event)
+    assert_contains "$event" '"ts":"' "Event has timestamp"
+
+    local ts
+    ts=$(json_field "$event" "ts")
+    assert_matches "$ts" "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}" "Timestamp is ISO8601 format"
 
     teardown_pathflow_test
 }
@@ -826,6 +917,8 @@ main() {
     # phase-transition tests
     test_phase_transition_entered
     test_phase_transition_completed
+    test_phase_transition_skipped
+    test_phase_transition_timestamp
     test_phase_transition_all_phases
     test_phase_transition_invalid_phase
     test_phase_transition_invalid_status
@@ -834,6 +927,9 @@ main() {
     # stage-transition tests
     test_stage_transition_in_progress
     test_stage_transition_complete_with_verdict
+    test_stage_transition_pending
+    test_stage_transition_failed
+    test_stage_transition_timestamp
     test_stage_transition_all_stages
     test_stage_transition_all_verdicts
     test_stage_transition_invalid_stage

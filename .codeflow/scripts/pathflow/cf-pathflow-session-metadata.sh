@@ -69,7 +69,8 @@ record_metadata() {
         --arg session_id "$session_id" \
         --arg key "$key" \
         --arg value "$value" \
-        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value}')
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+        '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
     append_event "$PATHFLOW_LEDGER" "$event"
 

@@ -21,7 +21,7 @@ source "$REPO_ROOT/.codeflow/scripts/state/ledger.sh"
 # Constants
 readonly PATHFLOW_LEDGER="pathflow-events.jsonl"
 readonly VALID_PHASES="PF1-INIT PF2-CONTEXT PF3-CLASSIFY PF4-EXECUTE PF5-VERIFY PF6-COMPLETE PF7-END"
-readonly VALID_STATUSES="entered completed"
+readonly VALID_STATUSES="entered completed skipped"
 
 # ============================================================================
 # FUNCTIONS
@@ -36,7 +36,7 @@ Record a PathFlow phase transition event.
 Required:
   -s  Session ID (e.g., SES-01HXYZ...)
   -p  Phase: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
-  -t  Status: entered or completed
+  -t  Status: entered, completed, or skipped
 
 Optional:
   -h  Show this help message
@@ -81,7 +81,8 @@ record_phase_transition() {
         --arg session_id "$session_id" \
         --arg phase "$phase" \
         --arg status "$status" \
-        '{id: $id, type: $type, session_id: $session_id, phase: $phase, status: $status}')
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+        '{id: $id, type: $type, session_id: $session_id, phase: $phase, status: $status, ts: $ts}')
 
     append_event "$PATHFLOW_LEDGER" "$event"
 

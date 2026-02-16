@@ -22,7 +22,7 @@ source "$REPO_ROOT/.codeflow/scripts/state/ledger.sh"
 # Constants
 readonly PATHFLOW_LEDGER="pathflow-events.jsonl"
 readonly VALID_STAGES="WS-DEV WS-PLAN WS-DOCS WS-TEST WS-REV WS-QA"
-readonly VALID_STATUSES="in_progress complete"
+readonly VALID_STATUSES="pending in_progress complete failed"
 readonly VALID_VERDICTS="pass fail approved changes_requested"
 
 # ============================================================================
@@ -38,7 +38,7 @@ Record a PathFlow work stage transition event.
 Required:
   -s  Session ID (e.g., SES-01HXYZ...)
   -g  Stage: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
-  -t  Status: in_progress or complete
+  -t  Status: pending, in_progress, complete, or failed
 
 Optional:
   -i  Iteration number (default: 1, required for in_progress)
@@ -90,6 +90,9 @@ record_stage_transition() {
     event_id=$(generate_event_id)
 
     local event
+    local ts
+    ts="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+
     if [[ -n "$verdict" ]]; then
         event=$(jq -c -n \
             --arg id "$event_id" \
@@ -99,7 +102,8 @@ record_stage_transition() {
             --arg status "$status" \
             --argjson iteration "$iteration" \
             --arg verdict "$verdict" \
-            '{id: $id, type: $type, session_id: $session_id, stage: $stage, status: $status, iteration: $iteration, verdict: $verdict}')
+            --arg ts "$ts" \
+            '{id: $id, type: $type, session_id: $session_id, stage: $stage, status: $status, iteration: $iteration, verdict: $verdict, ts: $ts}')
     else
         event=$(jq -c -n \
             --arg id "$event_id" \
@@ -108,7 +112,8 @@ record_stage_transition() {
             --arg stage "$stage" \
             --arg status "$status" \
             --argjson iteration "$iteration" \
-            '{id: $id, type: $type, session_id: $session_id, stage: $stage, status: $status, iteration: $iteration}')
+            --arg ts "$ts" \
+            '{id: $id, type: $type, session_id: $session_id, stage: $stage, status: $status, iteration: $iteration, ts: $ts}')
     fi
 
     append_event "$PATHFLOW_LEDGER" "$event"
