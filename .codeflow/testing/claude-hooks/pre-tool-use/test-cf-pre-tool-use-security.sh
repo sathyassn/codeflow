@@ -564,6 +564,23 @@ else
 fi
 
 echo ""
+echo "--- Env File Session ID ---"
+
+# Test 66: Security hook references env file (codeflow-env.sh)
+if grep -q "codeflow-env.sh" "$HOOK"; then
+    pass "Hook references env file (codeflow-env.sh)"
+else
+    fail "Hook should reference codeflow-env.sh for session ID"
+fi
+
+# Test 67: Security hook has TODO(go-cli) comment
+if grep -q "TODO(go-cli)" "$HOOK"; then
+    pass "Has TODO(go-cli) comment"
+else
+    fail "Should have TODO(go-cli) comment near session ID sourcing"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Passed: $TESTS_PASSED"
 echo "Failed: $TESTS_FAILED"

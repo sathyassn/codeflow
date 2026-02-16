@@ -948,6 +948,43 @@ fi
 echo ""
 
 # =============================================================================
+# ENV FILE SESSION ID TESTS
+# =============================================================================
+
+echo "--- Env File Session ID ---"
+
+# Test: is_pathflow_active sources env file for session ID
+TESTS_RUN=$((TESTS_RUN + 1))
+PF_TEST_DIR="/tmp/claude/test-pathflow-envfile-$$"
+mkdir -p "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx"
+mkdir -p "$PF_TEST_DIR/repo/.state/runtime"
+touch "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx/is-pathflow-active"
+echo "export CODEFLOW_SESSION_ID='ses-envtest-ctx'" > "$PF_TEST_DIR/repo/.state/runtime/codeflow-env.sh"
+result=$(
+    export REPO_ROOT="$PF_TEST_DIR/repo"
+    unset CODEFLOW_SESSION_ID 2>/dev/null || true
+    unset _CONTEXT_LIB_LOADED 2>/dev/null || true
+    source "$LIB_FILE"
+    is_pathflow_active && echo "active" || echo "inactive"
+) 2>/dev/null
+if [[ "$result" == "active" ]]; then
+    pass "is_pathflow_active sources env file for session ID"
+else
+    fail "is_pathflow_active should source env file to find session ID (got '$result')"
+fi
+rm -rf "$PF_TEST_DIR"
+
+# Test: context-lib has TODO(go-cli) comment
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "TODO(go-cli)" "$LIB_FILE"; then
+    pass "context-lib.sh has TODO(go-cli) comment"
+else
+    fail "context-lib.sh should have TODO(go-cli) comment near env file sourcing"
+fi
+
+echo ""
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 

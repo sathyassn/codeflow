@@ -601,17 +601,19 @@ else
     fail "Should read session_id from stdin"
 fi
 
-# Test 59: Reads session_id from stdin JSON
+# Test 59: Reads session_id from stdin JSON as fallback
 setup_test_dirs
 mkdir -p "$REPO_ROOT/.state/session/stdin-test-id" 2>/dev/null || true
 echo '{"count":1}' > "$REPO_ROOT/.state/session/stdin-test-id/claim-heartbeat"
 stdin_json='{"session_id":"stdin-test-id","transcript_path":"/tmp/test.jsonl"}'
-echo "$stdin_json" | CODEFLOW_SESSION_ID="fallback" bash "$HOOK" 2>/dev/null || true
+# No CODEFLOW_SESSION_ID set, no env file — stdin should be used as fallback
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+echo "$stdin_json" | bash "$HOOK" 2>/dev/null || true
 # If stdin session_id was used, it should have cleaned the stdin-test-id session dir
 if [[ ! -d "$REPO_ROOT/.state/session/stdin-test-id" ]]; then
-    pass "Uses session_id from stdin JSON"
+    pass "Uses session_id from stdin JSON as fallback"
 else
-    fail "Should use session_id from stdin JSON over env var"
+    fail "Should use session_id from stdin JSON as fallback"
     rm -rf "$REPO_ROOT/.state/session/stdin-test-id"
 fi
 
@@ -667,6 +669,62 @@ if [[ -n "$state_line" ]] && [[ -n "$sk_line" ]] && [[ "$state_line" -gt "$sk_li
 else
     fail "V4 spec requires flag removal after sentinel cleanup"
 fi
+
+echo ""
+echo "--- V4: Env File Session ID ---"
+
+# Test 65: Session-end sources env file for session ID
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/ses-envtest-end" 2>/dev/null || true
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
+echo '{"count":1}' > "$REPO_ROOT/.state/session/ses-envtest-end/claim-heartbeat"
+echo "export CODEFLOW_SESSION_ID='ses-envtest-end'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Run hook without setting CODEFLOW_SESSION_ID in process env — env file should provide it
+bash "$HOOK" </dev/null 2>/dev/null || true
+# If env file session ID was used, it should have cleaned the ses-envtest-end session dir
+if [[ ! -d "$REPO_ROOT/.state/session/ses-envtest-end" ]]; then
+    pass "Sources env file for session ID"
+else
+    fail "Should source env file to get session ID"
+    rm -rf "$REPO_ROOT/.state/session/ses-envtest-end"
+fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+
+# Test 66: Session-end removes env file during cleanup
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
+echo "export CODEFLOW_SESSION_ID='ses-cleanup-env'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+CODEFLOW_SESSION_ID="ses-cleanup-env" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    pass "Removes env file during cleanup"
+else
+    fail "Should remove env file during cleanup"
+    rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+fi
+
+# Test 67: Session-end has TODO(go-cli) comment
+if grep -q "TODO(go-cli)" "$HOOK"; then
+    pass "Has TODO(go-cli) comment"
+else
+    fail "Should have TODO(go-cli) comment near session ID sourcing"
+fi
+
+# Test 68: Session-end falls back to stdin when env file missing
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/stdin-fallback-id" 2>/dev/null || true
+echo '{"count":1}' > "$REPO_ROOT/.state/session/stdin-fallback-id/claim-heartbeat"
+# Ensure no env file exists
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+stdin_json='{"session_id":"stdin-fallback-id"}'
+echo "$stdin_json" | bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/session/stdin-fallback-id" ]]; then
+    pass "Falls back to stdin when env file missing"
+else
+    fail "Should fall back to stdin session_id when env file missing"
+    rm -rf "$REPO_ROOT/.state/session/stdin-fallback-id"
+fi
+
+cleanup_test_artifacts
 
 echo ""
 echo "=== Test Summary ==="
