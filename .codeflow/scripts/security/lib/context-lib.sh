@@ -41,7 +41,7 @@ fi
 readonly _CONTEXT_LIB_LOADED="true"
 
 # shellcheck disable=SC2034  # CONTEXT_LIB_VERSION available for version queries
-readonly CONTEXT_LIB_VERSION="1.0.0"
+readonly CONTEXT_LIB_VERSION="1.1.0"
 
 # --- Internal Helper ---
 
@@ -161,6 +161,15 @@ is_sub_context() {
 # Returns 0 if active, 1 otherwise.
 is_pathflow_active() {
     local repo_root="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+    # TODO(go-cli): Session flag check unchanged. Go CLI writes same flag files
+    # Future: query DB sessions table instead of flag file
+    local _env_file="$repo_root/.state/runtime/codeflow-env.sh"
+    if [[ -f "$_env_file" ]]; then
+        # shellcheck source=/dev/null
+        source "$_env_file"
+    fi
+
     local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
     [[ -f "$flag_file" ]]
 }

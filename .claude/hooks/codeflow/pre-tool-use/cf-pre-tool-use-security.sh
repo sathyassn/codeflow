@@ -69,6 +69,16 @@ fi
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
+# TODO(go-cli): Session ID sourcing unchanged when CLI arrives
+# The env file path and variable name remain stable
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
+
 # Security library and enforcement paths
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 ENFORCEMENT_DIR="$REPO_ROOT/.codeflow/scripts/security/enforcement"

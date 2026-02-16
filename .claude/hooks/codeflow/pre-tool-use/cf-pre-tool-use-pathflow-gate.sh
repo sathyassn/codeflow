@@ -27,7 +27,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="4.0.0"
+VERSION="4.1.0"
 
 
 # =============================================================================
@@ -42,12 +42,8 @@ if [[ ! -t 0 ]]; then
         [[ -n "$_tn" ]] && TOOL_NAME="$_tn"
         _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
         [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
-        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
     fi
 fi
-CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
-export CODEFLOW_SESSION_ID
 
 # =============================================================================
 # EARLY EXIT: CHECK TOOL NAME
@@ -65,6 +61,26 @@ fi
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# =============================================================================
+# SESSION ID: Source from env file (shared across all teammates)
+# =============================================================================
+
+# TODO(go-cli): Session ID sourcing unchanged when CLI arrives
+# The env file path and variable name remain stable
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+else
+    # Fallback: read from hook input (degraded mode — per-agent UUID)
+    if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
+        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
+        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+    fi
+fi
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+export CODEFLOW_SESSION_ID
 
 # =============================================================================
 # PATHFLOW FLAG CHECK

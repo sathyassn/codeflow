@@ -44,6 +44,13 @@ _CF_PATHFLOW_STATE_LIB_SOURCED=1
 
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
+# TODO(go-cli): Session ID source unchanged. Go CLI writes same env file
+# Consider adding DB lookup as secondary source for resilience
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
 readonly _PFS_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 readonly _PFS_SESSION_DIR="$REPO_ROOT/.state/session/$_PFS_SESSION_ID"
 readonly _PFS_FLAG_FILE="$_PFS_SESSION_DIR/is-pathflow-active"

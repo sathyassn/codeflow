@@ -4,7 +4,7 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.1.0
+# Version:   1.2.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
@@ -25,29 +25,24 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
 # =============================================================================
 
+# Read hook stdin for Claude Code metadata
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
-    if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
-        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null) || true
-        if [[ -n "${_sid:-}" ]]; then
-            CODEFLOW_SESSION_ID="$_sid"
-        fi
-    fi
 fi
 
-# Generate session ID if not already set (via stdin or environment)
-if [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
-    TIMESTAMP=$(date +%s%N | cut -c1-13)
-    RANDOM_PART=$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    CODEFLOW_SESSION_ID="ses-${TIMESTAMP}${RANDOM_PART}"
+# Store Claude Code's per-agent UUID as metadata only (NOT used as session ID).
+# Each agent context (lead + each teammate) receives a unique UUID from Claude Code.
+# Using it as session ID causes sentinel lookup failures across teammates.
+_CLAUDE_UUID=""
+if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
+    _CLAUDE_UUID=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null) || true
 fi
-export CODEFLOW_SESSION_ID
 
 # =============================================================================
 # SECTION 2: SETUP
@@ -56,6 +51,34 @@ export CODEFLOW_SESSION_ID
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# TODO(go-cli): Replace ses-{ts}{hex} with session-{ulid} via Go CLI
+# The Go CLI will generate the ID and write to the same env file
+# This shell fallback becomes dead code once CLI handles session init
+
+# CodeFlow-native session ID: shared across all teammates via env file.
+# The env file (.state/runtime/codeflow-env.sh) is the stable interface.
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+    # Teammate joining existing session — ID already set
+fi
+
+# Generate session ID if not already set (via env file or environment)
+if [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
+    # Lead starting new session — generate CodeFlow-native ID
+    TIMESTAMP=$(date +%s%N | cut -c1-13)
+    RANDOM_PART=$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    CODEFLOW_SESSION_ID="ses-${TIMESTAMP}${RANDOM_PART}"
+
+    # Write env file atomically (tmp + mv) for cross-teammate sharing
+    mkdir -p "$(dirname "$_env_file")"
+    _tmp_env=$(mktemp "${_env_file}.XXXXXX")
+    echo "export CODEFLOW_SESSION_ID='${CODEFLOW_SESSION_ID}'" > "$_tmp_env"
+    mv "$_tmp_env" "$_env_file"
+fi
+export CODEFLOW_SESSION_ID
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
@@ -98,6 +121,7 @@ SHARED_STATE_DIR="$REPO_ROOT/.state/session"
 mkdir -p "$REPO_ROOT/.state/logs/sessions" 2>/dev/null || true
 mkdir -p "$REPO_ROOT/.state/logs/security" 2>/dev/null || true
 mkdir -p "$REPO_ROOT/.state/db" 2>/dev/null || true
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
 
 # Create sentinel directories (session-scoped)
 mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
@@ -194,13 +218,14 @@ GIT_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unk
 if command -v jq &>/dev/null; then
     jq -nc \
         --arg session_id "$CODEFLOW_SESSION_ID" \
+        --arg claude_uuid "${_CLAUDE_UUID:-unknown}" \
         --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
         --argjson started_epoch "$(date +%s)" \
         --arg repo_root "$REPO_ROOT" \
         --arg git_branch "$GIT_BRANCH" \
         --arg git_commit "$GIT_COMMIT" \
         --arg user "${USER:-unknown}" \
-        '{session_id: $session_id, started_at: $started_at, started_epoch: $started_epoch, repo_root: $repo_root, git_branch: $git_branch, git_commit: $git_commit, user: $user}' \
+        '{session_id: $session_id, claude_uuid: $claude_uuid, started_at: $started_at, started_epoch: $started_epoch, repo_root: $repo_root, git_branch: $git_branch, git_commit: $git_commit, user: $user}' \
         > "$SESSION_META_FILE" 2>/dev/null || true
 fi
 
