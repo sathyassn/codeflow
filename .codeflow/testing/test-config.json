@@ -104,6 +104,7 @@
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-pathflow-gate.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-team-guard.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-logging.sh",
+        "claude-hooks/post-tool-use/test-cf-post-tool-use-pathflow-sentinel.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-settings-templates.sh",
         "claude-hooks/post-tool-use/test-cf-post-tool-use-tmp-workflow.sh",
         "claude-hooks/session-start/test-cf-session-start-init.sh",

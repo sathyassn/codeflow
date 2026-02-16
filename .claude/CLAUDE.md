@@ -308,17 +308,45 @@ PathFlow phases and work stages are mirrored into Claude Code's internal task tr
 
 **How it works:**
 
-1. The lead creates a TaskCreate entry when **entering** each phase or stage, using templates from `pathflow-config.json` `task_tracker` section
-2. The lead calls TaskUpdate (status=`completed`) when **leaving** each phase or stage
-3. Template placeholders (`{phase_id}`, `{task_id}`, `{session_id}`, etc.) are substituted with actual values at creation time
+1. **On entering** a phase or stage: Call `TaskCreate` with subject, description, and activeForm from the corresponding template in `pathflow-config.json` `task_tracker.phase_templates.{PHASE}` or `task_tracker.stage_templates.{STAGE}`. Substitute all placeholders with actual session values before creating.
+2. **On leaving** a phase or stage: Call `TaskUpdate(taskId="{id}", status="completed")` on the task created in step 1.
+3. Template placeholders are substituted with actual values at creation time (see reference table below).
 
 **Phase mirroring:** On entering PF1 through PF7, the lead creates a task using `task_tracker.phase_templates.{PHASE}` with subject, description, and activeForm from the template.
 
 **Stage mirroring:** On entering WS-DEV, WS-PLAN, etc., the lead creates a task using `task_tracker.stage_templates.{STAGE}` with subject, description, and activeForm from the template.
 
+**Placeholder reference:**
+
+| Placeholder | Resolves To | Example |
+|-------------|------------|---------|
+| `{phase_id}` | Current PathFlow phase | `PF1-INIT` |
+| `{task_id}` | WorkGraph task identifier | `INF-TSK-FEAT-GENL-002` |
+| `{session_id}` | Current session identifier | `ses-17712618121074c5d2cda5828` |
+| `{stage_id}` | Current work stage | `WS-DEV` |
+| `{work_type}` | Classified work type | `FEAT` |
+| `{pipeline}` | Stage pipeline for work type | `WS-DEV -> WS-REV -> WS-QA` |
+| `{branch}` | Current feature branch | `feat/task-tracker-mirroring` |
+| `{teammate}` | Assigned stage teammate | `cf-development` |
+| `{iteration}` | Rework iteration number | `1` |
+| `{retry}` | QA retry number | `0` |
+| `{review_mode}` | Review mode for WS-REV | `CODE_REVIEW` |
+
+**Concrete example -- PF1-INIT phase entry:**
+
+```text
+TaskCreate(
+  subject="PF1-INIT: Initialize session",
+  description="Register session record, spawn cf-security. Phase: PF1-INIT, Session: ses-17712618121074c5d2cda5828.",
+  activeForm="Initializing PathFlow session"
+)
+```
+
+Then when PF1 completes and PF2 begins: `TaskUpdate(taskId="{pf1_task_id}", status="completed")`.
+
 **Key rules:**
 
-- Task tracker entries are disposable -- if lost, no data is lost (JSONL has the record)
+- Task tracker entries are **ephemeral and disposable** -- if context resets or entries are lost, no data is lost (JSONL has the authoritative record). Simply re-create entries for the current phase on recovery.
 - Only the team lead creates/updates task tracker entries (not teammates)
 - cf-knowledge-layer is NOT responsible for task tracker operations
 - Task tracker entries should reflect current PathFlow state but are never consulted as source of truth
