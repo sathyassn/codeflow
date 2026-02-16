@@ -12,6 +12,7 @@
 #   - Removes is-pathflow-active flag file
 #   - Cleans up memory-progress state files
 #   - Preserves active task context if in_progress
+#   - Removes env file (session ID shared state)
 #   - Removes session-specific temp files
 #   - Logs session end event (if configured)
 #
@@ -21,7 +22,8 @@
 #   3. Remove is-pathflow-active flag
 #   4. Clean memory progress files
 #   5. Preserve active task context if in_progress
-#   6. Log session end event (optional)
+#   6. Remove env file (session ID shared state)
+#   7. Log session end event (optional)
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 #
@@ -31,13 +33,12 @@
 set -euo pipefail
 
 # Read hook data from stdin (Claude Code protocol)
-SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 TRANSCRIPT_PATH=""
+_stdin_sid=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
-        _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && SESSION_ID="$_sid"
+        _stdin_sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null || true)
         _tp=$(echo "$_HOOK_STDIN" | jq -r '.transcript_path // empty' 2>/dev/null)
         # shellcheck disable=SC2034  # TRANSCRIPT_PATH available for future use
         [[ -n "$_tp" ]] && TRANSCRIPT_PATH="$_tp"
@@ -54,6 +55,17 @@ readonly VERSION="2.0.0"
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# TODO(go-cli): Session ID sourcing unchanged when CLI arrives
+# The env file path and variable name remain stable
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Session ID priority: env file > stdin JSON > fallback
+SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
@@ -161,6 +173,9 @@ fi
 if [[ -d "$SESSION_STATE_DIR" ]] && [[ "$SESSION_ID" != "unknown" ]]; then
     rm -rf "$SESSION_STATE_DIR" 2>/dev/null || true
 fi
+
+# Clean up env file (session ID shared state)
+rm -f "${REPO_ROOT}/.state/runtime/codeflow-env.sh" 2>/dev/null || true
 
 # Clean up session-specific temp files
 TEMP_DIR="/tmp/claude/sessions/$SESSION_ID"
