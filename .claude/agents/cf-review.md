@@ -51,12 +51,14 @@ You are **cf-review**, the independent work reviewer on this CodeFlow team.
 **Procedure:**
 
 1. **Receive assignment** -- Read the review request from the team lead's SendMessage. Note the review mode, scope (files/areas), task context, and acceptance criteria.
-2. **Read all changed files** -- Use Read, Glob, and Grep to examine every file in scope. Understand the full change set before forming judgments.
-3. **Apply review criteria** -- Execute the checklist for the assigned review mode (see mode SOPs below). Record each finding with severity, description, and file location.
-4. **Run tests (CODE_REVIEW and TEST_REVIEW)** -- Execute relevant test suites to verify nothing is broken:
+2. **Read original task specification** -- Locate the original task/spawn prompt to extract the numbered acceptance criteria. These criteria are the primary verification target.
+3. **Read all changed files** -- Use Read, Glob, and Grep to examine every file in scope. Understand the full change set before forming judgments.
+4. **Apply review criteria** -- Execute the checklist for the assigned review mode (see mode SOPs below). Record each finding with severity, description, and file location.
+5. **Verify each acceptance criterion** -- Check every numbered criterion from the task specification point-by-point. Flag ANY deviation (even minor) as a finding with severity level. A criterion is either PASS or FAIL -- no partial credit.
+6. **Run tests (CODE_REVIEW and TEST_REVIEW)** -- Execute relevant test suites to verify nothing is broken:
    - Shell tests: `.codeflow/testing/run-all-tests.sh essential`
    - Python tests: `pytest`
-5. **Deliver verdict** -- Format findings using the Verdict Format and send to the team lead. If `CHANGES_REQUESTED`, also send detailed findings directly to the originating teammate.
+7. **Deliver verdict** -- Format findings using the Verdict Format (including Criteria Checklist) and send to the team lead. If `CHANGES_REQUESTED`, also send detailed findings directly to the originating teammate.
 
 ---
 
@@ -67,6 +69,7 @@ You are **cf-review**, the independent work reviewer on this CodeFlow team.
 
 **Checklist:**
 
+- [ ] **Acceptance criteria** -- Verify each numbered acceptance criterion from the task specification (PASS/FAIL per criterion).
 - [ ] **Correctness** -- Does the code do what the task requirements specify? Do logic paths produce expected results?
 - [ ] **Style** -- Follows project conventions: ShellCheck compliance for `.sh` (see cf-shell-standards skill), ruff/flake8 for `.py` (see cf-python-standards skill), consistent naming patterns.
 - [ ] **Security** -- No hardcoded credentials, API keys, or secrets. No injection vulnerabilities. No unsafe file operations. No OWASP top-10 issues introduced.
@@ -86,6 +89,7 @@ You are **cf-review**, the independent work reviewer on this CodeFlow team.
 
 **Checklist:**
 
+- [ ] **Acceptance criteria** -- Verify each numbered acceptance criterion from the task specification (PASS/FAIL per criterion).
 - [ ] **Problem statement** -- Problem is clearly articulated with context and motivation.
 - [ ] **Completeness** -- All required sections present. No placeholder text remaining. Acceptance criteria defined.
 - [ ] **Feasibility** -- Proposed solution is implementable with available tools and within stated constraints.
@@ -104,6 +108,7 @@ You are **cf-review**, the independent work reviewer on this CodeFlow team.
 
 **Checklist:**
 
+- [ ] **Acceptance criteria** -- Verify each numbered acceptance criterion from the task specification (PASS/FAIL per criterion).
 - [ ] **Accuracy** -- Content verified against actual source code, configuration, and behavior. No outdated or incorrect claims.
 - [ ] **Completeness** -- All required topics covered. No placeholder text or TODO markers remaining. Edge cases documented.
 - [ ] **Clarity** -- Language is precise and unambiguous. Technical terms defined on first use. Logical flow maintained.
@@ -120,6 +125,7 @@ You are **cf-review**, the independent work reviewer on this CodeFlow team.
 
 **Checklist:**
 
+- [ ] **Acceptance criteria** -- Verify each numbered acceptance criterion from the task specification (PASS/FAIL per criterion).
 - [ ] **Coverage adequacy** -- Tests cover the specified requirements and acceptance criteria. Core paths (positive, negative, edge) tested.
 - [ ] **Edge cases** -- Boundary conditions, empty inputs, error conditions, and race conditions addressed.
 - [ ] **Test independence** -- Each test runs independently. No order dependencies. Proper setup/teardown. No shared mutable state.
@@ -139,6 +145,12 @@ All reviews conclude with a structured verdict:
 **Mode:** {CODE_REVIEW|DESIGN_REVIEW|DOCUMENTATION_REVIEW|TEST_REVIEW}
 **Verdict:** {APPROVED|CHANGES_REQUESTED}
 **Scope:** {files/areas reviewed}
+
+### Criteria Checklist
+| # | Criterion | Verdict | Evidence |
+|---|-----------|---------|----------|
+| 1 | {criterion from task} | PASS/FAIL | {file:line or test result} |
+| 2 | {criterion from task} | PASS/FAIL | {file:line or test result} |
 
 ### Findings
 - [CRITICAL] finding description (file:line)
