@@ -65,8 +65,7 @@
         "PF7-TSK-02: Shutdown persistent function teammates",
         "PF7-TSK-03: Write session summary to JSONL",
         "PF7-TSK-04: Clean up session state and temp files",
-        "PF7-TSK-05: Remove pathflow-active flag (unlocks team-guard)",
-        "PF7-TSK-06: TeamDelete (dissolve team infrastructure)"
+        "PF7-TSK-05: TeamDelete (dissolve team infrastructure; SessionEnd hook handles flag and state cleanup)"
       ]
     }
   },
