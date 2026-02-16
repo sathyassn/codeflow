@@ -232,7 +232,7 @@ Suppression:
   # shellcheck disable=SC2086
   (Place on the line above the flagged line)
 
-See also: resources/shell-essentials.md
+For the full ShellCheck rule reference with before/after examples, load: resources/shell-essentials.md
 
 Pre-Commit Checklist:
 
@@ -259,6 +259,8 @@ Output: Clean ShellCheck run and all checklist items satisfied
 
 ## Resources
 
-| Resource | Purpose |
-|----------|---------|
-| `resources/shell-essentials.md` | ShellCheck rules, expanded examples, Bash 3.2 reference |
+Companion resources provide expanded detail beyond the operation summaries above. Load when the inline guidance is insufficient for the task at hand.
+
+| Resource | Companion To | Contains |
+|----------|-------------|----------|
+| `resources/shell-essentials.md` | validate-script, apply-patterns | Full ShellCheck rule reference, expanded pattern examples, Bash 3.2 compatibility details |
