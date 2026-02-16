@@ -43,6 +43,16 @@ Apply cognitive operations throughout execution:
 - Running a quick self-test during development (cf-development handles its own test runs)
 - Code hasn't been reviewed yet (complete `/cf-review` first)
 
+### Pipeline Position
+
+```text
+Phase: PF4-EXECUTE | Stage: WS-QA
+Pipeline: /cf-review --> /cf-test --> /cf-ship --> /cf-cleanup
+                          ^ you are here
+Previous: /cf-review (APPROVED verdict)
+Next: /cf-ship (on PASS) or back to /cf-develop (on FAIL)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -111,37 +121,37 @@ This command takes no positional arguments. Test scope is determined from the cu
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF4-EXECUTE | Stage: WS-QA | Teammate: cf-quality-assurance
+
 /cf-test invoked
     |
     v
 Parse flags (--coverage, --type)
     |
     v
-Verify WS-REV approved
+Verify WS-REV approved                              [cf-knowledge-layer]
     |
     v
-Load acceptance criteria
-from WorkGraph
+Load acceptance criteria from WorkGraph              [cf-knowledge-layer]
     |
     v
-Determine test scope
-from changed files
+Determine test scope from changed files
     |
     v
-Assign to cf-quality-assurance teammate
+Spawn cf-quality-assurance teammate                  [cf-quality-assurance]
 (WS-QA mode: read-only verification)
     |
     v
-Teammate runs test suite
+Teammate runs test suite                             [cf-quality-assurance]
     |
     v
-Teammate verifies acceptance criteria
+Teammate verifies acceptance criteria                [cf-quality-assurance]
     |
     v
-Teammate checks for regressions
+Teammate checks for regressions                     [cf-quality-assurance]
     |
     v
-Teammate delivers verdict
+Teammate delivers verdict                           [cf-quality-assurance]
     |
     v
 Process verdict --------+-------------------+
@@ -151,11 +161,15 @@ Process verdict --------+-------------------+
     |                    |
     v                    v
 Record verdict       Send failure details
-in WorkGraph         to cf-development
+in WorkGraph         to cf-development               [cf-knowledge-layer]
     |                    |
     v                    v
 Present results      Route back to WS-DEV
-(proceed to PF5)     for targeted fixes
+                     for targeted fixes
+    |                    |
+    v                    v
+Next: /cf-ship       Next: /cf-develop
+(PF6-COMPLETE)       (rework, max 2 retries)
 ```
 
 ### 4.2 Execution Steps

@@ -40,6 +40,13 @@ Apply cognitive operations throughout execution:
 - Modifying hook behavior (hooks are configured separately in `.claude/settings.json`)
 - Changing model or other CLI settings (use Claude Code CLI flags)
 
+### Pipeline Position
+
+```text
+Phase: Any (always available) | Type: Information/Settings
+No pipeline dependencies — can be invoked at any point during a session.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -99,23 +106,48 @@ If no mode is provided, the command displays the current mode and shows a select
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-approval-mode invoked]) --> Parse[Parse mode argument]
-    Parse --> HasMode{Mode provided?}
+Phase: Any | Type: Information/Settings
 
-    HasMode -->|No| ShowCurrent[Show current mode]
-    ShowCurrent --> ShowMenu[Display mode selection menu]
-    ShowMenu --> UserSelect[User selects mode] --> ValidateMode
-
-    HasMode -->|Yes| ValidateMode{Valid mode?}
-    ValidateMode -->|No| Error([ERROR: Invalid mode. Valid: strict, standard, autonomous, permissive])
-    ValidateMode -->|Yes| ReadTemplate[Read template file]
-
-    ReadTemplate --> TemplateExists{Template exists?}
-    TemplateExists -->|No| ErrorTemplate([ERROR: Template not found at .claude/settings-templates/])
-    TemplateExists -->|Yes| ApplyTemplate[Copy template to settings.local.json]
-
-    ApplyTemplate --> Confirm([Confirm: Mode applied successfully])
+/cf-approval-mode invoked
+    |
+    v
+Parse mode argument
+    |
+    v
+Mode provided? ---NO---> Show current mode
+    |                        |
+    YES                      v
+    |                    Display selection menu
+    |                        |
+    |                        v
+    |                    User selects mode
+    |                        |
+    +----------+-------------+
+               |
+               v
+Valid mode? ---NO---> ERROR: "Invalid mode.
+    |                 Valid: strict, standard, autonomous, permissive"
+    YES
+    |
+    v
+Read template file
+    |
+    v
+Template exists? ---NO---> ERROR: "Template not found"
+    |
+    YES
+    |
+    v
+Validate mode with cf-security                [cf-security]
+    |
+    v
+Copy template to settings.local.json
+    |
+    v
+Confirm: Mode applied successfully
+    |
+    v
+Next: No pipeline progression — standalone settings command.
 ```
 
 ### 4.2 Execution Steps

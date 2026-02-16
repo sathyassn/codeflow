@@ -44,6 +44,15 @@ Apply cognitive operations throughout execution:
 - Running tests or QA verification (use `/cf-test`)
 - Reviewing code (use `/cf-review`)
 
+### Pipeline Position
+
+```text
+Phase: Post-PF7 (optional)
+Pipeline: /cf-ship --> /cf-deploy
+Previous: /cf-ship (PR merged to main)
+Next: Monitor deployment. Start new session for new work.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -143,6 +152,8 @@ Is production? ----------> YES -------> Staging deployed since last merge?
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: Post-PF7 (optional) | Teammate: cf-git-operations
+
 /cf-deploy invoked
     |
     v
@@ -165,7 +176,7 @@ Exists? ---NO----> ERROR: "No deployment config found"
     YES
     |
     v
-Is production? --YES--> Staging verified?
+Is production? --YES--> Staging verified?            [cf-knowledge-layer]
     |                       |
     NO                      v
     |               YES --> Confirm with user
@@ -179,7 +190,7 @@ Is --dry-run? --YES--> Report validation results, STOP
            NO
            |
            v
-Execute deployment
+Execute deployment                                   [cf-git-operations]
 via cf-git-operations
     |
     v
@@ -188,7 +199,7 @@ Deployment succeeded? ---NO----> ERROR with failure details
     YES
     |
     v
-Post-deploy health check
+Post-deploy health check                             [cf-git-operations]
 via cf-git-operations
     |
     v
@@ -197,11 +208,14 @@ Healthy? ---NO----> WARN: "Health check failed"
     YES
     |
     v
-Record deployment
+Record deployment                                    [cf-knowledge-layer]
 (cf-knowledge-layer)
     |
     v
 Present results
+    |
+    v
+Next: Monitor deployment. Start new session for new work.
 ```
 
 ### 4.2 Execution Steps

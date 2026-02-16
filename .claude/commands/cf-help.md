@@ -43,6 +43,13 @@ Apply cognitive operations throughout execution:
 - Diagnosing infrastructure issues (use `/cf-doctor`)
 - Checking approval mode (use `/cf-approval-mode`)
 
+### Pipeline Position
+
+```text
+Phase: Any (always available) | Type: Information
+No pipeline dependencies — can be invoked at any point during a session.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -94,29 +101,32 @@ This command is always available regardless of PathFlow phase, tracking mode, or
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-help invoked]) --> Parse[Parse topic argument]
-    Parse --> HasTopic{Topic provided?}
+Phase: Any | Type: Information
 
-    HasTopic -->|No| Dashboard[Show dashboard]
-    HasTopic -->|Yes| Route{Which topic?}
-
-    Route -->|commands| ShowCommands[List all /cf-* commands]
-    Route -->|status| ShowStatus[Show session status]
-    Route -->|workflow| ShowWorkflow[Show PathFlow phases and pipelines]
-    Route -->|agents| ShowAgents[Show teammate roster]
-    Route -->|skills| ShowSkills[Show available skills]
-    Route -->|unknown| ShowDashboard[Show dashboard + suggest valid topics]
-
-    Dashboard --> CheckState[Check active session state]
-    CheckState --> Present([Present formatted output])
-
-    ShowCommands --> Present
-    ShowStatus --> Present
-    ShowWorkflow --> Present
-    ShowAgents --> Present
-    ShowSkills --> Present
-    ShowDashboard --> Present
+/cf-help invoked
+    |
+    v
+Parse topic argument
+    |
+    v
+Topic provided? ---NO---> Check session state --> Show dashboard
+    |
+    YES
+    |
+    v
+Route by topic:
+    +--commands --> List all /cf-* commands
+    +--status ---> Show session status             [cf-knowledge-layer]
+    +--workflow -> Show PathFlow phases and pipelines
+    +--agents ---> Show teammate roster
+    +--skills ---> Show available skills
+    +--unknown --> Show dashboard + suggest valid topics
+    |
+    v
+Present formatted output
+    |
+    v
+Next: No pipeline progression — standalone info command.
 ```
 
 ### 4.2 Execution Steps

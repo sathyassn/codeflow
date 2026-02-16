@@ -44,6 +44,16 @@ Apply cognitive operations throughout execution:
 - QA gate has not passed (use `/cf-test` to run QA)
 - Deploying to an environment (use `/cf-deploy`)
 
+### Pipeline Position
+
+```text
+Phase: PF6-COMPLETE
+Pipeline: /cf-test or /cf-review --> /cf-ship --> /cf-cleanup
+                                      ^ you are here
+Previous: /cf-test (PASS verdict) or /cf-review (for pipelines without WS-QA)
+Next: /cf-cleanup (session end)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -143,6 +153,8 @@ PROCEED to merge
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF6-COMPLETE | Teammate: cf-git-operations
+
 /cf-ship invoked
     |
     v
@@ -156,12 +168,12 @@ Identify PR -------+-------------------+
     |               |                   |
     v               v                   v
 Fetch PR info   Detect PR from      ERROR:
-via cf-git-ops  current branch      "No PR for branch"
+via cf-git-ops  current branch      "No PR for branch"   [cf-git-operations]
     |               |
     +-------+-------+
             |
             v
-Pre-merge validation (3.5)
+Pre-merge validation (3.5)                               [cf-git-operations]
     |
     v
 All checks pass? ---NO---> ERROR with specific failure reason
@@ -169,11 +181,11 @@ All checks pass? ---NO---> ERROR with specific failure reason
     YES
     |
     v
-Advance to PF6-COMPLETE
+Advance to PF6-COMPLETE                                 [cf-knowledge-layer]
 (cf-knowledge-layer: log phase transition)
     |
     v
-Merge PR via cf-git-operations
+Merge PR via cf-git-operations                           [cf-git-operations]
 (squash merge by default)
     |
     v
@@ -182,16 +194,19 @@ Merge successful? ---NO---> ERROR: merge failed
     YES
     |
     v
-Delete feature branch
+Delete feature branch                                   [cf-git-operations]
 (remote + local, via --delete-branch)
     |
     v
-Update WorkGraph
+Update WorkGraph                                         [cf-knowledge-layer]
 (cf-knowledge-layer: complete task, log event)
     |
     v
 Present results
 (merge commit, branch cleanup, next steps)
+    |
+    v
+Next: /cf-cleanup (PF7-END)
 ```
 
 ### 4.2 Execution Steps

@@ -45,6 +45,13 @@ Apply cognitive operations throughout execution:
 - Want general help or command list (use `/cf-help`)
 - Normal development work -- diagnostics are for troubleshooting
 
+### Pipeline Position
+
+```text
+Phase: Any (always available) | Type: Information/Diagnostics
+No pipeline dependencies — can be invoked at any point during a session.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -91,33 +98,47 @@ This command is always available. It diagnoses problems rather than requiring pr
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-doctor invoked]) --> Parse[Parse --repair and --verbose flags]
-    Parse --> RunChecks[Run diagnostic checks]
+Phase: Any | Type: Information/Diagnostics
 
-    RunChecks --> C1[Check 1: Directory structure]
-    C1 --> C2[Check 2: Database health]
-    C2 --> C3[Check 3: Hook scripts]
-    C3 --> C4[Check 4: Settings files]
-    C4 --> C5[Check 5: PathFlow state consistency]
-    C5 --> C6[Check 6: Sentinel integrity]
-    C6 --> C7[Check 7: Teammate responsiveness]
-    C7 --> C8[Check 8: Flag file state]
-    C8 --> C9[Check 9: JSONL integrity]
-    C9 --> C10[Check 10: Agent definitions]
-
-    C10 --> Summarize[Summarize results]
-    Summarize --> HasIssues{Issues found?}
-
-    HasIssues -->|No| AllClear([All checks passed])
-    HasIssues -->|Yes| ShouldRepair{--repair flag?}
-
-    ShouldRepair -->|No| ReportIssues[Report issues with remediation steps]
-    ReportIssues --> End([Complete])
-
-    ShouldRepair -->|Yes| AttemptRepair[Attempt automatic repair]
-    AttemptRepair --> ReportResults[Report repair results]
-    ReportResults --> End
+/cf-doctor invoked
+    |
+    v
+Parse flags (--repair, --verbose)
+    |
+    v
+Run diagnostic checks (sequential):
+    1. Directory structure
+    2. Database health
+    3. Hook scripts (19 scripts)
+    4. Settings files
+    5. PathFlow state consistency
+    6. Sentinel integrity
+    7. Teammate responsiveness
+    8. Flag file state
+    9. JSONL integrity
+    10. Agent definitions (8 files)
+    |
+    v
+Summarize results
+    |
+    v
+Issues found? ---NO---> All checks passed
+    |
+    YES
+    |
+    v
+--repair flag? ---NO---> Report issues with remediation steps
+    |
+    YES
+    |
+    v
+Attempt automatic repair
+    |
+    v
+Report repair results
+    |
+    v
+Next: No pipeline progression — standalone diagnostics command.
 ```
 
 ### 4.2 Execution Steps

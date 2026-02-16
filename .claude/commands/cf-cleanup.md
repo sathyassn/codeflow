@@ -44,6 +44,16 @@ Apply cognitive operations throughout execution:
 - Cleaning up code or refactoring (use `/cf-develop`)
 - Checking session status (use `/cf-stack`)
 
+### Pipeline Position
+
+```text
+Phase: PF7-END
+Pipeline: /cf-ship --> /cf-cleanup
+                        ^ you are here
+Previous: /cf-ship (PR merged)
+Next: Session ends. Start new session for new work.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -124,6 +134,8 @@ No positional arguments. Cleanup scope is controlled entirely by flags.
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF7-END | Type: Session Cleanup
+
 /cf-cleanup invoked
     |
     v
@@ -151,6 +163,7 @@ Analyze cleanup targets --------+-------------------+
 Query completed/          List worktrees        Scan for stale
 stale sessions            for merged PRs        sentinels, flags,
 from DB                       |                 old logs
+[cf-knowledge-layer]     [cf-git-operations]
     |                         |                     |
     +----------+--------------+---------------------+
                |
@@ -169,11 +182,14 @@ User confirms? ---NO---> CANCELLED
     YES
     |
     v
-Execute cleanup
-(delegate to teammates)
+Execute cleanup                                     [cf-git-operations]
+(delegate to teammates)                             [cf-knowledge-layer]
     |
     v
 Report results
+    |
+    v
+Next: Session ends. Start new session for new work.
 ```
 
 ### 4.2 Execution Steps

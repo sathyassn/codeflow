@@ -43,6 +43,14 @@ Apply cognitive operations throughout execution:
 - Just checking status without intending to resume (use `/cf-help status`)
 - No previous work exists to resume
 
+### Pipeline Position
+
+```text
+Phase: PF2-CONTEXT | Type: Session recovery
+Flow: /cf-resume --> [routes to current stage command]
+Entry point for resuming previous work. Routes to the appropriate stage command.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -94,31 +102,57 @@ None.
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-resume invoked]) --> Parse[Parse work-id argument]
-    Parse --> QueryWork
+Phase: PF2-CONTEXT | Type: Session Recovery
 
-    QueryWork[Query cf-knowledge-layer for active work] --> HasWork{Active work found?}
-
-    HasWork -->|None| NoWork([Display: No active work. Suggest starting fresh.])
-    HasWork -->|Single| LoadSingle[Load work context]
-    HasWork -->|Multiple| ShowOptions[Show work options to user]
-
-    ShowOptions --> UserPick[User selects work item] --> LoadSingle
-
-    LoadSingle --> RestoreState[Restore state]
-    RestoreState --> RestoreBranch[Verify/switch to work branch]
-    RestoreBranch --> RestorePhase[Identify PathFlow phase]
-    RestorePhase --> RespawnTeam[Respawn teammates from saved roster]
-    RespawnTeam --> PresentSummary[Present context summary]
-    PresentSummary --> RouteNext{Route to appropriate stage}
-
-    RouteNext -->|WS-DEV incomplete| SpawnDev[Route to cf-development]
-    RouteNext -->|WS-PLAN incomplete| SpawnPlan[Route to cf-planning]
-    RouteNext -->|WS-DOCS incomplete| SpawnDocs[Route to cf-documentation]
-    RouteNext -->|WS-REV incomplete| SpawnRev[Route to cf-review]
-    RouteNext -->|WS-QA incomplete| SpawnQA[Route to cf-quality-assurance]
-    RouteNext -->|All stages done| AdvancePhase[Advance to next PathFlow phase]
+/cf-resume invoked
+    |
+    v
+Parse work-id argument
+    |
+    v
+Query active work                              [cf-knowledge-layer]
+    |
+    v
+Active work found?
+    |
+    +--NONE------> "No active work. Start fresh."
+    |
+    +--MULTIPLE--> Show options to user
+    |                  |
+    |                  v
+    |              User selects work item
+    |                  |
+    +--SINGLE------+---+
+                   |
+                   v
+Load work context
+    |
+    v
+Restore state
+    |
+    v
+Verify/switch to work branch                  [cf-git-operations]
+    |
+    v
+Identify PathFlow phase
+    |
+    v
+Respawn teammates from saved roster
+    |
+    v
+Present context summary
+    |
+    v
+Route to appropriate stage:
+    +--WS-DEV incomplete ---> cf-development
+    +--WS-PLAN incomplete --> cf-planning
+    +--WS-DOCS incomplete --> cf-documentation
+    +--WS-REV incomplete ---> cf-review
+    +--WS-QA incomplete ----> cf-quality-assurance
+    +--All stages done -----> Advance to next PathFlow phase
+    |
+    v
+Next: [routes to current stage command]
 ```
 
 ### 4.2 Execution Steps

@@ -45,6 +45,16 @@ Apply cognitive operations throughout execution:
 - Creating planning artifacts like epics (use `/cf-plan`)
 - Reviewing documentation (use `/cf-review`)
 
+### Pipeline Position
+
+```text
+Phase: PF4-EXECUTE | Stage: WS-DOCS
+Pipeline: /cf-document --> /cf-review --> /cf-ship --> /cf-cleanup
+                  ^ you are here
+Previous: PF3-CLASSIFY (work classification)
+Next: /cf-review (DOCUMENTATION_REVIEW mode)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -161,6 +171,8 @@ If on a protected branch, the team lead asks cf-git-operations to create a `docs
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF4-EXECUTE | Stage: WS-DOCS | Teammate: cf-documentation
+
 /cf-document invoked
     |
     v
@@ -175,19 +187,19 @@ Type provided? ---NO---> Auto-detect type from description
 Classify work (DOCS type)
     |
     v
-Register task in WorkGraph
+Register task in WorkGraph                          [cf-knowledge-layer]
 (cf-knowledge-layer: create-task)
     |
     v
 Branch safety check (3.5)
     |
     v
-Safe? ---NO---> Create docs/* branch
+Safe? ---NO---> Create docs/* branch                [cf-git-operations]
     |           via cf-git-operations
     YES             |
     |               |
     v               v
-Register active work
+Register active work                                [cf-knowledge-layer]
 (cf-knowledge-layer: begin-work)
     |
     v
@@ -195,24 +207,27 @@ Build context bundle
 (existing docs, codebase references, templates)
     |
     v
-Assign to cf-documentation teammate
+Spawn cf-documentation teammate                     [cf-documentation]
     |
     v
-Teammate researches + writes docs
+Teammate researches + writes docs                   [cf-documentation]
     |
     v
-Teammate validates (lint, structure, links)
+Teammate validates (lint, structure, links)          [cf-documentation]
     |
     v
-Teammate requests commit
+Teammate requests commit                            [cf-git-operations]
 (cf-documentation --> cf-git-operations)
     |
     v
-Complete work
+Complete work                                       [cf-knowledge-layer]
 (cf-knowledge-layer: complete-work)
     |
     v
 Present results
+    |
+    v
+Next: /cf-review (WS-REV, DOCUMENTATION_REVIEW mode)
 ```
 
 ### 4.2 Execution Steps

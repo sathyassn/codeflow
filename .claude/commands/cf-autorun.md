@@ -55,6 +55,14 @@ Apply cognitive operations throughout execution:
 - Single task execution (use `/cf-develop` directly)
 - Tasks are not yet planned or registered in the WorkGraph
 
+### Pipeline Position
+
+```text
+Phase: Pre-PF1 | Type: Autonomous execution
+Prerequisite: No active PathFlow session
+Launches independent workers that each run their own PF1-PF7 pipeline.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -146,32 +154,155 @@ Before launching workers, the CLI validates:
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-autorun start invoked]) --> Parse[Parse subcommand and arguments]
-    Parse --> ValidateBatch{Batch file valid?}
-    ValidateBatch -->|No| Error([ERROR: Invalid batch])
-    ValidateBatch -->|Yes| CheckState
+Phase: Pre-PF1 | Type: Autonomous Execution
 
-    CheckState{PathFlow active?}
-    CheckState -->|Yes| ErrorActive([ERROR: Active PathFlow session])
-    CheckState -->|No| CheckClean
+/cf-autorun start invoked
+    |
+    v
+Parse subcommand and arguments
+    |
+    v
+Batch file valid? ---NO---> ERROR: "Invalid batch"
+    |
+    YES
+    |
+    v
+PathFlow active? ---YES---> ERROR: "Active PathFlow session"
+    |
+    NO
+    |
+    v
+Git tree clean? ---NO---> ERROR: "Uncommitted changes"
+    |
+    YES
+    |
+    v
+Resolve task IDs from WorkGraph                [cf-knowledge-layer]
+    |
+    v
+--dry-run? ---YES---> Report validation results, STOP
+    |
+    NO
+    |
+    v
+Create autorun session record
+    |
+    v
+Spawn tmux workers with worktrees
+    |
+    v
+Workers execute PathFlow PF1-PF7 (each worker independently)
+    |
+    v
+All workers done? ---NO---> Continue monitoring
+    |
+    YES
+    |
+    v
+Summarize: PRs created, failures, time
+    |
+    v
+Next: Monitor with /cf-autorun status, cleanup with /cf-autorun cleanup --merged
+```
 
-    CheckClean{Git tree clean?}
-    CheckClean -->|No| ErrorDirty([ERROR: Uncommitted changes])
-    CheckClean -->|Yes| ResolveTasks
+### 4.1.2 Status Subcommand
 
-    ResolveTasks[Resolve task IDs from WorkGraph] --> DryRun{--dry-run?}
-    DryRun -->|Yes| ReportDry([Report validation results])
-    DryRun -->|No| CreateSession
+```text
+/cf-autorun status [session-id]
+    |
+    v
+Session ID provided? ---NO---> List all active sessions
+    |                              |
+    YES                            v
+    |                          Show summary for each
+    v
+Query session record                           [cf-knowledge-layer]
+    |
+    v
+Display worker states (running, completed, failed, timed-out)
+    |
+    v
+Show progress: {completed}/{total} tasks
+```
 
-    CreateSession[Create autorun session record] --> SpawnWorkers
-    SpawnWorkers[Spawn tmux workers with worktrees] --> Monitor
+### 4.1.3 Sessions Subcommand
 
-    Monitor[Workers execute PathFlow PF1-PF7] --> WorkerDone{All workers done?}
-    WorkerDone -->|No| Monitor
-    WorkerDone -->|Yes| Summarize
+```text
+/cf-autorun sessions
+    |
+    v
+Query all autorun sessions from JSONL          [cf-knowledge-layer]
+    |
+    v
+Format session list (ID, name, status, progress)
+    |
+    v
+Display sorted by most recent first
+```
 
-    Summarize[Summarize: PRs created, failures, time] --> End([Complete])
+### 4.1.4 Stop Subcommand
+
+```text
+/cf-autorun stop <session-id>
+    |
+    v
+Validate session exists and is running         [cf-knowledge-layer]
+    |
+    v
+Signal workers to stop (graceful shutdown)
+    |
+    v
+Wait for workers to reach safe stopping point
+    |
+    v
+Preserve worktrees for debugging
+    |
+    v
+Update session record: status=stopped
+    |
+    v
+Report: {completed} completed, {stopped} stopped
+```
+
+### 4.1.5 Cleanup Subcommand
+
+```text
+/cf-autorun cleanup --merged
+    |
+    v
+List all autorun worktrees                     [cf-git-operations]
+    |
+    v
+Identify merged PRs (branch merged to main)
+    |
+    v
+For each merged worktree:
+    Remove worktree directory
+    Delete local branch
+    |
+    v
+Preserve unmerged worktrees
+    |
+    v
+Report: {removed} cleaned, {preserved} preserved
+```
+
+### 4.1.6 Logs Subcommand
+
+```text
+/cf-autorun logs <session-id>
+    |
+    v
+Validate session exists                        [cf-knowledge-layer]
+    |
+    v
+Read session log files from .state/autorun/sessions/
+    |
+    v
+Format and display worker logs (chronological)
+    |
+    v
+Show per-worker status and event timeline
 ```
 
 ### 4.2 Execution Steps

@@ -43,6 +43,15 @@ Apply cognitive operations throughout execution:
 - Writing documentation without planning artifacts (use `/cf-document`)
 - Investigating a bug (use `/cf-develop` with FIX classification)
 
+### Pipeline Position
+
+```text
+Phase: PF4-EXECUTE | Stage: WS-PLAN
+Pipeline: /cf-plan --> /cf-review
+Previous: PF3-CLASSIFY (work classification)
+Next: /cf-review (DESIGN_REVIEW mode)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -115,6 +124,8 @@ Apply cognitive operations throughout execution:
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF4-EXECUTE | Stage: WS-PLAN | Teammate: cf-planning
+
 /cf-plan invoked
     |
     v
@@ -128,7 +139,7 @@ Determine mode ----+--------------------+
     |               |                    |
     v               v                    v
 Classify work   Load existing        Load existing
-(PLAN type)     epic from DB         epic from DB
+(PLAN type)     epic from DB         epic from DB       [cf-knowledge-layer]
     |               |                    |
     v               v                    v
 Register task   Verify epic          Validate plan
@@ -136,19 +147,25 @@ in WorkGraph    exists               completeness
     |               |                    |
     v               v                    v
 Create plan/*   +---+                Lock epic
-branch          |                    (status=finalized)
+branch          |                    (status=finalized)  [cf-knowledge-layer]
     |           |                        |
     v           v                        v
-Assign to cf-planning teammate      Assign to cf-git-operations
-    |                                (create PR)
-    v                                    |
-Teammate creates/refines epic            v
-    |                                Present PR URL
+Spawn cf-planning teammate           Create PR           [cf-git-operations]
+    |                                    |
+    v                                    v
+Teammate creates/refines epic        Present PR URL
+    |                                [cf-planning]
     v
-Teammate decomposes into tasks
+Teammate decomposes into tasks                          [cf-planning]
+    |
+    v
+Teammate requests commit                                [cf-git-operations]
     |
     v
 Present results to user
+    |
+    v
+Next: /cf-review (WS-REV, DESIGN_REVIEW mode)
 ```
 
 ### 4.2 Execution Steps

@@ -45,6 +45,16 @@ Apply cognitive operations throughout execution:
 - Writing tests as primary deliverable (use `/cf-test`)
 - Reviewing code (use `/cf-review`)
 
+### Pipeline Position
+
+```text
+Phase: PF4-EXECUTE | Stage: WS-DEV
+Pipeline: /cf-develop --> /cf-review --> /cf-test --> /cf-ship --> /cf-cleanup
+                 ^ you are here
+Previous: PF3-CLASSIFY (work classification) or /cf-plan
+Next: /cf-review (CODE_REVIEW mode)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -146,6 +156,8 @@ If on a protected branch, the team lead asks cf-git-operations to create an appr
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF4-EXECUTE | Stage: WS-DEV | Teammate: cf-development
+
 /cf-develop invoked
     |
     v
@@ -159,7 +171,7 @@ Determine mode --------+
     |                   |
     v                   v
 Query task from      Classify work
-WorkGraph            (auto-detect type)
+WorkGraph            (auto-detect type)              [cf-knowledge-layer]
     |                   |
     v                   v
 Task exists? ---NO---> Create task in
@@ -170,33 +182,36 @@ Task exists? ---NO---> Create task in
 Branch safety check (3.5)
     |
     v
-Safe? ---NO---> Create feature branch
+Safe? ---NO---> Create feature branch               [cf-git-operations]
     |           via cf-git-operations
     YES             |
     |               |
     v               v
-Register active work
+Register active work                                [cf-knowledge-layer]
 (cf-knowledge-layer:begin-work)
     |
     v
 Build context bundle
     |
     v
-Assign to cf-development teammate
+Spawn cf-development teammate                       [cf-development]
     |
     v
-Teammate implements + tests
+Teammate implements + unit tests                    [cf-development]
     |
     v
-Teammate requests commit
+Teammate requests commit                            [cf-git-operations]
 (cf-development --> cf-git-operations)
     |
     v
-Complete work
+Complete work                                       [cf-knowledge-layer]
 (cf-knowledge-layer:complete-work)
     |
     v
 Present results
+    |
+    v
+Next: /cf-review (WS-REV, CODE_REVIEW mode)
 ```
 
 ### 4.2 Execution Steps

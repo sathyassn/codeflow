@@ -42,6 +42,13 @@ Apply cognitive operations throughout execution:
 - Diagnosing infrastructure problems (use `/cf-doctor`)
 - Resuming previous work (use `/cf-resume`)
 
+### Pipeline Position
+
+```text
+Phase: Any (always available) | Type: Information
+No pipeline dependencies — can be invoked at any point during a session.
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -81,29 +88,44 @@ This command is always available. It adapts its output based on what session sta
 ### 4.1 Workflow Diagram
 
 ```text
-flowchart TD
-    Start([/cf-stack invoked]) --> Parse[Parse --verbose flag]
-    Parse --> CheckSession{PathFlow session active?}
+Phase: Any | Type: Information
 
-    CheckSession -->|No| NoSession[Display: No active PathFlow session]
-    NoSession --> ShowBranch[Show git branch and basic state]
-    ShowBranch --> End([Complete])
-
-    CheckSession -->|Yes| GatherState[Gather session state]
-    GatherState --> ReadPhase[Read current PathFlow phase]
-    ReadPhase --> ReadStage[Read current work stage]
-    ReadStage --> ReadTeam[Read active teammates]
-    ReadTeam --> ReadTask[Read current task]
-
-    ReadTask --> IsVerbose{--verbose?}
-    IsVerbose -->|No| RenderStandard[Render standard stack view]
-    IsVerbose -->|Yes| ReadSentinels[Read sentinels and flags]
-    ReadSentinels --> ReadEvents[Read recent JSONL events]
-    ReadEvents --> ReadRework[Read rework counters]
-    ReadRework --> RenderVerbose[Render verbose stack view]
-
-    RenderStandard --> End
-    RenderVerbose --> End
+/cf-stack invoked
+    |
+    v
+Parse --verbose flag
+    |
+    v
+PathFlow session active? ---NO---> Show "No active session" + branch info
+    |
+    YES
+    |
+    v
+Gather session state:
+    Read current PathFlow phase
+    Read current work stage
+    Read active teammates                          [cf-knowledge-layer]
+    Read current task
+    |
+    v
+--verbose? ---NO---> Render standard stack view
+    |
+    YES
+    |
+    v
+Read sentinels and flags
+    |
+    v
+Read recent JSONL events
+    |
+    v
+Read rework counters
+    |
+    v
+Render verbose stack view
+    |
+    v
+Next: No pipeline progression — standalone info command.
 ```
 
 ### 4.2 Execution Steps

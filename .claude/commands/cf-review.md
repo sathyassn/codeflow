@@ -43,6 +43,16 @@ Apply cognitive operations throughout execution:
 - Running tests or QA verification (use `/cf-test`)
 - Reviewing your own plan or design in progress (cf-review requires completed work)
 
+### Pipeline Position
+
+```text
+Phase: PF4-EXECUTE | Stage: WS-REV
+Pipeline: [primary stage] --> /cf-review --> /cf-test or /cf-ship
+                                ^ you are here
+Previous: /cf-develop, /cf-plan, /cf-document, or /cf-test (primary stage)
+Next: /cf-test (if pipeline includes WS-QA) or /cf-ship (if not)
+```
+
 ---
 
 ## 2. Arguments & Flags
@@ -110,6 +120,8 @@ The review mode is auto-detected from the work type registered in the current se
 ### 4.1 Workflow Diagram
 
 ```text
+Phase: PF4-EXECUTE | Stage: WS-REV | Teammate: cf-review
+
 /cf-review invoked
     |
     v
@@ -123,27 +135,27 @@ Identify changes ------+-------------------+
     |                   |                   |
     v                   v                   v
 Fetch PR diff       Compare branch      Detect current
-via cf-git-ops      against main        branch + PR
+via cf-git-ops      against main        branch + PR      [cf-git-operations]
     |                   |                   |
     +-------------------+-------------------+
     |
     v
-Determine review mode (from work type)
+Determine review mode (from work type)              [cf-knowledge-layer]
     |
     v
-Assign to cf-review teammate
+Spawn cf-review teammate                             [cf-review]
     |
     v
-Teammate reads all changed files
+Teammate reads all changed files                     [cf-review]
     |
     v
-Teammate applies review checklist
+Teammate applies review checklist                    [cf-review]
     |
     v
-Teammate runs tests (CODE_REVIEW, TEST_REVIEW)
+Teammate runs tests (CODE_REVIEW, TEST_REVIEW)       [cf-review]
     |
     v
-Teammate delivers verdict
+Teammate delivers verdict                            [cf-review]
     |
     v
 Process verdict --------+-------------------+
@@ -153,11 +165,17 @@ Process verdict --------+-------------------+
     |                    |
     v                    v
 Record verdict       Send findings to
-in WorkGraph         originating teammate
+in WorkGraph         originating teammate             [cf-knowledge-layer]
     |                    |
     v                    v
 Present results      Route back to primary
-to user              stage for rework
+to user              stage for rework (iteration +1)
+    |                    |
+    v                    v
+Next: /cf-test       Next: /cf-develop, /cf-plan,
+(if WS-QA in         /cf-document, or /cf-test
+pipeline) or         (rework, max 3 iterations)
+/cf-ship (if not)
 ```
 
 ### 4.2 Execution Steps
