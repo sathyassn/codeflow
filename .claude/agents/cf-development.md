@@ -56,7 +56,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 | Constraint | Rule |
 |-----------|------|
-| Branch access | Write to `feat/*`, `fix/*`, `refactor/*`, `ci/*`. Read-only on `main` and all other branches. |
+| Branch access | Write to `feat/*`, `fix/*`, `refactor/*`, `ci/*`, `hotfix/*`, `chore/*`. Read-only on `main` and all other branches. |
 | Tool restrictions | Read, Edit, Write, Bash, Glob, Grep. Cannot spawn other teammates. Can spawn Explore sub-agents. |
 | Scope | Source code, test files, CI/CD configuration, scripts. Does NOT perform git operations or modify protected resources. |
 
