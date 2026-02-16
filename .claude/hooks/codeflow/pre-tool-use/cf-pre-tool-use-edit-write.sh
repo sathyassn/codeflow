@@ -158,12 +158,20 @@ block_write() {
         log_security_event "blocked" "edit_write_blocked" "$TOOL_NAME" "$FILE_PATH" "$reason"
     fi
 
+    # Add anti-circumvention guidance for branch protection blocks
+    local branch_guidance=""
+    if [[ "$reason" == *"protected branch"* ]]; then
+        branch_guidance="
+⛔ Do NOT bypass by using Bash redirects, interpreter writes, or dangerouslyDisableSandbox.
+Delegate to cf-git-operations teammate: SendMessage(recipient=\"cf-git-operations\", content=\"create-branch {prefix}/{name}\")"
+    fi
+
     cat >&2 <<EOF
 BLOCKED: $TOOL_NAME operation not allowed
 
 Path: $FILE_PATH
 Reason: $reason
-
+${branch_guidance}
 This is a safety restriction enforced by CodeFlow.
 EOF
     exit 2

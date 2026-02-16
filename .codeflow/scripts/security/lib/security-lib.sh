@@ -219,6 +219,9 @@ Command: ${COMMAND:-<unknown>}
 This is a security restriction enforced by CodeFlow.
 See: .codeflow/docs/security/README.md
 
+⛔ Do NOT circumvent this restriction by using dangerouslyDisableSandbox, interpreter workarounds, or other bypass techniques.
+Work THROUGH PathFlow: delegate to the appropriate teammate instead.
+
 EOF
     exit 2
 }
@@ -249,6 +252,7 @@ Reason: $reason | Pattern: $pattern
 Command: ${COMMAND:-<unknown>}
 
 MUST: Delegate to cf-$skill teammate: $operation
+⛔ Do NOT attempt to bypass this restriction. The delegation above is the correct path.
 EOF
     exit 2
 }

@@ -132,5 +132,8 @@ Reason: PathFlow is active - team resources are still in use
 Operation: $BLOCKED_OP
 
 Complete the PathFlow workflow (PF7-END) before cleaning up team resources.
+
+⛔ Do NOT bypass by directly modifying team config files, removing the pathflow-active flag, or killing tmux panes manually.
+Follow the proper PF7-END shutdown sequence.
 EOF
 exit 2

@@ -207,6 +207,9 @@ if [[ "$CODEFLOW_SESSION_ID" == "unknown" ]]; then
             echo "Gate: $GATE_TYPE" >&2
             echo "" >&2
             echo "Ensure PathFlow session is properly initialized (PF1-INIT) before push/PR/teammate spawn." >&2
+            echo "" >&2
+            echo "⛔ Do NOT bypass by manually creating sentinel files or session state." >&2
+            echo "Initialize properly through PF1-INIT." >&2
             exit 2
             ;;
     esac
@@ -262,7 +265,8 @@ if [[ -n "$REQUIRED_SENTINEL" ]] && declare -f has_sentinel &>/dev/null; then
     # Customize block message for role teammate spawns
     _block_reason="$GATE_TYPE requires $REQUIRED_DESC. No pathflow-$REQUIRED_SENTINEL sentinel found."
     if [[ "$GATE_TYPE" == "role_teammate_spawn" ]]; then
-        _block_reason="Cannot spawn role teammates before PF3-CLASSIFY. Create a feature branch first. No pathflow-$REQUIRED_SENTINEL sentinel found."
+        _block_reason="Cannot spawn role teammates before PF3-CLASSIFY. No pathflow-$REQUIRED_SENTINEL sentinel found.
+⛔ Do NOT bypass by creating pf-3 sentinel directly. Delegate to cf-git-operations to create a feature branch, which properly advances to PF3."
     fi
 
     cat >&2 <<EOF
@@ -273,6 +277,9 @@ Gate: $GATE_TYPE
 
 Complete earlier phases before this operation.
 Current sentinels: ${CURRENT_SENTINELS:-none}
+
+⛔ Do NOT bypass PathFlow by creating sentinels directly, using workarounds, or skipping phases.
+Progress through phases sequentially by delegating to the appropriate teammate.
 EOF
     exit 2
 fi
