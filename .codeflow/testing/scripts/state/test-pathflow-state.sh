@@ -495,6 +495,93 @@ test_list_sentinels_no_directory() {
 }
 
 # ============================================================================
+# TESTS: Env File Session ID
+# ============================================================================
+
+test_pfs_reads_from_env_file() {
+    test_section "Library reads session ID from env file"
+    setup_pfs_env
+    # Verify the library sources codeflow-env.sh
+    if grep -q "codeflow-env.sh" "$LIBRARY_UNDER_TEST"; then
+        test_pass "Library references codeflow-env.sh"
+    else
+        test_fail "Library should reference codeflow-env.sh for session ID"
+    fi
+}
+
+test_pfs_has_todo_go_cli() {
+    test_section "Library has TODO(go-cli) comment"
+    if grep -q "TODO(go-cli)" "$LIBRARY_UNDER_TEST"; then
+        test_pass "Has TODO(go-cli) comment near env file sourcing"
+    else
+        test_fail "Should have TODO(go-cli) comment"
+    fi
+}
+
+test_sentinel_uses_env_file_id() {
+    test_section "Sentinel uses session ID from env file"
+    setup_pfs_env
+    # Create env file with a specific session ID
+    local env_file="$REPO_ROOT/.state/runtime/codeflow-env.sh"
+    mkdir -p "$(dirname "$env_file")"
+    local env_session_id="ses-envtest-$$"
+    echo "export CODEFLOW_SESSION_ID='$env_session_id'" > "$env_file"
+    # Create sentinel directory for the env file session ID
+    mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$env_session_id"
+
+    # Source the library in a subshell with the env file present
+    # (must unset source guard so it re-sources)
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        unset CODEFLOW_SESSION_ID 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        create_sentinel "pf-3"
+        [[ -f "$REPO_ROOT/.state/sentinels/pathflow/$env_session_id/pathflow-pf-3" ]] && echo "FOUND" || echo "MISSING"
+    )
+    if [[ "$result" == "FOUND" ]]; then
+        test_pass "Sentinel created under env file session ID"
+    else
+        test_fail "Sentinel should be created under env file session ID ($env_session_id)"
+    fi
+    rm -f "$env_file"
+}
+
+test_sentinel_env_file_cross_teammate() {
+    test_section "Multiple sources share sentinel via env file"
+    setup_pfs_env
+    # Create env file with a specific session ID
+    local env_file="$REPO_ROOT/.state/runtime/codeflow-env.sh"
+    mkdir -p "$(dirname "$env_file")"
+    local shared_id="ses-shared-$$"
+    echo "export CODEFLOW_SESSION_ID='$shared_id'" > "$env_file"
+    mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$shared_id"
+
+    # "Teammate 1" creates sentinel
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        unset CODEFLOW_SESSION_ID 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        create_sentinel "pf-3"
+    )
+
+    # "Teammate 2" checks sentinel (fresh source with same env file)
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        unset CODEFLOW_SESSION_ID 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        has_sentinel "pf-3" && echo "YES" || echo "NO"
+    )
+    if [[ "$result" == "YES" ]]; then
+        test_pass "Second source finds sentinel created by first"
+    else
+        test_fail "Both sources should see same sentinel via env file"
+    fi
+    rm -f "$env_file"
+}
+
+# ============================================================================
 # TESTS: Integration
 # ============================================================================
 
@@ -604,6 +691,12 @@ main() {
     test_list_sentinels_multiple
     test_list_sentinels_empty
     test_list_sentinels_no_directory
+
+    # Env file session ID
+    test_pfs_reads_from_env_file
+    test_pfs_has_todo_go_cli
+    test_sentinel_uses_env_file_id
+    test_sentinel_env_file_cross_teammate
 
     # Integration
     test_flag_and_sentinels_lifecycle

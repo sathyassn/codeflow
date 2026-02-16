@@ -139,6 +139,54 @@ test_is_pathflow_active_with_flag() {
 }
 
 # ============================================================================
+# TEST: is_pathflow_active() - env file sourcing
+# ============================================================================
+
+test_is_pathflow_active_env_file() {
+    test_section "is_pathflow_active: sources env file for session ID"
+
+    setup_test_env
+
+    # Create env file with a specific session ID
+    local test_session="ses-envtest-$$"
+    local env_dir="$TEST_TMPDIR/repo/.state/runtime"
+    mkdir -p "$env_dir"
+    echo "export CODEFLOW_SESSION_ID='$test_session'" > "$env_dir/codeflow-env.sh"
+
+    # Create the flag file at the path the function will look for (using env file session ID)
+    local test_flag="$TEST_TMPDIR/repo/.state/session/$test_session/is-pathflow-active"
+    mkdir -p "$(dirname "$test_flag")"
+    touch "$test_flag"
+
+    local exit_code=0
+    (
+        export REPO_ROOT="$TEST_TMPDIR/repo"
+        unset CODEFLOW_SESSION_ID 2>/dev/null || true
+        unset _CONTEXT_LIB_LOADED 2>/dev/null || true
+        source "$LIB_FILE"
+        is_pathflow_active
+    ) 2>/dev/null || exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        test_pass "is_pathflow_active finds flag via env file session ID"
+    else
+        test_fail "is_pathflow_active should find flag using session ID from env file"
+    fi
+
+    teardown_test_env
+}
+
+test_is_pathflow_active_env_file_ref() {
+    test_section "is_pathflow_active: references codeflow-env.sh in source"
+
+    if grep -q "codeflow-env.sh" "$LIB_FILE"; then
+        test_pass "context-lib.sh references codeflow-env.sh"
+    else
+        test_fail "context-lib.sh should reference codeflow-env.sh for session ID"
+    fi
+}
+
+# ============================================================================
 # TEST: get_pathflow_setting() - no settings.json
 # ============================================================================
 
@@ -316,6 +364,8 @@ main() {
     # is_pathflow_active() tests
     test_is_pathflow_active_no_flag
     test_is_pathflow_active_with_flag
+    test_is_pathflow_active_env_file
+    test_is_pathflow_active_env_file_ref
 
     # get_pathflow_setting tests
     test_get_setting_no_settings_file

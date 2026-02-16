@@ -2,7 +2,7 @@
 # Test: cf-pre-tool-use-pathflow-gate.sh
 # Location: .codeflow/testing/claude-hooks/pre-tool-use/test-cf-pre-tool-use-pathflow-gate.sh
 #
-# Tests PathFlow gate hook (v4.0.0 - sentinel-backed enforcement):
+# Tests PathFlow gate hook (v4.1.0 - sentinel-backed enforcement):
 #   - File exists, executable, shellcheck, headers, strict mode, VERSION
 #   - Exits 0 when no pathflow-active flag (standalone mode)
 #   - Exits 0 when TOOL_NAME is not Edit/Write/Bash
@@ -27,7 +27,7 @@ TESTS_FAILED=0
 pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
 fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 
-echo "=== Testing cf-pre-tool-use-pathflow-gate.sh (v4 sentinel) ==="
+echo "=== Testing cf-pre-tool-use-pathflow-gate.sh (v4.1 sentinel) ==="
 echo ""
 
 # =============================================================================
@@ -93,12 +93,12 @@ else
     fail "Should use set -euo pipefail"
 fi
 
-# Test 6: Has VERSION constant (v4.0.0)
+# Test 6: Has VERSION constant (v4.1.0)
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'VERSION="4.0.0"' "$HOOK"; then
-    pass "Has VERSION 4.0.0"
+if grep -q 'VERSION="4.1.0"' "$HOOK"; then
+    pass "Has VERSION 4.1.0"
 else
-    fail "Should have VERSION 4.0.0"
+    fail "Should have VERSION 4.1.0"
 fi
 
 # Test 7: Has Hook Type header
@@ -609,6 +609,61 @@ if [[ $exit_code -eq 2 ]] && [[ "$output" == *"session state unknown"* ]]; then
     pass "Blocks role teammate spawn when session ID is unknown"
 else
     fail "Should block role teammate spawn when session ID is unknown (got exit=$exit_code)"
+fi
+
+echo ""
+echo "--- Execution Tests: Env File Session ID ---"
+
+# Test 52: Hook references env file (codeflow-env.sh)
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "codeflow-env.sh" "$HOOK"; then
+    pass "Hook references env file (codeflow-env.sh)"
+else
+    fail "Hook should reference codeflow-env.sh for session ID"
+fi
+
+# Test 53: Hook has TODO(go-cli) comment near env file sourcing
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "TODO(go-cli)" "$HOOK"; then
+    pass "Has TODO(go-cli) comment"
+else
+    fail "Should have TODO(go-cli) comment near session ID sourcing"
+fi
+
+# Test 54: Hook uses session ID from env file when present
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-54"
+touch "$flag_file"
+# Create env file in isolated REPO_ROOT
+env_file="$REPO_ROOT/.state/runtime/codeflow-env.sh"
+mkdir -p "$(dirname "$env_file")"
+echo "export CODEFLOW_SESSION_ID='ses-envtest54'" > "$env_file"
+# Create pf-3 sentinel for the env file session ID
+create_test_sentinel "ses-envtest54" "pf-3"
+# Run hook — it should source env file and use ses-envtest54, finding the pf-3 sentinel
+result=$(PATHFLOW_FLAG_FILE="$flag_file" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"test.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Uses session ID from env file (sentinel found)"
+else
+    fail "Should use session ID from env file to find sentinel"
+fi
+rm -f "$env_file"
+
+# Test 55: Hook falls back to hook input .session_id when env file missing
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-55"
+touch "$flag_file"
+# Ensure no env file exists
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+# Create pf-3 sentinel for the fallback session ID
+create_test_sentinel "fallback-uuid-55" "pf-3"
+# Send session_id via stdin (simulating Claude Code hook protocol)
+stdin_json='{"tool_name":"Edit","tool_input":{"file_path":"test.txt"},"session_id":"fallback-uuid-55"}'
+result=$(PATHFLOW_FLAG_FILE="$flag_file" bash "$HOOK" <<< "$stdin_json" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Falls back to hook input session_id when env file missing"
+else
+    fail "Should fall back to hook input session_id when env file missing"
 fi
 
 echo ""

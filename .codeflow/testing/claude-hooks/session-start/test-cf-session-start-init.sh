@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Test: cf-session-start-init.sh (V4 / v1.0.0)
+# Test: cf-session-start-init.sh (V4 / v1.2.0)
 # Location: .codeflow/testing/claude-hooks/session-start/test-cf-session-start-init.sh
 #
-# Tests SessionStart init hook (V4 / v1.0.0) — consolidated from cleanup + pathflow-init
-# 88 tests covering all V4 gaps + PathFlow flag creation
+# Tests SessionStart init hook (V4 / v1.2.0) — consolidated from cleanup + pathflow-init
+# Tests cover all V4 gaps + PathFlow flag creation + env file session ID mechanism
 
 set -euo pipefail
 
@@ -34,14 +34,16 @@ setup_test_env() {
 
 cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/logs/sessions"/session-test-*.meta 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/logs/sessions"/session-ses-*.meta 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels/skill"/test-*.json 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}"/memory-progress* 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-test-* 2>/dev/null || true
 }
 
-echo "=== Testing cf-session-start-init.sh (V4 / v1.0.0) ==="
+echo "=== Testing cf-session-start-init.sh (V4 / v1.2.0) ==="
 echo ""
 
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -73,7 +75,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then pass "Has Location header"; else fail "Should have Location header"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '"1.0.0"' "$HOOK"; then pass "Version is 1.0.0"; else fail "Version should be 1.0.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
+if grep -q '"1.2.0"' "$HOOK"; then pass "Version is 1.2.0"; else fail "Version should be 1.2.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
 
 echo ""
 echo "--- Execution Tests ---"
@@ -104,18 +106,20 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q '! -t 0' "$HOOK"; then pass "Checks if stdin is a terminal"; else fail "Should check if stdin is a terminal"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'session_id' "$HOOK" && grep -q 'jq.*session_id' "$HOOK"; then pass "Reads session_id from stdin JSON"; else fail "Should read session_id from stdin JSON"; fi
+if grep -q 'session_id' "$HOOK" && grep -q 'jq.*session_id' "$HOOK"; then pass "Reads session_id from stdin (stored as _CLAUDE_UUID metadata)"; else fail "Should read session_id from stdin JSON"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 cleanup_test_artifacts
+# Stdin UUID is stored as metadata only — NOT used as CODEFLOW_SESSION_ID
+# The metadata file will use the generated CodeFlow session ID, not the stdin UUID
 echo '{"session_id": "test-stdin-sid-001"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null
 META_FILE="$REPO_ROOT/.state/logs/sessions/session-test-stdin-sid-001.meta"
-if [[ -f "$META_FILE" ]]; then
-    pass "Stdin session_id is used for metadata file"
-    rm -f "$META_FILE" 2>/dev/null || true
+if [[ ! -f "$META_FILE" ]]; then
+    pass "Stdin UUID NOT used as session ID (env file mechanism used)"
 else
-    fail "Stdin session_id should be used for metadata file"
+    fail "Stdin UUID should NOT be used as session ID anymore"
+    rm -f "$META_FILE" 2>/dev/null || true
 fi
 
 echo ""
@@ -462,6 +466,93 @@ if grep -q 'tracking_level.*pending' "$HOOK" || grep -q 'create_pathflow_flag' "
 TESTS_RUN=$((TESTS_RUN + 1))
 # Graceful degradation: if library missing, hook continues without error
 if grep -q '_PFS_LIB' "$HOOK" && grep -q 'if.*-f.*_PFS_LIB' "$HOOK"; then pass "Graceful degradation when pathflow library missing"; else fail "Should degrade gracefully when library missing"; fi
+
+echo ""
+echo "--- Env File Session ID Mechanism ---"
+
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'codeflow-env.sh' "$HOOK"; then pass "References env file (codeflow-env.sh)"; else fail "Should reference codeflow-env.sh"; fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '_CLAUDE_UUID' "$HOOK"; then pass "Stores Claude UUID as _CLAUDE_UUID (not session ID)"; else fail "Should store Claude UUID as _CLAUDE_UUID"; fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'TODO(go-cli)' "$HOOK"; then pass "Has TODO(go-cli) comment for future CLI migration"; else fail "Should have TODO(go-cli) comment"; fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_test_env
+cleanup_test_artifacts
+# When no env file exists, hook should create one
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    pass "Creates env file when none exists"
+else
+    fail "Should create env file at .state/runtime/codeflow-env.sh"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Env file should contain CODEFLOW_SESSION_ID export
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    if grep -q "CODEFLOW_SESSION_ID=" "$REPO_ROOT/.state/runtime/codeflow-env.sh"; then
+        pass "Env file contains CODEFLOW_SESSION_ID"
+    else
+        fail "Env file should contain CODEFLOW_SESSION_ID"
+    fi
+else
+    fail "Env file should exist for content check"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Session ID format: ses-{timestamp}{hex} (at least 26 chars total)
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+    if echo "$CODEFLOW_SESSION_ID" | grep -qE '^ses-[0-9N]{10,13}[a-f0-9]{12}$'; then
+        pass "Session ID format: ses-{timestamp}{hex}"
+    else
+        fail "Session ID format should be ses-{ts}{hex}, got: $CODEFLOW_SESSION_ID"
+    fi
+else
+    fail "Env file should exist for ID format check"
+fi
+cleanup_test_artifacts
+
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_test_env
+# Teammate scenario: env file already exists, hook should source it and NOT overwrite
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
+echo "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null
+_env_after=$(cat "$REPO_ROOT/.state/runtime/codeflow-env.sh")
+if echo "$_env_after" | grep -q "ses-1234567890123abcdef012345"; then
+    pass "Teammate: env file preserved (not overwritten)"
+else
+    fail "Teammate: env file should not be overwritten when it already exists"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Teammate scenario: metadata file uses CodeFlow session ID from env file
+setup_test_env
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
+echo "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"session_id": "uuid-from-claude-code"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null
+META_FILE="$REPO_ROOT/.state/logs/sessions/session-ses-1234567890123abcdef012345.meta"
+if [[ -f "$META_FILE" ]]; then
+    pass "Metadata file uses CodeFlow session ID from env file"
+    rm -f "$META_FILE" 2>/dev/null || true
+else
+    fail "Metadata file should use CodeFlow session ID from env file"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Atomic write: env file is written via tmp+mv pattern
+if grep -q 'mktemp' "$HOOK" && grep -q 'mv.*_tmp_env.*_env_file' "$HOOK"; then
+    pass "Env file written atomically (tmp + mv)"
+else
+    fail "Env file should be written atomically"
+fi
+cleanup_test_artifacts
 
 # Cleanup
 cleanup_test_artifacts
