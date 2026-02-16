@@ -51,10 +51,11 @@
     },
     "PF6-COMPLETE": {
       "name": "Work Completion",
-      "description": "Update task status, create PR",
+      "description": "Update task status, record session memory, create PR",
       "tasks": [
         "PF6-TSK-01: Update task status to complete in WorkGraph",
-        "PF6-TSK-02: Create PR via cf-git-operations"
+        "PF6-TSK-02: Update project memory via cf-knowledge-layer",
+        "PF6-TSK-03: Create PR via cf-git-operations"
       ]
     },
     "PF7-END": {

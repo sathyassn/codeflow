@@ -112,7 +112,7 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 | **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow:pf-3 sentinel |
 | **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type (see Work Type Pipelines below) | Role teammates (on-demand, per stage) | Code, docs, tests, reviews |
 | **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
-| **PF6-COMPLETE** | cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated |
+| **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, session memory recorded |
 | **PF7-END** | Shutdown all teammates, write session summary to JSONL, remove pathflow-active flag, TeamDelete | None (shutting down) | Clean session end |
 
 ### Quick-Reference Phase Map
@@ -301,55 +301,6 @@ In autorun mode (no human present), phase transitions happen automatically:
 - WS-REV uses Haiku-class model for cost-effective automated review
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
-
-### Task Tracker Mirroring
-
-PathFlow phases and work stages are mirrored into Claude Code's internal task tracker (TaskCreate/TaskUpdate/TaskList) for UI visibility. These entries are **visual mirrors only** -- JSONL/SQLite remains the authoritative source of truth.
-
-**How it works:**
-
-1. **On entering** a phase or stage: Call `TaskCreate` with subject, description, and activeForm from the corresponding template in `pathflow-config.json` `task_tracker.phase_templates.{PHASE}` or `task_tracker.stage_templates.{STAGE}`. Substitute all placeholders with actual session values before creating.
-2. **On leaving** a phase or stage: Call `TaskUpdate(taskId="{id}", status="completed")` on the task created in step 1.
-3. Template placeholders are substituted with actual values at creation time (see reference table below).
-
-**Phase mirroring:** On entering PF1 through PF7, the lead creates a task using `task_tracker.phase_templates.{PHASE}` with subject, description, and activeForm from the template.
-
-**Stage mirroring:** On entering WS-DEV, WS-PLAN, etc., the lead creates a task using `task_tracker.stage_templates.{STAGE}` with subject, description, and activeForm from the template.
-
-**Placeholder reference:**
-
-| Placeholder | Resolves To | Example |
-|-------------|------------|---------|
-| `{phase_id}` | Current PathFlow phase | `PF1-INIT` |
-| `{task_id}` | WorkGraph task identifier | `INF-TSK-FEAT-GENL-002` |
-| `{session_id}` | Current session identifier | `ses-17712618121074c5d2cda5828` |
-| `{stage_id}` | Current work stage | `WS-DEV` |
-| `{work_type}` | Classified work type | `FEAT` |
-| `{pipeline}` | Stage pipeline for work type | `WS-DEV -> WS-REV -> WS-QA` |
-| `{branch}` | Current feature branch | `feat/task-tracker-mirroring` |
-| `{teammate}` | Assigned stage teammate | `cf-development` |
-| `{iteration}` | Rework iteration number | `1` |
-| `{retry}` | QA retry number | `0` |
-| `{review_mode}` | Review mode for WS-REV | `CODE_REVIEW` |
-
-**Concrete example -- PF1-INIT phase entry:**
-
-```text
-TaskCreate(
-  subject="PF1-INIT: Initialize session",
-  description="Register session record, spawn cf-security. Phase: PF1-INIT, Session: ses-17712618121074c5d2cda5828.",
-  activeForm="Initializing PathFlow session"
-)
-```
-
-Then when PF1 completes and PF2 begins: `TaskUpdate(taskId="{pf1_task_id}", status="completed")`.
-
-**Key rules:**
-
-- Task tracker entries are **ephemeral and disposable** -- if context resets or entries are lost, no data is lost (JSONL has the authoritative record). Simply re-create entries for the current phase on recovery.
-- Only the team lead creates/updates task tracker entries (not teammates)
-- cf-knowledge-layer is NOT responsible for task tracker operations
-- Task tracker entries should reflect current PathFlow state but are never consulted as source of truth
 
 ---
 
@@ -759,7 +710,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Load work context | Resume flow | cf-knowledge-layer |
 | Register task | PF3-CLASSIFY | cf-knowledge-layer |
 | Record progress | During PF4-EXECUTE | cf-knowledge-layer (via teammate reports) |
-| Complete work | PF6-COMPLETE | cf-knowledge-layer |
+| Complete work (pre-PR) | PF6-COMPLETE | cf-knowledge-layer |
 | Write session summary | PF7-END | cf-knowledge-layer |
 
 ### Session Context Files
@@ -770,6 +721,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/runtime/current-session-id` | Current session ID reference |
 | `.state/ledger/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/is-pathflow-active` | Flag file: PathFlow session is active |
+| `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
 ---
 
