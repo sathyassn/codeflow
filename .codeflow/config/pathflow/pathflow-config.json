@@ -51,11 +51,12 @@
     },
     "PF6-COMPLETE": {
       "name": "Work Completion",
-      "description": "Update task status, record session memory, create PR",
+      "description": "Update task status, record session memory, commit state files, create PR",
       "tasks": [
         "PF6-TSK-01: Update task status to complete in WorkGraph",
         "PF6-TSK-02: Update project memory via cf-knowledge-layer",
-        "PF6-TSK-03: Create PR via cf-git-operations"
+        "PF6-TSK-03: Commit uncommitted workgraph and state files via cf-git-operations",
+        "PF6-TSK-04: Create PR via cf-git-operations"
       ]
     },
     "PF7-END": {
@@ -144,9 +145,9 @@
         "activeForm": "Verifying acceptance criteria"
       },
       "PF6-COMPLETE": {
-        "subject": "PF6-COMPLETE: Create PR and finalize",
-        "description": "Create PR via cf-git-operations, mark task complete. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-        "activeForm": "Creating PR and finalizing work"
+        "subject": "PF6-COMPLETE: Finalize and create PR",
+        "description": "Update task status, record session memory, commit state files, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+        "activeForm": "Finalizing work and creating PR"
       },
       "PF7-END": {
         "subject": "PF7-END: End session",
