@@ -542,7 +542,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 | SessionStart | 3 | init, instructions, logging |
 | UserPromptSubmit | 2 | validation, logging |
 | PreToolUse | 7 | pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch |
-| PostToolUse | 3 | logging, settings-templates, tmp-workflow |
+| PostToolUse | 4 | logging, pathflow-sentinel, settings-templates, tmp-workflow |
 | Stop | 2 | pathflow-gate, logging |
 | SubagentStop | 1 | pathflow-gate (shared with Stop) |
 | SessionEnd | 2 | cleanup, logging |
@@ -653,7 +653,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/runtime/active-task.json` | Bridge file: current task for hook context |
 | `.state/runtime/current-session-id` | Current session ID reference |
 | `.state/ledger/pathflow-events.jsonl` | Phase and stage transition log |
-| `/tmp/claude/managed/state/pathflow-active` | Flag file: PathFlow session is active |
+| `.state/session/{SID}/is-pathflow-active` | Flag file: PathFlow session is active |
 | `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
 ---
@@ -737,7 +737,7 @@ Three complementary mechanisms provide defense-in-depth:
 |---------|----------|
 | Lost phase state | Check `.state/ledger/pathflow-events.jsonl` for latest `phase_transition` event |
 | Sentinel missing | Re-complete the phase marker task to regenerate sentinel |
-| pathflow-active flag stale | Manually remove `/tmp/claude/managed/state/pathflow-active` via PF7 flow |
+| pathflow-active flag stale | Manually remove `.state/session/{SID}/is-pathflow-active` via PF7 flow |
 | Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
 
 ### Teammate Recovery

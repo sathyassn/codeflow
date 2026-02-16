@@ -12,11 +12,12 @@
 #   - Enables pathflow-gate enforcement without requiring JSONL writes
 #
 # Sentinel detection:
-#   tool_name=TeamCreate                        → pathflow-pf-1
-#   tool_name=Task, name has cf-knowledge-layer → pathflow-pf-2
-#   tool_name=Bash, git checkout -b/switch -c   → pathflow-pf-3
-#   tool_name=SendMessage, STAGE-COMPLETE: WS-* → pathflow-ws-{stage}
-#   tool_name=Bash, gh pr create                → pathflow-pf-6
+#   tool_name=TeamCreate                        -> pathflow-pf-1
+#   tool_name=Task, name has cf-knowledge-layer -> pathflow-pf-2
+#   tool_name=Bash, git checkout -b/switch -c   -> pathflow-pf-3
+#   tool_name=Bash, git checkout/switch <feat/>  -> pathflow-pf-3 (resume flow)
+#   tool_name=SendMessage, STAGE-COMPLETE: WS-* -> pathflow-ws-{stage}
+#   tool_name=Bash, gh pr create                -> pathflow-pf-6
 #
 # Idempotent: touch on existing file is a no-op.
 # Early exit: If is_pathflow_active() returns false, exit 0.
@@ -106,13 +107,17 @@ case "$TOOL_NAME" in
         ;;
 
     Bash)
-        # PF3-CLASSIFY: git branch creation
+        # PF3-CLASSIFY: git branch creation or switching to feature branch
         # PF6-COMPLETE: gh pr create
         if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
             _command=$(echo "$TOOL_INPUT" | jq -r '.command // empty' 2>/dev/null) || true
             if [[ -n "${_command:-}" ]]; then
-                # Check for git branch creation
+                # Check for git branch creation (new branch)
                 if echo "$_command" | grep -qE 'git\s+(checkout\s+-b|switch\s+-c)\s'; then
+                    create_sentinel "pf-3"
+                fi
+                # Check for switching to an existing feature branch (resume flow)
+                if echo "$_command" | grep -qE 'git\s+(checkout|switch)\s+(feat|fix|plan|docs|refactor|test|chore|ci|experiment|hotfix)/'; then
                     create_sentinel "pf-3"
                 fi
                 # Check for PR creation
