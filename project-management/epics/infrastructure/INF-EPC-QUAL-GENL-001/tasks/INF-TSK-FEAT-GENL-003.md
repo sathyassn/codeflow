@@ -6,7 +6,7 @@
 |-------|-------|
 | Task ID | INF-TSK-FEAT-GENL-003 |
 | Epic | INF-EPC-QUAL-GENL-001 (Quality Infrastructure Hardening) |
-| Status | in_progress |
+| Status | complete |
 | Area | INF (Infrastructure) |
 | Work Type | FEAT |
 | Domain | GENL |
@@ -29,7 +29,10 @@ Create a new on-demand skill at `.claude/skills/cf-sandbox-standards/` documenti
 
 - [x] Task registered in WorkGraph
 - [x] Branch created: feat/sandbox-skill
-- [x] Skill SKILL.md created
-- [x] CLAUDE.md Section 7 updated
-- [x] Agent definitions updated
-- [ ] Review complete
+- [x] Skill SKILL.md created (4 operations: classify-operation, apply-bypass, delegate-network-op, validate-network-safety)
+- [x] CLAUDE.md Section 7, 10 (sandbox bypass), Section 4 (task tracker mirroring) updated
+- [x] All 8 agent definitions updated with skill references
+- [x] Renamed responsible→assigned_to across 22 pathflow-config tasks
+- [x] Fixed test assertion for mirror_target
+- [x] WS-REV approved (round 2), 339/339 tests pass
+- [x] Work complete (4 commits on feat/sandbox-skill)
