@@ -1840,3 +1840,134 @@ PF7-END -> minimal cleanup, session logged as untracked
 ---
 
 *End of proposal v2. All 9 errors from v1 corrected. Updated 2026-02-15 with enforcement hardening: file sentinels as PRIMARY enforcement, STAGE-COMPLETE protocol, PathFlow enforcement mechanism lifecycle, SessionStart pathflow-init hook, PostToolUse sentinel hook, pathflow-active flag documentation, JSONL event flow script mapping (Section 6.7), dual-track state documentation (Section 6.8), teammate hook firing clarification (Section 3.5), and conflict resolution rule (Section 6.6).*
+
+## Appendix D: PF7-END Cleanup Flow
+
+Added: 2026-02-17. Resolves the chicken-and-egg problem where team-guard blocks TeamDelete while pathflow-active flag exists, but SessionEnd (which removes the flag) only fires after the session ends.
+
+### Problem
+
+1. **team-guard hook** blocks TeamDelete when pathflow-active flag exists (mid-session protection)
+2. **SessionEnd hook** removes the flag — but only fires after the session ends
+3. TeamDelete must run DURING PF7-END (before session end)
+4. Result: TeamDelete is always blocked, requiring manual flag removal
+
+### Solution
+
+Two-part fix using the pathflow-active flag as single source of truth:
+
+1. **team-guard.sh**: When TeamDelete requested + pf-6 sentinel exists → remove flag → allow TeamDelete
+2. **session-end-cleanup.sh**: Replace team-config checking with simple pathflow-active flag check
+
+### Flow
+
+```text
+PF7-END: Session Shutdown
+══════════════════════════════════════════════════════════════════
+
+PF7-TSK-01: Shutdown on-demand teammates
+─────────────────────────────────────────
+  Lead: SendMessage(type="shutdown_request", recipient="cf-development")
+  Lead: SendMessage(type="shutdown_request", recipient="cf-review")
+    │
+    ▼
+  Each teammate approves → Claude Code ends their session
+    │
+    ▼
+  SessionEnd hook fires (for EACH teammate)
+    │
+    ├─ source .state/runtime/codeflow-env.sh → get CODEFLOW_SESSION_ID
+    ├─ is_pathflow_active() → checks .state/session/{SID}/is-pathflow-active
+    ├─ Flag EXISTS → _PATHFLOW_ACTIVE="true"
+    ├─ Guard: if _PATHFLOW_ACTIVE == true → exit 0 (skip cleanup)
+    │
+    └─ ✅ Shared state preserved (sentinels, flag, env file intact)
+
+
+PF7-TSK-02: Shutdown persistent teammates
+──────────────────────────────────────────
+  Lead: SendMessage(type="shutdown_request", recipient="cf-security")
+  Lead: SendMessage(type="shutdown_request", recipient="cf-knowledge-layer")
+  Lead: SendMessage(type="shutdown_request", recipient="cf-git-operations")
+    │
+    ▼
+  Same as above → flag EXISTS → SessionEnd skips cleanup
+    │
+    └─ ✅ All teammates gone, shared state still intact
+
+
+PF7-TSK-03: TeamDelete
+───────────────────────
+  Lead: TeamDelete()
+    │
+    ▼
+  PreToolUse: team-guard hook fires
+    │
+    ├─ Tool is TeamDelete? → YES
+    ├─ is_pathflow_active()? → YES (flag still exists)
+    │
+    ├─ PF7-END GATE: Does pathflow-pf-6 sentinel exist?
+    │   File: .state/sentinels/pathflow/{SID}/pathflow-pf-6
+    │   │
+    │   ├─ NO  → exit 2 (BLOCK — not at PF7, mid-session protection)
+    │   │
+    │   └─ YES → PF7-END is legitimate
+    │       │
+    │       ├─ ACTION: rm -f .state/session/{SID}/is-pathflow-active
+    │       └─ exit 0 (ALLOW TeamDelete)
+    │
+    ▼
+  TeamDelete executes
+    │
+    ├─ Removes ~/.claude/teams/{team-name}/config.json
+    └─ Removes ~/.claude/tasks/{team-name}/
+    │
+    └─ ✅ Team dissolved, flag already removed
+
+
+Lead's session ends (user closes CLI, /exit, etc.)
+───────────────────────────────────────────────────
+  SessionEnd hook fires (for the LEAD)
+    │
+    ├─ source .state/runtime/codeflow-env.sh → get CODEFLOW_SESSION_ID
+    ├─ is_pathflow_active() → checks .state/session/{SID}/is-pathflow-active
+    ├─ Flag DOES NOT EXIST (removed by team-guard in TSK-03)
+    ├─ _PATHFLOW_ACTIVE="false"
+    │
+    ├─ Guard: if _PATHFLOW_ACTIVE == true → skip
+    │         else → PROCEED WITH CLEANUP
+    │
+    ▼
+  Cleanup runs:
+    ├─ 1. rm -rf .state/sentinels/pathflow/{SID}/     (all sentinels)
+    ├─ 2. Clean expired skill sentinels
+    ├─ 3. Flag already gone (idempotent rm -f, no-op)
+    ├─ 4. Preserve active-task.json if in_progress
+    ├─ 5. rm -rf .state/session/{SID}/                (session dir)
+    ├─ 6. rm -f .state/runtime/codeflow-env.sh        (env file)
+    └─ 7. rm -rf /tmp/claude/sessions/{SID}/          (temp files)
+    │
+    └─ ✅ Full cleanup complete
+```
+
+### Edge Cases
+
+| Scenario | Outcome |
+|----------|---------|
+| Teammate shutdown mid-session | Flag exists → SessionEnd skips cleanup ✅ |
+| Lead PF7-END (normal) | team-guard removes flag → TeamDelete → SessionEnd cleans up ✅ |
+| Stale teams from previous sessions | Irrelevant — guard only checks flag, not team configs ✅ |
+| Non-pathflow session | Flag never created → SessionEnd runs cleanup ✅ |
+| Context overflow (orphaned flag) | session-start handles stale cleanup ✅ |
+| PF6 never completed (abnormal PF7) | pf-6 sentinel missing → team-guard BLOCKS TeamDelete ✅ |
+| Hard crash (no SessionEnd) | Flag persists → session-start handles stale cleanup ✅ |
+
+### Key Insight
+
+The pathflow-active flag is the single source of truth for session liveness. Team config files (`~/.claude/teams/`) are NOT reliable signals because:
+
+- Stale teams accumulate from crashed/overflow sessions
+- Multiple concurrent sessions share the same `~/.claude/teams/` directory
+- Team config existence doesn't indicate session liveness
+
+By having team-guard remove the flag during PF7-END (gated by pf-6 sentinel), and SessionEnd check only the flag (not team configs), the cleanup flow becomes deterministic and immune to stale state.

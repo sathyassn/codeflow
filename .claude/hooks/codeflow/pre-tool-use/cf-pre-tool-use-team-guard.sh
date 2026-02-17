@@ -7,6 +7,8 @@
 # This hook:
 #   - Blocks Teammate tool cleanup operation while PathFlow is active
 #   - Blocks TeamDelete tool while PathFlow is active
+#   - PF7-END gate: When TeamDelete requested AND pf-6 sentinel exists,
+#     removes pathflow-active flag and allows TeamDelete (exit 0)
 #   - If not Teammate/TeamDelete tool, allows through
 #   - If Teammate but not cleanup operation, allows through
 #   - If cleanup/TeamDelete but PathFlow not active, allows cleanup
@@ -14,7 +16,8 @@
 # Compatibility: bash 3.2+ (macOS compatible)
 #
 # Exit codes:
-#   - 0: Operation allowed (not Teammate/TeamDelete, not cleanup, or PathFlow not active)
+#   - 0: Operation allowed (not Teammate/TeamDelete, not cleanup, PathFlow
+#         not active, or PF7-END gate passed)
 #   - 2: Operation blocked (cleanup/TeamDelete while PathFlow active)
 
 set -euo pipefail
@@ -108,6 +111,25 @@ if [[ -n "${PATHFLOW_FLAG_FILE:-}" ]]; then
 elif ! is_pathflow_active 2>/dev/null; then
     # Not in PathFlow mode - allow cleanup
     exit 0
+fi
+
+# =============================================================================
+# PF7-END GATE: Allow TeamDelete when PF6-COMPLETE is done
+# =============================================================================
+# If pf-6 sentinel exists, we're legitimately at PF7-END.
+# Remove the pathflow-active flag and allow TeamDelete to proceed.
+# SessionEnd hook will then run full cleanup (flag gone = proceed).
+
+if [[ "$IS_TEAM_DELETE" == "true" ]]; then
+    _sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
+    if [[ -f "$_sentinel_dir/pathflow-pf-6" ]]; then
+        # PF7-END: remove flag so SessionEnd cleanup will proceed
+        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/is-pathflow-active" 2>/dev/null || true
+        if declare -f log_security_event &>/dev/null; then
+            log_security_event "allowed" "team_guard_pf7_gate" "$TOOL_NAME" "TeamDelete" "PF7-END: pf-6 sentinel found, flag removed, TeamDelete allowed"
+        fi
+        exit 0
+    fi
 fi
 
 # =============================================================================

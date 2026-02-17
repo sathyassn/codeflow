@@ -4,12 +4,13 @@
 # Hook Type: SessionEnd
 # Usage:     Called by Claude Code at session end
 # Platform:  macOS/Linux
-# Version:   2.0.0
+# Version:   2.1.0
 #
 # This hook:
+#   - Guards against premature cleanup using pathflow-active flag
+#     (if flag exists, this is a teammate shutdown — skip cleanup)
 #   - Removes all PathFlow sentinels (session-scoped)
 #   - Cleans up EXPIRED skill sentinels (preserves valid ones)
-#   - Removes is-pathflow-active flag file
 #   - Cleans up memory-progress state files
 #   - Preserves active task context if in_progress
 #   - Removes env file (session ID shared state)
@@ -19,7 +20,7 @@
 # Cleanup order (per V4 spec):
 #   1. Remove all PathFlow sentinels
 #   2. Remove expired skill sentinels
-#   3. Remove is-pathflow-active flag
+#   3. Flag already removed by team-guard (idempotent no-op)
 #   4. Clean memory progress files
 #   5. Preserve active task context if in_progress
 #   6. Remove env file (session ID shared state)
@@ -46,7 +47,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.0.0"
+readonly VERSION="2.1.0"
 
 # =============================================================================
 # SETUP
@@ -112,34 +113,16 @@ if [[ -f "$SECURITY_LIB" ]]; then
 fi
 
 # =============================================================================
-# TEAM-AWARENESS GUARD
+# PATHFLOW GUARD
 # =============================================================================
-# If an active team exists with members in this repo, this SessionEnd event
-# is likely a teammate shutdown — NOT a full session end. Skip cleanup to
-# avoid destroying shared state (env file, sentinels, pathflow flag).
+# If pathflow-active flag exists, this SessionEnd is from a teammate shutdown
+# (not the lead's final session end). Skip cleanup to preserve shared state.
+# The flag is removed by team-guard hook during PF7-END (before TeamDelete),
+# so when the lead's session actually ends, this check passes and cleanup runs.
 
-_TEAMS_DIR="${HOME}/.claude/teams"
-if [[ -d "$_TEAMS_DIR" ]] && command -v jq &>/dev/null; then
-    for _team_config in "$_TEAMS_DIR"/*/config.json; do
-        [[ -f "$_team_config" ]] || continue
-
-        _member_count=$(jq -r '.members | length // 0' "$_team_config" 2>/dev/null) || continue
-        case "$_member_count" in
-            ''|*[!0-9]*) continue ;;
-        esac
-        [[ "$_member_count" -eq 0 ]] && continue
-
-        # Check if any member's cwd matches this repo
-        _idx=0
-        while [[ "$_idx" -lt "$_member_count" ]]; do
-            _member_cwd=$(jq -r ".members[$_idx].cwd // empty" "$_team_config" 2>/dev/null) || true
-            if [[ "${_member_cwd:-}" == "$REPO_ROOT"* ]]; then
-                echo "SessionEnd: Team active, skipping cleanup for teammate shutdown" >&2
-                exit 0
-            fi
-            _idx=$(( _idx + 1 ))
-        done
-    done
+if [[ "$_PATHFLOW_ACTIVE" == "true" ]]; then
+    echo "SessionEnd: PathFlow active, skipping cleanup (teammate shutdown)" >&2
+    exit 0
 fi
 
 # Track cleanup stats for output
