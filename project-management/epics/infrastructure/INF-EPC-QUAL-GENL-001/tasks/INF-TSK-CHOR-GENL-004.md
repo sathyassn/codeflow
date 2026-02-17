@@ -8,7 +8,7 @@ area_type: INF
 work_type: CHOR
 domain: GENL
 origin: planned
-file_scope: [".codeflow/scripts/", ".codeflow/config/test-config.json", ".codeflow/testing/scripts/"]
+file_scope: [".codeflow/scripts/", ".codeflow/testing/test-config.json", ".codeflow/testing/scripts/"]
 scope_policy: hard
 scope_root: null
 estimate: M
@@ -25,7 +25,7 @@ acceptance:
   - "./codeflow test --mode full passes clean"
   - "Coverage report shows no untested scripts"
   - "Intentional exceptions documented in test-config.json with reason"
-tests: [".codeflow/testing/scripts/test-coverage.sh"]
+tests: [".codeflow/testing/lib/test-coverage.sh"]
 branch: chore/test-coverage-gaps
 pr_number: null
 external_id: null
@@ -40,7 +40,7 @@ completed_at: null
 
 ## Description
 
-Audit all scripts in `.codeflow/scripts/` to ensure each has a corresponding test file registered in `.codeflow/config/test-config.json`. Fill coverage gaps where tests are missing. Verify the coverage report (`./codeflow test --coverage`) reflects complete coverage.
+Audit all scripts in `.codeflow/scripts/` to ensure each has a corresponding test file registered in `.codeflow/testing/test-config.json`. Fill coverage gaps where tests are missing. Verify the coverage report (`./codeflow test --coverage`) reflects complete coverage.
 
 This task ensures that no script goes untested, preventing silent regressions like the pre-existing failures fixed in INF-TSK-FIX-GENL-007.
 
@@ -72,7 +72,7 @@ This task ensures that no script goes untested, preventing silent regressions li
 
 ### To Modify
 
-- `.codeflow/config/test-config.json` -- Register new test files, document exceptions
+- `.codeflow/testing/test-config.json` -- Register new test files, document exceptions
 - `.codeflow/testing/scripts/` -- Existing test files may need updates
 
 ### To Create

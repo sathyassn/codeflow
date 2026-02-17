@@ -8,7 +8,7 @@ work_type: CHOR
 domain: GENL
 priority: high
 is_ongoing: false
-file_scope: [".codeflow/testing/", ".codeflow/config/test-config.json", ".codeflow/scripts/codeflow_py_lib/", ".claude/agents/cf-quality-assurance.md", ".claude/agents/cf-review.md"]
+file_scope: [".codeflow/testing/", ".codeflow/testing/test-config.json", ".codeflow/scripts/codeflow_py_lib/", ".claude/agents/cf-quality-assurance.md", ".claude/agents/cf-review.md"]
 pr_number: null
 external_id: null
 external_url: null
@@ -20,20 +20,20 @@ updated_at: 2026-02-16T00:00:00Z
 
 ## Summary
 
-This epic addresses quality infrastructure gaps discovered during recent development. Pre-existing test failures went undetected, test coverage has gaps, and the QA and review agent definitions lack comprehensive verification steps. The work hardens the testing and review pipeline so future regressions are caught earlier.
+This epic addresses quality infrastructure gaps discovered during recent development. A pre-existing test failure went undetected, test coverage has gaps, and the QA and review agent definitions lack comprehensive verification steps. The work hardens the testing and review pipeline so future regressions are caught earlier.
 
 The root problems are:
 
-1. **Silent test failures:** 5 tests fail in `--mode full` but pass in `--mode standard`, meaning regressions go unnoticed until full runs happen.
+1. **Silent test failure:** 1 test fails in `--mode full` but passes in `--mode standard`, meaning the regression goes unnoticed until full runs happen.
 2. **Coverage gaps:** Not all scripts in `.codeflow/scripts/` have corresponding test files, so untested code can break silently.
-3. **QA agent defaults to standard mode:** cf-quality-assurance runs `--mode standard` by default, which misses the failures above.
+3. **QA agent defaults to standard mode:** cf-quality-assurance runs `--mode standard` by default, which misses the failure above.
 4. **Review agent lacks standards integration:** cf-review does not load language-specific skill files or apply security/logic checklists systematically.
 
 ## Scope
 
 ### In Scope
 
-- Fix 5 pre-existing test failures (4 Python, 1 shell)
+- Fix 1 pre-existing test failure (shell: missing `integration_tested` pattern for memory scripts)
 - Audit and fill test coverage gaps for all `.codeflow/scripts/` files
 - Enhance cf-quality-assurance agent definition (default to full mode, add coverage verification)
 - Enhance cf-review agent definition (file-type standards loading, security checklist, logic checklist)
@@ -47,7 +47,7 @@ The root problems are:
 
 ## Acceptance Criteria
 
-- [ ] All 5 pre-existing test failures fixed and passing in `--mode full`
+- [ ] Pre-existing test failure fixed and passing in `--mode full`
 - [ ] Every script in `.codeflow/scripts/` has a corresponding test file registered in `test-config.json`
 - [ ] `./codeflow test --mode full` runs clean across all tasks
 - [ ] cf-quality-assurance agent definition defaults to `--mode full` for WS-QA
@@ -58,12 +58,12 @@ The root problems are:
 
 ## Tasks
 
-| ID | Title | Status | Work Type | Priority | Depends On |
-|----|-------|--------|-----------|----------|------------|
-| INF-TSK-FIX-GENL-007 | Fix pre-existing test failures | todo | FIX | high | - |
-| INF-TSK-CHOR-GENL-004 | Audit and fill test coverage gaps | todo | CHOR | medium | INF-TSK-FIX-GENL-007 |
-| INF-TSK-CHOR-GENL-005 | Enhance cf-quality-assurance agent definition | todo | CHOR | medium | INF-TSK-FIX-GENL-007 |
-| INF-TSK-CHOR-GENL-006 | Enhance cf-review agent definition | todo | CHOR | medium | - |
+| ID | Title | Status | Assignee | Priority |
+|----|-------|--------|----------|----------|
+| INF-TSK-FIX-GENL-007 | Fix memory script test-coverage exception failure | todo | - | high |
+| INF-TSK-CHOR-GENL-004 | Audit and fill test coverage gaps | todo | - | medium |
+| INF-TSK-CHOR-GENL-005 | Enhance cf-quality-assurance agent definition | todo | - | medium |
+| INF-TSK-CHOR-GENL-006 | Enhance cf-review agent definition | todo | - | medium |
 
 ### Execution Order
 
@@ -85,13 +85,7 @@ Each task produces a separate branch and PR.
 
 ### Root Cause Analysis
 
-**Python test failures (4):** `load_enforcement_policy()` and `load_pathflow_config()` in `codeflow_py_lib/config.py` return empty dicts when config files cannot be found at default paths. In the test environment, path resolution fails because tests run from a different working directory than expected. The fix must ensure either:
-
-- Config paths are resolved relative to the script location, or
-- Tests set up the correct working directory, or
-- Tests mock the config file paths
-
-**Shell test failure (1):** The "Memory scripts should be excepted" assertion in `test-coverage.sh` fails because the memory script exception list in `test-config.json` is stale (scripts have been renamed, added, or removed since the list was last updated).
+**Shell test failure (1):** The "Memory scripts should be excepted" assertion in `.codeflow/testing/lib/test-test-coverage.sh:129-133` fails because the `integration_tested` list in `.codeflow/testing/test-config.json` has no pattern matching `.codeflow/scripts/memory/*`. The test calls `is_excepted ".codeflow/scripts/memory/cf-memory-store.py"` and expects it to return true, but no entry covers memory scripts. The fix is to add an `integration_tested` entry for the memory scripts pattern.
 
 ### Known Issue: PathFlow Gate Hook False Positive
 
