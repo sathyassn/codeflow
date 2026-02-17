@@ -94,6 +94,29 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 **Recovery:** Tier 1 can be rebuilt from Tier 0. Tier 2 can be regenerated from Tier 1.
 **Rule:** NEVER modify or delete JSONL entries. Append only.
 
+### Canonical Ledger Filenames
+
+| Ledger File | Variable (`ledger.sh`) | Purpose |
+|---|---|---|
+| `work-graph.jsonl` | `LEDGER_WORK_GRAPH` | Task lifecycle events (task_created, begin_work, complete_work, task_updated) |
+| `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations (store, query, milestone) |
+| `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle |
+| `config.jsonl` | `LEDGER_CONFIG` | Configuration changes |
+| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events |
+
+⛔ **MUST use these exact filenames.** Do NOT invent alternative names (e.g., `workgraph-events.jsonl`). The canonical names are defined in `.codeflow/scripts/state/ledger.sh`.
+
+### Go CLI Fallback
+
+When Go CLI (`codeflow`) is not available (pre-Phase 7), use these fallbacks:
+
+- **DB writes:** `sqlite3 .state/db/codeflow.db "SQL_STATEMENT"`
+- **DB reads:** `sqlite3 -json .state/db/codeflow.db "SELECT ..."`
+- **JSONL appends:** `echo '{"event":...}' >> .state/ledger/{canonical-filename}.jsonl`
+- **PathFlow events:** `echo '{"event":...}' >> .state/logs/pathflow-events.jsonl`
+
+Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
+
 All DB operations execute via: `codeflow db exec` (writes) or `codeflow db query` (reads).
 Schema defined in: `.codeflow/scripts/db/schema.sql`
 
