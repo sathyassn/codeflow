@@ -222,7 +222,7 @@ Format findings using the verdict template and send to the team lead. If `CHANGE
 
 ### Stage Completion Protocol
 
-When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final message to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 ## Quality Checklist
 

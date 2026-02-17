@@ -137,7 +137,7 @@ SendMessage to cf-git-operations with conventional commit message:
 
 ### Step 7: Report Completion
 
-SendMessage to team lead with summary. Include `STAGE-COMPLETE: WS-DEV` in your final message. This triggers automatic sentinel creation for PathFlow enforcement.
+SendMessage to team lead with summary. Include `STAGE-COMPLETE: WS-DEV` in your final message. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 Before reporting, run the Pre-Completion Self-Check (see Communication section).
 

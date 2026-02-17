@@ -222,7 +222,7 @@ Autorun eligibility (all must be true): clear acceptance criteria, defined file 
 
 ### Stage Completion Protocol
 
-When your work stage is complete, include `STAGE-COMPLETE: WS-PLAN` in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+When your work stage is complete, include `STAGE-COMPLETE: WS-PLAN` in your final message to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 ## Quality Checklist
 

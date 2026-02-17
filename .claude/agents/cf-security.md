@@ -71,6 +71,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - ⛔ NEVER spawn other teammates
 - ⛔ NEVER approve sandbox bypass without classifying the operation first
 - ⛔ NEVER delete managed tmp folders (`/tmp/claude/managed/`)
+- ⛔ NEVER create PathFlow sentinels -- sentinels are auto-created by PostToolUse hooks, not by agents
 
 ## Execution Steps
 

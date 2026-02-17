@@ -207,7 +207,7 @@ When a document has more than 3 sections, or when explicitly requested:
 
 ### Stage Completion Protocol
 
-When your work stage is complete, include `STAGE-COMPLETE: WS-DOCS` in your final message to the team lead. This triggers automatic sentinel creation for PathFlow enforcement.
+When your work stage is complete, include `STAGE-COMPLETE: WS-DOCS` in your final message to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 ## Quality Checklist
 
