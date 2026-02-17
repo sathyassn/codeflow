@@ -98,7 +98,7 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 
 | Ledger File | Variable (`ledger.sh`) | Purpose |
 |---|---|---|
-| `work-graph.jsonl` | `LEDGER_WORK_GRAPH` | Task lifecycle events (task_created, begin_work, complete_work, task_updated) |
+| `work-graph.jsonl` | `LEDGER_WORK_GRAPH` | Task lifecycle events (epic_created, task_created, task_status_changed, epic_status_changed) |
 | `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations (store, query, milestone) |
 | `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle |
 | `config.jsonl` | `LEDGER_CONFIG` | Configuration changes |
