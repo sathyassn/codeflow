@@ -61,7 +61,7 @@
       "tasks": [
         { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph" },
         { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer" },
-        { "id": "PF6-TSK-03", "task_order": 3, "description": "Commit uncommitted workgraph and state files via cf-git-operations" },
+        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, task tickets, etc.) via cf-git-operations" },
         { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations" }
       ]
     },
@@ -121,7 +121,15 @@
       "enabled": true,
       "source_of_truth": "jsonl",
       "mirror_target": "task_tracker",
-      "description": "Task tracker entries are visual mirrors of PathFlow state. JSONL/SQLite is authoritative. Task tracker is derived and disposable."
+      "description": "Task tracker entries are visual mirrors of PathFlow state. JSONL/SQLite is authoritative. Task tracker is derived and disposable.",
+      "behavior": {
+        "on_phase_enter": "Lead creates TaskCreate using phase_templates[{phase}] with substituted placeholders",
+        "on_phase_exit": "Lead marks phase task completed via TaskUpdate",
+        "on_stage_enter": "Lead creates TaskCreate using stage_templates[{stage}] with substituted placeholders",
+        "on_stage_exit": "Lead marks stage task completed via TaskUpdate",
+        "owner": "team-lead",
+        "recovery": "If entries lost (context overflow), re-create for current phase only. Entries are ephemeral and disposable."
+      }
     },
     "phase_templates": {
       "PF1-INIT": {
