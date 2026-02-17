@@ -3,81 +3,86 @@
   "phases": {
     "PF1-INIT": {
       "name": "Session Start",
+      "phase_order": 1,
       "description": "Initialize session, register in DB/JSONL, spawn security teammate",
       "tasks": [
-        "PF1-TSK-01: Initialize PathFlow session record",
-        "PF1-TSK-02: Register session in DB/JSONL with tracking_level='pending'",
-        "PF1-TSK-03: Spawn cf-security teammate"
+        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record" },
+        { "id": "PF1-TSK-02", "task_order": 2, "description": "Register session in DB/JSONL with tracking_level='pending'" },
+        { "id": "PF1-TSK-03", "task_order": 3, "description": "Spawn cf-security teammate" }
       ]
     },
     "PF2-CONTEXT": {
       "name": "Context Awareness",
+      "phase_order": 2,
       "description": "Load previous context, determine tracked vs untracked",
       "tasks": [
-        "PF2-TSK-01: Spawn cf-knowledge-layer teammate",
-        "PF2-TSK-02: Query active work and session state",
-        "PF2-TSK-03: Load memory context for current work",
-        "PF2-TSK-04: Determine tracked vs untracked decision"
+        { "id": "PF2-TSK-01", "task_order": 1, "description": "Spawn cf-knowledge-layer teammate" },
+        { "id": "PF2-TSK-02", "task_order": 2, "description": "Query active work and session state" },
+        { "id": "PF2-TSK-03", "task_order": 3, "description": "Load memory context for current work" },
+        { "id": "PF2-TSK-04", "task_order": 4, "description": "Determine tracked vs untracked decision" }
       ]
     },
     "PF3-CLASSIFY": {
       "name": "Work Classification",
+      "phase_order": 3,
       "description": "Classify work, register task, create branch, activate session",
       "tasks": [
-        "PF3-TSK-01: Classify work type and area",
-        "PF3-TSK-02: Register task in WorkGraph",
-        "PF3-TSK-03: Spawn cf-git-operations teammate",
-        "PF3-TSK-04: Create feature branch",
-        "PF3-TSK-05: Activate session: set tracking_level='tracked', populate work_type, area_type"
+        { "id": "PF3-TSK-01", "task_order": 1, "description": "Classify work type and area" },
+        { "id": "PF3-TSK-02", "task_order": 2, "description": "Register task in WorkGraph" },
+        { "id": "PF3-TSK-03", "task_order": 3, "description": "Spawn cf-git-operations teammate" },
+        { "id": "PF3-TSK-04", "task_order": 4, "description": "Create feature branch" },
+        { "id": "PF3-TSK-05", "task_order": 5, "description": "Activate session: set tracking_level='tracked', populate work_type, area_type" }
       ]
     },
     "PF4-EXECUTE": {
       "name": "Work Execution",
+      "phase_order": 4,
       "description": "Execute work through configured stage pipeline",
       "tasks": [
-        "PF4-TSK-01: Look up stage pipeline from work_type_stages",
-        "PF4-TSK-02: Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)",
-        "PF4-TSK-03: Execute WS-REV stage (universal review)",
-        "PF4-TSK-04: Execute WS-QA stage (if pipeline includes it)"
+        { "id": "PF4-TSK-01", "task_order": 1, "description": "Look up stage pipeline from work_type_stages" },
+        { "id": "PF4-TSK-02", "task_order": 2, "description": "Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)" },
+        { "id": "PF4-TSK-03", "task_order": 3, "description": "Execute WS-REV stage (universal review)" },
+        { "id": "PF4-TSK-04", "task_order": 4, "description": "Execute WS-QA stage (if pipeline includes it)" }
       ]
     },
     "PF5-VERIFY": {
       "name": "Work Verification",
+      "phase_order": 5,
       "description": "Verify all stages passed and acceptance criteria met",
       "tasks": [
-        "PF5-TSK-01: Verify all pipeline stages completed with pass verdict",
-        "PF5-TSK-02: Check acceptance criteria met"
+        { "id": "PF5-TSK-01", "task_order": 1, "description": "Verify all pipeline stages completed with pass verdict" },
+        { "id": "PF5-TSK-02", "task_order": 2, "description": "Check acceptance criteria met" }
       ]
     },
     "PF6-COMPLETE": {
       "name": "Work Completion",
+      "phase_order": 6,
       "description": "Update task status, record session memory, commit state files, create PR",
       "tasks": [
-        "PF6-TSK-01: Update task status to complete in WorkGraph",
-        "PF6-TSK-02: Update project memory via cf-knowledge-layer",
-        "PF6-TSK-03: Commit uncommitted workgraph and state files via cf-git-operations",
-        "PF6-TSK-04: Create PR via cf-git-operations"
+        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph" },
+        { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer" },
+        { "id": "PF6-TSK-03", "task_order": 3, "description": "Commit uncommitted workgraph and state files via cf-git-operations" },
+        { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations" }
       ]
     },
     "PF7-END": {
       "name": "Session End",
-      "description": "Shutdown teammates, dissolve team, cleanup",
+      "phase_order": 7,
+      "description": "Shutdown teammates, dissolve team (hooks handle cleanup)",
       "tasks": [
-        "PF7-TSK-01: Shutdown on-demand role teammates",
-        "PF7-TSK-02: Shutdown persistent function teammates",
-        "PF7-TSK-03: Write session summary to JSONL",
-        "PF7-TSK-04: Clean up session state and temp files",
-        "PF7-TSK-05: TeamDelete (dissolve team infrastructure; SessionEnd hook handles flag and state cleanup)"
+        { "id": "PF7-TSK-01", "task_order": 1, "description": "Shutdown on-demand role teammates" },
+        { "id": "PF7-TSK-02", "task_order": 2, "description": "Shutdown persistent function teammates" },
+        { "id": "PF7-TSK-03", "task_order": 3, "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)" }
       ]
     }
   },
   "stages": {
-    "WS-DEV": { "name": "Development", "teammate": "cf-development", "max_rework_iterations": 3 },
-    "WS-PLAN": { "name": "Planning", "teammate": "cf-planning", "max_rework_iterations": 3 },
-    "WS-DOCS": { "name": "Documentation", "teammate": "cf-documentation", "max_rework_iterations": 3 },
-    "WS-TEST": { "name": "Testing", "teammate": "cf-quality-assurance", "max_rework_iterations": 3 },
-    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3 },
-    "WS-QA": { "name": "Quality Assurance", "teammate": "cf-quality-assurance", "max_qa_retries": 2, "rework_target": "primary" }
+    "WS-DEV": { "name": "Development", "teammate": "cf-development", "max_rework_iterations": 3, "max_parallel": 3, "batch_size": 2 },
+    "WS-PLAN": { "name": "Planning", "teammate": "cf-planning", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
+    "WS-DOCS": { "name": "Documentation", "teammate": "cf-documentation", "max_rework_iterations": 3, "max_parallel": 3, "batch_size": 2 },
+    "WS-TEST": { "name": "Testing", "teammate": "cf-quality-assurance", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
+    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3, "max_parallel": 1, "batch_size": 1 },
+    "WS-QA": { "name": "Quality Assurance", "teammate": "cf-quality-assurance", "max_qa_retries": 2, "rework_target": "primary", "max_parallel": 1, "batch_size": 1 }
   },
   "pipelines": {
     "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
@@ -150,9 +155,9 @@
         "activeForm": "Finalizing work and creating PR"
       },
       "PF7-END": {
-        "subject": "PF7-END: End session",
-        "description": "Shutdown teammates, write session summary, cleanup. Phase: {phase_id}, Session: {session_id}.",
-        "activeForm": "Ending PathFlow session"
+        "subject": "PF7-END: Shutdown and cleanup",
+        "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
+        "activeForm": "Shutting down session"
       }
     },
     "stage_templates": {

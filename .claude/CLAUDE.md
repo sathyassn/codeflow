@@ -110,10 +110,10 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 | **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag (JSON), pathflow-pf-1 sentinel |
 | **PF2-CONTEXT** | Spawn cf-knowledge-layer, query active work, load memory context, determine tracked vs untracked | cf-knowledge-layer (persistent) | Active work state, tracking decision |
 | **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow:pf-3 sentinel |
-| **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type (see Work Type Pipelines below) | Role teammates (on-demand, per stage) | Code, docs, tests, reviews |
+| **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type. For independent items, spawn parallel teammate instances per stage max_parallel/batch_size settings (see Parallel Batch Execution) | Role teammates (on-demand, per stage; multiple instances for parallel work) | Code, docs, tests, reviews |
 | **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
 | **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, session memory recorded |
-| **PF7-END** | Shutdown all teammates, write session summary to JSONL, remove pathflow-active flag, TeamDelete | None (shutting down) | Clean session end |
+| **PF7-END** | Shutdown all teammates, TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup) | None (shutting down) | Clean session end (hooks handle state cleanup) |
 
 ### Quick-Reference Phase Map
 
@@ -458,6 +458,47 @@ If a persistent teammate's context fills up (auto-compaction at ~95%):
 4. Re-send any necessary state via messages
 
 This should be rare for function teammates whose context is bounded.
+
+### Parallel Batch Execution
+
+When a work stage involves multiple independent items (files, components, docs), the lead MAY spawn multiple instances of the same teammate type to work in parallel.
+
+**When to parallelize:**
+
+| Condition | Parallelize? | Example |
+|-----------|-------------|---------|
+| Multiple independent files, no shared state | Yes | 3 docs, each in a separate directory |
+| Files that import/depend on each other | No | Component + its tests in the same module |
+| Large single file | No | One big refactor — single teammate |
+| Mixed independent + dependent | Batch the independent ones | 2 independent + 1 dependent = batch of 2, then 1 |
+
+**Batch sizing rules:**
+
+| Parameter | Source | Default |
+|-----------|--------|---------|
+| `max_parallel` | `pathflow-config.json` stage definition | 1 |
+| `batch_size` | `pathflow-config.json` stage definition | 1 |
+
+- Never exceed `max_parallel` concurrent instances for a stage
+- Process items in batches of `batch_size`
+- Reserve at least 30% of session token budget for review, commit, and PR phases
+- If unsure about remaining budget, reduce batch size to 1
+
+**Naming convention for parallel instances:**
+
+| Instance | Name | Example |
+|----------|------|---------|
+| First (or solo) | `cf-{role}` | `cf-development` |
+| Additional | `cf-{role}-{n}` | `cf-development-2`, `cf-development-3` |
+
+**Coordination rules:**
+
+- All parallel instances commit through the SAME cf-git-operations (serialized commits)
+- Each instance gets a clear, non-overlapping file scope in its spawn prompt
+- Lead waits for ALL instances in a batch to complete before starting the next batch
+- If any instance fails, the lead resolves before proceeding
+
+**Applies to:** Any on-demand teammate during PF4-EXECUTE — cf-development, cf-documentation, cf-planning, cf-quality-assurance (for WS-TEST).
 
 ### Teammate Name Preservation
 
