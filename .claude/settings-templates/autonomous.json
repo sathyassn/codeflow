@@ -41,13 +41,7 @@
   "teammateMode": "in-process",
   "permissions": {
     "defaultMode": "bypassPermissions",
-    "ask": [
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
-      "Bash(git pull:*)",
-      "Bash(git fetch:*)",
-      "Bash(gh pr create:*)"
-    ],
+    "ask": [],
     "allow": [
       "Read(/**)",
       "Glob(/**)",
