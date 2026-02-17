@@ -439,11 +439,11 @@ cleanup_test_artifacts
 echo ""
 echo "--- V4: PathFlow Cleanup ---"
 
-# Test 45: Hook contains pathflow flag cleanup (is-pathflow-active)
-if grep -q "is-pathflow-active" "$HOOK"; then
-    pass "Has is-pathflow-active flag cleanup"
+# Test 45: Hook has pathflow-active guard (skip cleanup when PathFlow active)
+if grep -q "_PATHFLOW_ACTIVE" "$HOOK"; then
+    pass "Has pathflow-active guard (_PATHFLOW_ACTIVE check)"
 else
-    fail "Should have is-pathflow-active flag cleanup"
+    fail "Should have pathflow-active guard (_PATHFLOW_ACTIVE check)"
 fi
 
 # Test 46: Hook contains PathFlow sentinel cleanup (pathflow-*)
@@ -460,17 +460,19 @@ else
     fail "Should have PATHFLOW section"
 fi
 
-# Test 48: Actually removes is-pathflow-active flag (via session dir cleanup)
+# Test 48: Skips cleanup when pathflow-active flag exists (guard behavior)
+# New behavior: hook detects _PATHFLOW_ACTIVE == true and exits 0 early.
+# The flag is NOT removed here — team-guard removes it during PF7-END.
 setup_test_dirs
 mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
 echo "active" > "$REPO_ROOT/.state/session/test-session/is-pathflow-active"
 CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
-if [[ ! -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" ]]; then
-    pass "Actually removes is-pathflow-active flag"
+if [[ -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" ]]; then
+    pass "Skips cleanup when pathflow-active (flag preserved for team-guard)"
 else
-    fail "Should remove is-pathflow-active flag"
-    rm -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active"
+    fail "Should skip cleanup when pathflow-active (flag should be preserved)"
 fi
+rm -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" 2>/dev/null || true
 
 # Test 49: Actually removes PathFlow sentinels (session-scoped)
 setup_test_dirs

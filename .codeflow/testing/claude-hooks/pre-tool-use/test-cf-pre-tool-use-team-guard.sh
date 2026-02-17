@@ -356,6 +356,68 @@ else
 fi
 
 echo ""
+echo "--- Execution Tests: PF7-END Gate ---"
+
+# Test 33: TeamDelete ALLOWED when pf-6 sentinel exists (PF7-END gate)
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+# Create pf-6 sentinel and pathflow-active flag at REPO_ROOT paths
+mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session"
+touch "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session/pathflow-pf-6"
+mkdir -p "$TEMP_DIR/.state/session/pf7-test-session"
+echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active"
+output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+# Should exit 0 (allowed) and remove the flag
+if [[ $exit_code -eq 0 ]]; then
+    pass "TeamDelete allowed when pf-6 sentinel exists (PF7-END gate)"
+else
+    fail "TeamDelete should be allowed when pf-6 sentinel exists (got exit=$exit_code)"
+fi
+# Verify flag was removed
+if [[ ! -f "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active" ]]; then
+    TESTS_RUN=$((TESTS_RUN + 1))
+    pass "PF7-END gate removes pathflow-active flag"
+else
+    TESTS_RUN=$((TESTS_RUN + 1))
+    fail "PF7-END gate should remove pathflow-active flag"
+fi
+rm -rf "$TEMP_DIR"
+
+# Test 35: TeamDelete BLOCKED when pf-6 sentinel missing (not at PF7-END)
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/state"
+touch "$TEMP_DIR/state/pathflow-active"
+# Create pathflow dirs but NO pf-6 sentinel
+mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session"
+mkdir -p "$TEMP_DIR/.state/session/pf7-test-session"
+echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active"
+output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
+    pass "TeamDelete blocked when pf-6 sentinel missing"
+else
+    fail "TeamDelete should be blocked when pf-6 sentinel missing (got exit=$exit_code)"
+fi
+rm -rf "$TEMP_DIR"
+
+# Test 36: TeamDelete ALLOWED when pf-6 exists but flag already gone
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+# Create pf-6 sentinel but NO pathflow-active flag file
+mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session"
+touch "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session/pathflow-pf-6"
+# PATHFLOW_FLAG_FILE points to nonexistent file (flag already gone)
+output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/nonexistent-flag" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "TeamDelete allowed when pf-6 exists but flag already gone"
+else
+    fail "TeamDelete should be allowed when flag already gone (got exit=$exit_code)"
+fi
+rm -rf "$TEMP_DIR"
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"
