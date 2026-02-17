@@ -61,8 +61,10 @@
       ]
     },
     "MEDIUM": {
-      "description": "Library utilities - shell-lib, python-lib, hooks, git, settings, staging",
+      "description": "Library utilities - shell-lib, python-lib, hooks, git, settings, staging, commands",
       "files": [
+        "scripts/db/test-generate-format-id.sh",
+        "scripts/commands/test-commands.sh",
         "scripts/codeflow_py_lib/test_config.py",
         "scripts/codeflow_py_lib/test_paths.py",
         "scripts/codeflow_py_lib/test_jsonl.py",
@@ -119,10 +121,11 @@
       ]
     },
     "LOW": {
-      "description": "Support utilities - logging, errors, backup",
+      "description": "Support utilities - logging, errors, backup, migration scripts",
       "files": [
         "scripts/codeflow_py_lib/test_logging.py",
         "scripts/codeflow_py_lib/test_errors.py",
+        "scripts/db/test-migrate-to-dual-id.sh",
         "lib/test-test-coverage.sh"
       ]
     }
@@ -164,6 +167,11 @@
       "directory": "scripts/db",
       "description": "Database operations tests",
       "language": "mixed"
+    },
+    "scripts-commands": {
+      "directory": "scripts/commands",
+      "description": "Slash command file tests (.claude/commands/cf-*.md)",
+      "language": "bash"
     },
     "scripts-memory": {
       "directory": "scripts/memory",

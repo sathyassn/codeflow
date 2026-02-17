@@ -80,8 +80,10 @@ REQUIRED_SECTIONS=(
 )
 
 # Forbidden terms (case-insensitive)
+# "standalone mode" instead of "standalone" — cf-help legitimately uses
+# "standalone info command" to describe itself (not a deprecated pattern).
 FORBIDDEN_TERMS=(
-    "standalone"
+    "standalone mode"
     "sub-agent"
     "fork-first"
     "dual-mode"
