@@ -164,6 +164,29 @@ Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from
 
 Each task in `pathflow-config.json` has a `responsible` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
 
+### Task Tracker Mirroring
+
+The team lead MUST mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility:
+
+| PathFlow Event | Task Tracker Action |
+|---|---|
+| Phase entered | TaskCreate with phase_templates[{phase}] -- ONE entry per phase |
+| Phase task started | TaskCreate per PF{N}-TSK-{NN} -- ONE entry per task |
+| Phase task completed | TaskUpdate status=completed for that task entry |
+| Phase completed | TaskUpdate status=completed for the phase entry |
+| Stage entered | TaskCreate with stage_templates[{stage}] -- ONE entry per stage |
+| Stage completed | TaskUpdate status=completed for that stage entry |
+
+**Rules:**
+
+- NEVER club multiple phases into a single task tracker entry
+- NEVER skip creating entries for individual PF{N}-TSK-{NN} tasks
+- Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
+- Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
+- JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
+
+**Reference:** `pathflow-config.json` `task_tracker` section defines templates and behavior.
+
 ### Team Lead Role
 
 🔒 **DELEGATION-ONLY MODE: You are an orchestrator. You delegate ALL work to teammates. You NEVER do work directly.**
@@ -629,6 +652,7 @@ These skills provide detailed standards and can be loaded by agents as needed:
 | `cf-shell-standards` | Shell scripting conventions, formatting, error handling | cf-development, cf-git-operations |
 | `cf-python-standards` | Python scripting conventions, type hints, testing | cf-development, cf-quality-assurance |
 | `cf-markdown-standards` | Markdown formatting, templates (ADR, epic, task) | cf-planning, cf-documentation |
+| `cf-sandbox-standards` | Sandbox bypass rules for network operations | cf-git-operations, cf-development, cf-quality-assurance |
 
 ### Agent Definitions (8)
 
@@ -782,6 +806,20 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 - Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `ci/*`, `experiment/*`, `hotfix/*`
 - Commit messages follow conventional format (enforced by cf-git-operations)
 - All changes through PRs to main
+
+### Sandbox Bypass
+
+Claude Code's sandbox blocks network operations by default. Commands that access remote servers require `dangerouslyDisableSandbox: true` in the Bash tool call.
+
+**Commands requiring bypass:** `git push`, `git pull`, `git fetch`, `git clone`, `git remote update`, `git ls-remote`, `gh pr`, `gh issue`, `gh api`, `gh workflow`, `gh run`, `npm install`, `pip install`.
+
+**In PathFlow mode:** Git network and GitHub CLI operations are delegated to cf-git-operations, which handles bypass internally. Package managers (npm install, pip install) are executed directly by the requesting agent with the bypass flag.
+
+**Outside PathFlow:** The executing agent sets `dangerouslyDisableSandbox: true` directly and runs pre-flight safety checks (correct remote, correct branch, no secrets staged).
+
+**Autorun mode:** Sandbox is pre-bypassed by the CLI orchestrator -- no explicit action needed.
+
+**Reference:** `.claude/skills/cf-sandbox-standards/SKILL.md`
 
 ### Decision Tiers
 

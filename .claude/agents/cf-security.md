@@ -102,6 +102,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 4. For operations needing bypass: advise requester to use `dangerouslyDisableSandbox: true`
 5. Report classification to requester
 
+**Canonical reference:** The `cf-sandbox-standards` skill (`.claude/skills/cf-sandbox-standards/SKILL.md`) provides the full classification table and pre-flight checks for sandbox bypass decisions.
+
 **Response format:** `"SECURITY: sandbox-check -- {operation} | requires_bypass: {true|false} | autorun: {true|false}"`
 
 ### Step 2: Protected Resource Staging

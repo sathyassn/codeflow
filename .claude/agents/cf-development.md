@@ -106,6 +106,8 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 - Naming: Files `snake_case.py` | Variables `snake_case` | Constants `SCREAMING_SNAKE` | Classes `PascalCase`
 - Full reference: [cf-python-standards](../skills/cf-python-standards/SKILL.md)
 
+**Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
+
 **Modularization check:** If scripts exceed thresholds (lines > 200, functions > 10, nesting > 4 levels), extract to shared libraries. Document intentional exceptions.
 
 ### Step 4: Write Tests

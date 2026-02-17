@@ -108,6 +108,8 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 
 ⛔ **MUST use these exact filenames.** Do NOT invent alternative names (e.g., `workgraph-events.jsonl`). The canonical names are defined in `.codeflow/scripts/state/ledger.sh`.
 
+**Network operations:** If database synchronization or external data operations ever require network access, load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound commands.
+
 ### Go CLI Fallback
 
 When Go CLI (`codeflow`) is not available (pre-Phase 7), use these fallbacks:

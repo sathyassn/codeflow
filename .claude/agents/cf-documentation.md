@@ -84,7 +84,7 @@ Read the task description from the team lead's SendMessage. Confirm understandin
 
 ### Step 2: Research
 
-Use Glob, Grep, and Read to explore the codebase, existing documentation, and source material. Understand current state, identify gaps, and gather technical details needed for accurate content.
+Use Glob, Grep, and Read to explore the codebase, existing documentation, and source material. Understand current state, identify gaps, and gather technical details needed for accurate content. If external documentation requires WebFetch, the WebFetch hook handles domain validation. For Bash-based network tools (curl, wget), load `cf-sandbox-standards` skill.
 
 ### Step 3: Write
 

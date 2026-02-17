@@ -96,6 +96,8 @@ Use `--mode full` if the lead requests comprehensive verification. Use `--mode e
 
 **Additional flags:** `--category {name}` (scoped), `--stop-on-fail`, `--verbose`, `--validate-coverage`, `--report`, `--dry-run`
 
+**Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
+
 #### Step 3: Run Targeted Tests
 
 If changes are scoped to specific components, run those tests directly:

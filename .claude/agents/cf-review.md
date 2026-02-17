@@ -103,7 +103,7 @@ Execute the checklist for the assigned review mode:
 - [ ] **Acceptance criteria** -- PASS/FAIL per criterion from task spec
 - [ ] **Correctness** -- Logic paths produce expected results
 - [ ] **Style** -- ShellCheck for `.sh` ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md)), ruff/flake8 for `.py` ([cf-python-standards](../skills/cf-python-standards/SKILL.md))
-- [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues
+- [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)
 - [ ] **Performance** -- No obvious inefficiencies
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
 - [ ] **Error handling** -- Failures handled gracefully, `set -euo pipefail` in shell

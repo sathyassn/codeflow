@@ -159,6 +159,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **When:** Team lead requests PR at PF6-COMPLETE or work is ready for review.
 
+**Sandbox bypass:** Load `cf-sandbox-standards` skill for sandbox bypass rules. Always use `dangerouslyDisableSandbox: true` for git push/pull/fetch/clone and gh pr/issue/api commands.
+
 **PR format:** Title: `type: description` (max 50 chars, matches commit convention). Body sections: Summary (required), Changes (3-5 bullets), Testing (required), Related Issues (optional). No AI attribution anywhere in title or body (blocked by PreToolUse hook).
 
 **Procedure:**

@@ -101,7 +101,7 @@ Parse the request for explicit requirements, implicit requirements (from codebas
 
 ### Step 3: Explore Codebase
 
-Use Glob, Grep, and Read to understand existing architecture, patterns, and dependencies. Identify affected components, interfaces, data flows, and integration points.
+Use Glob, Grep, and Read to understand existing architecture, patterns, and dependencies. Identify affected components, interfaces, data flows, and integration points. If research requires WebFetch to external URLs, the WebFetch hook handles domain validation. For Bash-based network tools, load `cf-sandbox-standards` skill.
 
 ### Step 4: Design Solution
 
