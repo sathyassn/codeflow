@@ -54,7 +54,7 @@
         "scripts/state/test-tracking-generate.sh",
         "scripts/state/test-work-state.sh",
         "scripts/state/test-stage-sync.sh",
-        "scripts/state/test_stage_sync.py",
+        "scripts/state/test_cf_stage_sync.py",
         "scripts/pathflow/test-cf-pathflow-scripts.sh",
         "scripts/state/test-pathflow-state.sh",
         "scripts/pathflow/test-cf-pathflow-enforcement.sh"
