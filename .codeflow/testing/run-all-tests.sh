@@ -107,7 +107,7 @@ while [[ $# -gt 0 ]]; do
             echo "Modes:"
             echo "  essential   CRITICAL priority only (~20s)"
             echo "  standard    CRITICAL + HIGH priorities (~30s parallel)"
-            echo "  full        All priorities (~40s parallel)"
+            echo "  full        All priorities + coverage validation (~40s parallel)"
             echo ""
             echo "Categories:"
             for cat in $(list_categories); do
@@ -161,6 +161,15 @@ main() {
     else
         # Sequential: --sequential, --jobs 1, or --dry-run
         run_all_tests "$mode" || exit_code=$?
+    fi
+
+    # Auto-validate coverage in full mode (skip if already validated via --validate-coverage)
+    if [[ "$mode" == "full" ]] && [[ "$VALIDATE_COVERAGE_FIRST" != "true" ]]; then
+        echo ""
+        if ! validate_coverage; then
+            # Coverage validation failed (only when validation_mode=fail in config)
+            [[ $exit_code -eq 0 ]] && exit_code=1
+        fi
     fi
 
     # Generate reports if requested
