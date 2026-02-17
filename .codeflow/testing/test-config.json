@@ -358,6 +358,11 @@
           "pattern": ".codeflow/scripts/pathflow/cf-pathflow-*.sh",
           "tested_by": "scripts/pathflow/test-cf-pathflow-scripts.sh",
           "reason": "PathFlow JSONL scripts have consolidated test file (Phase 4)"
+        },
+        {
+          "pattern": ".codeflow/scripts/memory/*",
+          "reference": "scripts/memory/ (skipped — awaiting Go CLI Phase 7)",
+          "reason": "Memory scripts have dedicated test group (currently skipped)"
         }
       ]
     }
