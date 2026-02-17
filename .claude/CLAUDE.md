@@ -107,9 +107,9 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 
 | Phase | What Happens | Teammate Spawned | Key Outputs |
 |-------|-------------|------------------|-------------|
-| **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag (JSON), pathflow-pf-1 sentinel |
+| **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag (JSON), pathflow-pf-1 sentinel (auto-created by hook) |
 | **PF2-CONTEXT** | Spawn cf-knowledge-layer, query active work, load memory context, determine tracked vs untracked | cf-knowledge-layer (persistent) | Active work state, tracking decision |
-| **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow:pf-3 sentinel |
+| **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow-pf-3 sentinel (auto-created by hook) |
 | **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type. For independent items, spawn parallel teammate instances per stage max_parallel/batch_size settings (see Parallel Batch Execution) | Role teammates (on-demand, per stage; multiple instances for parallel work) | Code, docs, tests, reviews |
 | **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
 | **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, session memory recorded |
@@ -117,8 +117,10 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 
 ### Quick-Reference Phase Map
 
-| Phase | Gate (what must exist) | Creates (sentinel) | Key Action |
-|-------|----------------------|-------------------|------------|
+> **Sentinels are created automatically by PostToolUse hooks** when phase markers complete. Agents must NOT attempt to create sentinels directly. If a sentinel appears missing, verify the correct session ID path at `.state/sentinels/pathflow/{session-id}/` before assuming it doesn't exist.
+
+| Phase | Gate (what must exist) | Sentinel (auto-created by hook) | Key Action |
+|-------|----------------------|-------------------------------|------------|
 | PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security |
 | PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer |
 | PF3-CLASSIFY | pf-2 | pathflow-pf-3 | Create branch (UNLOCKS Edit/Write) |
@@ -658,6 +660,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 **Key hooks:**
 
 - **pathflow-gate**: Blocks Edit/Write before PF3-CLASSIFY. Enforces PathFlow sentinel checks.
+- **pathflow-sentinel**: PostToolUse hook that automatically creates sentinels when phase markers complete. Agents never need to create sentinels manually.
 - **team-guard**: Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
 - **edit-write**: Scope enforcement for file operations.
 - **protected-resource**: Routes protected files through staging area.
@@ -700,7 +703,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
     session-start/                # 3 scripts
     user-prompt-submit/           # 2 scripts
     pre-tool-use/                 # 7 scripts
-    post-tool-use/                # 4 scripts
+    post-tool-use/                # 4 scripts (includes pathflow-sentinel for auto-creating sentinels)
     stop/                         # 2 scripts
     session-end/                  # 2 scripts
   commands/                       # 14 slash command definitions (cf-*.md)
@@ -720,7 +723,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
   logs/                           # Session telemetry (gitignored)
     pathflow-events.jsonl          # Phase/stage transitions
   runtime/                        # Active task, current session ID
-  sentinels/                      # PathFlow sentinels (pathflow:pf-3, etc.)
+  sentinels/                      # PathFlow sentinels (auto-created by hooks, not agents)
 
 project/                          # PROJECT.md, mission, tech-stack
 project-management/               # Tier 2: Human-readable work tracking
@@ -808,9 +811,9 @@ Three complementary mechanisms provide defense-in-depth:
 | **Tasks** | PathFlow task graph makes state visible to all agents | Ordering awareness |
 | **Hooks** | PreToolUse hooks block violations at tool-call level | Edge cases where instructions are ignored |
 
-**Sentinel system:** PathFlow sentinels (`pathflow:pf-3`, `pathflow:ws-dev-done`, etc.) are session-scoped, no TTL, created when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations.
+**Sentinel system:** PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev-done`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
-> -> See Section 4 (Phase Progression) for sentinel details
+> -> See Section 4 (Quick-Reference Phase Map) for sentinel details
 
 ### PR Workflow
 
@@ -845,7 +848,7 @@ Three complementary mechanisms provide defense-in-depth:
 | Problem | Solution |
 |---------|----------|
 | Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
-| Sentinel missing | Re-complete the phase marker task to regenerate sentinel |
+| Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `pathflow-sentinel` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-active flag stale | Manually remove `.state/session/{SID}/is-pathflow-active` via PF7 flow |
 | Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
 
@@ -892,13 +895,13 @@ When Claude Code's context window overflows mid-session, the conversation contin
 
 ### Graceful Degradation
 
-If the enforcement system fails (sentinel creation fails, hooks malfunction), PathFlow degrades gracefully:
+If the enforcement system fails (hook malfunction, sentinel not auto-created), PathFlow degrades gracefully:
 
 ```text
 Full enforcement (nominal)
   Instructions + Tasks + Hooks all active
        |
-       | (sentinel creation fails)
+       | (hook fails to auto-create sentinel)
        v
 Partial enforcement
   Instructions + Tasks active, hooks warn but skip sentinel checks
