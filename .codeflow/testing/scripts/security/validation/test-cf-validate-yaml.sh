@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test: Validation - cf-validate-yaml.sh
-# Location: .codeflow/testing/scripts/security/test-cf-validate-yaml.sh
+# Location: .codeflow/testing/scripts/security/validation/test-cf-validate-yaml.sh
 #
 # Tests the YAML file validation functionality
 
@@ -8,7 +8,7 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$TEST_DIR/../../lib/test-isolation.sh"
+source "$TEST_DIR/../../../lib/test-isolation.sh"
 SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-yaml.sh"
 
 # Test counter

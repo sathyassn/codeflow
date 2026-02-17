@@ -1,27 +1,23 @@
 #!/usr/bin/env bash
-# Test: Staging workflow - cf-rollback-edit.sh
-# Location: .codeflow/testing/scripts/security/test-cf-rollback-edit.sh
+# Test: Staging workflow - cf-apply-staged-edit.sh
+# Location: .codeflow/testing/scripts/security/staging/test-cf-apply-staged-edit.sh
 #
-# Tests the rollback edit functionality
+# Tests the apply staged edit functionality
 
 set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$TEST_DIR/../../lib/test-isolation.sh"
-SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-rollback-edit.sh"
+source "$TEST_DIR/../../../lib/test-isolation.sh"
+SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
 STAGE_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
-APPLY_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
-# shellcheck disable=SC2034  # used by sourced staging scripts
 STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
-# shellcheck disable=SC2034
-BACKUP_DIR="$REPO_ROOT/.state/backups/protected"
 
 # Test counter
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-echo "=== Testing cf-rollback-edit.sh ==="
+echo "=== Testing cf-apply-staged-edit.sh ==="
 echo ""
 
 # ============================================================================
@@ -75,63 +71,75 @@ else
 fi
 
 # ============================================================================
-# Test 5: No backup to rollback
+# Test 5: No staged edit
 # ============================================================================
 OUTPUT=$("$SCRIPT" "/nonexistent/file" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "no backup"; then
-    echo "PASS: Errors when no backup exists"
+if echo "$OUTPUT" | grep -qi "no staged edit"; then
+    echo "PASS: Errors when no staged edit"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Should error when no backup exists"
+    echo "FAIL: Should error when no staged edit exists"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 6: List backups option
+# Test 6: Successful apply
 # ============================================================================
 echo ""
-echo "--- Rollback functionality ---"
+echo "--- Apply functionality ---"
 
-# Create, stage, and apply to create a backup
-echo "original content" > "$TEST_TMPDIR/test-rollback-original.txt"
-echo "new content" > "$TEST_TMPDIR/test-rollback-new.txt"
-"$STAGE_SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" "$TEST_TMPDIR/test-rollback-new.txt" >/dev/null 2>&1
-"$APPLY_SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" >/dev/null 2>&1
+# Create and stage a test file
+echo "original content" > "$TEST_TMPDIR/test-apply-original.txt"
+echo "new content" > "$TEST_TMPDIR/test-apply-new.txt"
+"$STAGE_SCRIPT" "$TEST_TMPDIR/test-apply-original.txt" "$TEST_TMPDIR/test-apply-new.txt" >/dev/null 2>&1
 
-OUTPUT=$("$SCRIPT" --list "$TEST_TMPDIR/test-rollback-original.txt" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "backup"; then
-    echo "PASS: List option shows backups"
+OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-apply-original.txt" 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "applied successfully"; then
+    echo "PASS: Apply succeeds"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: List option should show backups"
+    echo "FAIL: Apply failed"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 7: Successful rollback
+# Test 7: File content updated
 # ============================================================================
-OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-rollback-original.txt" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "rollback.*success\|restored"; then
-    echo "PASS: Rollback succeeds"
+if grep -q "new content" "$TEST_TMPDIR/test-apply-original.txt"; then
+    echo "PASS: File content updated"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Rollback failed"
+    echo "FAIL: File content not updated"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 8: Content restored
+# Test 8: Backup created
 # ============================================================================
-if grep -q "original content" "$TEST_TMPDIR/test-rollback-original.txt"; then
-    echo "PASS: Original content restored"
+# shellcheck disable=SC2012  # ls used intentionally; filenames are controlled test data
+if ls "$REPO_ROOT/.state/backups/protected/"*test-apply*.backup 2>/dev/null | head -1 | grep -q ".backup"; then
+    echo "PASS: Backup created"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Content not restored properly"
+    echo "FAIL: Backup not created"
     ((TESTS_FAILED++)) || true
 fi
 
 # ============================================================================
-# Test 9: Shellcheck passes
+# Test 9: Staged files cleaned up
+# ============================================================================
+SAFE_NAME=$(echo "$TEST_TMPDIR/test-apply-original.txt" | sed 's/[\/]/_/g')
+
+if [[ ! -f "$STAGING_DIR/${SAFE_NAME}.staged" ]]; then
+    echo "PASS: Staged files cleaned up"
+    ((TESTS_PASSED++)) || true
+else
+    echo "FAIL: Staged files not cleaned up"
+    ((TESTS_FAILED++)) || true
+fi
+
+# ============================================================================
+# Test 10: Shellcheck passes
 # ============================================================================
 echo ""
 echo "--- Code quality ---"

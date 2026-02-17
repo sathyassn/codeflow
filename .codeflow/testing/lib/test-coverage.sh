@@ -271,8 +271,7 @@ is_excepted() {
     if [[ -n "$no_test_patterns" ]]; then
         while IFS= read -r pattern; do
             [[ -z "$pattern" ]] && continue
-            # shellcheck disable=SC2053
-            if [[ "$script" == $pattern ]]; then
+            if _pattern_matches "$script" "$pattern"; then
                 return 0
             fi
         done <<< "$no_test_patterns"
@@ -284,14 +283,37 @@ is_excepted() {
     if [[ -n "$integration_patterns" ]]; then
         while IFS= read -r pattern; do
             [[ -z "$pattern" ]] && continue
-            # shellcheck disable=SC2053
-            if [[ "$script" == $pattern ]]; then
+            if _pattern_matches "$script" "$pattern"; then
                 return 0
             fi
         done <<< "$integration_patterns"
     fi
 
     return 1  # Not excepted
+}
+
+# Match a script path against an exception pattern
+# Handles both flat globs (dir/*) and recursive matching (dir/* also matches dir/sub/file)
+# Usage: _pattern_matches "script_path" "pattern"
+_pattern_matches() {
+    local script="$1"
+    local pattern="$2"
+
+    # Try direct glob match first (handles exact paths and single-level globs)
+    # shellcheck disable=SC2053
+    if [[ "$script" == $pattern ]]; then
+        return 0
+    fi
+
+    # For patterns ending in /*, also match recursively (any depth under that directory)
+    if [[ "$pattern" == *'/*' ]]; then
+        local dir_prefix="${pattern%/\*}"
+        if [[ "$script" == "$dir_prefix/"* ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 # Get exception reason for a script
@@ -304,27 +326,25 @@ get_exception_reason() {
         return
     fi
 
-    # Check no_test_required
-    local reason
-    reason=$(jq -r --arg s "$script" '
-        .coverage_enforcement.exceptions.no_test_required[]? |
-        select(.pattern == $s) | .reason // empty
-    ' "$TEST_CONFIG_FILE" 2>/dev/null)
-    if [[ -n "$reason" ]]; then
-        echo "No test required: $reason"
-        return
-    fi
+    # Check no_test_required (iterate patterns and use glob matching)
+    local pattern reason
+    while IFS='|' read -r pattern reason; do
+        [[ -z "$pattern" ]] && continue
+        if _pattern_matches "$script" "$pattern"; then
+            echo "No test required: $reason"
+            return
+        fi
+    done < <(jq -r '.coverage_enforcement.exceptions.no_test_required[]? | "\(.pattern // "")|\(.reason // "")"' "$TEST_CONFIG_FILE" 2>/dev/null)
 
-    # Check integration_tested
+    # Check integration_tested (iterate patterns and use glob matching)
     local tested_by
-    tested_by=$(jq -r --arg s "$script" '
-        .coverage_enforcement.exceptions.integration_tested[]? |
-        select(.pattern == $s) | .tested_by // empty
-    ' "$TEST_CONFIG_FILE" 2>/dev/null)
-    if [[ -n "$tested_by" ]]; then
-        echo "Integration tested by: $tested_by"
-        return
-    fi
+    while IFS='|' read -r pattern tested_by; do
+        [[ -z "$pattern" ]] && continue
+        if _pattern_matches "$script" "$pattern"; then
+            echo "Integration tested by: $tested_by"
+            return
+        fi
+    done < <(jq -r '.coverage_enforcement.exceptions.integration_tested[]? | "\(.pattern // "")|\(.tested_by // "")"' "$TEST_CONFIG_FILE" 2>/dev/null)
 
     echo "Exception not found in config"
 }

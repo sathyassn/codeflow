@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test: Staging workflow - cf-stage-edit.sh
-# Location: .codeflow/testing/scripts/security/test-cf-stage-edit.sh
+# Location: .codeflow/testing/scripts/security/staging/test-cf-stage-edit.sh
 #
 # Tests the staging edit functionality for protected files
 
@@ -8,7 +8,7 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$TEST_DIR/../../lib/test-isolation.sh"
+source "$TEST_DIR/../../../lib/test-isolation.sh"
 SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
 STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 

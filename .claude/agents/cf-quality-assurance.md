@@ -89,10 +89,10 @@ Extract specific, testable criteria from the task assignment. List them as a che
 #### Step 2: Run Full Test Suite
 
 ```text
-bash .codeflow/testing/run-all-tests.sh --mode standard
+bash .codeflow/testing/run-all-tests.sh --mode full
 ```
 
-Use `--mode full` if the lead requests comprehensive verification. Use `--mode essential` only for quick pre-checks.
+Use `--mode standard` if the lead requests faster turnaround. Use `--mode essential` only for quick pre-checks.
 
 **Additional flags:** `--category {name}` (scoped), `--stop-on-fail`, `--verbose`, `--validate-coverage`, `--report`, `--dry-run`
 
@@ -113,6 +113,17 @@ Check each criterion against test results and code inspection (read-only). Mark 
 #### Step 5: Check for Regressions
 
 Compare test results against the expected baseline. Any previously-passing test that now fails is a regression.
+
+#### Step 5b: Verify Test Coverage
+
+Run the coverage validation to ensure no gaps were introduced:
+
+```text
+bash .codeflow/testing/lib/test-coverage.sh --audit
+```
+
+- **Clean:** Note coverage status in verdict as passing.
+- **Gaps found:** Report as findings in the verdict. If gaps are in newly-added scripts (not pre-existing), escalate to team lead as a blocking issue. Pre-existing gaps should be noted but do not block the verdict.
 
 #### Step 6: Deliver Verdict
 
@@ -246,6 +257,8 @@ Before marking any task complete, verify:
 - [ ] 🔒 Test names are descriptive of the behavior being verified
 - [ ] 🔒 New tests registered in test-config.json (WS-TEST mode only)
 - [ ] 🔒 Commit requested via cf-git-operations (WS-TEST mode only)
+- [ ] 🔒 Test coverage verified (no new gaps introduced)
+- [ ] 🔒 Full test mode used for comprehensive verification
 - [ ] 🔒 Changes are within scope of the assigned task
 
 ## References

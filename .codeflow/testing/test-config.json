@@ -76,18 +76,18 @@
         "scripts/shell-lib/test-ulid.sh",
         "scripts/shell-lib/test-logging.sh",
         "scripts/shell-lib/test-index.sh",
-        "scripts/security/test-cf-stage-edit.sh",
-        "scripts/security/test-cf-apply-staged-edit.sh",
-        "scripts/security/test-cf-reject-staged-edit.sh",
-        "scripts/security/test-cf-rollback-edit.sh",
-        "scripts/security/test-cf-cleanup-expired.sh",
+        "scripts/security/staging/test-cf-stage-edit.sh",
+        "scripts/security/staging/test-cf-apply-staged-edit.sh",
+        "scripts/security/staging/test-cf-reject-staged-edit.sh",
+        "scripts/security/staging/test-cf-rollback-edit.sh",
+        "scripts/security/staging/test-cf-cleanup-expired.sh",
         "scripts/security/test-cf-reload-protection.sh",
         "scripts/security/test-cf-promote-protection.sh",
-        "scripts/security/test-cf-validate-shell.sh",
-        "scripts/security/test-cf-validate-python.sh",
+        "scripts/security/validation/test-cf-validate-shell.sh",
+        "scripts/security/validation/test-cf-validate-python.sh",
         "scripts/security/test-main-branch-protection.sh",
-        "scripts/security/test-cf-validate-json.sh",
-        "scripts/security/test-cf-validate-yaml.sh",
+        "scripts/security/validation/test-cf-validate-json.sh",
+        "scripts/security/validation/test-cf-validate-yaml.sh",
         "scripts/git-hooks/test-pre-commit.sh",
         "scripts/git-hooks/test-commit-msg.sh",
         "scripts/git-hooks/test-prepare-commit-msg.sh",
@@ -224,6 +224,16 @@
       "description": "OS-level protection tests",
       "language": "bash"
     },
+    "scripts-security-staging": {
+      "directory": "scripts/security/staging",
+      "description": "Security staging operation tests",
+      "language": "bash"
+    },
+    "scripts-security-validation": {
+      "directory": "scripts/security/validation",
+      "description": "Security validation script tests",
+      "language": "bash"
+    },
     "scripts-security-sentinel": {
       "directory": "scripts/security/sentinel",
       "description": "Sentinel system tests",
@@ -341,6 +351,16 @@
           "pattern": ".codeflow/scripts/security/protection/*",
           "tested_by": "scripts/security/protection/test-cf-*.sh",
           "reason": "Protection scripts have dedicated tests (Phase 3)"
+        },
+        {
+          "pattern": ".codeflow/scripts/security/staging/*",
+          "tested_by": "scripts/security/staging/test-cf-*.sh",
+          "reason": "Staging scripts have dedicated tests in staging subdirectory"
+        },
+        {
+          "pattern": ".codeflow/scripts/security/validation/*",
+          "tested_by": "scripts/security/validation/test-cf-*.sh",
+          "reason": "Validation scripts have dedicated tests in validation subdirectory"
         },
         {
           "pattern": ".claude/hooks/codeflow/**/*.sh",
