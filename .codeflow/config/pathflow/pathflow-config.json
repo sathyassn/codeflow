@@ -6,7 +6,7 @@
       "phase_order": 1,
       "description": "Initialize session, register in DB/JSONL, spawn security teammate",
       "tasks": [
-        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record", "responsible": "team-lead", "operation": "TeamCreate + spawn cf-security" },
+        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record", "responsible": "team-lead", "operation": "TeamCreate + create pathflow-active flag" },
         { "id": "PF1-TSK-02", "task_order": 2, "description": "Register session in DB/JSONL with tracking_level='pending'", "responsible": "team-lead", "operation": "Register session — deferred to cf-knowledge-layer at PF2" },
         { "id": "PF1-TSK-03", "task_order": 3, "description": "Spawn cf-security teammate", "responsible": "team-lead", "operation": "Task(subagent_type=cf-security)" }
       ]
