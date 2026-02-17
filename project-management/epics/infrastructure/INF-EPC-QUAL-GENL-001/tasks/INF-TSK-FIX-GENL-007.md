@@ -3,7 +3,7 @@ id: INF-TSK-FIX-GENL-007
 epic_id: INF-EPC-QUAL-GENL-001
 title: Fix memory script test-coverage exception failure
 description: Fix 1 shell test that fails in --mode full (stale integration_tested list missing memory script pattern)
-status: todo
+status: complete
 area_type: INF
 work_type: FIX
 domain: GENL
@@ -25,13 +25,13 @@ acceptance:
   - "Full test suite runs clean: ./codeflow test --mode full"
 tests: [".codeflow/testing/lib/test-test-coverage.sh"]
 branch: fix/pre-existing-test-failures
-pr_number: null
+pr_number: 27
 external_id: null
 external_url: null
 created_at: 2026-02-16T00:00:00Z
 updated_at: 2026-02-16T00:00:00Z
 started_at: null
-completed_at: null
+completed_at: 2026-02-16T07:35:00Z
 ---
 
 # INF-TSK-FIX-GENL-007: Fix memory script test-coverage exception failure
@@ -93,3 +93,9 @@ completed_at: null
 - This is an XS task: single file change (add one entry to a JSON array).
 - The `scripts-memory` test group in test-config.json is marked `skip: true` with note "deleted -- awaiting Go CLI Phase 7". The `integration_tested` exception should reference this context.
 - Be careful to maintain valid JSON when editing test-config.json.
+
+## Completion
+
+- **PR:** #27 (merged to main at 65e1a2c on 2026-02-17)
+- **Branch:** fix/pre-existing-test-failures
+- **Status:** Complete
