@@ -717,6 +717,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 .state/                           # Runtime state (partially gitignored)
   db/codeflow.db                  # Tier 1: SQLite (query interface)
   ledger/                         # Tier 0: JSONL event logs (rebuild authority)
+  logs/                           # Session telemetry (gitignored)
     pathflow-events.jsonl          # Phase/stage transitions
   runtime/                        # Active task, current session ID
   sentinels/                      # PathFlow sentinels (pathflow:pf-3, etc.)
@@ -760,7 +761,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 |------|---------|
 | `.state/runtime/active-task.json` | Bridge file: current task for hook context |
 | `.state/runtime/current-session-id` | Current session ID reference |
-| `.state/ledger/pathflow-events.jsonl` | Phase and stage transition log |
+| `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/is-pathflow-active` | Flag file: PathFlow session is active |
 | `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
@@ -843,7 +844,7 @@ Three complementary mechanisms provide defense-in-depth:
 
 | Problem | Solution |
 |---------|----------|
-| Lost phase state | Check `.state/ledger/pathflow-events.jsonl` for latest `phase_transition` event |
+| Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
 | Sentinel missing | Re-complete the phase marker task to regenerate sentinel |
 | pathflow-active flag stale | Manually remove `.state/session/{SID}/is-pathflow-active` via PF7 flow |
 | Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
@@ -884,7 +885,7 @@ When Claude Code's context window overflows mid-session, the conversation contin
 2. **Check pane health** -- For each member, verify tmux pane is alive: `tmux list-panes -a | grep {paneId}`
 3. **Clean stale entries** -- Remove members with dead panes from team config (or delete the config and re-create the team)
 4. **Respawn persistent teammates** -- Respawn cf-security, cf-knowledge-layer, and cf-git-operations with the SAME names and agent types. Include re-orientation context in spawn prompts.
-5. **Re-read pathflow state** -- Check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/ledger/pathflow-events.jsonl` to determine current phase
+5. **Re-read pathflow state** -- Check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase
 6. **Determine current phase** -- Map sentinel state to phase (e.g., pf-3 exists but no ws-dev-done means PF4-EXECUTE in progress) and continue from that phase
 
 **Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately check for stale team state before proceeding with any work. The SessionStart hook will output a warning if stale team configs are detected.

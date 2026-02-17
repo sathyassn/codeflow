@@ -76,7 +76,7 @@ fi
 # =============================================================================
 
 # Read current phase from JSONL for audit logging
-JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/ledger/pathflow-events.jsonl}"
+JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/logs/pathflow-events.jsonl}"
 
 if [ -f "$JSONL_FILE" ] && command -v jq >/dev/null 2>&1; then
     # Read session ID from file

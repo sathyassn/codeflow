@@ -342,7 +342,7 @@ esac
 # CURRENT_SESSION_ID=$(cat "$SESSION_ID_FILE" 2>/dev/null) || true
 # [[ -z "$CURRENT_SESSION_ID" ]] && exit 0
 #
-# JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/ledger/pathflow-events.jsonl}"
+# JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/logs/pathflow-events.jsonl}"
 # [[ ! -f "$JSONL_FILE" ]] && exit 0
 # command -v jq &>/dev/null || exit 0
 #
