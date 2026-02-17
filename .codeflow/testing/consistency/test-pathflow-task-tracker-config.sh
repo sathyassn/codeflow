@@ -93,8 +93,8 @@ assert_success "jq -e '.task_tracker.mirroring.enabled == true' '$CONFIG_FILE'" 
 assert_success "jq -e '.task_tracker.mirroring.source_of_truth == \"jsonl\"' '$CONFIG_FILE'" \
     "mirroring.source_of_truth is 'jsonl'"
 
-assert_success "jq -e '.task_tracker.mirroring.mirror_target == \"task_tracker\"' '$CONFIG_FILE'" \
-    "mirroring.mirror_target is 'task_tracker'"
+assert_success "jq -e '.task_tracker.mirroring.mirror_target == \"Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)\"' '$CONFIG_FILE'" \
+    "mirroring.mirror_target is 'Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)'"
 
 # ============================================================================
 # TEST 3: Phase templates - all 7 phases present
