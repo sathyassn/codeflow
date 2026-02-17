@@ -228,7 +228,7 @@ SendMessage to cf-git-operations: `"Please commit: test: {description}"`
 
 ### Stage Completion Protocol
 
-When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate mode) or `STAGE-COMPLETE: WS-TEST` (test implementation mode) in your final message to the team lead.
+When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate mode) or `STAGE-COMPLETE: WS-TEST` (test implementation mode) in your final message to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 ## Quality Checklist
 
