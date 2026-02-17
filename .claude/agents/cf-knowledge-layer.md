@@ -96,13 +96,15 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 
 ### Canonical Ledger Filenames
 
-| Ledger File | Variable (`ledger.sh`) | Purpose |
-|---|---|---|
-| `work-graph.jsonl` | `LEDGER_WORK_GRAPH` | Task lifecycle events (epic_created, task_created, task_status_changed, epic_status_changed) |
-| `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations (store, query, milestone) |
-| `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle |
-| `config.jsonl` | `LEDGER_CONFIG` | Configuration changes |
-| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events |
+| Ledger File | Variable (`ledger.sh`) | Purpose | Event Types |
+|---|---|---|---|
+| `work-graph.jsonl` | `LEDGER_WORK_GRAPH` | Task lifecycle events | `epic_created`, `task_created`, `task_status_changed`, `epic_status_changed` |
+| `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations | `memory_store`, `memory_query`, `memory_milestone`, `decision`, `finding`, `progress` |
+| `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle | `session_start`, `session_end` |
+| `config.jsonl` | `LEDGER_CONFIG` | Configuration changes | `config_change` |
+| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated` |
+
+**NEVER write an event to a file that doesn't list that event type. memory_events go to memory-events.jsonl, NOT work-graph.jsonl.**
 
 ⛔ **MUST use these exact filenames.** Do NOT invent alternative names (e.g., `workgraph-events.jsonl`). The canonical names are defined in `.codeflow/scripts/state/ledger.sh`.
 
