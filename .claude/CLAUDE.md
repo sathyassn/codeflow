@@ -162,7 +162,7 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 
 Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from `pathflow-config.json`. These are ephemeral -- created at phase entry, disposed at PF7-END. Distinct from project tasks in the `tasks` table.
 
-Each task in `pathflow-config.json` has a `responsible` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
+Each task in `pathflow-config.json` has an `assigned_to` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
 
 ### Task Tracker Mirroring
 
