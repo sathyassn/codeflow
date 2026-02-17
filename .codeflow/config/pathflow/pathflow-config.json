@@ -6,9 +6,9 @@
       "phase_order": 1,
       "description": "Initialize session, register in DB/JSONL, spawn security teammate",
       "tasks": [
-        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record" },
-        { "id": "PF1-TSK-02", "task_order": 2, "description": "Register session in DB/JSONL with tracking_level='pending'" },
-        { "id": "PF1-TSK-03", "task_order": 3, "description": "Spawn cf-security teammate" }
+        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record", "responsible": "team-lead", "operation": "TeamCreate + spawn cf-security" },
+        { "id": "PF1-TSK-02", "task_order": 2, "description": "Register session in DB/JSONL with tracking_level='pending'", "responsible": "team-lead", "operation": "Register session — deferred to cf-knowledge-layer at PF2" },
+        { "id": "PF1-TSK-03", "task_order": 3, "description": "Spawn cf-security teammate", "responsible": "team-lead", "operation": "Task(subagent_type=cf-security)" }
       ]
     },
     "PF2-CONTEXT": {
@@ -16,10 +16,10 @@
       "phase_order": 2,
       "description": "Load previous context, determine tracked vs untracked",
       "tasks": [
-        { "id": "PF2-TSK-01", "task_order": 1, "description": "Spawn cf-knowledge-layer teammate" },
-        { "id": "PF2-TSK-02", "task_order": 2, "description": "Query active work and session state" },
-        { "id": "PF2-TSK-03", "task_order": 3, "description": "Load memory context for current work" },
-        { "id": "PF2-TSK-04", "task_order": 4, "description": "Determine tracked vs untracked decision" }
+        { "id": "PF2-TSK-01", "task_order": 1, "description": "Spawn cf-knowledge-layer teammate", "responsible": "team-lead", "operation": "Task(subagent_type=cf-knowledge-layer)" },
+        { "id": "PF2-TSK-02", "task_order": 2, "description": "Query active work and session state", "responsible": "cf-knowledge-layer", "operation": "detect-active-work" },
+        { "id": "PF2-TSK-03", "task_order": 3, "description": "Load memory context for current work", "responsible": "cf-knowledge-layer", "operation": "load-work-context" },
+        { "id": "PF2-TSK-04", "task_order": 4, "description": "Determine tracked vs untracked decision", "responsible": "team-lead", "operation": "Tracking decision (tracked/untracked/ask)" }
       ]
     },
     "PF3-CLASSIFY": {
@@ -27,11 +27,11 @@
       "phase_order": 3,
       "description": "Classify work, register task, create branch, activate session",
       "tasks": [
-        { "id": "PF3-TSK-01", "task_order": 1, "description": "Classify work type and area" },
-        { "id": "PF3-TSK-02", "task_order": 2, "description": "Register task in WorkGraph" },
-        { "id": "PF3-TSK-03", "task_order": 3, "description": "Spawn cf-git-operations teammate" },
-        { "id": "PF3-TSK-04", "task_order": 4, "description": "Create feature branch" },
-        { "id": "PF3-TSK-05", "task_order": 5, "description": "Activate session: set tracking_level='tracked', populate work_type, area_type" }
+        { "id": "PF3-TSK-01", "task_order": 1, "description": "Classify work type and area", "responsible": "team-lead", "operation": "Work type classification from CLAUDE.md Section 6" },
+        { "id": "PF3-TSK-02", "task_order": 2, "description": "Register task in WorkGraph", "responsible": "cf-knowledge-layer", "operation": "ensure-work-registered" },
+        { "id": "PF3-TSK-03", "task_order": 3, "description": "Spawn cf-git-operations teammate", "responsible": "team-lead", "operation": "Task(subagent_type=cf-git-operations)" },
+        { "id": "PF3-TSK-04", "task_order": 4, "description": "Create feature branch", "responsible": "cf-git-operations", "operation": "create-feature-branch" },
+        { "id": "PF3-TSK-05", "task_order": 5, "description": "Activate session: set tracking_level='tracked', populate work_type, area_type", "responsible": "cf-knowledge-layer", "operation": "begin-work" }
       ]
     },
     "PF4-EXECUTE": {
@@ -39,10 +39,10 @@
       "phase_order": 4,
       "description": "Execute work through configured stage pipeline",
       "tasks": [
-        { "id": "PF4-TSK-01", "task_order": 1, "description": "Look up stage pipeline from work_type_stages" },
-        { "id": "PF4-TSK-02", "task_order": 2, "description": "Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)" },
-        { "id": "PF4-TSK-03", "task_order": 3, "description": "Execute WS-REV stage (universal review)" },
-        { "id": "PF4-TSK-04", "task_order": 4, "description": "Execute WS-QA stage (if pipeline includes it)" }
+        { "id": "PF4-TSK-01", "task_order": 1, "description": "Look up stage pipeline from work_type_stages", "responsible": "team-lead", "operation": "Lookup pipeline from work_type_stages in this config" },
+        { "id": "PF4-TSK-02", "task_order": 2, "description": "Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)", "responsible": "team-lead", "operation": "Spawn stage teammate per pipeline" },
+        { "id": "PF4-TSK-03", "task_order": 3, "description": "Execute WS-REV stage (universal review)", "responsible": "team-lead", "operation": "Spawn cf-review with mode per work type" },
+        { "id": "PF4-TSK-04", "task_order": 4, "description": "Execute WS-QA stage (if pipeline includes it)", "responsible": "team-lead", "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)" }
       ]
     },
     "PF5-VERIFY": {
@@ -50,8 +50,8 @@
       "phase_order": 5,
       "description": "Verify all stages passed and acceptance criteria met",
       "tasks": [
-        { "id": "PF5-TSK-01", "task_order": 1, "description": "Verify all pipeline stages completed with pass verdict" },
-        { "id": "PF5-TSK-02", "task_order": 2, "description": "Check acceptance criteria met" }
+        { "id": "PF5-TSK-01", "task_order": 1, "description": "Verify all pipeline stages completed with pass verdict", "responsible": "team-lead", "operation": "Verify all stage sentinels exist" },
+        { "id": "PF5-TSK-02", "task_order": 2, "description": "Check acceptance criteria met", "responsible": "team-lead", "operation": "Check acceptance criteria against task record" }
       ]
     },
     "PF6-COMPLETE": {
@@ -59,10 +59,10 @@
       "phase_order": 6,
       "description": "Update task status, record session memory, commit state files, create PR",
       "tasks": [
-        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph" },
-        { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer" },
-        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, task tickets, etc.) via cf-git-operations" },
-        { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations" }
+        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph", "responsible": "cf-knowledge-layer", "operation": "complete-work" },
+        { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer", "responsible": "cf-knowledge-layer", "operation": "record-session-summary" },
+        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, task tickets, etc.) via cf-git-operations", "responsible": "cf-git-operations", "operation": "commit-outstanding-changes" },
+        { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations", "responsible": "cf-git-operations", "operation": "create-pr" }
       ]
     },
     "PF7-END": {
@@ -70,9 +70,9 @@
       "phase_order": 7,
       "description": "Shutdown teammates, dissolve team (hooks handle cleanup)",
       "tasks": [
-        { "id": "PF7-TSK-01", "task_order": 1, "description": "Shutdown on-demand role teammates" },
-        { "id": "PF7-TSK-02", "task_order": 2, "description": "Shutdown persistent function teammates" },
-        { "id": "PF7-TSK-03", "task_order": 3, "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)" }
+        { "id": "PF7-TSK-01", "task_order": 1, "description": "Shutdown on-demand role teammates", "responsible": "team-lead", "operation": "SendMessage(type=shutdown_request) to on-demand teammates" },
+        { "id": "PF7-TSK-02", "task_order": 2, "description": "Shutdown persistent function teammates", "responsible": "team-lead", "operation": "SendMessage(type=shutdown_request) to persistent teammates" },
+        { "id": "PF7-TSK-03", "task_order": 3, "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)", "responsible": "team-lead", "operation": "TeamDelete (after pathflow-active flag removed by SessionEnd hook)" }
       ]
     }
   },

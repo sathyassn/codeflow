@@ -107,7 +107,7 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 
 | Phase | What Happens | Teammate Spawned | Key Outputs |
 |-------|-------------|------------------|-------------|
-| **PF1-INIT** | Register session record in DB/JSONL (`tracking_level='pending'`), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security | cf-security (persistent) | Session record, pathflow-active flag (JSON), pathflow-pf-1 sentinel (auto-created by hook) |
+| **PF1-INIT** | Initialize team infrastructure (TeamCreate), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security. Note: session DB/JSONL registration (PF1-TSK-02) is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available. | cf-security (persistent) | pathflow-active flag (JSON), pathflow-pf-1 sentinel (auto-created by hook) |
 | **PF2-CONTEXT** | Spawn cf-knowledge-layer, query active work, load memory context, determine tracked vs untracked | cf-knowledge-layer (persistent) | Active work state, tracking decision |
 | **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow-pf-3 sentinel (auto-created by hook) |
 | **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type. For independent items, spawn parallel teammate instances per stage max_parallel/batch_size settings (see Parallel Batch Execution) | Role teammates (on-demand, per stage; multiple instances for parallel work) | Code, docs, tests, reviews |
@@ -161,6 +161,8 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 ### Phase Task IDs
 
 Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from `pathflow-config.json`. These are ephemeral -- created at phase entry, disposed at PF7-END. Distinct from project tasks in the `tasks` table.
+
+Each task in `pathflow-config.json` has a `responsible` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
 
 ### Team Lead Role
 
