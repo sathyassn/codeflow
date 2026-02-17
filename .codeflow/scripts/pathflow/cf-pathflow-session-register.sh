@@ -49,9 +49,9 @@ register_session() {
         return 1
     fi
 
-    # Ensure ledger directory exists
-    # shellcheck disable=SC2153  # LEDGER_PATH exported from sourced ledger.sh
-    local ledger_path="$LEDGER_PATH/$PATHFLOW_LEDGER"
+    # Ensure logs directory exists
+    # shellcheck disable=SC2153  # PATHFLOW_LOGS_PATH exported from sourced ledger.sh
+    local ledger_path="$PATHFLOW_LOGS_PATH/$PATHFLOW_LEDGER"
     mkdir -p "$(dirname "$ledger_path")"
     [[ -f "$ledger_path" ]] || touch "$ledger_path"
 
@@ -73,7 +73,7 @@ register_session() {
         --arg ts "$ts" \
         '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
-    append_event "$PATHFLOW_LEDGER" "$event"
+    LEDGER_PATH="$PATHFLOW_LOGS_PATH" append_event "$PATHFLOW_LEDGER" "$event"
 
     # Write interaction_mode event
     local mode_event_id
@@ -88,7 +88,7 @@ register_session() {
         --arg ts "$ts" \
         '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
-    append_event "$PATHFLOW_LEDGER" "$mode_event"
+    LEDGER_PATH="$PATHFLOW_LOGS_PATH" append_event "$PATHFLOW_LEDGER" "$mode_event"
 
     # Output success
     jq -c -n \

@@ -401,7 +401,7 @@ Worker Stop Hook Flow:
 | `.state/autorun/batches/*.yaml` | Batch definitions |
 | `.state/autorun/sessions/*.json` | Session records and status |
 | `.state/db/codeflow.db` | Task resolution from WorkGraph |
-| `.state/ledger/pathflow-events.jsonl` | Event log (worker progress) |
+| `.state/logs/pathflow-events.jsonl` | Event log (worker progress) |
 
 ### Files Created/Modified
 

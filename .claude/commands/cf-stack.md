@@ -149,7 +149,7 @@ Next: No pipeline progression — standalone info command.
 
 **Step 4: Determine Phase and Stage**
 
-- Read `.state/ledger/pathflow-events.jsonl` for latest `phase_transition` event
+- Read `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event
 - Identify current phase (PF1-PF7) and stage within PF4 (WS-DEV, WS-REV, WS-QA, etc.)
 - Calculate pipeline progress (completed stages / total stages)
 
@@ -261,7 +261,7 @@ This command reads session state files to display information. It does not modif
 | `/tmp/claude/managed/state/is-pathflow-active` | PathFlow mode flag |
 | `.state/runtime/active-task.json` | Current task context |
 | `.state/runtime/current-session-id` | Session identity |
-| `.state/ledger/pathflow-events.jsonl` | Phase/stage transition history |
+| `.state/logs/pathflow-events.jsonl` | Phase/stage transition history |
 | `.state/sentinels/` | Sentinel files (verbose mode) |
 
 ---

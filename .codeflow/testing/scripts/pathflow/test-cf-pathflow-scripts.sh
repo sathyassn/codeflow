@@ -62,6 +62,8 @@ setup_pathflow_test() {
     setup_test_dir "pathflow"
     export CODEFLOW_LEDGER_PATH="$TEST_DIR/ledger"
     export LEDGER_PATH="$CODEFLOW_LEDGER_PATH"
+    export CODEFLOW_PATHFLOW_LOGS_PATH="$TEST_DIR/ledger"
+    export PATHFLOW_LOGS_PATH="$CODEFLOW_PATHFLOW_LOGS_PATH"
     mkdir -p "$LEDGER_PATH"
 }
 
@@ -69,6 +71,8 @@ teardown_pathflow_test() {
     teardown_test_dir
     unset CODEFLOW_LEDGER_PATH
     unset LEDGER_PATH
+    unset CODEFLOW_PATHFLOW_LOGS_PATH
+    unset PATHFLOW_LOGS_PATH
 }
 
 # Helper: count lines in pathflow-events.jsonl

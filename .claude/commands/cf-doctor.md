@@ -215,7 +215,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 
 **Check 9: JSONL Integrity**
 
-- Verify `.state/ledger/pathflow-events.jsonl` exists
+- Verify `.state/logs/pathflow-events.jsonl` exists
 - Check each line is valid JSON
 - Verify events are chronologically ordered
 - Check for duplicate or missing event IDs
@@ -286,7 +286,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | File | Purpose |
 |------|---------|
 | `.state/db/codeflow.db` | Database health check |
-| `.state/ledger/pathflow-events.jsonl` | JSONL integrity check |
+| `.state/logs/pathflow-events.jsonl` | JSONL integrity check |
 | `.state/runtime/active-task.json` | Runtime state check |
 | `.state/runtime/current-session-id` | Session identity check |
 | `.state/sentinels/*` | Sentinel integrity check |

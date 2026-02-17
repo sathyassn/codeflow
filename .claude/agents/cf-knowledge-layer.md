@@ -136,7 +136,7 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 3. Generate work_id: `work-{ulid}`
 4. INSERT into active_work: id, task_id, topic, status='in_progress', branch, scope, session_id
 5. Create `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
-6. Append event to `.state/ledger/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
+6. Append event to `.state/logs/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
 7. Update task status to 'in_progress': `UPDATE tasks SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
 8. Report: `"KNOWLEDGE: begin-work - Registered work-{ulid} for task {format_id} on branch {branch}"`
 
@@ -162,7 +162,7 @@ Event types:
 3. Build JSON payload for data field (include summary, files_affected, rationale as applicable)
 4. INSERT into memory_events: id, event_type, domain, work_id, data, memory_type, created_at
 5. INSERT into extraction_queue: id, event_id, status='pending' (for entity extraction)
-6. Append to `.state/ledger/pathflow-events.jsonl`
+6. Append to `.state/logs/pathflow-events.jsonl`
 7. If milestone or stage_transition, update Tier 2 markdown (task file progress section)
 8. Report: `"KNOWLEDGE: record-progress - {event_type} logged for {work_id}"`
 
@@ -175,7 +175,7 @@ Event types:
 1. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
 2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-4. Append completion event to `.state/ledger/pathflow-events.jsonl`
+4. Append completion event to `.state/logs/pathflow-events.jsonl`
 5. Record completion memory_event (event_type='milestone', data includes deliverables summary)
 6. Update `.state/runtime/active-task.json` status to "completed", then delete the file
 7. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`

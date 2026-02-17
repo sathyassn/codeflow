@@ -52,9 +52,9 @@ record_metadata() {
     local key="$2"
     local value="$3"
 
-    # Ensure ledger exists
-    # shellcheck disable=SC2153  # LEDGER_PATH exported from sourced ledger.sh
-    local ledger_path="$LEDGER_PATH/$PATHFLOW_LEDGER"
+    # Ensure logs directory exists
+    # shellcheck disable=SC2153  # PATHFLOW_LOGS_PATH exported from sourced ledger.sh
+    local ledger_path="$PATHFLOW_LOGS_PATH/$PATHFLOW_LEDGER"
     mkdir -p "$(dirname "$ledger_path")"
     [[ -f "$ledger_path" ]] || touch "$ledger_path"
 
@@ -72,7 +72,7 @@ record_metadata() {
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
         '{id: $id, type: $type, session_id: $session_id, key: $key, value: $value, ts: $ts}')
 
-    append_event "$PATHFLOW_LEDGER" "$event"
+    LEDGER_PATH="$PATHFLOW_LOGS_PATH" append_event "$PATHFLOW_LEDGER" "$event"
 
     # Output success
     jq -c -n \

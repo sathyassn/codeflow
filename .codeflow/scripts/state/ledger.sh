@@ -28,6 +28,9 @@ fi
 # Configuration
 LEDGER_PATH="${CODEFLOW_LEDGER_PATH:-$REPO_ROOT/.state/ledger}"
 
+# PathFlow events log path (session telemetry, not Tier 0 rebuild data)
+PATHFLOW_LOGS_PATH="${CODEFLOW_PATHFLOW_LOGS_PATH:-$REPO_ROOT/.state/logs}"
+
 # Ledger files
 readonly LEDGER_CONFIG="config.jsonl"
 readonly LEDGER_WORK_GRAPH="work-graph.jsonl"
@@ -402,3 +405,4 @@ export LEDGER_WORK_GRAPH
 export LEDGER_MEMORY
 export LEDGER_SESSIONS
 export LEDGER_PATH
+export PATHFLOW_LOGS_PATH

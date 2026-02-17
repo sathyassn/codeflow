@@ -290,7 +290,7 @@ Next: [routes to current stage command]
 ```text
 ON "Database inaccessible":
   1. Check .state/db/ exists
-  2. Query .state/ledger/pathflow-events.jsonl for latest events
+  2. Query .state/logs/pathflow-events.jsonl for latest events
   3. Reconstruct task state from event log
   4. Rebuild SQLite from JSONL if needed
 

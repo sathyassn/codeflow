@@ -321,7 +321,7 @@ Next: /cf-cleanup (PF7-END)
 
 | Tier | Location | Purpose |
 |------|----------|---------|
-| 0 | `.state/ledger/pathflow-events.jsonl` | Append PF6-COMPLETE transition, merge event |
+| 0 | `.state/logs/pathflow-events.jsonl` | Append PF6-COMPLETE transition, merge event |
 | 1 | `.state/db/codeflow.db` | Update task status, PR tracking |
 | 2 | `project-management/` | Derived work tracking views (updated if applicable) |
 
