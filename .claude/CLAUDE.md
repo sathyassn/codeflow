@@ -341,7 +341,7 @@ After PF6-COMPLETE, the only remaining phase is PF7-END. If the user wants to do
 In autorun mode (no human present), phase transitions happen automatically:
 
 - Work stages determined from task `work_type` in WorkGraph
-- WS-REV uses Haiku-class model for cost-effective automated review
+- WS-REV uses cf-review teammate (same pipeline as interactive mode)
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
 
@@ -528,10 +528,12 @@ When a work stage involves multiple independent items (files, components, docs),
 
 **Batch sizing rules:**
 
-| Parameter | Source | Default |
-|-----------|--------|---------|
-| `max_parallel` | `pathflow-config.json` stage definition | 1 |
-| `batch_size` | `pathflow-config.json` stage definition | 1 |
+| Parameter | WS-DEV | WS-PLAN | WS-DOCS | WS-TEST | WS-REV | WS-QA |
+|-----------|--------|---------|---------|---------|--------|-------|
+| `max_parallel` | 3 | 2 | 3 | 2 | 2 | 1 |
+| `batch_size` | 2 | 2 | 2 | 2 | 2 | 1 |
+
+Source: `pathflow-config.json` stage definitions.
 
 - Never exceed `max_parallel` concurrent instances for a stage
 - Process items in batches of `batch_size`
@@ -679,7 +681,7 @@ WS-DEV --> WS-REV --> [approved] --> WS-QA --> [pass] --> PF5-VERIFY
 |-----------|---------|---------|
 | `max_rework_iterations` | 3 | WS-REV returns `changes_requested` --> back to primary stage |
 | `max_qa_retries` | 2 | WS-QA returns `fail` --> back to WS-DEV |
-| `stage_timeout_minutes` | 30 | Any single stage exceeds time limit (autorun only) |
+| `stage_timeout_minutes` | 60 | Any single stage exceeds time limit (autorun only) |
 
 If limits exceeded: escalate to user (interactive) or mark task `blocked` and skip to PF7-END (autorun).
 
@@ -708,24 +710,26 @@ If limits exceeded: escalate to user (interactive) or mark task `blocked` and sk
 | /cf-doctor | lead | Diagnose infrastructure issues (direct) |
 | /cf-autorun | lead | Launch autorun session (direct) |
 
-### Stage-Gated Availability
+### Command Availability
 
-| Command | Available When | Gating Condition |
-|---------|---------------|------------------|
-| /cf-resume | Always | No prerequisites |
-| /cf-help | Always | No prerequisites |
-| /cf-approval-mode | Always | No prerequisites |
-| /cf-stack | Always | No prerequisites |
-| /cf-doctor | Always | No prerequisites |
-| /cf-autorun | No active PathFlow | pathflow-active flag must be absent |
-| /cf-plan | PF4-EXECUTE | WS-PLAN stage |
-| /cf-develop | PF4-EXECUTE | WS-DEV stage |
-| /cf-document | PF4-EXECUTE | WS-DOCS stage |
-| /cf-deploy | PF4-EXECUTE | WS-DEV stage (CICD type) |
-| /cf-review | PF4-EXECUTE | WS-REV stage |
-| /cf-test | PF4-EXECUTE | WS-QA or WS-TEST stage |
-| /cf-ship | PF5+ | PF5-VERIFY complete |
-| /cf-cleanup | PF6+ | PF6-COMPLETE or --force |
+| Command | Available | Notes |
+|---------|-----------|-------|
+| `/cf-resume` | Always | Session recovery, no prerequisites |
+| `/cf-help` | Always | Information and navigation |
+| `/cf-stack` | Always | Show session state |
+| `/cf-doctor` | Always | Diagnose infrastructure |
+| `/cf-approval-mode` | Always | View/change approval mode |
+| `/cf-plan` | Always (entry point) | Triggers full PathFlow: PF1 → classify as PLAN → WS-PLAN pipeline |
+| `/cf-develop` | Always (entry point) | Triggers full PathFlow: PF1 → classify as FEAT/FIX/etc. → WS-DEV pipeline |
+| `/cf-document` | Always (entry point) | Triggers full PathFlow: PF1 → classify as DOCS → WS-DOCS pipeline |
+| `/cf-test` | Always (entry point) | Triggers full PathFlow: PF1 → classify as TEST → WS-TEST pipeline |
+| `/cf-deploy` | Always (entry point) | Triggers full PathFlow: PF1 → classify as CICD → WS-DEV pipeline |
+| `/cf-review` | Needs prior work | Reviews existing changes on a branch -- requires something to review |
+| `/cf-ship` | PF5+ | Requires reviewed, passing work to ship |
+| `/cf-cleanup` | Always (--force) or PF6+ | Cleanup is safe anytime with --force flag |
+| `/cf-autorun` | No active PathFlow | Prevents collision with active session |
+
+Entry point commands (`/cf-plan`, `/cf-develop`, `/cf-document`, `/cf-test`, `/cf-deploy`) start full PathFlow sessions. They do NOT require being inside PF4-EXECUTE already -- they create the entire lifecycle from PF1-INIT onward.
 
 ### Work Type Keywords --> Pipeline
 
@@ -771,13 +775,13 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
 | TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
 
-**Instruction-enforced gates (proportionate, not hook-enforced):**
+**Instruction-enforced gates (cannot be hook-enforced):**
 
 | Gate | Instruction | Why Not Hook-Enforced |
 |------|-------------|----------------------|
-| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- PF1 is trivial initialization |
-| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Low risk -- PF2 is context loading |
-| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Caught by review finding no work to review |
+| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | cf-knowledge-layer is a function teammate, explicitly excluded from the pf-3 role teammate gate because it must spawn before pf-3 exists |
+| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | cf-git-operations is a function teammate, explicitly excluded because it spawns at PF3 to CREATE pf-3 |
+| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Self-correcting -- review finds no work to review and reports back |
 
 **Not enforced (acceptable risk):**
 
@@ -989,49 +993,57 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ## 9. Project Structure
 
 ```text
-.claude/                          # Claude Code configuration
-  CLAUDE.md                       # Team lead instructions (this file)
-  agents/                         # 8 teammate definitions (cf-*.md, 5-section format)
-    cf-security.md
-    cf-knowledge-layer.md
-    cf-git-operations.md
-    cf-development.md
-    cf-planning.md
-    cf-documentation.md
-    cf-review.md
-    cf-quality-assurance.md
-  skills/                         # 1 active skill
-    cf-working-protocol/          # Team lead cognitive procedures
-  hooks/codeflow/                 # 20 hook scripts by event type
-    session-start/                # 3 scripts
-    user-prompt-submit/           # 2 scripts
-    pre-tool-use/                 # 7 scripts
-    post-tool-use/                # 4 scripts (includes pathflow-sentinel for auto-creating sentinels)
-    stop/                         # 2 scripts
-    session-end/                  # 2 scripts
-  commands/                       # 14 slash command definitions (cf-*.md)
-  settings.json                   # Permissions, hook config, PathFlow settings
+.claude/                              # Claude Code configuration
+├── CLAUDE.md                         # Team lead instructions (this file)
+├── agents/                           # 8 teammate definitions (cf-*.md, 5-section format)
+│   ├── cf-security.md                #   Persistent: security consultation
+│   ├── cf-knowledge-layer.md         #   Persistent: WorkGraph, memory, DB
+│   ├── cf-git-operations.md          #   Persistent: git operations
+│   ├── cf-development.md             #   On-demand: code implementation
+│   ├── cf-planning.md                #   On-demand: design, architecture
+│   ├── cf-documentation.md           #   On-demand: documentation
+│   ├── cf-review.md                  #   On-demand: independent review
+│   └── cf-quality-assurance.md       #   On-demand: QA gate / test writer
+├── skills/                           # 1 active + 4 on-demand skills
+│   ├── cf-working-protocol/          #   Active: team lead cognitive procedures
+│   ├── cf-shell-standards/           #   On-demand: shell scripting standards
+│   ├── cf-python-standards/          #   On-demand: Python scripting standards
+│   ├── cf-markdown-standards/        #   On-demand: markdown documentation standards
+│   └── cf-sandbox-standards/         #   On-demand: sandbox bypass rules
+├── hooks/codeflow/                   # 20 hook scripts by event type
+│   ├── session-start/                #   3 scripts (init, instructions, logging)
+│   ├── user-prompt-submit/           #   2 scripts (validation, logging)
+│   ├── pre-tool-use/                 #   7 scripts (pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch)
+│   ├── post-tool-use/                #   4 scripts (logging, pathflow-sentinel, settings-templates, tmp-workflow)
+│   ├── stop/                         #   2 scripts (pathflow-gate, logging)
+│   └── session-end/                  #   2 scripts (cleanup, logging)
+├── commands/                         # 14 slash command definitions (cf-*.md)
+├── memory/                           # Tier 2: domain-specific work context
+└── settings.json                     # Permissions, hook config, PathFlow settings
 
-.codeflow/                        # CodeFlow infrastructure
-  config/                         # Enforcement policies
-    enforcement/                  # enforcement-policy.json
-    pathflow/                     # pathflow-config.json (phases, stages, pipelines, teammates, rework limits)
-  scripts/security/               # Security libraries (security-lib.sh, context-lib.sh)
-  testing/                        # Test suite (1,555+ tests)
-  docs/archived/skills/           # 9 archived skills (reference only)
+.codeflow/                            # CodeFlow infrastructure
+├── config/
+│   ├── enforcement/                  # enforcement-policy.json
+│   └── pathflow/                     # pathflow-config.json (phases, stages, pipelines, rework limits)
+├── scripts/
+│   └── security/                     # Security libraries (security-lib.sh, context-lib.sh)
+├── testing/                          # Test suite (1,555+ tests)
+└── docs/archived/skills/             # 9 archived skills (reference only)
 
-.state/                           # Runtime state (partially gitignored)
-  db/codeflow.db                  # Tier 1: SQLite (query interface)
-  ledger/                         # Tier 0: JSONL event logs (rebuild authority)
-  logs/                           # Session telemetry (gitignored)
-    pathflow-events.jsonl          # Phase/stage transitions
-  runtime/                        # Active task, current session ID
-  sentinels/                      # PathFlow sentinels (auto-created by hooks, not agents)
+.state/                               # Runtime state (partially gitignored)
+├── db/codeflow.db                    # Tier 1: SQLite (query interface)
+├── ledger/                           # Tier 0: JSONL event logs (rebuild authority)
+├── logs/
+│   └── pathflow-events.jsonl         # Phase/stage transitions
+├── runtime/                          # Active task, current session ID
+├── sentinels/                        # PathFlow sentinels (auto-created by hooks)
+│   └── pathflow/{session-id}/        # Session-scoped sentinel files
+└── session/                          # Session state (pathflow-active flags)
 
-project/                          # PROJECT.md, mission, tech-stack
-project-management/               # Tier 2: Human-readable work tracking
-  epics/                          # Epic markdown files
-  tracking/                       # Progress tracking
+project/                              # PROJECT.md, mission, tech-stack
+project-management/                   # Tier 2: Human-readable work tracking
+├── epics/                            # Epic markdown files
+└── tracking/                         # Progress tracking
 ```
 
 ---

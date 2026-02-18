@@ -81,7 +81,7 @@
     "WS-PLAN": { "name": "Planning", "teammate": "cf-planning", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
     "WS-DOCS": { "name": "Documentation", "teammate": "cf-documentation", "max_rework_iterations": 3, "max_parallel": 3, "batch_size": 2 },
     "WS-TEST": { "name": "Testing", "teammate": "cf-quality-assurance", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
-    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3, "max_parallel": 1, "batch_size": 1 },
+    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
     "WS-QA": { "name": "Quality Assurance", "teammate": "cf-quality-assurance", "max_qa_retries": 2, "rework_target": "primary", "max_parallel": 1, "batch_size": 1 }
   },
   "pipelines": {
@@ -113,7 +113,7 @@
   "rework": {
     "max_rework_iterations": 3,
     "max_qa_retries": 2,
-    "stage_timeout_minutes": 30,
+    "stage_timeout_minutes": 60,
     "escalation": "lead"
   },
   "task_tracker": {
