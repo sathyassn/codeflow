@@ -155,7 +155,52 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **On failure:** Pre-commit hook rejects: fix issue, re-stage, create NEW commit (never amend). No staged changes: report `"Nothing to commit -- no files staged"`.
 
-### Step 3: Create Pull Request
+### Step 3: Squash Branch Commits
+
+**When:** Team lead requests commit-and-squash at PF6-TSK-03, AFTER all work stages are complete and reviewed.
+
+**Purpose:** Consolidate all branch commits into a single clean commit before PR creation. This keeps the main branch history clean with one meaningful commit per work item.
+
+**Procedure:**
+
+1. Count commits on branch relative to main:
+
+   ```text
+   git rev-list --count $(git merge-base HEAD main)..HEAD
+   ```
+
+2. **If only 1 commit:** Skip squash -- branch is already clean. Report: `"Single commit on branch, squash not needed."`
+
+3. **If 2+ commits:** Squash using soft reset:
+
+   ```text
+   merge_base=$(git merge-base HEAD main)
+   git reset --soft "$merge_base"
+   git commit -m "$(printf '{type}: {description}\n\n{bullet summary}')"
+   ```
+
+4. **Synthesized commit message format:**
+   - First line: conventional-commit format derived from the work type and epic/task title (e.g., `plan: add project management standardization epic and tasks`)
+   - Body: bullet list summarizing what was done, synthesized from individual commit messages (not a raw concatenation -- distill into clear summary points)
+   - Footer: none (no AI attribution -- blocked by commit-msg hook)
+
+5. Verify squash result:
+
+   ```text
+   git log --oneline $(git merge-base HEAD main)..HEAD
+   ```
+
+   Output should show exactly 1 commit.
+
+6. Report to requester: `"Squashed {n} commits into 1: {hash} -- {type}: {description}"`
+
+**Important constraints:**
+
+- 🔒 This step is ONLY executed at PF6-TSK-03, after all work stages are complete and reviewed
+- 🔒 If the branch has already been pushed to remote (e.g., draft PR), the subsequent push must use `--force-with-lease` (never `--force`)
+- 🔒 If `git merge-base HEAD main` fails (orphan branch or no common ancestor), skip squash and warn: `"GITOPS: Squash skipped -- no merge-base with main (orphan branch?)"`
+
+### Step 4: Create Pull Request
 
 **When:** Team lead requests PR at PF6-COMPLETE or work is ready for review.
 
@@ -181,7 +226,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry.
 
-### Step 4: Sync Remote
+### Step 5: Sync Remote
 
 **When:** After commits (push) or before starting work (pull/fetch).
 
