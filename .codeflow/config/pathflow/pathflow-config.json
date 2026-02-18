@@ -59,9 +59,9 @@
       "phase_order": 6,
       "description": "Update task status, record session memory, commit state files, create PR",
       "tasks": [
-        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph", "assigned_to": "cf-knowledge-layer", "operation": "complete-work" },
+        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph AND update the corresponding markdown task file (project-management/.../tasks/{task_id}.md) status field from current value to 'complete'. Both DB and markdown Tier 2 status MUST be updated.", "assigned_to": "cf-knowledge-layer", "operation": "complete-work" },
         { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer", "assigned_to": "cf-knowledge-layer", "operation": "record-session-summary" },
-        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, task tickets, etc.) via cf-git-operations", "assigned_to": "cf-git-operations", "operation": "commit-outstanding-changes" },
+        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state) via cf-git-operations", "assigned_to": "cf-git-operations", "operation": "commit-outstanding-changes" },
         { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations", "assigned_to": "cf-git-operations", "operation": "create-pr" }
       ]
     },
@@ -133,7 +133,8 @@
         "granularity": "individual — Every phase = 1 tracker entry. Every PF{N}-TSK-{NN} = 1 tracker entry. NEVER combine multiple phases or tasks into a single entry.",
         "ordering": "Tasks MUST be created in phase_order × task_order sequence. Use TaskUpdate addBlockedBy to express dependencies.",
         "owner": "team-lead",
-        "recovery": "If entries lost (context overflow), re-create for current phase only. Entries are ephemeral and disposable."
+        "recovery": "If entries lost (context overflow), re-create for current phase only. Entries are ephemeral and disposable.",
+        "routing_compliance": "When executing PF tasks, the lead MUST follow the assigned_to field to determine WHICH teammate to delegate to, and the operation field to determine WHAT operation to request. These fields are authoritative routing directives, not optional metadata. Ignoring assigned_to or operation is a protocol violation."
       }
     },
     "phase_templates": {

@@ -202,11 +202,12 @@ Event types:
 1. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
 2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-4. Append completion event to `.state/logs/pathflow-events.jsonl`
-5. Record completion memory_event (event_type='milestone', data includes deliverables summary)
-6. Update `.state/runtime/active-task.json` status to "completed", then delete the file
-7. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
-8. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
+4. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
+5. Append completion event to `.state/logs/pathflow-events.jsonl`
+6. Record completion memory_event (event_type='milestone', data includes deliverables summary)
+7. Update `.state/runtime/active-task.json` status to "completed", then delete the file
+8. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
+9. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
 
 #### Memory Lifecycle Management
 

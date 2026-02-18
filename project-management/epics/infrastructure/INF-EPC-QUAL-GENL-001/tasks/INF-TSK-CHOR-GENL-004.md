@@ -3,7 +3,7 @@ id: INF-TSK-CHOR-GENL-004
 epic_id: INF-EPC-QUAL-GENL-001
 title: Audit and fill test coverage gaps
 description: Ensure every script in .codeflow/scripts/ has a corresponding test file registered in test-config.json
-status: todo
+status: complete
 area_type: INF
 work_type: CHOR
 domain: GENL
@@ -27,13 +27,13 @@ acceptance:
   - "Intentional exceptions documented in test-config.json with reason"
 tests: [".codeflow/testing/lib/test-coverage.sh"]
 branch: chore/test-coverage-gaps
-pr_number: null
+pr_number: 31
 external_id: null
 external_url: null
 created_at: 2026-02-16T00:00:00Z
-updated_at: 2026-02-16T00:00:00Z
-started_at: null
-completed_at: null
+updated_at: 2026-02-17T22:40:41Z
+started_at: 2026-02-17T21:26:13Z
+completed_at: 2026-02-17T22:40:41Z
 ---
 
 # INF-TSK-CHOR-GENL-004: Audit and fill test coverage gaps

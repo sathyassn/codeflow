@@ -3,7 +3,7 @@ id: INF-TSK-CHOR-GENL-005
 epic_id: INF-EPC-QUAL-GENL-001
 title: Enhance cf-quality-assurance agent definition
 description: Update cf-quality-assurance.md to default to full test mode, add coverage verification step, and update quality checklist
-status: todo
+status: complete
 area_type: INF
 work_type: CHOR
 domain: GENL
@@ -28,13 +28,13 @@ acceptance:
   - "Agent definition passes format consistency tests"
 tests: []
 branch: chore/enhance-qa-agent
-pr_number: null
+pr_number: 31
 external_id: null
 external_url: null
 created_at: 2026-02-16T00:00:00Z
-updated_at: 2026-02-16T00:00:00Z
-started_at: null
-completed_at: null
+updated_at: 2026-02-17T22:40:41Z
+started_at: 2026-02-17T22:00:00Z
+completed_at: 2026-02-17T22:40:41Z
 ---
 
 # INF-TSK-CHOR-GENL-005: Enhance cf-quality-assurance agent definition

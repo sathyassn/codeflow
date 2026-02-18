@@ -112,7 +112,7 @@ PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6
 | **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow-pf-3 sentinel (auto-created by hook) |
 | **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type. For independent items, spawn parallel teammate instances per stage max_parallel/batch_size settings (see Parallel Batch Execution) | Role teammates (on-demand, per stage; multiple instances for parallel work) | Code, docs, tests, reviews |
 | **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
-| **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, session memory recorded |
+| **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, markdown task status updated, session memory recorded |
 | **PF7-END** | Shutdown all teammates, TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup) | None (shutting down) | Clean session end (hooks handle state cleanup) |
 
 ### Quick-Reference Phase Map
@@ -186,6 +186,15 @@ The team lead MUST mirror PathFlow state into Claude Code's internal task tracke
 - JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
 
 **Reference:** `pathflow-config.json` `task_tracker` section defines templates and behavior.
+
+**Routing Compliance:**
+
+When the lead delegates PF{N}-TSK-{NN} tasks to teammates, it MUST:
+
+- Follow the `assigned_to` field in pathflow-config.json to determine which teammate executes the task
+- Follow the `operation` field to determine what operation to request
+- These fields are authoritative routing directives, not optional metadata
+- Ignoring `assigned_to` or `operation` is a protocol violation
 
 ### Team Lead Role
 
@@ -558,6 +567,33 @@ When shutting down a teammate, the lead MUST verify the tmux pane is properly te
 3. Then spawn the new instance with the SAME name (see Name Preservation above)
 
 NEVER spawn a new teammate while the old tmux pane is still alive. This causes zombie processes, resource leaks, and numbered name suffixes.
+
+### Teammate Health Verification
+
+The lead MUST verify teammate health before relying on them for critical operations.
+
+**When to check:**
+
+| Trigger | Action |
+|---------|--------|
+| After spawning a teammate | Verify tmux pane exists within 10 seconds |
+| Before sending critical messages | Quick tmux health check |
+| After idle notification with no content message | Verify pane is alive |
+| After extended silence (>60s) | Check pane status |
+
+**How to check:**
+
+```text
+tmux ls                                    # Is the tmux server alive?
+tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
+```
+
+**Recovery when dead:**
+
+1. Note the dead teammate's name from team config
+2. Respawn with the SAME name (see Name Preservation above)
+3. If numbered suffix created (stale config), work with it but note for cleanup
+4. Re-send any pending instructions to the new instance
 
 ---
 

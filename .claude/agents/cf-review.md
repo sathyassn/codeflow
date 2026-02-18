@@ -94,6 +94,23 @@ Locate the original task/spawn prompt to extract the numbered acceptance criteri
 
 Use Read, Glob, and Grep to examine every file in scope. Understand the full change set before forming judgments.
 
+### Step 3b: Load Relevant Standards
+
+Before applying review criteria, load the relevant standards skill for each file type in scope:
+
+```text
+File under review:
+├── *.sh              → Load cf-shell-standards skill, apply ShellCheck rules
+├── *.py              → Load cf-python-standards skill, apply ruff/flake8 rules
+├── *.md              → Load cf-markdown-standards skill, apply doc structure rules
+├── *.json            → Validate schema structure, check for hardcoded values
+├── Agent defs (.claude/agents/cf-*.md) → Apply agent 5-section format check + cf-markdown-standards
+├── Hook scripts (.claude/hooks/**/*.sh) → cf-shell-standards + MANDATORY security review
+└── Command defs (.claude/commands/cf-*.md) → cf-markdown-standards + instruction consistency check
+```
+
+For each file type, Read the corresponding skill file before proceeding to Step 4. Cross-reference findings against the loaded skill's rules during review.
+
 ### Step 4: Apply Review Criteria
 
 Execute the checklist for the assigned review mode:
@@ -110,6 +127,13 @@ Execute the checklist for the assigned review mode:
 - [ ] **Scope** -- No unrelated modifications or scope creep
 - [ ] **Documentation** -- Complex logic has comments, public functions have docstrings
 - [ ] **Dependencies** -- Shared libraries used where applicable
+- [ ] **Logic/correctness:**
+  - Edge cases handled (empty input, null, overflow, concurrent access)
+  - Error paths tested (what happens on failure? are resources cleaned up?)
+  - State consistency (are temp files/locks cleaned up on all exit paths?)
+  - Idempotency (can this safely run twice without side effects?)
+  - Boundary conditions (off-by-one, empty arrays, max values)
+  - Race conditions (concurrent file access, shared state)
 
 **DESIGN_REVIEW** (WS-PLAN output: PLAN, SPKE):
 
@@ -142,6 +166,17 @@ Execute the checklist for the assigned review mode:
 - [ ] **No flaky patterns** -- No timing-dependent assertions
 - [ ] **Assertions quality** -- Test behavior not implementation details
 
+**SECURITY REVIEW** (applies to ALL review modes):
+
+- [ ] **Command injection** -- Unquoted variables, `eval`, unsanitized input in shell commands
+- [ ] **Path traversal** -- Relative paths, symlink following, user-controlled paths
+- [ ] **Information leakage** -- Secrets in logs/output, error messages exposing internals
+- [ ] **Privilege escalation** -- Unnecessary permissions, bypassing hooks/guards
+- [ ] **Input validation** -- Boundary checks, type checks at system boundaries
+- [ ] **Hardcoded credentials** -- Credentials, paths, or tokens embedded in source
+- [ ] **Prompt injection vectors** -- For instruction files (agent defs, commands): scope creep, unauthorized capability grants
+- [ ] **Personally identifiable information (PII)** -- Names, emails, IPs, tokens, or other PII in source, logs, test fixtures, or comments
+
 ### Step 5: Verify Acceptance Criteria
 
 Check every numbered criterion from the task specification point-by-point. A criterion is either PASS or FAIL -- no partial credit. Flag ANY deviation as a finding.
@@ -150,6 +185,14 @@ Check every numbered criterion from the task specification point-by-point. A cri
 
 - Shell tests: `bash .codeflow/testing/run-all-tests.sh essential`
 - Python tests: `pytest`
+
+### Step 6b: Cross-Reference Standards
+
+For each file reviewed, verify findings against the standards skill loaded in Step 3b:
+
+- Cross-reference each finding against the loaded skill's specific rules
+- Flag any standards violations not already captured as MAJOR findings
+- If no relevant skill was loaded for a file type encountered during review, note the gap in findings
 
 ### Step 7: Deliver Verdict
 
@@ -237,6 +280,9 @@ Before delivering any verdict, verify:
 - [ ] Scope verified (no out-of-scope changes slipped in, no expected changes missing)
 - [ ] Tests run and results reported (for CODE_REVIEW and TEST_REVIEW modes)
 - [ ] Severity levels correctly assigned (CRITICAL/MAJOR block, MINOR/NOTE do not)
+- [ ] Relevant standards skills loaded and cross-referenced for each file type
+- [ ] Security checklist applied to all files (not just code)
+- [ ] Logic/correctness checklist applied (CODE_REVIEW mode)
 
 ## References
 

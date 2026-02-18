@@ -3,7 +3,9 @@ id: INF-TSK-CHOR-GENL-006
 epic_id: INF-EPC-QUAL-GENL-001
 title: Enhance cf-review agent definition
 description: Add file-type standards loading, security review checklist, logic/correctness checklist, and standards enforcement step to cf-review.md
-status: todo
+status: complete
+pr_number: 32
+completed_at: 2026-02-18T00:48:00Z
 area_type: INF
 work_type: CHOR
 domain: GENL
