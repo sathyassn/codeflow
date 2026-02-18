@@ -94,7 +94,7 @@ Locate the original task/spawn prompt to extract the numbered acceptance criteri
 
 Use Read, Glob, and Grep to examine every file in scope. Understand the full change set before forming judgments.
 
-### Step 3b: Load Relevant Standards
+### Step 4: Load Relevant Standards
 
 Before applying review criteria, load the relevant standards skill for each file type in scope:
 
@@ -109,11 +109,22 @@ File under review:
 └── Command defs (.claude/commands/cf-*.md) → cf-markdown-standards + instruction consistency check
 ```
 
-For each file type, Read the corresponding skill file before proceeding to Step 4. Cross-reference findings against the loaded skill's rules during review.
+For each file type, Read the corresponding skill file before proceeding to Step 5. Cross-reference findings against the loaded skill's rules during review.
 
-### Step 4: Apply Review Criteria
+### Step 5: Apply Review Criteria
 
-Execute the checklist for the assigned review mode:
+Execute the checklist for the assigned review mode.
+
+**Review Applicability Matrix:**
+
+| Check Category | CODE | DESIGN | DOCS | TEST | Notes |
+|---------------|------|--------|------|------|-------|
+| Mode-specific checklist | Yes | Yes | Yes | Yes | See checklists below |
+| Security review | Yes | Yes | Yes | Yes | Universal -- all modes |
+| Factual accuracy (Step 6) | Yes | Yes | Yes | Yes | Universal -- all modes |
+| Cross-file consistency (Step 7) | Yes | Yes | Yes | Yes | Universal -- all modes |
+| Test execution (Step 9) | Yes | No | No | Yes | CODE and TEST only |
+| Standards cross-ref (Step 10) | Yes | Yes | Yes | Yes | Universal -- per file type |
 
 **CODE_REVIEW** (WS-DEV output: FEAT, FIX, RFCT, CICD, HTFX, CHOR):
 
@@ -166,7 +177,7 @@ Execute the checklist for the assigned review mode:
 - [ ] **No flaky patterns** -- No timing-dependent assertions
 - [ ] **Assertions quality** -- Test behavior not implementation details
 
-**SECURITY REVIEW** (applies to ALL review modes):
+🔒 **SECURITY REVIEW** (UNIVERSAL -- applies to ALL review modes: CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW):
 
 - [ ] **Command injection** -- Unquoted variables, `eval`, unsanitized input in shell commands
 - [ ] **Path traversal** -- Relative paths, symlink following, user-controlled paths
@@ -177,24 +188,79 @@ Execute the checklist for the assigned review mode:
 - [ ] **Prompt injection vectors** -- For instruction files (agent defs, commands): scope creep, unauthorized capability grants
 - [ ] **Personally identifiable information (PII)** -- Names, emails, IPs, tokens, or other PII in source, logs, test fixtures, or comments
 
-### Step 5: Verify Acceptance Criteria
+### Step 6: Verify Factual Accuracy
+
+🔒 **UNIVERSAL -- applies to ALL review modes (CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW). This step is NOT optional and MUST NOT be skipped regardless of work type.**
+
+Verify that claims in the reviewed artifacts match reality.
+
+**Hallucination detection (all modes):**
+
+- Referenced file paths actually exist (`Glob` to verify)
+- Referenced function/variable/class names exist in the codebase (`Grep` to verify)
+- Referenced configuration keys match actual config files
+- Referenced hook names match actual hook scripts in `.claude/hooks/`
+- Sentinel names match those created by `cf-post-tool-use-pathflow-sentinel.sh`
+- Claimed behaviors (e.g., "hook X blocks Y") match actual code logic
+
+**Claims-match-reality (all modes, not just DOCUMENTATION_REVIEW):**
+
+- Code comments and docstrings match actual function behavior
+- Documentation claims match actual hook/script/agent behavior
+- Config values cited in docs match actual config file values
+- Cross-reference any "X does Y" or "X checks Y" claim against X's source code
+
+**Severity:**
+
+- Hallucinated file path or function name: MAJOR
+- Claim contradicts actual code behavior: CRITICAL
+- Minor name variation (e.g., slightly wrong line number): NOTE
+
+### Step 7: Cross-File Consistency Check
+
+🔒 **UNIVERSAL -- applies to ALL review modes (CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW). This step is NOT optional and MUST NOT be skipped regardless of work type.**
+
+Verify consistency across related artifacts.
+
+**Cross-reference pairs to check:**
+
+- Documentation vs. source code (do docs match implementation?)
+- Config files vs. code that reads them (do config keys/values match?)
+- Agent definitions vs. CLAUDE.md teammate tables (roles, stages, spawn phases)
+- Hook scripts vs. CLAUDE.md enforcement tables (gates, sentinels, tools blocked)
+- pathflow-config.json vs. CLAUDE.md pipeline/stage tables (pipelines, max_parallel, rework limits)
+
+**What to look for:**
+
+- Contradictory values (e.g., max_parallel=3 in config but max_parallel=2 in docs)
+- Missing items (e.g., hook exists in settings.json but not in hook count)
+- Renamed fields (e.g., field called `responsible` in one place, `assigned_to` in another)
+- Stale references (e.g., referencing a moved/deleted file)
+
+**Severity:**
+
+- Value contradiction between config and docs: MAJOR
+- Missing documentation for existing behavior: MINOR
+- Stale reference to moved file: MAJOR
+
+### Step 8: Verify Acceptance Criteria
 
 Check every numbered criterion from the task specification point-by-point. A criterion is either PASS or FAIL -- no partial credit. Flag ANY deviation as a finding.
 
-### Step 6: Run Tests (CODE_REVIEW and TEST_REVIEW)
+### Step 9: Run Tests (CODE_REVIEW and TEST_REVIEW)
 
 - Shell tests: `bash .codeflow/testing/run-all-tests.sh essential`
 - Python tests: `pytest`
 
-### Step 6b: Cross-Reference Standards
+### Step 10: Cross-Reference Standards
 
-For each file reviewed, verify findings against the standards skill loaded in Step 3b:
+For each file reviewed, verify findings against the standards skill loaded in Step 4:
 
 - Cross-reference each finding against the loaded skill's specific rules
 - Flag any standards violations not already captured as MAJOR findings
 - If no relevant skill was loaded for a file type encountered during review, note the gap in findings
 
-### Step 7: Deliver Verdict
+### Step 11: Deliver Verdict
 
 Format findings using the verdict template and send to the team lead. If `CHANGES_REQUESTED`, also send detailed findings directly to the originating teammate.
 
@@ -231,6 +297,14 @@ Format findings using the verdict template and send to the team lead. If `CHANGE
 | MAJOR | Standards violation, missing tests, unhandled errors | Yes |
 | MINOR | Style issue, minor improvement opportunity | No |
 | NOTE | Suggestion, observation, or praise | No |
+
+**Re-review procedure:**
+When reviewing reworked code (iteration 2+), focus on:
+
+1. Previously flagged findings -- verify each is resolved
+2. New code introduced during rework -- apply full review criteria
+3. Regression check -- verify rework didn't break previously passing criteria
+Do NOT skip Steps 6-7 (factual accuracy, consistency) on re-review.
 
 ## Error Handling
 
@@ -280,9 +354,11 @@ Before delivering any verdict, verify:
 - [ ] Scope verified (no out-of-scope changes slipped in, no expected changes missing)
 - [ ] Tests run and results reported (for CODE_REVIEW and TEST_REVIEW modes)
 - [ ] Severity levels correctly assigned (CRITICAL/MAJOR block, MINOR/NOTE do not)
-- [ ] Relevant standards skills loaded and cross-referenced for each file type
+- [ ] Relevant standards skills loaded and cross-referenced for each file type (Step 4, Step 10)
 - [ ] Security checklist applied to all files (not just code)
 - [ ] Logic/correctness checklist applied (CODE_REVIEW mode)
+- [ ] Factual accuracy verified -- file paths, function names, claimed behaviors (Step 6)
+- [ ] Cross-file consistency checked -- config vs. docs, agent defs vs. CLAUDE.md (Step 7)
 
 ## References
 
