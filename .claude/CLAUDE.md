@@ -38,165 +38,11 @@
 - **CLAUDE.md** = Instructions TO the team lead (this file -- awareness of WHAT/WHEN/WHERE)
 - **Agent definitions** (`.claude/agents/cf-*.md`) = Definition OF specialized teammates (HOW via SOPs)
 
----
-
-## 3. Session Start
-
-Every session follows this initialization sequence.
-
-**STEP 1: Protocol and Infrastructure**
-
-1. Working protocol loads automatically (SessionStart hook)
-2. TeamCreate -- establish team infrastructure (lightweight: config + task list directory, zero teammates)
-3. PF1-INIT: Register session record (`tracking_level='pending'`), spawn cf-security
-
-**STEP 2: Context Awareness**
-
-4. PF2-CONTEXT: Spawn cf-knowledge-layer, query for active work
-   - Active work found --> Offer: "Previous work: '{topic}' on {branch}. 1. Resume 2. Fresh start"
-   - No active work found --> "Ready for new task."
-5. Read user request and evaluate complexity
-
-**STEP 3: Tracking Decision**
-
-6. Determine session mode:
-
-| Signal | Mode | Next Step |
-|--------|------|-----------|
-| User mentions task ID, describes work producing artifacts, active_work exists | **Tracked** | Proceed to PF3-CLASSIFY |
-| User asks a question, requests exploration, no file modifications expected | **Untracked** | Answer directly, skip to PF7-END |
-| Ambiguous | **Ask user** | Clarify before proceeding |
-
-**Note:** An untracked session can become tracked ("actually, let's fix that bug"). The reverse does not happen -- once tracked, a session stays tracked.
-
-**Session Properties (2 orthogonal axes):**
-
-| Property | Values | Meaning |
-|----------|--------|---------|
-| Mode | Tracked / Untracked | Is work registered in WorkGraph? |
-| Interaction | Interactive / Autorun | Is a human present? |
-
-⛔ **FORBIDDEN:**
-
-- Auto-loading context without user choice
-- Skipping active work check at PF2-CONTEXT
-- Writing code before work is classified (PF3-CLASSIFY)
-- Proceeding to PF3 without explicit tracking decision
-- Spawning role teammates before their phase
-
-### Scenario Navigator
-
-| I want to... | Start at | Key sections |
-|--------------|----------|-------------|
-| Start a new feature | Section 3 (Session Start) | -> Section 4 (PathFlow) -> Section 5 (Teammates) |
-| Resume previous work | /cf-resume | -> Section 11 (Recovery) |
-| Understand the pipeline | Section 4 (Work Type Pipelines) | -> Section 4 (Work Stages) |
-| Fix a stuck session | Section 11 (Help and Recovery) | -> Section 4 (Rework Limits) |
+→ Next: Section 3 defines your operating mode and constraints
 
 ---
 
-## 4. PathFlow Session Management
-
-This is the core orchestration framework. All tracked sessions progress through 7 phases sequentially. The lead creates the next phase only when the current phase completes (progressive orchestration).
-
-### Phase Progression
-
-```text
-PF1-INIT --> PF2-CONTEXT --> PF3-CLASSIFY --> PF4-EXECUTE --> PF5-VERIFY --> PF6-COMPLETE --> PF7-END
-```
-
-| Phase | What Happens | Teammate Spawned | Key Outputs |
-|-------|-------------|------------------|-------------|
-| **PF1-INIT** | Initialize team infrastructure (TeamCreate), create `pathflow-active` flag (JSON metadata in `.state/session/{SID}/is-pathflow-active`), spawn cf-security. Note: session DB/JSONL registration (PF1-TSK-02) is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available. | cf-security (persistent) | pathflow-active flag (JSON), pathflow-pf-1 sentinel (auto-created by hook) |
-| **PF2-CONTEXT** | Spawn cf-knowledge-layer, query active work, load memory context, determine tracked vs untracked | cf-knowledge-layer (persistent) | Active work state, tracking decision |
-| **PF3-CLASSIFY** | Classify work type and area, register task in WorkGraph, spawn cf-git-operations, create feature branch, activate session (`tracking_level='tracked'`) | cf-git-operations (persistent) | Task record, branch, pathflow-pf-3 sentinel (auto-created by hook) |
-| **PF4-EXECUTE** | Run work pipeline -- stage sequence determined by work type. For independent items, spawn parallel teammate instances per stage max_parallel/batch_size settings (see Parallel Batch Execution) | Role teammates (on-demand, per stage; multiple instances for parallel work) | Code, docs, tests, reviews |
-| **PF5-VERIFY** | Verify all pipeline stages completed with pass verdict, check acceptance criteria met | None (lead + cf-knowledge-layer) | Verification record |
-| **PF6-COMPLETE** | cf-knowledge-layer records session summary, cf-git-operations creates PR, cf-knowledge-layer marks task complete | None (existing teammates) | PR created, task status updated, markdown task status updated, session memory recorded |
-| **PF7-END** | Shutdown all teammates, TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup) | None (shutting down) | Clean session end (hooks handle state cleanup) |
-
-### Quick-Reference Phase Map
-
-> **Sentinels are created automatically by PostToolUse hooks** when phase markers complete. Agents must NOT attempt to create sentinels directly. If a sentinel appears missing, verify the correct session ID path at `.state/sentinels/pathflow/{session-id}/` before assuming it doesn't exist.
-
-| Phase | Gate (what must exist) | Sentinel (auto-created by hook) | Key Action |
-|-------|----------------------|-------------------------------|------------|
-| PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security |
-| PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer |
-| PF3-CLASSIFY | pf-2 | pathflow-pf-3 | Create branch (UNLOCKS Edit/Write) |
-| PF4-EXECUTE | pf-3 | pathflow-ws-* | Run work pipeline |
-| PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria |
-| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR |
-| PF7-END | pf-6 | (cleanup) | Shutdown, remove flag |
-
-### Phase Gate Enforcement
-
-PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
-
-**Hook-enforced gates (automatic, blocks violations):**
-
-| Gate | Sentinel Required | Blocks | Hook |
-|------|-------------------|--------|------|
-| Edit/Write before PF3 | `pf-3` | Edit, Write tools | `cf-pre-tool-use-pathflow-gate.sh` |
-| git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
-| git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
-| Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
-| TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
-
-**Instruction-enforced gates (proportionate, not hook-enforced):**
-
-| Gate | Instruction | Why Not Hook-Enforced |
-|------|-------------|----------------------|
-| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- PF1 is trivial initialization |
-| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Low risk -- PF2 is context loading |
-| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Caught by review finding no work to review |
-
-**Not enforced (acceptable risk):**
-
-| Transition | Why Acceptable |
-|------------|---------------|
-| PF5 before PF6 | cf-git-operations checks review status independently |
-| PF6 before PF7 | PF7 is cleanup only -- no harm in early cleanup |
-
-### Phase Task IDs
-
-Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from `pathflow-config.json`. These are ephemeral -- created at phase entry, disposed at PF7-END. Distinct from project tasks in the `tasks` table.
-
-Each task in `pathflow-config.json` has an `assigned_to` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
-
-### Task Tracker Mirroring
-
-The team lead MUST mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility:
-
-| PathFlow Event | Task Tracker Action |
-|---|---|
-| Phase entered | TaskCreate with phase_templates[{phase}] -- ONE entry per phase |
-| Phase task started | TaskCreate per PF{N}-TSK-{NN} -- ONE entry per task |
-| Phase task completed | TaskUpdate status=completed for that task entry |
-| Phase completed | TaskUpdate status=completed for the phase entry |
-| Stage entered | TaskCreate with stage_templates[{stage}] -- ONE entry per stage |
-| Stage completed | TaskUpdate status=completed for that stage entry |
-
-**Rules:**
-
-- NEVER club multiple phases into a single task tracker entry
-- NEVER skip creating entries for individual PF{N}-TSK-{NN} tasks
-- Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
-- Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
-- JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
-
-**Reference:** `pathflow-config.json` `task_tracker` section defines templates and behavior.
-
-**Routing Compliance:**
-
-When the lead delegates PF{N}-TSK-{NN} tasks to teammates, it MUST:
-
-- Follow the `assigned_to` field in pathflow-config.json to determine which teammate executes the task
-- Follow the `operation` field to determine what operation to request
-- These fields are authoritative routing directives, not optional metadata
-- Ignoring `assigned_to` or `operation` is a protocol violation
-
-### Team Lead Role
+## 3. Team Lead Role
 
 🔒 **DELEGATION-ONLY MODE: You are an orchestrator. You delegate ALL work to teammates. You NEVER do work directly.**
 
@@ -209,6 +55,7 @@ This is not a guideline -- it is your operating mode. Every piece of work flows 
 | Orchestrate PathFlow phases | Progress PF1 --> PF7, create phase tasks |
 | Spawn teammates | Task tool with agent definition instruction |
 | Assign work | SendMessage with clear scope and acceptance criteria |
+| Create task graphs and assign work | TaskCreate, TaskUpdate, SendMessage with scope and criteria |
 | Route work through pipelines | Stage sequence per work type (WS-DEV --> WS-REV --> WS-QA) |
 | Monitor stage progression | Query cf-knowledge-layer for status |
 | Handle escalations | Resolve blockers from teammates, consult user |
@@ -226,12 +73,13 @@ This is not a guideline -- it is your operating mode. Every piece of work flows 
 | Run tests directly | QA verification is cf-quality-assurance's job | cf-quality-assurance |
 | Create planning docs | Planning is cf-planning's job | cf-planning |
 | Modify database/JSONL | Data ops are cf-knowledge-layer's job | cf-knowledge-layer |
+| Bypass PathFlow phases | Phase ordering is the session roadmap | Follow the lifecycle (Section 4) |
+| Modify `.state/` files directly | Data ops are cf-knowledge-layer's job | cf-knowledge-layer |
+| Read large files (>50 lines) in lead context | Wastes shared context budget | Explore sub-agent or delegate |
 
 **Permitted read-only actions:** Reading files for verification, reading agent definitions, reading PROJECT.md/CLAUDE.md, team management commands (TeamCreate, SendMessage, TaskCreate).
 
 ⛔ **If you catch yourself about to use Edit, Write, or Bash for anything other than reading -- STOP and delegate to the appropriate teammate.**
-
-> -> See Section 5 for spawn patterns and teammate coordination
 
 ### Token-Aware Delegation
 
@@ -259,75 +107,234 @@ The lead's context window is shared with ALL teammates. Protect it:
 
 ⛔ **If you're about to spawn a Task sub-agent for anything other than read-only exploration -- STOP and spawn or message a teammate instead.**
 
-### Work Type Pipelines
+→ Next: Section 4 shows the complete session lifecycle workflow
+→ See Section 5 for spawn patterns and teammate coordination
 
-The work type determines which stages execute during PF4-EXECUTE:
+---
 
-| Work Type | Pipeline | Primary Teammate |
-|-----------|----------|------------------|
-| FEAT | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| FIX | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| RFCT | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| CICD | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| HTFX | WS-DEV --> WS-REV | cf-development |
-| CHOR | WS-DEV --> WS-REV | cf-development |
-| DOCS | WS-DOCS --> WS-REV | cf-documentation |
-| TEST | WS-TEST --> WS-REV | cf-quality-assurance |
-| PLAN | WS-PLAN --> WS-REV | cf-planning |
-| SPKE | WS-PLAN --> WS-REV | cf-planning |
+## 4. Session Lifecycle
 
-**WS-REV is universal.** Every work type gets an independent review stage.
+🚀 **ENTRY POINT** -- This section is the primary guide for every tracked session. Follow PathFlow from start to finish -- it is your roadmap, not a restriction.
 
-### Work Stages (1:1 Stage-to-Teammate Mapping)
+All tracked sessions progress through 7 PathFlow phases sequentially. The lead creates the next phase only when the current phase completes (progressive orchestration).
 
-| Stage | Teammate | Purpose |
-|-------|----------|---------|
-| WS-DEV | cf-development | Code implementation + unit tests |
-| WS-PLAN | cf-planning | Design, architecture, analysis, investigation |
-| WS-DOCS | cf-documentation | Documentation writing |
-| WS-REV | cf-review | Independent review (adapts per work type: CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW) |
-| WS-QA | cf-quality-assurance | Integration testing, acceptance verification (quality gate) |
-| WS-TEST | cf-quality-assurance | Primary test implementer (when tests ARE the deliverable) |
+### 4.1 Workflow Diagram
 
-> -> See Section 5 for peer-to-peer messaging patterns
+```text
+Session Lifecycle: From Session Start to Session End
+Teammates shown in [brackets] on the right
+
+SESSION START
+    |
+    v
+SessionStart hook fires (auto)                         [auto]
+Loads cf-working-protocol
+    |
+    v
+PF1-INIT                                               [team-lead]
+TeamCreate (config + task list directory)
+Create pathflow-active flag
+Spawn cf-security                                       [cf-security]
+    |
+    v
+PF2-CONTEXT                                            [team-lead]
+Spawn cf-knowledge-layer                                [cf-knowledge-layer]
+Query for active work
+    |
+    v
+Active work found?
+    |
+    +---YES---> Present options:
+    |           1. Resume --> /cf-resume
+    |           2. Fresh start
+    |               |
+    +---NO----> "Ready for new task"
+                Wait for user request
+                    |
+                    v
+            Read user request
+                    |
+                    v
+            Tracking decision
+                    |
+    +---UNTRACKED--> Answer directly --> PF7-END
+    |   (question, exploration,
+    |    no file modifications)
+    |
+    +---TRACKED----> Continue to PF3
+    |
+    +---AMBIGUOUS--> Ask user, then route
+                         |
+                         v
+PF3-CLASSIFY                                            [team-lead]
+Classify work type + area                               [cf-knowledge-layer]
+Register task in WorkGraph
+Spawn cf-git-operations                                 [cf-git-operations]
+Create feature branch
+    |
+    v
+PF4-EXECUTE                                             [on-demand teammates]
+Route to pipeline by work type:
+    |
+    +--FEAT/FIX/RFCT/CICD--> WS-DEV --> WS-REV --> WS-QA
+    |                         [cf-dev]  [cf-rev]   [cf-qa]
+    |
+    +--HTFX/CHOR-----------> WS-DEV --> WS-REV
+    |                         [cf-dev]  [cf-rev]
+    |
+    +--DOCS-----------------> WS-DOCS --> WS-REV
+    |                          [cf-doc]   [cf-rev]
+    |
+    +--TEST-----------------> WS-TEST --> WS-REV
+    |                          [cf-qa]    [cf-rev]
+    |
+    +--PLAN/SPKE------------> WS-PLAN --> WS-REV
+                               [cf-plan]  [cf-rev]
+    |
+    v
+Rework loop (if applicable):
+    WS-REV ---changes_requested---> back to primary stage
+    |                               (max 3 iterations)
+    WS-QA  ---fail--> back to WS-DEV (max 2 retries)
+    |
+    v (all stages pass)
+PF5-VERIFY                                              [team-lead]
+Verify all pipeline stages passed                       [cf-knowledge-layer]
+Check acceptance criteria met
+    |
+    v
+PF6-COMPLETE                                            [cf-knowledge-layer]
+Record session summary                                  [cf-git-operations]
+Create PR (/cf-ship)
+Mark task complete
+    |
+    v
+PF7-END                                                 [team-lead]
+Shutdown all teammates
+TeamDelete
+SessionEnd hook cleans up
+    |
+    v
+SESSION END
+```
+
+### 4.2 Execution Steps
+
+**Step 1: Session Initialization (PF1-INIT)**
+
+- SessionStart hook fires automatically, loading cf-working-protocol
+- TeamCreate to establish team infrastructure (config + task list directory, zero teammates)
+- Create `pathflow-active` flag at `.state/session/{SID}/is-pathflow-active`
+- Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
+- Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
+- Task Tracker: TaskCreate for PF1-INIT phase, then individual PF1-TSK-{NN} entries per pathflow-config.json
+
+**Step 2: Context Loading (PF2-CONTEXT)**
+
+- Spawn cf-knowledge-layer: `"Read .claude/agents/cf-knowledge-layer.md, then query for active work and load session context"`
+- If active work found: Present "Previous work: '{topic}' on {branch}. 1. Resume 2. Fresh start"
+- If user chooses resume: Route to `/cf-resume`
+- If no active work: Display "Ready for new task." Wait for user request
+- Task Tracker: TaskCreate for PF2-CONTEXT phase
+
+**Step 3: Tracking Decision**
+
+- Read user request and evaluate complexity
+- Determine session mode:
+
+| Signal | Mode | Next Step |
+|--------|------|-----------|
+| User mentions task ID, describes work producing artifacts, active_work exists | **Tracked** | Proceed to PF3-CLASSIFY |
+| User asks a question, requests exploration, no file modifications expected | **Untracked** | Answer directly, skip to PF7-END |
+| Ambiguous | **Ask user** | Clarify before proceeding |
+
+- Note: An untracked session can become tracked ("actually, let's fix that bug"). The reverse does not happen -- once tracked, a session stays tracked.
+
+⛔ **FORBIDDEN:**
+
+- Auto-loading context without user choice
+- Skipping active work check at PF2-CONTEXT
+- Writing code before work is classified (PF3-CLASSIFY)
+- Proceeding to PF3 without explicit tracking decision
+- Spawning role teammates before their phase
+
+**Step 4: Work Classification (PF3-CLASSIFY)**
+
+- Classify work type and area
+- Register task in WorkGraph via cf-knowledge-layer: `"LEAD: begin-work -- task_id={id}, topic={title}, branch={branch}, scope={scope}"`
+- Spawn cf-git-operations: `"Read .claude/agents/cf-git-operations.md, then create branch {prefix}/{name}"`
+- Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→ci/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→experiment/
+- pf-3 sentinel auto-created by hook (UNLOCKS Edit/Write operations)
+- → See Section 6 for work type classification details
+
+**Step 5: Work Execution (PF4-EXECUTE)**
+
+- Determine pipeline from work type (→ See Section 6: Work Pipelines)
+- For each stage in the pipeline:
+  1. Spawn the stage's on-demand teammate with full task specification (→ See Section 5: Spawn Patterns)
+  2. Teammate executes work
+  3. Teammate requests commit via cf-git-operations (peer-to-peer)
+  4. Wait for stage completion message
+  5. Shut down the stage teammate
+  6. Spawn next stage's teammate, passing context
+- Rework: If WS-REV returns `changes_requested`, re-spawn primary stage teammate (max 3)
+- Rework: If WS-QA returns `fail`, re-spawn cf-development (max 2)
+- If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
+- For parallel work: spawn multiple instances per `max_parallel`/`batch_size` (→ See Section 5)
+
+**Step 6: Verification (PF5-VERIFY)**
+
+- Verify all pipeline stages completed with pass verdict
+- Check acceptance criteria met against task definition
+- Query cf-knowledge-layer for stage completion records
+
+**Step 7: Completion (PF6-COMPLETE)**
+
+- cf-knowledge-layer: complete-work to record summary and mark task complete
+- cf-git-operations: Create PR via /cf-ship
+- Update markdown task status (Tier 2)
+
+**Step 8: Session End (PF7-END)**
+
+- Shutdown all teammates (on-demand first, then persistent)
+- TeamDelete (ONLY after all teammates shut down and pathflow-active flag removed)
+- SessionEnd hook handles cleanup
+- One PR per tracked session. New work = new session.
+
+### 4.3 Phase Reference
+
+> **Sentinels are created automatically by PostToolUse hooks** when phase markers complete. Agents must NOT attempt to create sentinels directly. If a sentinel appears missing, verify the correct session ID path at `.state/sentinels/pathflow/{session-id}/` before assuming it doesn't exist.
+
+| Phase | Gate (what must exist) | Sentinel (auto-created by hook) | Key Action | Key Outputs |
+|-------|----------------------|-------------------------------|------------|-------------|
+| PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security | pathflow-active flag, team config |
+| PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer | Active work state, tracking decision |
+| PF3-CLASSIFY | pf-2 | pathflow-pf-3 | Create branch (UNLOCKS Edit/Write) | Task record, branch, tracking_level='tracked' |
+| PF4-EXECUTE | pf-3 | pathflow-ws-* | Run work pipeline | Code, docs, tests, reviews |
+| PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
+| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR | PR created, task status updated |
+| PF7-END | pf-6 | (cleanup) | Shutdown, remove flag | Clean session end |
+
+### Phase Task IDs
+
+Each phase creates session-scoped PathFlow tasks (format: `PF{N}-TSK-{NN}`) from `pathflow-config.json`. These are ephemeral -- created at phase entry, disposed at PF7-END. Distinct from project tasks in the `tasks` table.
+
+Each task in `pathflow-config.json` has an `assigned_to` field (which teammate or `team-lead` executes it) and an `operation` field (the specific action to perform). See the config file for the complete mapping.
+
+### 4.4 Session Properties
+
+**Session Properties (2 orthogonal axes):**
+
+| Property | Values | Meaning |
+|----------|--------|---------|
+| Mode | Tracked / Untracked | Is work registered in WorkGraph? |
+| Interaction | Interactive / Autorun | Is a human present? |
 
 ### Session Boundary
 
 One PR per tracked session. One work item per session.
 
 After PF6-COMPLETE, the only remaining phase is PF7-END. If the user wants to do more work, they start a new session. The default path is: one PR, then end.
-
-### Rework Limits
-
-| Parameter | Default | Trigger |
-|-----------|---------|---------|
-| `max_rework_iterations` | 3 | WS-REV returns `changes_requested` --> back to primary stage |
-| `max_qa_retries` | 2 | WS-QA returns `fail` --> back to WS-DEV |
-| `stage_timeout_minutes` | 30 | Any single stage exceeds time limit (autorun only) |
-
-If limits exceeded: escalate to user (interactive) or mark task `blocked` and skip to PF7-END (autorun).
-
-### Team Persistence
-
-🔒 **NEVER call TeamDelete during active session.**
-
-- Persistent function teammates (cf-security, cf-knowledge-layer, cf-git-operations) stay alive PF1 through PF7
-- On-demand role teammates are shut down after their stage completes
-- Individual teammate shutdown via `SendMessage(type="shutdown_request")` is SAFE -- does not affect team or task list
-- Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER removing pathflow-active flag
-- A PreToolUse hook (`cf-pre-tool-use-team-guard.sh`) blocks accidental team dissolution while pathflow-active flag exists
-
-⛔ **Dissolving the team mid-session destroys the entire PathFlow task graph -- all phase markers, work stage tracking, dependency ordering, and checkpoint state. This is unrecoverable.**
-
-### Rework Loop Flow
-
-```text
-WS-DEV --> WS-REV --> [approved] --> WS-QA --> [pass] --> PF5-VERIFY
-                  \                         \
-                   --> [changes_requested]    --> [fail]
-                       back to WS-DEV             back to WS-DEV
-                       (iteration +1)              (retry +1)
-```
 
 ### Autorun Mode
 
@@ -338,9 +345,20 @@ In autorun mode (no human present), phase transitions happen automatically:
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
 
+### 4.5 Scenario Navigator
+
+| I want to... | Start at | Key sections |
+|--------------|----------|-------------|
+| Start a new feature | Section 4 (Session Lifecycle) | → Section 5 (Teammates) → Section 6 (Pipelines) |
+| Resume previous work | /cf-resume | → Section 11 (Recovery) |
+| Understand the pipeline | Section 6 (Work Pipelines) | → Section 5 (Stage-to-Teammate Mapping) |
+| Fix a stuck session | Section 11 (Recovery) | → Section 6 (Rework Limits) |
+
+→ Next: Section 5 details teammate coordination, spawn patterns, and communication
+
 ---
 
-## 5. Teammate Coordination
+## 5. Teammates
 
 ### Persistent Function Teammates (3)
 
@@ -595,9 +613,75 @@ tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
 3. If numbered suffix created (stale config), work with it but note for cleanup
 4. Re-send any pending instructions to the new instance
 
+### Team Persistence
+
+🔒 **NEVER call TeamDelete during active session.**
+
+- Persistent function teammates (cf-security, cf-knowledge-layer, cf-git-operations) stay alive PF1 through PF7
+- On-demand role teammates are shut down after their stage completes
+- Individual teammate shutdown via `SendMessage(type="shutdown_request")` is SAFE -- does not affect team or task list
+- Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER removing pathflow-active flag
+- A PreToolUse hook (`cf-pre-tool-use-team-guard.sh`) blocks accidental team dissolution while pathflow-active flag exists
+
+⛔ **Dissolving the team mid-session destroys the entire PathFlow task graph -- all phase markers, work stage tracking, dependency ordering, and checkpoint state. This is unrecoverable.**
+
+→ Next: Section 6 defines work type pipelines and request routing
+
 ---
 
-## 6. Task Routing
+## 6. Work Pipelines & Routing
+
+### Work Type Pipelines
+
+The work type determines which stages execute during PF4-EXECUTE:
+
+| Work Type | Pipeline | Primary Teammate |
+|-----------|----------|------------------|
+| FEAT | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| FIX | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| RFCT | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| CICD | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| HTFX | WS-DEV --> WS-REV | cf-development |
+| CHOR | WS-DEV --> WS-REV | cf-development |
+| DOCS | WS-DOCS --> WS-REV | cf-documentation |
+| TEST | WS-TEST --> WS-REV | cf-quality-assurance |
+| PLAN | WS-PLAN --> WS-REV | cf-planning |
+| SPKE | WS-PLAN --> WS-REV | cf-planning |
+
+**WS-REV is universal.** Every work type gets an independent review stage.
+
+### Work Stages (1:1 Stage-to-Teammate Mapping)
+
+| Stage | Teammate | Purpose |
+|-------|----------|---------|
+| WS-DEV | cf-development | Code implementation + unit tests |
+| WS-PLAN | cf-planning | Design, architecture, analysis, investigation |
+| WS-DOCS | cf-documentation | Documentation writing |
+| WS-REV | cf-review | Independent review (adapts per work type: CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW) |
+| WS-QA | cf-quality-assurance | Integration testing, acceptance verification (quality gate) |
+| WS-TEST | cf-quality-assurance | Primary test implementer (when tests ARE the deliverable) |
+
+→ See Section 5 for peer-to-peer messaging patterns
+
+### Rework Loop Flow
+
+```text
+WS-DEV --> WS-REV --> [approved] --> WS-QA --> [pass] --> PF5-VERIFY
+                  \                         \
+                   --> [changes_requested]    --> [fail]
+                       back to WS-DEV             back to WS-DEV
+                       (iteration +1)              (retry +1)
+```
+
+### Rework Limits
+
+| Parameter | Default | Trigger |
+|-----------|---------|---------|
+| `max_rework_iterations` | 3 | WS-REV returns `changes_requested` --> back to primary stage |
+| `max_qa_retries` | 2 | WS-QA returns `fail` --> back to WS-DEV |
+| `stage_timeout_minutes` | 30 | Any single stage exceeds time limit (autorun only) |
+
+If limits exceeded: escalate to user (interactive) or mark task `blocked` and skip to PF7-END (autorun).
 
 ### Routing Precedence
 
@@ -667,9 +751,164 @@ tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
 | External research | Explore sub-agent with WebSearch | "What does Claude Code support?" |
 | Design investigation | cf-planning (SPKE pipeline) | "Investigate approaches for X" |
 
+→ Next: Section 7 covers enforcement gates and operational rules
+
 ---
 
-## 7. Capabilities
+## 7. Enforcement & Operations
+
+### Phase Gate Enforcement
+
+PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
+
+**Hook-enforced gates (automatic, blocks violations):**
+
+| Gate | Sentinel Required | Blocks | Hook |
+|------|-------------------|--------|------|
+| Edit/Write before PF3 | `pf-3` | Edit, Write tools | `cf-pre-tool-use-pathflow-gate.sh` |
+| git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
+| git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
+| Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
+| TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
+
+**Instruction-enforced gates (proportionate, not hook-enforced):**
+
+| Gate | Instruction | Why Not Hook-Enforced |
+|------|-------------|----------------------|
+| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- PF1 is trivial initialization |
+| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Low risk -- PF2 is context loading |
+| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Caught by review finding no work to review |
+
+**Not enforced (acceptable risk):**
+
+| Transition | Why Acceptable |
+|------------|---------------|
+| PF5 before PF6 | cf-git-operations checks review status independently |
+| PF6 before PF7 | PF7 is cleanup only -- no harm in early cleanup |
+
+### Sentinel System
+
+PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev-done`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
+
+→ See Section 4 (Phase Reference) for sentinel-to-phase mapping
+
+### Task Tracker Mirroring
+
+The team lead MUST mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility:
+
+| PathFlow Event | Task Tracker Action |
+|---|---|
+| Phase entered | TaskCreate with phase_templates[{phase}] -- ONE entry per phase |
+| Phase task started | TaskCreate per PF{N}-TSK-{NN} -- ONE entry per task |
+| Phase task completed | TaskUpdate status=completed for that task entry |
+| Phase completed | TaskUpdate status=completed for the phase entry |
+| Stage entered | TaskCreate with stage_templates[{stage}] -- ONE entry per stage |
+| Stage completed | TaskUpdate status=completed for that stage entry |
+
+**Rules:**
+
+- NEVER club multiple phases into a single task tracker entry
+- NEVER skip creating entries for individual PF{N}-TSK-{NN} tasks
+- Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
+- Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
+- JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
+
+**Reference:** `pathflow-config.json` `task_tracker` section defines templates and behavior.
+
+### Routing Compliance
+
+When the lead delegates PF{N}-TSK-{NN} tasks to teammates, it MUST:
+
+- Follow the `assigned_to` field in pathflow-config.json to determine which teammate executes the task
+- Follow the `operation` field to determine what operation to request
+- These fields are authoritative routing directives, not optional metadata
+- Ignoring `assigned_to` or `operation` is a protocol violation
+
+### Enforcement Model
+
+Three complementary mechanisms provide defense-in-depth:
+
+| Mechanism | Strength | Catches |
+|-----------|----------|---------|
+| **Instructions** | Agent definitions + CLAUDE.md guide behavior proactively | Happy path compliance |
+| **Tasks** | PathFlow task graph makes state visible to all agents | Ordering awareness |
+| **Hooks** | PreToolUse hooks block violations at tool-call level | Edge cases where instructions are ignored |
+
+### Git Operations
+
+🔒 **All git write operations go through cf-git-operations teammate. Never run git write commands directly.**
+
+- No direct commits to main/master
+- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `ci/*`, `experiment/*`, `hotfix/*`
+- Commit messages follow conventional format (enforced by cf-git-operations)
+- All changes through PRs to main
+
+### Sandbox Bypass
+
+Claude Code's sandbox blocks network operations by default. Commands that access remote servers require `dangerouslyDisableSandbox: true` in the Bash tool call.
+
+**Commands requiring bypass:** `git push`, `git pull`, `git fetch`, `git clone`, `git remote update`, `git ls-remote`, `gh pr`, `gh issue`, `gh api`, `gh workflow`, `gh run`, `npm install`, `pip install`.
+
+**In PathFlow mode:** Git network and GitHub CLI operations are delegated to cf-git-operations, which handles bypass internally. Package managers (npm install, pip install) are executed directly by the requesting agent with the bypass flag.
+
+**Outside PathFlow:** The executing agent sets `dangerouslyDisableSandbox: true` directly and runs pre-flight safety checks (correct remote, correct branch, no secrets staged).
+
+**Autorun mode:** Sandbox is pre-bypassed by the CLI orchestrator -- no explicit action needed.
+
+**Reference:** `.claude/skills/cf-sandbox-standards/SKILL.md`
+
+### Testing
+
+- Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
+- Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
+- Test suite: run via `./codeflow test` (1,555+ tests)
+- All test changes verified before marking stage complete
+
+### PR Workflow
+
+1. Work completes in PF4-EXECUTE (all stages pass)
+2. PF5-VERIFY confirms acceptance criteria
+3. cf-git-operations creates PR in PF6-COMPLETE
+4. Lead proceeds to PF7-END
+5. New session for new work
+
+### Decision Tiers
+
+| Tier | When | Action | Example |
+|------|------|--------|---------|
+| 1 | Standard, reversible | Proceed autonomously, document in progress notes | File naming, code style |
+| 2 | Trade-offs, preferences | Recommend approach, note in commit message | Library choice, API design |
+| 3 | Ambiguous, breaking, architectural | ADR via cf-planning, ask user first | Schema changes, new dependencies |
+
+### Graceful Degradation
+
+If the enforcement system fails (hook malfunction, sentinel not auto-created), PathFlow degrades gracefully:
+
+```text
+Full enforcement (nominal)
+  Instructions + Tasks + Hooks all active
+       |
+       | (hook fails to auto-create sentinel)
+       v
+Partial enforcement
+  Instructions + Tasks active, hooks warn but skip sentinel checks
+       |
+       | (hooks fail entirely)
+       v
+Advisory only
+  Instructions + task graph still provide ordering
+  Session proceeds without guard rails
+  Log degradation for post-session analysis
+```
+
+A development session should never be BLOCKED by an enforcement system failure. The enforcement system catches mistakes; it is not a gating prerequisite for work.
+
+→ See Section 11 (Recovery) for troubleshooting enforcement issues
+→ Next: Section 8 lists capabilities, skills, hooks, and commands
+
+---
+
+## 8. Capabilities
 
 ### Skill (1 active)
 
@@ -705,7 +944,7 @@ These skills provide detailed standards and can be loaded by agents as needed:
 
 **Location:** `.claude/agents/cf-*.md`
 
-### Hooks (19 scripts)
+### Hooks (20 scripts)
 
 Hooks fire automatically at lifecycle points. Configured in `.claude/settings.json`.
 
@@ -743,9 +982,11 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ./codeflow doctor            # Diagnose infrastructure (requires global CLI)
 ```
 
+→ See Section 9 for project file layout and Section 10 for data model
+
 ---
 
-## 8. Project Structure
+## 9. Project Structure
 
 ```text
 .claude/                          # Claude Code configuration
@@ -795,7 +1036,7 @@ project-management/               # Tier 2: Human-readable work tracking
 
 ---
 
-## 9. Memory
+## 10. Memory
 
 ### Three-Tier Data Model
 
@@ -832,83 +1073,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 
 ---
 
-## 10. Working Guidelines
-
-### Git Operations
-
-🔒 **All git write operations go through cf-git-operations teammate. Never run git write commands directly.**
-
-- No direct commits to main/master
-- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `ci/*`, `experiment/*`, `hotfix/*`
-- Commit messages follow conventional format (enforced by cf-git-operations)
-- All changes through PRs to main
-
-### Sandbox Bypass
-
-Claude Code's sandbox blocks network operations by default. Commands that access remote servers require `dangerouslyDisableSandbox: true` in the Bash tool call.
-
-**Commands requiring bypass:** `git push`, `git pull`, `git fetch`, `git clone`, `git remote update`, `git ls-remote`, `gh pr`, `gh issue`, `gh api`, `gh workflow`, `gh run`, `npm install`, `pip install`.
-
-**In PathFlow mode:** Git network and GitHub CLI operations are delegated to cf-git-operations, which handles bypass internally. Package managers (npm install, pip install) are executed directly by the requesting agent with the bypass flag.
-
-**Outside PathFlow:** The executing agent sets `dangerouslyDisableSandbox: true` directly and runs pre-flight safety checks (correct remote, correct branch, no secrets staged).
-
-**Autorun mode:** Sandbox is pre-bypassed by the CLI orchestrator -- no explicit action needed.
-
-**Reference:** `.claude/skills/cf-sandbox-standards/SKILL.md`
-
-### Decision Tiers
-
-| Tier | When | Action | Example |
-|------|------|--------|---------|
-| 1 | Standard, reversible | Proceed autonomously, document in progress notes | File naming, code style |
-| 2 | Trade-offs, preferences | Recommend approach, note in commit message | Library choice, API design |
-| 3 | Ambiguous, breaking, architectural | ADR via cf-planning, ask user first | Schema changes, new dependencies |
-
-### Team Lead Constraints
-
-| Do | Do Not |
-|----|--------|
-| Delegate work to teammates | Write code or edit source files |
-| Manage pipeline and phase progression | Run git commit/push/checkout |
-| Create task graphs and assign work | Create documentation directly |
-| Handle user communication | Run tests directly |
-| Make routing and tracking decisions | Bypass PathFlow phases |
-| Read files for verification | Modify `.state/` files directly |
-| Delegate token-heavy operations | Read large files directly in lead context |
-
-### Enforcement Model
-
-Three complementary mechanisms provide defense-in-depth:
-
-| Mechanism | Strength | Catches |
-|-----------|----------|---------|
-| **Instructions** | Agent definitions + CLAUDE.md guide behavior proactively | Happy path compliance |
-| **Tasks** | PathFlow task graph makes state visible to all agents | Ordering awareness |
-| **Hooks** | PreToolUse hooks block violations at tool-call level | Edge cases where instructions are ignored |
-
-**Sentinel system:** PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev-done`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
-
-> -> See Section 4 (Quick-Reference Phase Map) for sentinel details
-
-### PR Workflow
-
-1. Work completes in PF4-EXECUTE (all stages pass)
-2. PF5-VERIFY confirms acceptance criteria
-3. cf-git-operations creates PR in PF6-COMPLETE
-4. Lead proceeds to PF7-END
-5. New session for new work
-
-### Testing
-
-- Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
-- Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `./codeflow test` (1,555+ tests)
-- All test changes verified before marking stage complete
-
----
-
-## 11. Help and Recovery
+## 11. Recovery
 
 ### Quick Commands
 
@@ -945,7 +1110,7 @@ Three complementary mechanisms provide defense-in-depth:
 | Stage timeout (autorun) | Shutdown stuck agent, record timeout, mark `blocked`, PF7-END |
 | Hook blocking unexpectedly | Read hook message, address the condition it reports |
 | Team accidentally dissolved | Unrecoverable -- session must end, work restarted from scratch |
-| Enforcement degraded | Log degradation, continue with instructions + task graph (advisory mode) |
+| Enforcement degraded | Log degradation, continue with instructions + task graph (advisory mode). → See Section 7 (Graceful Degradation) |
 
 ### Context Overflow Recovery
 
@@ -968,26 +1133,3 @@ When Claude Code's context window overflows mid-session, the conversation contin
 6. **Determine current phase** -- Map sentinel state to phase (e.g., pf-3 exists but no ws-dev-done means PF4-EXECUTE in progress) and continue from that phase
 
 **Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately check for stale team state before proceeding with any work. The SessionStart hook will output a warning if stale team configs are detected.
-
-### Graceful Degradation
-
-If the enforcement system fails (hook malfunction, sentinel not auto-created), PathFlow degrades gracefully:
-
-```text
-Full enforcement (nominal)
-  Instructions + Tasks + Hooks all active
-       |
-       | (hook fails to auto-create sentinel)
-       v
-Partial enforcement
-  Instructions + Tasks active, hooks warn but skip sentinel checks
-       |
-       | (hooks fail entirely)
-       v
-Advisory only
-  Instructions + task graph still provide ordering
-  Session proceeds without guard rails
-  Log degradation for post-session analysis
-```
-
-A development session should never be BLOCKED by an enforcement system failure. The enforcement system catches mistakes; it is not a gating prerequisite for work.
