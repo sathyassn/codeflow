@@ -775,13 +775,13 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
 | TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
 
-**Instruction-enforced gates (cannot be hook-enforced):**
+**Instruction-enforced gates (not currently hook-enforced):**
 
 | Gate | Instruction | Why Not Hook-Enforced |
 |------|-------------|----------------------|
-| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | cf-knowledge-layer is a function teammate, explicitly excluded from the pf-3 role teammate gate because it must spawn before pf-3 exists |
-| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | cf-git-operations is a function teammate, explicitly excluded because it spawns at PF3 to CREATE pf-3 |
-| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | Self-correcting -- review finds no work to review and reports back |
+| pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- phases run sequentially. The pf-3 gate checks a hardcoded ROLE_TEAMMATES name list (5 role teammates); function teammates are not in that list and pass through ungated. Adding per-phase gates would add complexity for negligible benefit. |
+| pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Same rationale -- function teammates are not in the ROLE_TEAMMATES gate list. PF3 naturally follows PF2 in the sequential lifecycle. |
+| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | The pf-3 gate blocks cf-review (it IS in the ROLE_TEAMMATES list) but does not check inter-stage ordering. Self-correcting -- review finds no work to review and reports back. |
 
 **Not enforced (acceptable risk):**
 
