@@ -773,7 +773,7 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
 | git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
-| TeamDelete during active session | pathflow-active flag | TeamDelete tool | `cf-pre-tool-use-team-guard.sh` |
+| TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists, removing the flag) | `cf-pre-tool-use-team-guard.sh` |
 
 **Instruction-enforced gates (not currently hook-enforced):**
 
@@ -785,14 +785,14 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 
 **Not enforced (acceptable risk):**
 
-| Transition | Why Acceptable |
-|------------|---------------|
-| PF5 before PF6 | cf-git-operations checks review status independently |
-| PF6 before PF7 | PF7 is cleanup only -- no harm in early cleanup |
+| Skipped Phase | Why Acceptable |
+|---------------|---------------|
+| Skipping PF5-VERIFY, going directly to PF6 | PF5 is a lightweight lead-only verification step with no destructive actions. The `ws-rev` sentinel gate on `gh pr create` already ensures review completion before PR creation. |
+| Skipping PF6-COMPLETE, going directly to PF7 | TeamDelete (the critical PF7 action) IS gated on `pf-6` sentinel by team-guard hook. Other PF7 cleanup actions (teammate shutdown) are safe regardless. |
 
 ### Sentinel System
 
-PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev-done`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
+PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
 → See Section 4 (Phase Reference) for sentinel-to-phase mapping
 
@@ -849,15 +849,24 @@ Three complementary mechanisms provide defense-in-depth:
 
 ### Sandbox Bypass
 
-Claude Code's sandbox blocks network operations by default. Commands that access remote servers require `dangerouslyDisableSandbox: true` in the Bash tool call.
+Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisableSandbox: true` in Bash tool calls for commands that access remote servers.
 
-**Commands requiring bypass:** `git push`, `git pull`, `git fetch`, `git clone`, `git remote update`, `git ls-remote`, `gh pr`, `gh issue`, `gh api`, `gh workflow`, `gh run`, `npm install`, `pip install`.
+**Commands requiring bypass:**
 
-**In PathFlow mode:** Git network and GitHub CLI operations are delegated to cf-git-operations, which handles bypass internally. Package managers (npm install, pip install) are executed directly by the requesting agent with the bypass flag.
+| Category | Commands |
+|----------|----------|
+| Git network | `git push`, `git pull`, `git fetch`, `git clone`, `git remote update`, `git ls-remote` |
+| GitHub CLI | `gh pr`, `gh issue`, `gh api`, `gh workflow`, `gh run` |
+| Package managers | `npm install`, `pip install` |
 
-**Outside PathFlow:** The executing agent sets `dangerouslyDisableSandbox: true` directly and runs pre-flight safety checks (correct remote, correct branch, no secrets staged).
+**Who handles bypass:**
 
-**Autorun mode:** Sandbox is pre-bypassed by the CLI orchestrator -- no explicit action needed.
+| Context | Who Bypasses | Notes |
+|---------|-------------|-------|
+| PathFlow mode | cf-git-operations | Handles git network + GitHub CLI bypass internally |
+| PathFlow mode (packages) | Requesting agent | Sets `dangerouslyDisableSandbox: true` directly |
+| Outside PathFlow | Executing agent | Pre-flight checks: correct remote, correct branch, no secrets staged |
+| Autorun mode | CLI orchestrator | Sandbox pre-bypassed, no explicit action needed |
 
 **Reference:** `.claude/skills/cf-sandbox-standards/SKILL.md`
 
