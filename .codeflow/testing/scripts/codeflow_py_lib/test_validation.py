@@ -111,12 +111,12 @@ class TestPatterns:
 
         pattern = PATTERNS["epic_format_id"]
         valid_ids = [
-            "FRT-EPC-FEAT-AUTH-001",
-            "BKD-EPC-FIX-API-023",
-            "INF-EPC-CICD-GENL-001",
-            "XCUT-EPC-HTFX-AUTH-001",
-            "DOC-EPC-DOCS-GENL-001",
-            "SHR-EPC-RFCT-CORE-001",
+            "FRT-EPC-001",
+            "BKD-EPC-023",
+            "INF-EPC-001",
+            "PLN-EPC-001",
+            "DOC-EPC-001",
+            "SHR-EPC-001",
         ]
         for valid in valid_ids:
             assert re.match(pattern, valid), f"Should match: {valid}"
@@ -127,15 +127,14 @@ class TestPatterns:
 
         pattern = PATTERNS["epic_format_id"]
         invalid_ids = [
-            "F-EPC-FEAT-AUTH-001",       # area too short (1 letter)
-            "FRONT-EPC-FEAT-AUTH-001",   # area too long (5 letters)
-            "FRT-EPC-F-AUTH-001",        # work type too short (1 letter)
-            "FRT-EPC-FEATURE-AUTH-001",  # work type too long (7 letters)
-            "FRT-TSK-FEAT-AUTH-001",     # wrong entity (TSK not EPC)
-            "FRT-EPC-FEAT-AUTH-01",      # number too short
-            "FRT-EPC-FEAT-AUTH-1000",    # number too long
-            "frt-EPC-FEAT-AUTH-001",     # lowercase area
+            "F-EPC-001",                 # area too short (1 letter)
+            "FRONT-EPC-001",             # area too long (5 letters)
+            "FRT-TSK-001",               # wrong entity (TSK not EPC)
+            "FRT-EPC-01",                # number too short
+            "FRT-EPC-1000",              # number too long
+            "frt-EPC-001",               # lowercase area
             "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # PK format, not format ID
+            "FRT-EPC-FEAT-AUTH-001",     # old format (TYPE-DOMAIN in ID)
         ]
         for invalid in invalid_ids:
             assert not re.match(pattern, invalid), f"Should reject: {invalid}"
@@ -146,11 +145,11 @@ class TestPatterns:
 
         pattern = PATTERNS["task_format_id"]
         valid_ids = [
-            "FRT-TSK-FEAT-AUTH-001",
-            "BKD-TSK-FIX-API-023",
-            "XCUT-TSK-HTFX-AUTH-001",
-            "INF-TSK-RFCT-CORE-001",
-            "DOC-TSK-DOCS-UI-005",
+            "FRT-TSK-001-001",
+            "BKD-TSK-001-023",
+            "PLN-TSK-001-001",
+            "INF-TSK-005-003",
+            "DOC-TSK-001-005",
         ]
         for valid in valid_ids:
             assert re.match(pattern, valid), f"Should match: {valid}"
@@ -161,11 +160,13 @@ class TestPatterns:
 
         pattern = PATTERNS["task_format_id"]
         invalid_ids = [
-            "FRT-EPC-FEAT-AUTH-001",     # wrong entity (EPC not TSK)
-            "F-TSK-FEAT-AUTH-001",       # area too short
-            "FRONT-TSK-FEAT-AUTH-001",   # area too long
-            "FRT-TSK-FEAT-AUTH-01",      # number too short
+            "FRT-EPC-001-001",           # wrong entity (EPC not TSK)
+            "F-TSK-001-001",             # area too short
+            "FRONT-TSK-001-001",         # area too long
+            "FRT-TSK-001-01",            # second number too short
+            "FRT-TSK-01-001",            # first number too short
             "task-01ARZ3NDEKTSV4RRFFQ69G5FAV",  # PK format, not format ID
+            "FRT-TSK-FEAT-AUTH-001",     # old format (TYPE-DOMAIN in ID)
         ]
         for invalid in invalid_ids:
             assert not re.match(pattern, invalid), f"Should reject: {invalid}"

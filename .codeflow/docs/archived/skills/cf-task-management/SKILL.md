@@ -106,7 +106,7 @@ Procedure:
      | INF | infra, deploy, CI, pipeline | "Update CI pipeline" |
      | SHR | shared, common, util, type | "Add date util" |
      | DOC | doc, readme, guide | "Update README" |
-     | XCUT | cross-cutting (multiple areas) | "Refactor auth across app" |
+     | PLN | plan, planning, epic, roadmap, ADR | "Plan the next phase" |
 
   3. Determine work_type:
      | Code | Keywords | Example |
@@ -126,7 +126,7 @@ Procedure:
      - Default to GENL if no match
 
 Output:
-  area_type: FRT | BKD | INF | SHR | DOC | XCUT
+  area_type: FRT | BKD | INF | SHR | DOC | PLN
   work_type: FEAT | FIX | RFCT | DOCS | TEST | HTFX | CHOR | CICD | SPKE
   domain: {configured-domain} | GENL
 
@@ -147,26 +147,26 @@ Prerequisite: classify-work (this skill) provides area_type, work_type, domain
 
 ID Convention (Dual-ID):
   - id (ULID PK): epic-{ulid} / task-{ulid} — used for DB FK references
-  - format_id: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} / {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} — used for display, filenames
+  - format_id: {AREA}-EPC-{NNN} / {AREA}-TSK-{NNN}-{NNN} — used for display, filenames
 
 Procedure:
   1. Search for existing ongoing epic matching area_type + work_type
      - Ongoing epics are per area + work_type combination
-     - e.g., format_id INF-EPC-FIX-GENL-001 for infrastructure fixes
-     - e.g., format_id INF-EPC-FEAT-GENL-001 for infrastructure features
+     - e.g., format_id INF-EPC-001 for infrastructure epic #1
+     - e.g., format_id DOC-EPC-001 for documentation epic #1
 
   2. If no ongoing epic found, create one:
      - id: epic-{ulid} (ULID PK, auto-generated)
-     - format_id: {AREA}-EPC-{TYPE}-GENL-001
-     - title: "Ongoing {Area} {Type}s"
+     - format_id: {AREA}-EPC-001
+     - title: "Ongoing {Area} Work"
      - is_ongoing: TRUE
      - status: 'in_progress'
-     - file_path: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
+     - file_path: project-management/epics/{AREA}/{format_id}/{format_id}.md
 
   3. Create task under epic:
      - epic_id: {ULID PK of found or created epic}
      - id: task-{ulid} (ULID PK, auto-generated)
-     - format_id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
+     - format_id: {AREA}-TSK-{NNN}-{NNN}
      - title: {original work description}
      - origin: 'informal'
      - scope_policy: 'soft' (default for informal)
@@ -181,8 +181,8 @@ Procedure:
 Output:
   task_id: {ULID PK — task-{ulid}}
   epic_id: {ULID PK — epic-{ulid}}
-  task_format_id: {display ID — {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}}
-  epic_format_id: {display ID — {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}}
+  task_format_id: {display ID — {AREA}-TSK-{NNN}-{NNN}}
+  epic_format_id: {display ID — {AREA}-EPC-{NNN}}
   origin: 'informal'
   is_new_epic: true | false
 
@@ -203,24 +203,24 @@ Agent: cf-planner (full creation), Main Agent (ongoing epics only)
 Procedure:
   1. Generate both IDs:
      - id (ULID PK): epic-{ulid} (auto-generated)
-     - format_id: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
+     - format_id: {AREA}-EPC-{NNN} (auto-generated)
 
   2. Validate required fields:
-     - area_type: FRT | BKD | INF | SHR | DOC | XCUT
+     - area_type: FRT | BKD | INF | SHR | DOC | PLN
      - work_type: FEAT | FIX | RFCT | DOCS | TEST | HTFX | CHOR | CICD | SPKE
      - domain: configured domain or GENL
      - title: descriptive title
 
   3. Insert into database via cf-db-operations:epic-create
 
-  4. Create markdown file: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
+  4. Create markdown file: project-management/epics/{AREA}/{format_id}/{format_id}.md
 
   5. Return both IDs
 
 Output:
   epic_id: {ULID PK — epic-{ulid}}
-  epic_format_id: {display ID — {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}}
-  file_path: project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md
+  epic_format_id: {display ID — {AREA}-EPC-{NNN}}
+  file_path: project-management/epics/{AREA}/{format_id}/{format_id}.md
 
 📚 Resource: [id-convention.md](resources/id-convention.md)
    Load when: Generating epic IDs or understanding ID structure
@@ -281,16 +281,16 @@ Procedure:
   1. Validate epic_id (ULID PK) exists
   2. Generate both IDs:
      - id (ULID PK): task-{ulid} (auto-generated)
-     - format_id: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} (auto-generated)
+     - format_id: {AREA}-TSK-{NNN}-{NNN} (auto-generated)
   3. Insert into database via cf-db-operations:task-create
-  4. Create markdown file: project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md
+  4. Create markdown file: project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md
   5. Return both IDs
 
 Output:
   task_id: {ULID PK — task-{ulid}}
-  task_format_id: {display ID — {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}}
+  task_format_id: {display ID — {AREA}-TSK-{NNN}-{NNN}}
   epic_id: {parent epic ULID PK}
-  file_path: project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md
+  file_path: project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md
 
 Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
 
@@ -341,7 +341,7 @@ Agent: All agents
 Query Parameters:
   | Parameter | Example | Purpose |
   |-----------|---------|---------|
-  | epic_id | FRT-EPC-FEAT-AUTH-001 | Tasks in epic |
+  | epic_id | FRT-EPC-001 | Tasks in epic |
   | status | pending, in_progress | Filter by status |
   | assignee | cf-developer | Tasks for agent |
   | area_type | FRT | Frontend tasks |
@@ -370,29 +370,34 @@ Executed by: codeflow db query (Go CLI; see .codeflow/scripts/db/schema.sql for 
 
 | Area Code | Folder Name |
 |-----------|-------------|
-| FRT | frontend/ |
-| BKD | backend/ |
-| INF | infrastructure/ |
-| SHR | shared/ |
-| DOC | documentation/ |
-| XCUT | cross-cutting/ |
+| FRT | FRT/ |
+| BKD | BKD/ |
+| INF | INF/ |
+| SHR | SHR/ |
+| DOC | DOC/ |
+| PLN | PLN/ |
 
-Used in paths: `project-management/epics/{folder}/...`
+Area code IS the folder name. Used in paths: `project-management/epics/{AREA}/...`
 
 ## ID Convention (Dual-ID)
 
 Every epic and task has two IDs:
 
 - **ULID PK** (`id`): `epic-{ulid}` / `task-{ulid}` — for DB FK references, internal lookups
-- **Format ID** (`format_id`): `{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NNN}` — for display, filenames, branches
+- **Format ID** (`format_id`): Human-readable ID for display, filenames, branches
+  - Epic: `{AREA}-EPC-{NNN}` (e.g., INF-EPC-001)
+  - Task: `{AREA}-TSK-{NNN}-{NNN}` (e.g., INF-TSK-001-001)
+  - Note: work_type and domain are metadata in YAML frontmatter, NOT in the format ID
 
 ```text
-Format ID pattern: {AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NUMBER}
+Format ID patterns:
+  Epic: {AREA}-EPC-{NNN}
+  Task: {AREA}-TSK-{NNN}-{NNN} (epic_number-task_sequence)
 
 Examples:
-  FRT-EPC-FEAT-AUTH-001  → Frontend Epic: Feature in Auth domain
-  BKD-TSK-FIX-API-023    → Backend Task: Fix in API domain
-  INF-EPC-CICD-GENL-001  → Infrastructure Epic: CI/CD general
+  INF-EPC-001  → Infrastructure Epic #1
+  INF-TSK-001-003  → Task #3 under INF-EPC-001
+  DOC-EPC-001  → Documentation Epic #1
 ```
 
 ## Resources

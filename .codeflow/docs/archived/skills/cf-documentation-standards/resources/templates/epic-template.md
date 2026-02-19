@@ -3,7 +3,7 @@ id: {EPIC-ID}
 title: {Title}
 summary: {One-line summary}
 status: draft  # draft|planning|in_progress|blocked|complete|archived
-area_type: {FRT|BKD|INF|SHR|DOC|XCUT}
+area_type: {FRT|BKD|INF|SHR|DOC|PLN}
 work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE}
 domain: {domain}
 priority: normal  # low|normal|high|critical

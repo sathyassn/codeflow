@@ -3,8 +3,8 @@ id: {EPIC-ID}
 title: {Title}
 summary: {One-line summary}
 status: draft  # draft|planning|in_progress|blocked|complete|archived
-area_type: {FRT|BKD|INF|SHR|DOC|XCUT}
-work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE}
+area_type: {FRT|BKD|INF|SHR|DOC|PLN}
+work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE|PLAN}
 domain: {domain}
 priority: normal  # low|normal|high|critical
 is_ongoing: false
@@ -15,6 +15,8 @@ external_url: null
 created_at: {ISO-8601}
 updated_at: {ISO-8601}
 ---
+<!-- NOTE: The authoritative epic template is at project-management/templates/epic-template.md.
+     This copy is kept for cf-markdown-standards skill reference. -->
 
 # {EPIC-ID}: {Title}
 

@@ -17,11 +17,11 @@ All writes must update all tiers atomically via cf-db-operations.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | id | TEXT | PK | ULID PK: `epic-{ulid}` |
-| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` |
+| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-EPC-{NNN}` |
 | title | TEXT | NOT NULL | Epic title |
 | summary | TEXT | | One-line summary |
 | status | TEXT | 'draft' | draft\|planning\|in_progress\|blocked\|complete\|archived |
-| area_type | TEXT | NOT NULL | FRT\|BKD\|INF\|SHR\|DOC\|XCUT |
+| area_type | TEXT | NOT NULL | FRT\|BKD\|INF\|SHR\|DOC\|PLN |
 | work_type | TEXT | NOT NULL | FEAT\|FIX\|HTFX\|RFCT\|DOCS\|TEST\|CHOR\|CICD\|SPKE |
 | domain | TEXT | NOT NULL | GENL (reserved) or project domain |
 | priority | TEXT | 'normal' | low\|normal\|high\|critical |
@@ -38,12 +38,12 @@ All writes must update all tiers atomically via cf-db-operations.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | id | TEXT | PK | ULID PK: `task-{ulid}` |
-| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` |
+| format_id | TEXT | UNIQUE NOT NULL | Human-readable: `{AREA}-TSK-{NNN}-{NNN}` |
 | epic_id | TEXT | NOT NULL FK | Parent epic ULID PK reference |
 | title | TEXT | NOT NULL | Task title |
 | description | TEXT | | One-line description |
 | status | TEXT | 'todo' | todo\|blocked\|in_progress\|complete |
-| area_type | TEXT | NOT NULL | FRT\|BKD\|INF\|SHR\|DOC\|XCUT |
+| area_type | TEXT | NOT NULL | FRT\|BKD\|INF\|SHR\|DOC\|PLN |
 | work_type | TEXT | NOT NULL | FEAT\|FIX\|HTFX\|RFCT\|DOCS\|TEST\|CHOR\|CICD\|SPKE |
 | domain | TEXT | NOT NULL | Task domain |
 | origin | TEXT | 'planned' | planned\|informal\|auto |
@@ -238,16 +238,16 @@ All writes must update all tiers atomically via cf-db-operations.
 Reference mapping from area codes to filesystem folder names:
 
 | Area Code | Folder Name | Used In |
-|-----------|-------------||---------|
-| FRT | frontend/ | project-management/epics/frontend/ |
-| BKD | backend/ | project-management/epics/backend/ |
-| INF | infrastructure/ | project-management/epics/infrastructure/ |
-| SHR | shared/ | project-management/epics/shared/ |
-| DOC | documentation/ | project-management/epics/documentation/ |
-| XCUT | cross-cutting/ | project-management/epics/cross-cutting/ |
+|-----------|-------------|---------|
+| FRT | FRT/ | project-management/epics/FRT/ |
+| BKD | BKD/ | project-management/epics/BKD/ |
+| INF | INF/ | project-management/epics/INF/ |
+| SHR | SHR/ | project-management/epics/SHR/ |
+| DOC | DOC/ | project-management/epics/DOC/ |
+| PLN | PLN/ | project-management/epics/PLN/ |
 
-This mapping is used by the Go CLI and cf-work-state.sh when resolving epic/task
-paths under `project-management/epics/`.
+Area code IS the folder name. This mapping is used by the Go CLI and cf-work-state.sh
+when resolving epic/task paths under `project-management/epics/`.
 
 ## Schema Location
 

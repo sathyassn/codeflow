@@ -137,11 +137,16 @@ Apply the appropriate design operation based on the deliverable type:
    | Cross-cutting with phases | One epic per phase |
    | Ongoing maintenance | One ongoing epic per area+type |
 
-2. Define epic scope -- summary, in-scope/out-of-scope, acceptance criteria, prerequisites.
-3. Break into tasks -- each independently implementable, right-sized (XS-XL), with file paths, approach, and verification steps.
-4. Map dependencies -- identify blocked-by/blocks relationships, minimize sequential dependencies.
-5. Set task metadata -- `origin: planned`, `scope_policy: hard`, `estimate: XS/S/M/L/XL`, `autorun_eligible: true/false`, `acceptance: [testable criteria]`.
-6. Send to cf-knowledge-layer for work item creation.
+2. **Check for ongoing epics first.** Some epics are ongoing (`is_ongoing: true`) and should be reused:
+   - PLN-EPC-001: All planning work -- add tasks here instead of creating a new PLN epic
+   - DOC-EPC-001: Documentation updates -- add tasks here instead of creating a new DOC epic
+   - Query cf-knowledge-layer: `"PLANNER: check-ongoing-epic -- area={area}"` before creating new epics in PLN or DOC areas
+   - Check `project-management/epics/{AREA}/` for existing epics in other areas too
+3. Define epic scope -- summary, in-scope/out-of-scope, acceptance criteria, prerequisites.
+4. Break into tasks -- each independently implementable, right-sized (XS-XL), with file paths, approach, and verification steps.
+5. Map dependencies -- identify blocked-by/blocks relationships, minimize sequential dependencies.
+6. Set task metadata -- `origin: planned`, `scope_policy: hard`, `estimate: XS/S/M/L/XL`, `autorun_eligible: true/false`, `acceptance: [testable criteria]`.
+7. Send to cf-knowledge-layer for work item creation.
 
 ### Step 5: Document Plan
 
@@ -204,8 +209,9 @@ Autorun eligibility (all must be true): clear acceptance criteria, defined file 
 
 | Recipient | When | Format |
 |-----------|------|--------|
-| cf-knowledge-layer | Epic creation | `"PLANNER: create-epic -- {title}, area={area}, type={type}, domain={domain}"` |
+| cf-knowledge-layer | Epic creation | `"PLANNER: create-epic -- {title}, area={area}, work_type={type}, domain={domain}"` (work_type and domain are metadata, NOT part of format ID) |
 | cf-knowledge-layer | Task creation | `"PLANNER: create-task -- epic={epic_id}, title={title}, estimate={size}"` |
+| cf-knowledge-layer | Check ongoing epic | `"PLANNER: check-ongoing-epic -- area={area}"` (before creating new PLN or DOC epics) |
 | cf-git-operations | Plan ready to commit | `"Please commit: plan: {description}"` |
 | Team lead | Deliverable ready | `"PLANNER: {type} -- {title} ready for review at {path}"` |
 | Team lead | Blocked | `"PLANNER: BLOCKED -- {reason}. Need clarification on: {questions}"` |

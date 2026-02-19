@@ -11,7 +11,7 @@ Determine the primary area affected by the work.
 | INF | Infrastructure | infra, deploy, CI, CD, docker, kubernetes, terraform | "Update CI pipeline", "Add staging environment" |
 | SHR | Shared | shared, common, util, lib, helper | "Add date utility", "Create validation helpers" |
 | DOC | Documentation | doc, readme, guide, tutorial, ADR | "Update README", "Add API documentation" |
-| XCUT | Cross-cutting | cross-cutting, refactor across, system-wide | "Refactor auth across app", "Update error handling everywhere" |
+| PLN | Planning | plan, planning, epic, roadmap, ADR | "Plan the next phase", "Create epic for feature X" |
 
 ## Work Type Classification
 
@@ -55,12 +55,12 @@ Domains are project-specific. Common patterns:
 
 | Area Code | Folder Name |
 |-----------|-------------|
-| FRT | frontend/ |
-| BKD | backend/ |
-| INF | infrastructure/ |
-| SHR | shared/ |
-| DOC | documentation/ |
-| XCUT | cross-cutting/ |
+| FRT | FRT/ |
+| BKD | BKD/ |
+| INF | INF/ |
+| SHR | SHR/ |
+| DOC | DOC/ |
+| PLN | PLN/ |
 
 ## Example Classifications
 
@@ -69,5 +69,5 @@ Domains are project-specific. Common patterns:
 | "Fix the login button styling" | FRT | FIX | AUTH |
 | "Add a new user REST endpoint" | BKD | FEAT | API |
 | "Update the deployment scripts" | INF | CHOR | GENL |
-| "Refactor authentication across the app" | XCUT | RFCT | AUTH |
+| "Refactor authentication across the app" | INF | RFCT | AUTH |
 | "Research caching solutions" | BKD | SPKE | DATA |

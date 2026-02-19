@@ -331,17 +331,17 @@ test_is_valid_task_id() {
 test_is_valid_epic_format_id() {
     test_section "is_valid_epic_format_id"
 
-    # Valid format IDs
-    if is_valid_epic_format_id "FRT-EPC-FEAT-AUTH-001"; then
+    # Valid format IDs (new convention: {AREA}-EPC-{NNN})
+    if is_valid_epic_format_id "FRT-EPC-001"; then
         test_pass "Valid epic format ID accepted"
     else
         test_fail "Valid epic format ID should be accepted"
     fi
 
-    if is_valid_epic_format_id "XCUT-EPC-HTFX-AUTH-001"; then
-        test_pass "4-letter area epic format ID accepted"
+    if is_valid_epic_format_id "PLN-EPC-001"; then
+        test_pass "PLN area epic format ID accepted"
     else
-        test_fail "4-letter area epic format ID should be accepted"
+        test_fail "PLN area epic format ID should be accepted"
     fi
 
     # Invalid - ULID primary key format
@@ -358,25 +358,25 @@ test_is_valid_epic_format_id() {
         test_pass "Old EPC-ULID rejected as format ID"
     fi
 
-    # Invalid - TSK entity
-    if is_valid_epic_format_id "FRT-TSK-FEAT-AUTH-001"; then
-        test_fail "TSK entity should not be valid epic format ID"
+    # Invalid - old format with TYPE-DOMAIN
+    if is_valid_epic_format_id "FRT-EPC-FEAT-AUTH-001"; then
+        test_fail "Old format with TYPE-DOMAIN should not be valid"
     else
-        test_pass "TSK entity rejected as epic format ID"
+        test_pass "Old format with TYPE-DOMAIN rejected"
     fi
 }
 
 test_is_valid_task_format_id() {
     test_section "is_valid_task_format_id"
 
-    # Valid format IDs
-    if is_valid_task_format_id "FRT-TSK-FEAT-AUTH-001"; then
+    # Valid format IDs (new convention: {AREA}-TSK-{NNN}-{NNN})
+    if is_valid_task_format_id "FRT-TSK-001-001"; then
         test_pass "Valid task format ID accepted"
     else
         test_fail "Valid task format ID should be accepted"
     fi
 
-    if is_valid_task_format_id "INF-TSK-FIX-GENL-005"; then
+    if is_valid_task_format_id "INF-TSK-005-003"; then
         test_pass "INF area task format ID accepted"
     else
         test_fail "INF area task format ID should be accepted"
@@ -396,11 +396,11 @@ test_is_valid_task_format_id() {
         test_pass "Old TSK-ULID rejected as format ID"
     fi
 
-    # Invalid - EPC entity
-    if is_valid_task_format_id "FRT-EPC-FEAT-AUTH-001"; then
-        test_fail "EPC entity should not be valid task format ID"
+    # Invalid - old format with TYPE-DOMAIN
+    if is_valid_task_format_id "FRT-TSK-FEAT-AUTH-001"; then
+        test_fail "Old format with TYPE-DOMAIN should not be valid"
     else
-        test_pass "EPC entity rejected as task format ID"
+        test_pass "Old format with TYPE-DOMAIN rejected"
     fi
 }
 

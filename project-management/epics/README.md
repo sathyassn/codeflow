@@ -1,18 +1,18 @@
 # Epics
 
-Epics are organized by area type. Each area has a corresponding folder.
+Epics are organized by area type. Each area has a corresponding folder named by area code.
 
 ## Structure
 
 ```text
 epics/
-  {area}/                          # Area folder (e.g., frontend/, backend/)
-    {FORMAT-ID}/                   # Epic folder (named by format_id)
-      {FORMAT-ID}-epic.md          # Epic definition
-        # frontmatter: id: epic-{ulid} (ULID PK), format_id: {FORMAT-ID}
+  {AREA}/                          # Area folder (e.g., INF/, DOC/, PLN/)
+    {format_id}/                   # Epic folder (named by format_id)
+      {format_id}.md               # Epic definition
+        # frontmatter: id: epic-{ulid} (ULID PK), format_id: {AREA}-EPC-{NNN}
       tasks/                       # Task files
-        {FORMAT-ID}.md             # Task definition
-          # frontmatter: id: task-{ulid} (ULID PK), format_id: {FORMAT-ID}
+        {format_id}.md             # Task definition
+          # frontmatter: id: task-{ulid} (ULID PK), format_id: {AREA}-TSK-{NNN}-{NNN}
 ```
 
 File names use format_id (human-readable). The ULID primary key is stored in the frontmatter `id` field.
@@ -21,17 +21,22 @@ File names use format_id (human-readable). The ULID primary key is stored in the
 
 | Folder | Area Code | Scope |
 |--------|-----------|-------|
-| `frontend/` | FRT | UI, components, client logic |
-| `backend/` | BKD | API, services, server logic |
-| `infrastructure/` | INF | CI/CD, deployment, DevOps |
-| `shared/` | SHR | Common libraries, types |
-| `documentation/` | DOC | Docs, guides, ADRs |
-| `cross-cutting/` | XCUT | Multi-area work |
+| `FRT/` | FRT | UI, components, client logic |
+| `BKD/` | BKD | API, services, server logic |
+| `INF/` | INF | CI/CD, deployment, DevOps |
+| `SHR/` | SHR | Common libraries, types |
+| `DOC/` | DOC | Docs, guides, ADRs |
+| `PLN/` | PLN | Planning, epics, roadmaps |
 
 ## Ongoing Epics
 
-Each area+work_type combination can have one ongoing epic:
+Some epics are ongoing (`is_ongoing: true`) and should be reused, not duplicated:
 
-- `{AREA}-EPC-{WORK}-GENL-001` (e.g., `INF-EPC-FEAT-GENL-001`)
+- `PLN-EPC-001` -- All planning work (add tasks here, don't create new PLN epics)
+- `DOC-EPC-001` -- Documentation updates (add tasks here, don't create new DOC epics)
 - Created on-demand when informal work is first registered
-- Used as catch-all containers for ad-hoc work
+- Check existing epics before creating new ones
+
+## Templates
+
+Canonical templates are at `project-management/templates/epic-template.md` and `project-management/templates/task-template.md`.

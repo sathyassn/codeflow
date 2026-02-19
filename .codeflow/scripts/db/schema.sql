@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS estimate_types (
 -- Epics table
 CREATE TABLE IF NOT EXISTS epics (
     id TEXT PRIMARY KEY,              -- ULID PK: epic-{ulid} (e.g., epic-01ARZ3NDEKTSV4RRFFQ69G5FAV)
-    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-EPC-{TYPE}-{DOMAIN}-{NNN} (e.g., FRT-EPC-FEAT-AUTH-001)
+    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-EPC-{NNN} (e.g., INF-EPC-001)
     title TEXT NOT NULL,
     summary TEXT,
     status TEXT DEFAULT 'draft'
@@ -145,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_epics_active ON epics(status)
 -- Tasks table
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,              -- ULID PK: task-{ulid} (e.g., task-01BRZ4PDFLUTW5SSGG70H6GBW)
-    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} (e.g., FRT-TSK-FEAT-AUTH-001)
+    format_id TEXT UNIQUE NOT NULL,   -- Human-readable: {AREA}-TSK-{NNN}-{NNN} (e.g., INF-TSK-001-001)
     epic_id TEXT NOT NULL REFERENCES epics(id),  -- FK to epics ULID PK
     title TEXT NOT NULL,
     description TEXT,
@@ -808,7 +808,7 @@ INSERT OR IGNORE INTO area_types (code, name, description) VALUES
     ('INF', 'Infrastructure', 'CI/CD, deployment, cloud'),
     ('SHR', 'Shared', 'Libraries used by multiple areas'),
     ('DOC', 'Documentation', 'Documentation only'),
-    ('XCUT', 'Cross-cutting', 'Spans multiple areas');
+    ('PLN', 'Planning', 'Planning, epics, roadmaps, ADRs');
 
 -- ============================================================================
 -- AREA FOLDER MAPPING
@@ -823,12 +823,12 @@ CREATE TABLE IF NOT EXISTS area_folder_mapping (
 );
 
 INSERT OR IGNORE INTO area_folder_mapping (area_type, folder_name, display_name) VALUES
-    ('FRT', 'frontend', 'Frontend'),
-    ('BKD', 'backend', 'Backend'),
-    ('INF', 'infrastructure', 'Infrastructure'),
-    ('SHR', 'shared', 'Shared'),
-    ('DOC', 'documentation', 'Documentation'),
-    ('XCUT', 'cross-cutting', 'Cross-cutting');
+    ('FRT', 'FRT', 'Frontend'),
+    ('BKD', 'BKD', 'Backend'),
+    ('INF', 'INF', 'Infrastructure'),
+    ('SHR', 'SHR', 'Shared'),
+    ('DOC', 'DOC', 'Documentation'),
+    ('PLN', 'PLN', 'Planning');
 
 -- Seed default work types
 INSERT OR IGNORE INTO work_types (code, name, branch_prefix, commit_type, urgency) VALUES
@@ -840,4 +840,5 @@ INSERT OR IGNORE INTO work_types (code, name, branch_prefix, commit_type, urgenc
     ('TEST', 'Test', 'test/', 'test', 'normal'),
     ('CHOR', 'Chore', 'chore/', 'chore', 'normal'),
     ('CICD', 'CI/CD', 'cicd/', 'ci', 'normal'),
-    ('SPKE', 'Spike', 'spike/', 'chore', 'normal');
+    ('SPKE', 'Spike', 'spike/', 'chore', 'normal'),
+    ('PLAN', 'Plan', 'plan/', 'plan', 'normal');

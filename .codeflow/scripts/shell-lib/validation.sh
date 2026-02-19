@@ -90,13 +90,13 @@ is_valid_task_id() {
 # Validate epic format ID (human-readable)
 is_valid_epic_format_id() {
     local id="$1"
-    [[ "$id" =~ ^[A-Z]{2,4}-EPC-[A-Z]{2,4}-[A-Z]{2,4}-[0-9]{3}$ ]]
+    [[ "$id" =~ ^[A-Z]{2,4}-EPC-[0-9]{3}$ ]]
 }
 
 # Validate task format ID (human-readable)
 is_valid_task_format_id() {
     local id="$1"
-    [[ "$id" =~ ^[A-Z]{2,4}-TSK-[A-Z]{2,4}-[A-Z]{2,4}-[0-9]{3}$ ]]
+    [[ "$id" =~ ^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$ ]]
 }
 
 # ============================================================================

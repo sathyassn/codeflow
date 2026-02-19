@@ -4,8 +4,8 @@ epic_id: {EPIC-ID}
 title: {Title}
 description: {One-line description}
 status: todo  # todo|blocked|in_progress|complete
-area_type: {FRT|BKD|INF|SHR|DOC|XCUT}
-work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE}
+area_type: {FRT|BKD|INF|SHR|DOC|PLN}
+work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE|PLAN}
 domain: {domain}
 origin: planned  # planned|informal|auto
 file_scope: []
@@ -30,6 +30,8 @@ updated_at: {ISO-8601}
 started_at: null
 completed_at: null
 ---
+<!-- NOTE: The authoritative task template is at project-management/templates/task-template.md.
+     This copy is kept for cf-markdown-standards skill reference. -->
 
 # {TASK-ID}: {Title}
 

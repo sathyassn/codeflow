@@ -7,7 +7,7 @@ Every epic and task has two identifiers:
 | ID Type | Format | Purpose | Example |
 |---------|--------|---------|---------|
 | **ULID PK** (`id`) | `epic-{ulid}` / `task-{ulid}` | Database primary key, FK references, joins | `epic-01JQ3KM7V8...`, `task-01JQ3KN2X9...` |
-| **Format ID** (`format_id`) | `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` / `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` | User-facing display, filenames, commits, branches | `FRT-EPC-FEAT-AUTH-001`, `BKD-TSK-FIX-API-023` |
+| **Format ID** (`format_id`) | `{AREA}-EPC-{NNN}` / `{AREA}-TSK-{NNN}-{NNN}` | User-facing display, filenames, commits, branches | `INF-EPC-001`, `INF-TSK-001-003` |
 
 ### Usage Rules
 
@@ -24,50 +24,49 @@ Every epic and task has two identifiers:
 ## Format ID: Epic
 
 ```text
-{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}
+{AREA}-EPC-{NNN}
 ```
 
 ### Components
 
 | Component | Values | Example |
 |-----------|--------|---------|
-| AREA | FRT, BKD, INF, SHR, DOC, XCUT | FRT |
+| AREA | FRT, BKD, INF, SHR, DOC, PLN | INF |
 | EPC | Literal "EPC" for epic | EPC |
-| TYPE | FEAT, FIX, RFCT, DOCS, TEST, HTFX, CHOR, CICD, SPKE | FEAT |
-| DOMAIN | Project-configured or GENL | AUTH |
 | NNN | Zero-padded sequence number | 001 |
+
+Note: work_type and domain are metadata fields in YAML frontmatter, NOT part of the format ID.
 
 ### Examples
 
-- `FRT-EPC-FEAT-AUTH-001` - Frontend feature epic for auth domain
-- `BKD-EPC-FIX-API-003` - Backend fix epic for API domain
-- `INF-EPC-CICD-GENL-001` - Infrastructure CI/CD epic (general)
+- `INF-EPC-001` - Infrastructure Epic #1
+- `DOC-EPC-001` - Documentation Epic #1
+- `PLN-EPC-001` - Planning Epic #1
 
 ## Format ID: Task
 
 ```text
-{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}
+{AREA}-TSK-{NNN}-{NNN}
 ```
 
 ### Components
 
 | Component | Values | Example |
 |-----------|--------|---------|
-| AREA | FRT, BKD, INF, SHR, DOC, XCUT | BKD |
+| AREA | FRT, BKD, INF, SHR, DOC, PLN | INF |
 | TSK | Literal "TSK" for task | TSK |
-| TYPE | FEAT, FIX, RFCT, DOCS, TEST, HTFX, CHOR, CICD, SPKE | FEAT |
-| DOMAIN | Project-configured or GENL | API |
-| NNN | Zero-padded sequence number | 012 |
+| NNN (first) | Epic number (zero-padded) | 001 |
+| NNN (second) | Task sequence within epic (zero-padded) | 003 |
 
 ### Examples
 
-- `BKD-TSK-FEAT-API-012` - Backend feature task for API domain
-- `FRT-TSK-FIX-UI-005` - Frontend fix task for UI domain
-- `SHR-TSK-RFCT-GENL-001` - Shared refactor task (general)
+- `INF-TSK-001-003` - Task #3 under INF-EPC-001
+- `DOC-TSK-001-001` - Task #1 under DOC-EPC-001
+- `PLN-TSK-001-002` - Task #2 under PLN-EPC-001
 
 ## Sequence Number Rules
 
-1. Sequence numbers are scoped per AREA-TYPE-DOMAIN combination
+1. Epic sequence numbers are scoped per AREA
 2. Always zero-padded to 3 digits (001, 002, ... 999)
 3. Never reuse deleted IDs within same scope
 4. Use `cf-db-operations:task-create` which handles sequencing automatically
@@ -77,7 +76,7 @@ Every epic and task has two identifiers:
 **Do not construct IDs manually.** Always use the appropriate operation:
 
 - **ULID PK** (`id`): Generated automatically — `epic-{ulid}` or `task-{ulid}`
-- **Format ID** (`format_id`): Generated automatically — `{AREA}-EPC-{TYPE}-{DOMAIN}-{NNN}` or `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}`
+- **Format ID** (`format_id`): Generated automatically — `{AREA}-EPC-{NNN}` or `{AREA}-TSK-{NNN}-{NNN}`
 
 Both are produced by:
 
@@ -91,13 +90,13 @@ These operations use `.codeflow/scripts/db/generate-id.sh` internally.
 When resolving area codes to filesystem paths, use this mapping:
 
 | Area Code | Folder Name | Path Example |
-|-----------|-------------||--------------|
-| FRT | frontend/ | project-management/epics/frontend/ |
-| BKD | backend/ | project-management/epics/backend/ |
-| INF | infrastructure/ | project-management/epics/infrastructure/ |
-| SHR | shared/ | project-management/epics/shared/ |
-| DOC | documentation/ | project-management/epics/documentation/ |
-| XCUT | cross-cutting/ | project-management/epics/cross-cutting/ |
+|-----------|-------------|--------------|
+| FRT | FRT/ | project-management/epics/FRT/ |
+| BKD | BKD/ | project-management/epics/BKD/ |
+| INF | INF/ | project-management/epics/INF/ |
+| SHR | SHR/ | project-management/epics/SHR/ |
+| DOC | DOC/ | project-management/epics/DOC/ |
+| PLN | PLN/ | project-management/epics/PLN/ |
 
 ## Validation
 

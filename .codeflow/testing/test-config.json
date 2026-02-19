@@ -69,6 +69,7 @@
         "scripts/codeflow_py_lib/test_paths.py",
         "scripts/codeflow_py_lib/test_jsonl.py",
         "scripts/codeflow_py_lib/test_ulid.py",
+        "scripts/codeflow_py_lib/test_ulid_generator.py",
         "scripts/shell-lib/test-common.sh",
         "scripts/shell-lib/test-config.sh",
         "scripts/shell-lib/test-errors.sh",

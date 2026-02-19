@@ -146,7 +146,7 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 2. Load associated task from tasks table (by task_id FK)
 3. Load associated epic from epics table (by epic_id FK)
 4. Query recent memory_events: `SELECT * FROM memory_events WHERE work_id = '{id}' ORDER BY created_at DESC LIMIT 50`
-5. Read task markdown: `project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md`
+5. Read task markdown: `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
 6. Compile context summary: work_id, task_id, scope, branch, progress events, remaining deliverables
 7. Report loaded context to team lead
 
@@ -202,7 +202,7 @@ Event types:
 1. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
 2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-4. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{area-folder}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
+4. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
 5. Append completion event to `.state/logs/pathflow-events.jsonl`
 6. Record completion memory_event (event_type='milestone', data includes deliverables summary)
 7. Update `.state/runtime/active-task.json` status to "completed", then delete the file
@@ -249,7 +249,7 @@ Area type classification:
 | INF | infra, deploy, CI, pipeline, hook, script | "Update CI pipeline" |
 | SHR | shared, common, util, type, library | "Add date util" |
 | DOC | doc, readme, guide, explanation | "Update README" |
-| XCUT | cross-cutting, multiple areas | "Refactor auth across app" |
+| PLN | plan, planning, epic, roadmap, ADR | "Plan the next phase" |
 
 Work type classification:
 
@@ -269,7 +269,7 @@ Work type classification:
 1. Parse work description for keywords matching tables above
 2. Determine area_type, work_type, and domain
 3. Default domain to GENL if no match
-4. Report: `"KNOWLEDGE: classify-work - {AREA}-{TYPE}-{DOMAIN}"`
+4. Report: `"KNOWLEDGE: classify-work - {AREA}"` (work_type and domain are metadata fields, not part of the format ID)
 
 #### Ensure Work Registered
 
@@ -280,7 +280,18 @@ Work type classification:
 Dual-ID system:
 
 - `id` (ULID PK): `epic-{ulid}` / `task-{ulid}` -- for DB FK references, internal lookups
-- `format_id`: `{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NNN}` -- for display, filenames, branches
+- `format_id`: Human-readable ID for display, filenames, branches
+  - Epic format: `{AREA}-EPC-{NNN}` (e.g., INF-EPC-001)
+  - Task format: `{AREA}-TSK-{NNN}-{NNN}` (e.g., INF-TSK-001-001, where first NNN is epic number, second is task sequence)
+  - Note: work_type and domain remain as metadata fields in YAML frontmatter, NOT in the format ID
+
+**ULID Generation:** Generate ULIDs for the `id` field using:
+
+```bash
+python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py
+```
+
+The script requires no external dependencies (pure Python, stdlib only). For multiple IDs: `--count N`. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic. This is a bridge solution until the Go CLI handles ULID generation natively.
 
 1. Search for existing ongoing epic matching area_type + work_type
 2. If no ongoing epic found, create one (generate id: `epic-{ulid}`, format_id, INSERT into epics, create markdown, append to JSONL)
@@ -288,17 +299,32 @@ Dual-ID system:
 4. Return task_id and epic_id (both ULID PKs) to team lead
 5. Team lead can then invoke begin-work with the returned task_id
 
-Area-to-folder mapping: FRT->frontend/, BKD->backend/, INF->infrastructure/, SHR->shared/, DOC->documentation/, XCUT->cross-cutting/
+Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF->INF/, SHR->SHR/, DOC->DOC/, PLN->PLN/
+
+#### Ongoing Epics
+
+Some epics are ongoing (`is_ongoing: true`) and should be reused, not duplicated. Before creating a new epic, check existing epics in `project-management/epics/{AREA}/` or query the DB: `SELECT * FROM epics WHERE area_type = '{AREA}' AND is_ongoing = 1`.
+
+Known ongoing epics:
+
+| Epic | Purpose | Rule |
+|------|---------|------|
+| PLN-EPC-001 | All planning work (epics, ADRs, roadmaps) | ADD new tasks here instead of creating a new PLN epic |
+| DOC-EPC-001 | Documentation updates | ADD new tasks here instead of creating a new DOC epic |
+
+When a teammate requests work in PLN or DOC area, first check if the ongoing epic exists and add a task to it. Only create a new epic if the work genuinely does not fit an ongoing epic's scope.
+
+**Templates:** Epic and task markdown templates are at `project-management/templates/epic-template.md` and `project-management/templates/task-template.md`. Always use these as the authoritative source when creating new work items.
 
 #### Epic CRUD
 
-**Create:** Validate required fields (area_type, work_type, domain, title). Generate both IDs. INSERT into epics table. Append to JSONL ledger. Create markdown file at `project-management/epics/{area-folder}/{format_id}/{format_id}-epic.md`. Return both IDs.
+**Create:** Validate required fields (area_type, work_type, domain, title). Generate both IDs. INSERT into epics table. Append to JSONL ledger. Create markdown file at `project-management/epics/{AREA}/{format_id}/{format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/INF-EPC-005.md`). Use templates at `project-management/templates/epic-template.md`. Return both IDs.
 
 **Update:** Validate epic exists. Validate status transitions (draft->planning->in_progress->complete/archived). Execute UPDATE. Append update event to JSONL. Re-render markdown. If status changed to 'complete', check child tasks.
 
 #### Task CRUD
 
-**Create:** Validate epic exists and is active. Generate both IDs. INSERT into tasks (epic_id as ULID FK). INSERT task_dependencies if specified. Append to JSONL. Create markdown file. Return both IDs.
+**Create:** Validate epic exists and is active. Generate both IDs. INSERT into tasks (epic_id as ULID FK). INSERT task_dependencies if specified. Append to JSONL. Create markdown file at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/tasks/INF-TSK-005-001.md`). Use templates at `project-management/templates/task-template.md`. Return both IDs.
 
 Optional autorun fields (set by cf-planning only): autorun_eligible, auto_commit, raise_pr, auto_merge, target_branch.
 

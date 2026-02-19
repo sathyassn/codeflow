@@ -6,26 +6,69 @@ Centralized project management for CodeFlow.
 
 | Directory | Purpose |
 |-----------|---------|
-| `epics/` | Epic and task tracking, organized by area |
+| `epics/{AREA}/` | Epics and tasks, organized by area code |
+| `templates/` | Epic and task YAML templates |
 | `tracking/` | Auto-generated tracking views and dashboards |
 
-## Epics
+## Area Codes
 
-Epics are organized by area under `epics/{area}/{EPIC-ID}/`:
+| Code | Folder | Description |
+|------|--------|-------------|
+| FRT | `epics/FRT/` | UI, components, client logic |
+| BKD | `epics/BKD/` | API, services, server logic |
+| INF | `epics/INF/` | CI/CD, deployment, DevOps, config, infrastructure |
+| SHR | `epics/SHR/` | Common libraries, types, utilities |
+| DOC | `epics/DOC/` | Docs, guides, ADRs |
+| PLN | `epics/PLN/` | Planning sessions, spikes, investigations |
 
-| Area Folder | Code | Description |
-|-------------|------|-------------|
-| `frontend/` | FRT | UI, components, client logic |
-| `backend/` | BKD | API, services, server logic |
-| `infrastructure/` | INF | CI/CD, deployment, DevOps, config |
-| `shared/` | SHR | Common libraries, types, utilities |
-| `documentation/` | DOC | Docs, guides, ADRs |
-| `cross-cutting/` | XCUT | Spans multiple areas |
+## Format ID Convention
+
+| Entity | Format | Example |
+|--------|--------|---------|
+| Epic | `{AREA}-EPC-{NNN}` | `INF-EPC-005` |
+| Task | `{AREA}-TSK-{NNN}-{NNN}` | `INF-TSK-005-001` |
+
+- Area code is always 3 uppercase letters
+- NNN is zero-padded to 3 digits
+- Task IDs embed the epic number: `{AREA}-TSK-{epic}-{task}`
+
+## Folder Layout
+
+```text
+project-management/
+├── epics/
+│   ├── FRT/                         # (empty — .gitkeep)
+│   ├── BKD/                         # (empty — .gitkeep)
+│   ├── INF/
+│   │   ├── INF-EPC-001/             # Quality Infrastructure Hardening (complete)
+│   │   ├── INF-EPC-002/             # Infrastructure Chores (complete)
+│   │   ├── INF-EPC-003/             # Infrastructure Improvements (complete)
+│   │   ├── INF-EPC-004/             # Dual-ID System (archived)
+│   │   └── INF-EPC-005/             # Project Management Standardization (planning)
+│   ├── SHR/                         # (empty — .gitkeep)
+│   ├── DOC/
+│   │   └── DOC-EPC-001/             # Documentation Updates (in_progress)
+│   └── PLN/
+│       └── PLN-EPC-001/             # Ongoing Planning (in_progress)
+├── templates/
+│   ├── epic-template.md
+│   └── task-template.md
+├── tracking/
+│   └── epic-tracker.md
+└── README.md
+```
+
+## Templates
+
+Epic and task templates are at [`templates/`](templates/):
+
+- [`epic-template.md`](templates/epic-template.md) -- YAML frontmatter + markdown body for epics
+- [`task-template.md`](templates/task-template.md) -- YAML frontmatter + markdown body for tasks
 
 ## File Naming
 
-- Epic files: `{FORMAT-ID}-epic.md` (e.g., `FRT-EPC-FEAT-AUTH-001-epic.md`)
-- Task files: `{FORMAT-ID}.md` (e.g., `FRT-TSK-FEAT-AUTH-001.md`)
+- Epic files: `{FORMAT-ID}.md` (e.g., `INF-EPC-005.md`)
+- Task files: `{FORMAT-ID}.md` (e.g., `INF-TSK-005-001.md`)
 
 File names use format_id (human-readable). The ULID primary key is stored in the frontmatter `id` field.
 

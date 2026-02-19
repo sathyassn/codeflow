@@ -4,7 +4,7 @@ epic_id: {EPIC-ID}
 title: {Title}
 description: {One-line description}
 status: todo  # todo|blocked|in_progress|complete
-area_type: {FRT|BKD|INF|SHR|DOC|XCUT}
+area_type: {FRT|BKD|INF|SHR|DOC|PLN}
 work_type: {FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE}
 domain: {domain}
 origin: planned  # planned|informal|auto
