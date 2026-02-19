@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Test: PathFlow task_tracker configuration in pathflow-config.json
+# Test: PathFlow task tracker configuration in pathflow-config.json
 # Location: .codeflow/testing/consistency/test-pathflow-task-tracker-config.sh
 #
-# Validates that the task_tracker section in pathflow-config.json has:
+# Validates that pathflow-config.json has:
 #   1. Required mirroring configuration fields
-#   2. Templates for all 7 PathFlow phases (PF1-PF7)
-#   3. Templates for all 6 work stages (WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA)
-#   4. Required fields (subject, description, activeForm) in each template
+#   2. Inline template properties (subject, description, activeForm) on all 7 phases
+#   3. Inline template properties (subject, description, activeForm) on all 6 stages
+#   4. No separate phase_templates or stage_templates sections (consolidated)
 #
 # Exit codes:
 #   0 - All validation checks passed
@@ -97,147 +97,183 @@ assert_success "jq -e '.task_tracker.mirroring.mirror_target == \"Claude Code in
     "mirroring.mirror_target is 'Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)'"
 
 # ============================================================================
-# TEST 3: Phase templates - all 7 phases present
+# TEST 3: No separate template sections (consolidated)
 # ============================================================================
 
-test_section "Phase Templates"
+test_section "Template Consolidation"
 
-assert_success "jq -e '.task_tracker.phase_templates' '$CONFIG_FILE'" \
-    "phase_templates object exists"
+if jq -e '.task_tracker.phase_templates' "$CONFIG_FILE" >/dev/null 2>&1; then
+    test_fail "phase_templates removed from task_tracker (consolidated into phases)"
+else
+    test_pass "phase_templates removed from task_tracker (consolidated into phases)"
+fi
+
+if jq -e '.task_tracker.stage_templates' "$CONFIG_FILE" >/dev/null 2>&1; then
+    test_fail "stage_templates removed from task_tracker (consolidated into stages)"
+else
+    test_pass "stage_templates removed from task_tracker (consolidated into stages)"
+fi
+
+# ============================================================================
+# TEST 4: Phase inline template properties - all 7 phases present
+# ============================================================================
+
+test_section "Phase Inline Properties"
 
 readonly EXPECTED_PHASES="PF1-INIT PF2-CONTEXT PF3-CLASSIFY PF4-EXECUTE PF5-VERIFY PF6-COMPLETE PF7-END"
 
 for phase in $EXPECTED_PHASES; do
-    if jq -e ".task_tracker.phase_templates.\"$phase\"" "$CONFIG_FILE" >/dev/null 2>&1; then
-        test_pass "Phase template exists: $phase"
+    if jq -e ".phases.\"$phase\"" "$CONFIG_FILE" >/dev/null 2>&1; then
+        test_pass "Phase exists: $phase"
     else
-        test_fail "Phase template exists: $phase"
+        test_fail "Phase exists: $phase"
     fi
 done
 
 # Count phases to ensure no extras or missing
-PHASE_COUNT=$(jq '.task_tracker.phase_templates | keys | length' "$CONFIG_FILE" 2>/dev/null)
-assert_equals "7" "$PHASE_COUNT" "Exactly 7 phase templates present"
+PHASE_COUNT=$(jq '.phases | keys | length' "$CONFIG_FILE" 2>/dev/null)
+assert_equals "7" "$PHASE_COUNT" "Exactly 7 phases present"
 
 # ============================================================================
-# TEST 4: Phase template required fields
+# TEST 5: Phase inline template required fields
 # ============================================================================
 
-test_section "Phase Template Fields"
+test_section "Phase Template Fields (inline)"
 
 for phase in $EXPECTED_PHASES; do
     for field in subject description activeForm; do
-        VALUE=$(jq -r ".task_tracker.phase_templates.\"$phase\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
+        VALUE=$(jq -r ".phases.\"$phase\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
         if [[ -n "$VALUE" ]]; then
-            test_pass "$phase has $field"
+            test_pass "$phase has inline $field"
         else
-            test_fail "$phase has $field"
+            test_fail "$phase has inline $field"
         fi
     done
 done
 
 # ============================================================================
-# TEST 5: Stage templates - all 6 stages present
+# TEST 6: Stage inline template properties - all 6 stages present
 # ============================================================================
 
-test_section "Stage Templates"
-
-assert_success "jq -e '.task_tracker.stage_templates' '$CONFIG_FILE'" \
-    "stage_templates object exists"
+test_section "Stage Inline Properties"
 
 readonly EXPECTED_STAGES="WS-DEV WS-PLAN WS-DOCS WS-TEST WS-REV WS-QA"
 
 for stage in $EXPECTED_STAGES; do
-    if jq -e ".task_tracker.stage_templates.\"$stage\"" "$CONFIG_FILE" >/dev/null 2>&1; then
-        test_pass "Stage template exists: $stage"
+    if jq -e ".stages.\"$stage\"" "$CONFIG_FILE" >/dev/null 2>&1; then
+        test_pass "Stage exists: $stage"
     else
-        test_fail "Stage template exists: $stage"
+        test_fail "Stage exists: $stage"
     fi
 done
 
 # Count stages
-STAGE_COUNT=$(jq '.task_tracker.stage_templates | keys | length' "$CONFIG_FILE" 2>/dev/null)
-assert_equals "6" "$STAGE_COUNT" "Exactly 6 stage templates present"
+STAGE_COUNT=$(jq '.stages | keys | length' "$CONFIG_FILE" 2>/dev/null)
+assert_equals "6" "$STAGE_COUNT" "Exactly 6 stages present"
 
 # ============================================================================
-# TEST 6: Stage template required fields
+# TEST 7: Stage inline template required fields
 # ============================================================================
 
-test_section "Stage Template Fields"
+test_section "Stage Template Fields (inline)"
 
 for stage in $EXPECTED_STAGES; do
     for field in subject description activeForm; do
-        VALUE=$(jq -r ".task_tracker.stage_templates.\"$stage\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
+        VALUE=$(jq -r ".stages.\"$stage\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
         if [[ -n "$VALUE" ]]; then
-            test_pass "$stage has $field"
+            test_pass "$stage has inline $field"
         else
-            test_fail "$stage has $field"
+            test_fail "$stage has inline $field"
         fi
     done
 done
 
 # ============================================================================
-# TEST 7: Phase templates reference phase_id placeholder
+# TEST 8: Phase descriptions reference phase_id placeholder
 # ============================================================================
 
 test_section "Template Placeholders"
 
 PHASES_WITH_PHASE_ID=0
 for phase in $EXPECTED_PHASES; do
-    DESC=$(jq -r ".task_tracker.phase_templates.\"$phase\".description // empty" "$CONFIG_FILE" 2>/dev/null)
+    DESC=$(jq -r ".phases.\"$phase\".description // empty" "$CONFIG_FILE" 2>/dev/null)
     if [[ "$DESC" == *"{phase_id}"* ]]; then
         ((PHASES_WITH_PHASE_ID++)) || true
     fi
 done
 
 if [[ "$PHASES_WITH_PHASE_ID" -eq 7 ]]; then
-    test_pass "All phase templates reference {phase_id} placeholder"
+    test_pass "All phase descriptions reference {phase_id} placeholder"
 else
-    test_fail "All phase templates reference {phase_id} placeholder (found $PHASES_WITH_PHASE_ID/7)"
+    test_fail "All phase descriptions reference {phase_id} placeholder (found $PHASES_WITH_PHASE_ID/7)"
 fi
 
 STAGES_WITH_STAGE_ID=0
 for stage in $EXPECTED_STAGES; do
-    DESC=$(jq -r ".task_tracker.stage_templates.\"$stage\".description // empty" "$CONFIG_FILE" 2>/dev/null)
+    DESC=$(jq -r ".stages.\"$stage\".description // empty" "$CONFIG_FILE" 2>/dev/null)
     if [[ "$DESC" == *"{stage_id}"* ]]; then
         ((STAGES_WITH_STAGE_ID++)) || true
     fi
 done
 
 if [[ "$STAGES_WITH_STAGE_ID" -eq 6 ]]; then
-    test_pass "All stage templates reference {stage_id} placeholder"
+    test_pass "All stage descriptions reference {stage_id} placeholder"
 else
-    test_fail "All stage templates reference {stage_id} placeholder (found $STAGES_WITH_STAGE_ID/6)"
+    test_fail "All stage descriptions reference {stage_id} placeholder (found $STAGES_WITH_STAGE_ID/6)"
 fi
 
 # ============================================================================
-# TEST 8: Consistency with phases and stages sections
+# TEST 9: Cross-section consistency
 # ============================================================================
 
 test_section "Cross-Section Consistency"
 
-# Every phase in phases section should have a task_tracker template
-PHASES_IN_PHASES=$(jq -r '.phases | keys[]' "$CONFIG_FILE" 2>/dev/null | sort)
-PHASES_IN_TEMPLATES=$(jq -r '.task_tracker.phase_templates | keys[]' "$CONFIG_FILE" 2>/dev/null | sort)
+# Every phase in phases section should have inline template properties
+PHASES_WITH_TEMPLATES=0
+for phase in $EXPECTED_PHASES; do
+    HAS_ALL="true"
+    for field in subject description activeForm; do
+        VALUE=$(jq -r ".phases.\"$phase\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
+        if [[ -z "$VALUE" ]]; then
+            HAS_ALL="false"
+            break
+        fi
+    done
+    if [[ "$HAS_ALL" == "true" ]]; then
+        ((PHASES_WITH_TEMPLATES++)) || true
+    fi
+done
 
-if [[ "$PHASES_IN_PHASES" == "$PHASES_IN_TEMPLATES" ]]; then
-    test_pass "Phase templates match phases section keys"
+if [[ "$PHASES_WITH_TEMPLATES" -eq 7 ]]; then
+    test_pass "All 7 phases have complete inline template properties"
 else
-    test_fail "Phase templates match phases section keys"
+    test_fail "All 7 phases have complete inline template properties (found $PHASES_WITH_TEMPLATES/7)"
 fi
 
-# Every stage in stages section should have a task_tracker template
-STAGES_IN_STAGES=$(jq -r '.stages | keys[]' "$CONFIG_FILE" 2>/dev/null | sort)
-STAGES_IN_TEMPLATES=$(jq -r '.task_tracker.stage_templates | keys[]' "$CONFIG_FILE" 2>/dev/null | sort)
+# Every stage in stages section should have inline template properties
+STAGES_WITH_TEMPLATES=0
+for stage in $EXPECTED_STAGES; do
+    HAS_ALL="true"
+    for field in subject description activeForm; do
+        VALUE=$(jq -r ".stages.\"$stage\".\"$field\" // empty" "$CONFIG_FILE" 2>/dev/null)
+        if [[ -z "$VALUE" ]]; then
+            HAS_ALL="false"
+            break
+        fi
+    done
+    if [[ "$HAS_ALL" == "true" ]]; then
+        ((STAGES_WITH_TEMPLATES++)) || true
+    fi
+done
 
-if [[ "$STAGES_IN_STAGES" == "$STAGES_IN_TEMPLATES" ]]; then
-    test_pass "Stage templates match stages section keys"
+if [[ "$STAGES_WITH_TEMPLATES" -eq 6 ]]; then
+    test_pass "All 6 stages have complete inline template properties"
 else
-    test_fail "Stage templates match stages section keys"
+    test_fail "All 6 stages have complete inline template properties (found $STAGES_WITH_TEMPLATES/6)"
 fi
 
 # ============================================================================
-# TEST 9: Existing config sections remain intact
+# TEST 10: Existing config sections remain intact
 # ============================================================================
 
 test_section "Existing Config Integrity"
@@ -259,6 +295,32 @@ assert_success "jq -e '.teammates' '$CONFIG_FILE'" \
 
 assert_success "jq -e '.rework' '$CONFIG_FILE'" \
     "rework section still present"
+
+# ============================================================================
+# TEST 11: PF6 squash task exists
+# ============================================================================
+
+test_section "PF6 Squash Task"
+
+SQUASH_TASK=$(jq -r '.phases."PF6-COMPLETE".tasks[] | select(.operation == "squash-branch") | .id' "$CONFIG_FILE" 2>/dev/null)
+if [[ -n "$SQUASH_TASK" ]]; then
+    test_pass "PF6 has squash-branch task ($SQUASH_TASK)"
+else
+    test_fail "PF6 has squash-branch task"
+fi
+
+# Verify squash task is before create-pr task
+SQUASH_ORDER=$(jq -r '.phases."PF6-COMPLETE".tasks[] | select(.operation == "squash-branch") | .task_order' "$CONFIG_FILE" 2>/dev/null)
+PR_ORDER=$(jq -r '.phases."PF6-COMPLETE".tasks[] | select(.operation == "create-pr") | .task_order' "$CONFIG_FILE" 2>/dev/null)
+if [[ -n "$SQUASH_ORDER" ]] && [[ -n "$PR_ORDER" ]] && [[ "$SQUASH_ORDER" -lt "$PR_ORDER" ]]; then
+    test_pass "squash-branch (order $SQUASH_ORDER) is before create-pr (order $PR_ORDER)"
+else
+    test_fail "squash-branch is before create-pr (squash=$SQUASH_ORDER, pr=$PR_ORDER)"
+fi
+
+# Verify squash task is assigned to cf-git-operations
+SQUASH_ASSIGNED=$(jq -r '.phases."PF6-COMPLETE".tasks[] | select(.operation == "squash-branch") | .assigned_to' "$CONFIG_FILE" 2>/dev/null)
+assert_equals "cf-git-operations" "$SQUASH_ASSIGNED" "squash-branch assigned to cf-git-operations"
 
 # ============================================================================
 # SUMMARY

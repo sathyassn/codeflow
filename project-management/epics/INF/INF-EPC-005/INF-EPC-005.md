@@ -59,7 +59,7 @@ Rationalize format IDs, folder structure, DB schema, validation scripts, and doc
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | INF-TSK-005-001 | DB schema migration — add V4 columns to tasks table | complete | high |
-| INF-TSK-005-002 | Update schema.sql for new format ID convention | todo | high |
+| INF-TSK-005-002 | Update schema.sql for new format ID convention | complete | high |
 | INF-TSK-005-003 | Rewrite id-convention.md | todo | normal |
 | INF-TSK-005-004 | Update validation scripts for new format | todo | normal |
 | INF-TSK-005-005 | Clean up work-graph.jsonl | todo | normal |

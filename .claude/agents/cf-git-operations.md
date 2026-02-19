@@ -157,7 +157,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 ### Step 3: Squash Branch Commits
 
-**When:** Team lead requests commit-and-squash at PF6-TSK-03, AFTER all work stages are complete and reviewed.
+**When:** Team lead requests squash-branch at PF6-TSK-04, AFTER all work stages are complete, reviewed, and outstanding changes are committed (PF6-TSK-03).
+
+**Default before PR creation.** This step runs as PF6-TSK-04 before Step 4 (Create Pull Request). PRs default to single-commit to keep the main branch history clean. The team lead may skip this step if multi-commit PRs are appropriate for the work.
 
 **Purpose:** Consolidate all branch commits into a single clean commit before PR creation. This keeps the main branch history clean with one meaningful commit per work item.
 
@@ -196,13 +198,13 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **Important constraints:**
 
-- 🔒 This step is ONLY executed at PF6-TSK-03, after all work stages are complete and reviewed
+- 🔒 This step is ONLY executed at PF6-TSK-04, after all work stages are complete and reviewed
 - 🔒 If the branch has already been pushed to remote (e.g., draft PR), the subsequent push must use `--force-with-lease` (never `--force`)
 - 🔒 If `git merge-base HEAD main` fails (orphan branch or no common ancestor), skip squash and warn: `"GITOPS: Squash skipped -- no merge-base with main (orphan branch?)"`
 
 ### Step 4: Create Pull Request
 
-**When:** Team lead requests PR at PF6-COMPLETE or work is ready for review.
+**When:** Team lead requests PR at PF6-TSK-05. By default, Step 3 (Squash Branch Commits) should have been completed first, resulting in a single commit on the branch.
 
 **Sandbox bypass:** Load `cf-sandbox-standards` skill for sandbox bypass rules. Always use `dangerouslyDisableSandbox: true` for git push/pull/fetch/clone and gh pr/issue/api commands.
 

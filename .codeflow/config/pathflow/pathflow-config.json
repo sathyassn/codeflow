@@ -4,7 +4,9 @@
     "PF1-INIT": {
       "name": "Session Start",
       "phase_order": 1,
-      "description": "Initialize session, register in DB/JSONL, spawn security teammate",
+      "subject": "PF1-INIT: Initialize session",
+      "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
+      "activeForm": "Initializing PathFlow session",
       "tasks": [
         {
           "id": "PF1-TSK-01",
@@ -32,7 +34,9 @@
     "PF2-CONTEXT": {
       "name": "Context Awareness",
       "phase_order": 2,
-      "description": "Load previous context, determine tracked vs untracked",
+      "subject": "PF2-CONTEXT: Load context",
+      "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
+      "activeForm": "Loading session context",
       "tasks": [
         {
           "id": "PF2-TSK-01",
@@ -67,7 +71,9 @@
     "PF3-CLASSIFY": {
       "name": "Work Classification",
       "phase_order": 3,
-      "description": "Classify work, register task, create branch, activate session",
+      "subject": "PF3-CLASSIFY: Classify and register work",
+      "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "activeForm": "Classifying work and creating branch",
       "tasks": [
         {
           "id": "PF3-TSK-01",
@@ -109,7 +115,9 @@
     "PF4-EXECUTE": {
       "name": "Work Execution",
       "phase_order": 4,
-      "description": "Execute work through configured stage pipeline",
+      "subject": "PF4-EXECUTE: Run work pipeline",
+      "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "activeForm": "Executing work pipeline",
       "tasks": [
         {
           "id": "PF4-TSK-01",
@@ -144,7 +152,9 @@
     "PF5-VERIFY": {
       "name": "Work Verification",
       "phase_order": 5,
-      "description": "Verify all stages passed and acceptance criteria met",
+      "subject": "PF5-VERIFY: Verify acceptance criteria",
+      "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "activeForm": "Verifying acceptance criteria",
       "tasks": [
         {
           "id": "PF5-TSK-01",
@@ -165,7 +175,9 @@
     "PF6-COMPLETE": {
       "name": "Work Completion",
       "phase_order": 6,
-      "description": "Update task status, record session memory, commit state files, create PR",
+      "subject": "PF6-COMPLETE: Finalize and create PR",
+      "description": "Update task status, record session memory, commit state files, squash branch, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "activeForm": "Finalizing work and creating PR",
       "tasks": [
         {
           "id": "PF6-TSK-01",
@@ -184,13 +196,20 @@
         {
           "id": "PF6-TSK-03",
           "task_order": 3,
-          "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state), then squash all branch commits into a single commit with a synthesized conventional-commit message via cf-git-operations",
+          "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state) via cf-git-operations",
           "assigned_to": "cf-git-operations",
-          "operation": "commit-and-squash"
+          "operation": "commit-outstanding-changes"
         },
         {
           "id": "PF6-TSK-04",
           "task_order": 4,
+          "description": "Squash all branch commits into a single commit with a synthesized conventional-commit message before PR creation",
+          "assigned_to": "cf-git-operations",
+          "operation": "squash-branch"
+        },
+        {
+          "id": "PF6-TSK-05",
+          "task_order": 5,
           "description": "Create PR via cf-git-operations",
           "assigned_to": "cf-git-operations",
           "operation": "create-pr"
@@ -200,7 +219,9 @@
     "PF7-END": {
       "name": "Session End",
       "phase_order": 7,
-      "description": "Shutdown teammates, dissolve team (hooks handle cleanup)",
+      "subject": "PF7-END: Shutdown and cleanup",
+      "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
+      "activeForm": "Shutting down session",
       "tasks": [
         {
           "id": "PF7-TSK-01",
@@ -230,6 +251,9 @@
     "WS-DEV": {
       "name": "Development",
       "teammate": "cf-development",
+      "subject": "WS-DEV: Development ({task_id})",
+      "description": "Code implementation and unit tests. Stage: {stage_id}, Teammate: cf-development, Task: {task_id}, Iteration: {iteration}.",
+      "activeForm": "Implementing code changes",
       "max_rework_iterations": 3,
       "max_parallel": 3,
       "batch_size": 2
@@ -237,6 +261,9 @@
     "WS-PLAN": {
       "name": "Planning",
       "teammate": "cf-planning",
+      "subject": "WS-PLAN: Planning ({task_id})",
+      "description": "Design, architecture, and analysis. Stage: {stage_id}, Teammate: cf-planning, Task: {task_id}, Iteration: {iteration}.",
+      "activeForm": "Creating design and plan",
       "max_rework_iterations": 3,
       "max_parallel": 2,
       "batch_size": 2
@@ -244,6 +271,9 @@
     "WS-DOCS": {
       "name": "Documentation",
       "teammate": "cf-documentation",
+      "subject": "WS-DOCS: Documentation ({task_id})",
+      "description": "Documentation writing and updates. Stage: {stage_id}, Teammate: cf-documentation, Task: {task_id}, Iteration: {iteration}.",
+      "activeForm": "Writing documentation",
       "max_rework_iterations": 3,
       "max_parallel": 3,
       "batch_size": 2
@@ -251,6 +281,9 @@
     "WS-TEST": {
       "name": "Testing",
       "teammate": "cf-quality-assurance",
+      "subject": "WS-TEST: Testing ({task_id})",
+      "description": "Test implementation as primary deliverable. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Iteration: {iteration}.",
+      "activeForm": "Implementing tests",
       "max_rework_iterations": 3,
       "max_parallel": 2,
       "batch_size": 2
@@ -258,6 +291,9 @@
     "WS-REV": {
       "name": "Review",
       "teammate": "cf-review",
+      "subject": "WS-REV: Review ({task_id})",
+      "description": "Independent review of completed work. Stage: {stage_id}, Teammate: cf-review, Mode: {review_mode}, Task: {task_id}, Iteration: {iteration}.",
+      "activeForm": "Reviewing work",
       "max_rework_iterations": 3,
       "max_parallel": 1,
       "batch_size": 1
@@ -265,6 +301,9 @@
     "WS-QA": {
       "name": "Quality Assurance",
       "teammate": "cf-quality-assurance",
+      "subject": "WS-QA: Quality Assurance ({task_id})",
+      "description": "Integration testing and acceptance verification. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Retry: {retry}.",
+      "activeForm": "Running quality assurance checks",
       "max_qa_retries": 2,
       "rework_target": "primary",
       "max_parallel": 1,
@@ -272,78 +311,33 @@
     }
   },
   "pipelines": {
-    "FEAT": [
-      "WS-DEV",
-      "WS-REV",
-      "WS-QA"
-    ],
-    "FIX": [
-      "WS-DEV",
-      "WS-REV",
-      "WS-QA"
-    ],
-    "HTFX": [
-      "WS-DEV",
-      "WS-REV"
-    ],
-    "RFCT": [
-      "WS-DEV",
-      "WS-REV",
-      "WS-QA"
-    ],
-    "DOCS": [
-      "WS-DOCS",
-      "WS-REV"
-    ],
-    "TEST": [
-      "WS-TEST",
-      "WS-REV"
-    ],
-    "CHOR": [
-      "WS-DEV",
-      "WS-REV"
-    ],
-    "CICD": [
-      "WS-DEV",
-      "WS-REV",
-      "WS-QA"
-    ],
-    "SPKE": [
-      "WS-PLAN",
-      "WS-REV"
-    ],
-    "PLAN": [
-      "WS-PLAN",
-      "WS-REV"
-    ]
+    "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
+    "FIX": ["WS-DEV", "WS-REV", "WS-QA"],
+    "HTFX": ["WS-DEV", "WS-REV"],
+    "RFCT": ["WS-DEV", "WS-REV", "WS-QA"],
+    "DOCS": ["WS-DOCS", "WS-REV"],
+    "TEST": ["WS-TEST", "WS-REV"],
+    "CHOR": ["WS-DEV", "WS-REV"],
+    "CICD": ["WS-DEV", "WS-REV", "WS-QA"],
+    "SPKE": ["WS-PLAN", "WS-REV"],
+    "PLAN": ["WS-PLAN", "WS-REV"]
   },
   "teammates": {
     "persistent": {
       "cf-security": {
         "spawn_phase": "PF1-INIT",
         "shutdown_phase": "PF7-END",
-        "definition": ".claude/agents/cf-security.md",
-        "embeds": [
-          "cf-security-management"
-        ]
+        "definition": ".claude/agents/cf-security.md"
       },
       "cf-knowledge-layer": {
         "spawn_phase": "PF2-CONTEXT",
         "shutdown_phase": "PF7-END",
-        "definition": ".claude/agents/cf-knowledge-layer.md",
-        "embeds": [
-          "cf-memory-management",
-          "cf-task-management",
-          "cf-db-operations"
-        ]
+        "definition": ".claude/agents/cf-knowledge-layer.md"
       },
       "cf-git-operations": {
         "spawn_phase": "PF3-CLASSIFY",
         "shutdown_phase": "PF7-END",
-        "definition": ".claude/agents/cf-git-operations.md",
-        "embeds": [
-          "cf-git-workflow"
-        ]
+        "definition": ".claude/agents/cf-git-operations.md"
       }
     },
     "on_demand": {
@@ -364,10 +358,7 @@
         "definition": ".claude/agents/cf-review.md"
       },
       "cf-quality-assurance": {
-        "stage": [
-          "WS-QA",
-          "WS-TEST"
-        ],
+        "stage": ["WS-QA", "WS-TEST"],
         "definition": ".claude/agents/cf-quality-assurance.md"
       }
     }
@@ -388,76 +379,7 @@
       "enabled": true,
       "source_of_truth": "jsonl",
       "mirror_target": "Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)",
-      "description": "Each PathFlow phase and task MUST be a separate entry. See CLAUDE.md Section 7."
-    },
-    "phase_templates": {
-      "PF1-INIT": {
-        "subject": "PF1-INIT: Initialize session",
-        "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
-        "activeForm": "Initializing PathFlow session"
-      },
-      "PF2-CONTEXT": {
-        "subject": "PF2-CONTEXT: Load context",
-        "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
-        "activeForm": "Loading session context"
-      },
-      "PF3-CLASSIFY": {
-        "subject": "PF3-CLASSIFY: Classify and register work",
-        "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-        "activeForm": "Classifying work and creating branch"
-      },
-      "PF4-EXECUTE": {
-        "subject": "PF4-EXECUTE: Run work pipeline",
-        "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-        "activeForm": "Executing work pipeline"
-      },
-      "PF5-VERIFY": {
-        "subject": "PF5-VERIFY: Verify acceptance criteria",
-        "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-        "activeForm": "Verifying acceptance criteria"
-      },
-      "PF6-COMPLETE": {
-        "subject": "PF6-COMPLETE: Finalize and create PR",
-        "description": "Update task status, record session memory, commit state files, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-        "activeForm": "Finalizing work and creating PR"
-      },
-      "PF7-END": {
-        "subject": "PF7-END: Shutdown and cleanup",
-        "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
-        "activeForm": "Shutting down session"
-      }
-    },
-    "stage_templates": {
-      "WS-DEV": {
-        "subject": "WS-DEV: Development ({task_id})",
-        "description": "Code implementation and unit tests. Stage: {stage_id}, Teammate: cf-development, Task: {task_id}, Iteration: {iteration}.",
-        "activeForm": "Implementing code changes"
-      },
-      "WS-PLAN": {
-        "subject": "WS-PLAN: Planning ({task_id})",
-        "description": "Design, architecture, and analysis. Stage: {stage_id}, Teammate: cf-planning, Task: {task_id}, Iteration: {iteration}.",
-        "activeForm": "Creating design and plan"
-      },
-      "WS-DOCS": {
-        "subject": "WS-DOCS: Documentation ({task_id})",
-        "description": "Documentation writing and updates. Stage: {stage_id}, Teammate: cf-documentation, Task: {task_id}, Iteration: {iteration}.",
-        "activeForm": "Writing documentation"
-      },
-      "WS-TEST": {
-        "subject": "WS-TEST: Testing ({task_id})",
-        "description": "Test implementation as primary deliverable. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Iteration: {iteration}.",
-        "activeForm": "Implementing tests"
-      },
-      "WS-REV": {
-        "subject": "WS-REV: Review ({task_id})",
-        "description": "Independent review of completed work. Stage: {stage_id}, Teammate: cf-review, Mode: {review_mode}, Task: {task_id}, Iteration: {iteration}.",
-        "activeForm": "Reviewing work"
-      },
-      "WS-QA": {
-        "subject": "WS-QA: Quality Assurance ({task_id})",
-        "description": "Integration testing and acceptance verification. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Retry: {retry}.",
-        "activeForm": "Running quality assurance checks"
-      }
+      "description": "Each PathFlow phase and task MUST be a separate entry. Template properties (subject, description, activeForm) are inline in phases and stages sections. See CLAUDE.md Section 7."
     }
   }
 }

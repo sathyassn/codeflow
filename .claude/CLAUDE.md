@@ -802,11 +802,11 @@ The team lead MUST mirror PathFlow state into Claude Code's internal task tracke
 
 | PathFlow Event | Task Tracker Action |
 |---|---|
-| Phase entered | TaskCreate with phase_templates[{phase}] -- ONE entry per phase |
+| Phase entered | TaskCreate using phases[{phase}].subject / .description / .activeForm -- ONE entry per phase |
 | Phase task started | TaskCreate per PF{N}-TSK-{NN} -- ONE entry per task |
 | Phase task completed | TaskUpdate status=completed for that task entry |
 | Phase completed | TaskUpdate status=completed for the phase entry |
-| Stage entered | TaskCreate with stage_templates[{stage}] -- ONE entry per stage |
+| Stage entered | TaskCreate using stages[{stage}].subject / .description / .activeForm -- ONE entry per stage |
 | Stage completed | TaskUpdate status=completed for that stage entry |
 
 **Rules:**
@@ -817,7 +817,7 @@ The team lead MUST mirror PathFlow state into Claude Code's internal task tracke
 - Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
 - JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
 
-**Reference:** `pathflow-config.json` `task_tracker` section defines templates and behavior.
+**Reference:** `pathflow-config.json` -- template properties (subject, description, activeForm) are inline in the `phases` and `stages` sections.
 
 ### Routing Compliance
 

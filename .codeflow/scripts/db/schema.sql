@@ -815,7 +815,8 @@ INSERT OR IGNORE INTO area_types (code, name, description) VALUES
 
 -- ============================================================================
 -- AREA FOLDER MAPPING
--- Maps area type codes to filesystem folder names
+-- Maps area type codes to filesystem folder names.
+-- Convention: folder_name is the lowercase of the area code itself.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS area_folder_mapping (
@@ -826,12 +827,12 @@ CREATE TABLE IF NOT EXISTS area_folder_mapping (
 );
 
 INSERT OR IGNORE INTO area_folder_mapping (area_type, folder_name, display_name) VALUES
-    ('FRT', 'FRT', 'Frontend'),
-    ('BKD', 'BKD', 'Backend'),
-    ('INF', 'INF', 'Infrastructure'),
-    ('SHR', 'SHR', 'Shared'),
-    ('DOC', 'DOC', 'Documentation'),
-    ('PLN', 'PLN', 'Planning');
+    ('FRT', 'frt', 'Frontend'),
+    ('BKD', 'bkd', 'Backend'),
+    ('INF', 'inf', 'Infrastructure'),
+    ('SHR', 'shr', 'Shared'),
+    ('DOC', 'doc', 'Documentation'),
+    ('PLN', 'pln', 'Planning');
 
 -- Seed default work types
 INSERT OR IGNORE INTO work_types (code, name, branch_prefix, commit_type, urgency) VALUES
