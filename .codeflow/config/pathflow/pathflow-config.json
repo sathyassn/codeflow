@@ -6,9 +6,27 @@
       "phase_order": 1,
       "description": "Initialize session, register in DB/JSONL, spawn security teammate",
       "tasks": [
-        { "id": "PF1-TSK-01", "task_order": 1, "description": "Initialize PathFlow session record", "assigned_to": "team-lead", "operation": "TeamCreate + create pathflow-active flag" },
-        { "id": "PF1-TSK-02", "task_order": 2, "description": "Register session in DB/JSONL with tracking_level='pending'", "assigned_to": "team-lead", "operation": "Register session — deferred to cf-knowledge-layer at PF2" },
-        { "id": "PF1-TSK-03", "task_order": 3, "description": "Spawn cf-security teammate", "assigned_to": "team-lead", "operation": "Task(subagent_type=cf-security)" }
+        {
+          "id": "PF1-TSK-01",
+          "task_order": 1,
+          "description": "Initialize PathFlow session record",
+          "assigned_to": "team-lead",
+          "operation": "TeamCreate + create pathflow-active flag"
+        },
+        {
+          "id": "PF1-TSK-02",
+          "task_order": 2,
+          "description": "Register session in DB/JSONL with tracking_level='pending'",
+          "assigned_to": "team-lead",
+          "operation": "Register session \u2014 deferred to cf-knowledge-layer at PF2"
+        },
+        {
+          "id": "PF1-TSK-03",
+          "task_order": 3,
+          "description": "Spawn cf-security teammate",
+          "assigned_to": "team-lead",
+          "operation": "Task(subagent_type=cf-security)"
+        }
       ]
     },
     "PF2-CONTEXT": {
@@ -16,10 +34,34 @@
       "phase_order": 2,
       "description": "Load previous context, determine tracked vs untracked",
       "tasks": [
-        { "id": "PF2-TSK-01", "task_order": 1, "description": "Spawn cf-knowledge-layer teammate", "assigned_to": "team-lead", "operation": "Task(subagent_type=cf-knowledge-layer)" },
-        { "id": "PF2-TSK-02", "task_order": 2, "description": "Query active work and session state", "assigned_to": "cf-knowledge-layer", "operation": "detect-active-work" },
-        { "id": "PF2-TSK-03", "task_order": 3, "description": "Load memory context for current work", "assigned_to": "cf-knowledge-layer", "operation": "load-work-context" },
-        { "id": "PF2-TSK-04", "task_order": 4, "description": "Determine tracked vs untracked decision", "assigned_to": "team-lead", "operation": "Tracking decision (tracked/untracked/ask)" }
+        {
+          "id": "PF2-TSK-01",
+          "task_order": 1,
+          "description": "Spawn cf-knowledge-layer teammate",
+          "assigned_to": "team-lead",
+          "operation": "Task(subagent_type=cf-knowledge-layer)"
+        },
+        {
+          "id": "PF2-TSK-02",
+          "task_order": 2,
+          "description": "Query active work and session state",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "detect-active-work"
+        },
+        {
+          "id": "PF2-TSK-03",
+          "task_order": 3,
+          "description": "Load memory context for current work",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "load-work-context"
+        },
+        {
+          "id": "PF2-TSK-04",
+          "task_order": 4,
+          "description": "Determine tracked vs untracked decision",
+          "assigned_to": "team-lead",
+          "operation": "Tracking decision (tracked/untracked/ask)"
+        }
       ]
     },
     "PF3-CLASSIFY": {
@@ -27,11 +69,41 @@
       "phase_order": 3,
       "description": "Classify work, register task, create branch, activate session",
       "tasks": [
-        { "id": "PF3-TSK-01", "task_order": 1, "description": "Classify work type and area", "assigned_to": "team-lead", "operation": "Work type classification from CLAUDE.md Section 6" },
-        { "id": "PF3-TSK-02", "task_order": 2, "description": "Register task in WorkGraph", "assigned_to": "cf-knowledge-layer", "operation": "ensure-work-registered" },
-        { "id": "PF3-TSK-03", "task_order": 3, "description": "Spawn cf-git-operations teammate", "assigned_to": "team-lead", "operation": "Task(subagent_type=cf-git-operations)" },
-        { "id": "PF3-TSK-04", "task_order": 4, "description": "Create feature branch", "assigned_to": "cf-git-operations", "operation": "create-feature-branch" },
-        { "id": "PF3-TSK-05", "task_order": 5, "description": "Activate session: set tracking_level='tracked', populate work_type, area_type", "assigned_to": "cf-knowledge-layer", "operation": "begin-work" }
+        {
+          "id": "PF3-TSK-01",
+          "task_order": 1,
+          "description": "Classify work type and area",
+          "assigned_to": "team-lead",
+          "operation": "Work type classification from CLAUDE.md Section 6"
+        },
+        {
+          "id": "PF3-TSK-02",
+          "task_order": 2,
+          "description": "Register task in WorkGraph",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "ensure-work-registered"
+        },
+        {
+          "id": "PF3-TSK-03",
+          "task_order": 3,
+          "description": "Spawn cf-git-operations teammate",
+          "assigned_to": "team-lead",
+          "operation": "Task(subagent_type=cf-git-operations)"
+        },
+        {
+          "id": "PF3-TSK-04",
+          "task_order": 4,
+          "description": "Create feature branch",
+          "assigned_to": "cf-git-operations",
+          "operation": "create-feature-branch"
+        },
+        {
+          "id": "PF3-TSK-05",
+          "task_order": 5,
+          "description": "Activate session: set tracking_level='tracked', populate work_type, area_type",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "begin-work"
+        }
       ]
     },
     "PF4-EXECUTE": {
@@ -39,10 +111,34 @@
       "phase_order": 4,
       "description": "Execute work through configured stage pipeline",
       "tasks": [
-        { "id": "PF4-TSK-01", "task_order": 1, "description": "Look up stage pipeline from work_type_stages", "assigned_to": "team-lead", "operation": "Lookup pipeline from work_type_stages in this config" },
-        { "id": "PF4-TSK-02", "task_order": 2, "description": "Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)", "assigned_to": "team-lead", "operation": "Spawn stage teammate per pipeline" },
-        { "id": "PF4-TSK-03", "task_order": 3, "description": "Execute WS-REV stage (universal review)", "assigned_to": "team-lead", "operation": "Spawn cf-review with mode per work type" },
-        { "id": "PF4-TSK-04", "task_order": 4, "description": "Execute WS-QA stage (if pipeline includes it)", "assigned_to": "team-lead", "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)" }
+        {
+          "id": "PF4-TSK-01",
+          "task_order": 1,
+          "description": "Look up stage pipeline from work_type_stages",
+          "assigned_to": "team-lead",
+          "operation": "Lookup pipeline from work_type_stages in this config"
+        },
+        {
+          "id": "PF4-TSK-02",
+          "task_order": 2,
+          "description": "Execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST)",
+          "assigned_to": "team-lead",
+          "operation": "Spawn stage teammate per pipeline"
+        },
+        {
+          "id": "PF4-TSK-03",
+          "task_order": 3,
+          "description": "Execute WS-REV stage (universal review)",
+          "assigned_to": "team-lead",
+          "operation": "Spawn cf-review with mode per work type"
+        },
+        {
+          "id": "PF4-TSK-04",
+          "task_order": 4,
+          "description": "Execute WS-QA stage (if pipeline includes it)",
+          "assigned_to": "team-lead",
+          "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)"
+        }
       ]
     },
     "PF5-VERIFY": {
@@ -50,8 +146,20 @@
       "phase_order": 5,
       "description": "Verify all stages passed and acceptance criteria met",
       "tasks": [
-        { "id": "PF5-TSK-01", "task_order": 1, "description": "Verify all pipeline stages completed with pass verdict", "assigned_to": "team-lead", "operation": "Verify all stage sentinels exist" },
-        { "id": "PF5-TSK-02", "task_order": 2, "description": "Check acceptance criteria met", "assigned_to": "team-lead", "operation": "Check acceptance criteria against task record" }
+        {
+          "id": "PF5-TSK-01",
+          "task_order": 1,
+          "description": "Verify all pipeline stages completed with pass verdict",
+          "assigned_to": "team-lead",
+          "operation": "Verify all stage sentinels exist"
+        },
+        {
+          "id": "PF5-TSK-02",
+          "task_order": 2,
+          "description": "Check acceptance criteria met",
+          "assigned_to": "team-lead",
+          "operation": "Check acceptance criteria against task record"
+        }
       ]
     },
     "PF6-COMPLETE": {
@@ -59,10 +167,34 @@
       "phase_order": 6,
       "description": "Update task status, record session memory, commit state files, create PR",
       "tasks": [
-        { "id": "PF6-TSK-01", "task_order": 1, "description": "Update task status to complete in WorkGraph AND update the corresponding markdown task file (project-management/.../tasks/{task_id}.md) status field from current value to 'complete'. Both DB and markdown Tier 2 status MUST be updated.", "assigned_to": "cf-knowledge-layer", "operation": "complete-work" },
-        { "id": "PF6-TSK-02", "task_order": 2, "description": "Update project memory via cf-knowledge-layer", "assigned_to": "cf-knowledge-layer", "operation": "record-session-summary" },
-        { "id": "PF6-TSK-03", "task_order": 3, "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state), then squash all branch commits into a single commit with a synthesized conventional-commit message via cf-git-operations", "assigned_to": "cf-git-operations", "operation": "commit-and-squash" },
-        { "id": "PF6-TSK-04", "task_order": 4, "description": "Create PR via cf-git-operations", "assigned_to": "cf-git-operations", "operation": "create-pr" }
+        {
+          "id": "PF6-TSK-01",
+          "task_order": 1,
+          "description": "Complete task in WorkGraph (cf-knowledge-layer syncs Tier 2 markdown)",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "complete-work"
+        },
+        {
+          "id": "PF6-TSK-02",
+          "task_order": 2,
+          "description": "Update project memory via cf-knowledge-layer",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "record-session-summary"
+        },
+        {
+          "id": "PF6-TSK-03",
+          "task_order": 3,
+          "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state), then squash all branch commits into a single commit with a synthesized conventional-commit message via cf-git-operations",
+          "assigned_to": "cf-git-operations",
+          "operation": "commit-and-squash"
+        },
+        {
+          "id": "PF6-TSK-04",
+          "task_order": 4,
+          "description": "Create PR via cf-git-operations",
+          "assigned_to": "cf-git-operations",
+          "operation": "create-pr"
+        }
       ]
     },
     "PF7-END": {
@@ -70,44 +202,174 @@
       "phase_order": 7,
       "description": "Shutdown teammates, dissolve team (hooks handle cleanup)",
       "tasks": [
-        { "id": "PF7-TSK-01", "task_order": 1, "description": "Shutdown on-demand role teammates", "assigned_to": "team-lead", "operation": "SendMessage(type=shutdown_request) to on-demand teammates" },
-        { "id": "PF7-TSK-02", "task_order": 2, "description": "Shutdown persistent function teammates", "assigned_to": "team-lead", "operation": "SendMessage(type=shutdown_request) to persistent teammates" },
-        { "id": "PF7-TSK-03", "task_order": 3, "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)", "assigned_to": "team-lead", "operation": "TeamDelete (after pathflow-active flag removed by SessionEnd hook)" }
+        {
+          "id": "PF7-TSK-01",
+          "task_order": 1,
+          "description": "Shutdown on-demand role teammates",
+          "assigned_to": "team-lead",
+          "operation": "SendMessage(type=shutdown_request) to on-demand teammates"
+        },
+        {
+          "id": "PF7-TSK-02",
+          "task_order": 2,
+          "description": "Shutdown persistent function teammates",
+          "assigned_to": "team-lead",
+          "operation": "SendMessage(type=shutdown_request) to persistent teammates"
+        },
+        {
+          "id": "PF7-TSK-03",
+          "task_order": 3,
+          "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)",
+          "assigned_to": "team-lead",
+          "operation": "TeamDelete (after pathflow-active flag removed by SessionEnd hook)"
+        }
       ]
     }
   },
   "stages": {
-    "WS-DEV": { "name": "Development", "teammate": "cf-development", "max_rework_iterations": 3, "max_parallel": 3, "batch_size": 2 },
-    "WS-PLAN": { "name": "Planning", "teammate": "cf-planning", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
-    "WS-DOCS": { "name": "Documentation", "teammate": "cf-documentation", "max_rework_iterations": 3, "max_parallel": 3, "batch_size": 2 },
-    "WS-TEST": { "name": "Testing", "teammate": "cf-quality-assurance", "max_rework_iterations": 3, "max_parallel": 2, "batch_size": 2 },
-    "WS-REV": { "name": "Review", "teammate": "cf-review", "max_rework_iterations": 3, "max_parallel": 1, "batch_size": 1 },
-    "WS-QA": { "name": "Quality Assurance", "teammate": "cf-quality-assurance", "max_qa_retries": 2, "rework_target": "primary", "max_parallel": 1, "batch_size": 1 }
+    "WS-DEV": {
+      "name": "Development",
+      "teammate": "cf-development",
+      "max_rework_iterations": 3,
+      "max_parallel": 3,
+      "batch_size": 2
+    },
+    "WS-PLAN": {
+      "name": "Planning",
+      "teammate": "cf-planning",
+      "max_rework_iterations": 3,
+      "max_parallel": 2,
+      "batch_size": 2
+    },
+    "WS-DOCS": {
+      "name": "Documentation",
+      "teammate": "cf-documentation",
+      "max_rework_iterations": 3,
+      "max_parallel": 3,
+      "batch_size": 2
+    },
+    "WS-TEST": {
+      "name": "Testing",
+      "teammate": "cf-quality-assurance",
+      "max_rework_iterations": 3,
+      "max_parallel": 2,
+      "batch_size": 2
+    },
+    "WS-REV": {
+      "name": "Review",
+      "teammate": "cf-review",
+      "max_rework_iterations": 3,
+      "max_parallel": 1,
+      "batch_size": 1
+    },
+    "WS-QA": {
+      "name": "Quality Assurance",
+      "teammate": "cf-quality-assurance",
+      "max_qa_retries": 2,
+      "rework_target": "primary",
+      "max_parallel": 1,
+      "batch_size": 1
+    }
   },
   "pipelines": {
-    "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
-    "FIX": ["WS-DEV", "WS-REV", "WS-QA"],
-    "HTFX": ["WS-DEV", "WS-REV"],
-    "RFCT": ["WS-DEV", "WS-REV", "WS-QA"],
-    "DOCS": ["WS-DOCS", "WS-REV"],
-    "TEST": ["WS-TEST", "WS-REV"],
-    "CHOR": ["WS-DEV", "WS-REV"],
-    "CICD": ["WS-DEV", "WS-REV", "WS-QA"],
-    "SPKE": ["WS-PLAN", "WS-REV"],
-    "PLAN": ["WS-PLAN", "WS-REV"]
+    "FEAT": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "FIX": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "HTFX": [
+      "WS-DEV",
+      "WS-REV"
+    ],
+    "RFCT": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "DOCS": [
+      "WS-DOCS",
+      "WS-REV"
+    ],
+    "TEST": [
+      "WS-TEST",
+      "WS-REV"
+    ],
+    "CHOR": [
+      "WS-DEV",
+      "WS-REV"
+    ],
+    "CICD": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "SPKE": [
+      "WS-PLAN",
+      "WS-REV"
+    ],
+    "PLAN": [
+      "WS-PLAN",
+      "WS-REV"
+    ]
   },
   "teammates": {
     "persistent": {
-      "cf-security": { "spawn_phase": "PF1-INIT", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-security.md", "embeds": ["cf-security-management"] },
-      "cf-knowledge-layer": { "spawn_phase": "PF2-CONTEXT", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-knowledge-layer.md", "embeds": ["cf-memory-management", "cf-task-management", "cf-db-operations"] },
-      "cf-git-operations": { "spawn_phase": "PF3-CLASSIFY", "shutdown_phase": "PF7-END", "definition": ".claude/agents/cf-git-operations.md", "embeds": ["cf-git-workflow"] }
+      "cf-security": {
+        "spawn_phase": "PF1-INIT",
+        "shutdown_phase": "PF7-END",
+        "definition": ".claude/agents/cf-security.md",
+        "embeds": [
+          "cf-security-management"
+        ]
+      },
+      "cf-knowledge-layer": {
+        "spawn_phase": "PF2-CONTEXT",
+        "shutdown_phase": "PF7-END",
+        "definition": ".claude/agents/cf-knowledge-layer.md",
+        "embeds": [
+          "cf-memory-management",
+          "cf-task-management",
+          "cf-db-operations"
+        ]
+      },
+      "cf-git-operations": {
+        "spawn_phase": "PF3-CLASSIFY",
+        "shutdown_phase": "PF7-END",
+        "definition": ".claude/agents/cf-git-operations.md",
+        "embeds": [
+          "cf-git-workflow"
+        ]
+      }
     },
     "on_demand": {
-      "cf-development": { "stage": "WS-DEV", "definition": ".claude/agents/cf-development.md" },
-      "cf-planning": { "stage": "WS-PLAN", "definition": ".claude/agents/cf-planning.md" },
-      "cf-documentation": { "stage": "WS-DOCS", "definition": ".claude/agents/cf-documentation.md" },
-      "cf-review": { "stage": "WS-REV", "definition": ".claude/agents/cf-review.md" },
-      "cf-quality-assurance": { "stage": ["WS-QA", "WS-TEST"], "definition": ".claude/agents/cf-quality-assurance.md" }
+      "cf-development": {
+        "stage": "WS-DEV",
+        "definition": ".claude/agents/cf-development.md"
+      },
+      "cf-planning": {
+        "stage": "WS-PLAN",
+        "definition": ".claude/agents/cf-planning.md"
+      },
+      "cf-documentation": {
+        "stage": "WS-DOCS",
+        "definition": ".claude/agents/cf-documentation.md"
+      },
+      "cf-review": {
+        "stage": "WS-REV",
+        "definition": ".claude/agents/cf-review.md"
+      },
+      "cf-quality-assurance": {
+        "stage": [
+          "WS-QA",
+          "WS-TEST"
+        ],
+        "definition": ".claude/agents/cf-quality-assurance.md"
+      }
     }
   },
   "rework": {
@@ -116,26 +378,17 @@
     "stage_timeout_minutes": 30,
     "escalation": "lead"
   },
+  "commit_standards": {
+    "delegate_to": "cf-git-operations",
+    "provide": "Description of what changed and why"
+  },
   "task_tracker": {
     "purpose": "Mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility and context overflow recovery",
     "mirroring": {
       "enabled": true,
       "source_of_truth": "jsonl",
       "mirror_target": "Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)",
-      "description": "Each PathFlow phase and each task within a phase MUST be created as a SEPARATE entry in Claude Code's internal task tracker. Phases map to parent tasks, tasks within phases map to child tasks. NEVER club multiple phases or tasks into a single tracker entry.",
-      "behavior": {
-        "on_phase_enter": "Lead creates ONE TaskCreate entry per phase using phase_templates[{phase}]. Phase tasks appear as separate entries.",
-        "on_task_start": "Lead creates ONE TaskCreate entry per PF{N}-TSK-{NN} task from pathflow-config phases[{phase}].tasks. Each task gets its own entry with the task description and assigned_to teammate.",
-        "on_task_complete": "Lead marks individual task entry completed via TaskUpdate when the task's assigned_to teammate reports completion.",
-        "on_phase_exit": "Lead marks the phase-level task completed via TaskUpdate after ALL subtasks complete.",
-        "on_stage_enter": "Lead creates ONE TaskCreate entry per stage using stage_templates[{stage}] with substituted placeholders.",
-        "on_stage_exit": "Lead marks stage task completed via TaskUpdate after stage teammate delivers verdict.",
-        "granularity": "individual — Every phase = 1 tracker entry. Every PF{N}-TSK-{NN} = 1 tracker entry. NEVER combine multiple phases or tasks into a single entry.",
-        "ordering": "Tasks MUST be created in phase_order × task_order sequence. Use TaskUpdate addBlockedBy to express dependencies.",
-        "owner": "team-lead",
-        "recovery": "If entries lost (context overflow), re-create for current phase only. Entries are ephemeral and disposable.",
-        "routing_compliance": "When executing PF tasks, the lead MUST follow the assigned_to field to determine WHICH teammate to delegate to, and the operation field to determine WHAT operation to request. These fields are authoritative routing directives, not optional metadata. Ignoring assigned_to or operation is a protocol violation."
-      }
+      "description": "Each PathFlow phase and task MUST be a separate entry. See CLAUDE.md Section 7."
     },
     "phase_templates": {
       "PF1-INIT": {

@@ -202,7 +202,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_in_progress ON tasks(status, assignee_id)
 CREATE INDEX IF NOT EXISTS idx_tasks_autorun ON tasks(epic_id, status, autorun_eligible)
     WHERE autorun_eligible = TRUE AND status = 'todo';
 CREATE INDEX IF NOT EXISTS idx_tasks_stage ON tasks(stage, stage_status);
-CREATE INDEX IF NOT EXISTS idx_tasks_format_id ON tasks(format_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_stage_status ON tasks(stage_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_format_id ON tasks(format_id);
 
 -- Task dependencies
 CREATE TABLE IF NOT EXISTS task_dependencies (
@@ -790,8 +791,10 @@ END;
 -- Insert schema version
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- Seed reserved domain
+-- Seed domains
 INSERT OR IGNORE INTO domains (code, name, is_reserved) VALUES ('GENL', 'General', TRUE);
+INSERT OR IGNORE INTO domains (code, name, description, is_reserved) VALUES ('QUAL', 'Quality Assurance', 'Testing and QA', FALSE);
+INSERT OR IGNORE INTO domains (code, name, description, is_reserved) VALUES ('PMGT', 'Project Management', 'Project management and tracking', FALSE);
 
 -- Seed default estimates
 INSERT OR IGNORE INTO estimate_types (code, name, description, sort_order) VALUES

@@ -45,7 +45,7 @@ Rationalize format IDs, folder structure, DB schema, validation scripts, and doc
 
 ## Acceptance Criteria
 
-- [ ] DB schema updated with V4 columns and new seed data
+- [x] DB schema updated with V4 columns and new seed data
 - [ ] Format ID validation scripts match new convention
 - [ ] id-convention.md fully rewritten
 - [ ] Project management folders use area codes (PLN/, INF/, DOC/)
@@ -58,7 +58,7 @@ Rationalize format IDs, folder structure, DB schema, validation scripts, and doc
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-005-001 | DB schema migration — add V4 columns to tasks table | todo | high |
+| INF-TSK-005-001 | DB schema migration — add V4 columns to tasks table | complete | high |
 | INF-TSK-005-002 | Update schema.sql for new format ID convention | todo | high |
 | INF-TSK-005-003 | Rewrite id-convention.md | todo | normal |
 | INF-TSK-005-004 | Update validation scripts for new format | todo | normal |
