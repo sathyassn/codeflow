@@ -1,8 +1,8 @@
 {
-  "_template": "strict",
+  "_template": "autonomous",
   "_version": "1.1.0",
-  "_description": "Maximum visibility, ask for everything except reads. Team default.",
-  "_use_case": "Onboarding, auditing, learning, high-security environments",
+  "_description": "Local autonomy with network oversight - auto-approve local ops, ask for network git.",
+  "_use_case": "Experienced developers, routine work, trusted local context",
   "_path_syntax": {
     "note": "Claude Code uses different path prefixes for pattern matching",
     "/path": "Relative to settings file location (project root) - RECOMMENDED",
@@ -19,8 +19,8 @@
   },
   "_web_fetch_config": {
     "_note": "WebFetch hook reads this config. Local settings override project settings.",
-    "approvalMode": "strict",
-    "untrustedAction": "block"
+    "approvalMode": "autonomous",
+    "untrustedAction": "ask"
   },
   "_plugins_note": {
     "_note": "Plugin config. IDENTICAL across all templates (like hooks).",
@@ -33,56 +33,54 @@
   },
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": false
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "*.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
+      ]
+    }
   },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "teammateMode": "in-process",
   "permissions": {
-    "defaultMode": "default",
-    "ask": [
-      "Edit(/**)",
-      "Write(/**)",
-      "Bash(rm:*)",
-      "Bash(mkdir:*)",
-      "Bash(cp:*)",
-      "Bash(mv:*)",
-      "Bash(git clone:*)",
-      "Bash(git commit:*)",
-      "Bash(git fetch:*)",
-      "Bash(git pull:*)",
-      "Bash(git push:*)",
-      "Bash(git remote:*)",
-      "Bash(gh:*)",
-      "Bash(npm:*)",
-      "Bash(yarn:*)",
-      "Bash(pip:*)",
-      "Bash(node:*)",
-      "Bash(python:*)",
-      "Bash(./scripts:*)",
-      "Bash(./.codeflow/scripts:*)",
-      "mcp__ide__executeCode"
-    ],
+    "defaultMode": "bypassPermissions",
+    "ask": [],
     "allow": [
       "Read(/**)",
       "Glob(/**)",
       "Grep(/**)",
+      "Edit(/**)",
       "Edit(//tmp/claude/**)",
+      "Write(/**)",
       "Write(//tmp/claude/**)",
-      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
-      "Bash(git branch:*)",
-      "Bash(git show:*)",
-      "Bash(git add:*)",
-      "Bash(git checkout:*)",
-      "Bash(git switch:*)",
-      "Bash(git stash:*)",
       "Bash(git merge:*)",
-      "Bash(git rebase:*)",
       "Bash(git mv:*)",
+      "Bash(git rebase:*)",
+      "Bash(git show:*)",
+      "Bash(git stash:*)",
+      "Bash(git status:*)",
+      "Bash(git switch:*)",
       "Bash(git tag:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(git clone:*)",
+      "Bash(git remote:*)",
+      "Bash(gh:*)",
       "Bash(tmux:*)",
       "Bash(sqlite3:*)",
       "Bash(jq:*)",
@@ -95,6 +93,17 @@
       "Bash(wc:*)",
       "Bash(file:*)",
       "Bash(echo:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(pip:*)",
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "Bash(./scripts:*)",
+      "Bash(./.codeflow/scripts:*)",
       "Skill",
       "SlashCommand",
       "Task",
@@ -102,7 +111,8 @@
       "TodoWrite",
       "WebSearch",
       "NotebookEdit",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "mcp__ide__executeCode"
     ],
     "deny": [
       "Bash(sudo:*)",

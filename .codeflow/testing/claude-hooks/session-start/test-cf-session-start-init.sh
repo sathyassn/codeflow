@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Test: cf-session-start-init.sh (V4 / v1.2.0)
+# Test: cf-session-start-init.sh (V4 / v1.3.0)
 # Location: .codeflow/testing/claude-hooks/session-start/test-cf-session-start-init.sh
 #
-# Tests SessionStart init hook (V4 / v1.2.0) — consolidated from cleanup + pathflow-init
-# Tests cover all V4 gaps + PathFlow flag creation + env file session ID mechanism
+# Tests SessionStart init hook (V4 / v1.3.0) — consolidated from cleanup + pathflow-init
+# Tests cover all V4 gaps + PathFlow flag creation + env file session ID mechanism + CF_PROJECT_ROOT
 
 set -euo pipefail
 
@@ -43,7 +43,7 @@ cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-test-* 2>/dev/null || true
 }
 
-echo "=== Testing cf-session-start-init.sh (V4 / v1.2.0) ==="
+echo "=== Testing cf-session-start-init.sh (V4 / v1.3.0) ==="
 echo ""
 
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -75,7 +75,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then pass "Has Location header"; else fail "Should have Location header"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '"1.2.0"' "$HOOK"; then pass "Version is 1.2.0"; else fail "Version should be 1.2.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
+if grep -q '"1.3.0"' "$HOOK"; then pass "Version is 1.3.0"; else fail "Version should be 1.3.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
 
 echo ""
 echo "--- Execution Tests ---"
@@ -551,6 +551,68 @@ if grep -q 'mktemp' "$HOOK" && grep -q 'mv.*_tmp_env.*_env_file' "$HOOK"; then
     pass "Env file written atomically (tmp + mv)"
 else
     fail "Env file should be written atomically"
+fi
+cleanup_test_artifacts
+
+echo ""
+echo "--- CF_PROJECT_ROOT in Env File ---"
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Hook should export CF_PROJECT_ROOT
+if grep -q "export CF_PROJECT_ROOT" "$HOOK"; then
+    pass "Exports CF_PROJECT_ROOT"
+else
+    fail "Should export CF_PROJECT_ROOT"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# Env file should contain CF_PROJECT_ROOT export
+setup_test_env
+cleanup_test_artifacts
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    if grep -q "CF_PROJECT_ROOT=" "$REPO_ROOT/.state/runtime/codeflow-env.sh"; then
+        pass "Env file contains CF_PROJECT_ROOT"
+    else
+        fail "Env file should contain CF_PROJECT_ROOT"
+    fi
+else
+    fail "Env file should exist for CF_PROJECT_ROOT check"
+fi
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# CF_PROJECT_ROOT value should be the basename of the repo root
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    _expected_root=$(basename "$REPO_ROOT")
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+    if [[ "$CF_PROJECT_ROOT" == "$_expected_root" ]]; then
+        pass "CF_PROJECT_ROOT value equals basename of repo root ($_expected_root)"
+    else
+        fail "CF_PROJECT_ROOT should be '$_expected_root', got: '$CF_PROJECT_ROOT'"
+    fi
+else
+    fail "Env file should exist for CF_PROJECT_ROOT value check"
+fi
+cleanup_test_artifacts
+
+TESTS_RUN=$((TESTS_RUN + 1))
+# CF_PROJECT_ROOT should have fallback when env file exists without it
+setup_test_env
+mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
+echo "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+CF_PROJECT_ROOT="" CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null
+# After hook runs, CF_PROJECT_ROOT should be set via fallback (basename of REPO_ROOT)
+_expected_root=$(basename "$REPO_ROOT")
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+# The hook sets CF_PROJECT_ROOT via fallback even if env file lacks it
+# Check the hook code has the fallback pattern
+if grep -q 'CF_PROJECT_ROOT:-' "$HOOK"; then
+    pass "CF_PROJECT_ROOT has fallback to basename of REPO_ROOT"
+else
+    fail "Should have CF_PROJECT_ROOT fallback"
 fi
 cleanup_test_artifacts
 

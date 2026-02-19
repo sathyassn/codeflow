@@ -33,7 +33,18 @@
   },
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": true
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "*.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
+      ]
+    }
   },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"

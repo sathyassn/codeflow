@@ -76,10 +76,15 @@ if [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
     # Write env file atomically (tmp + mv) for cross-teammate sharing
     mkdir -p "$(dirname "$_env_file")"
     _tmp_env=$(mktemp "${_env_file}.XXXXXX")
-    echo "export CODEFLOW_SESSION_ID='${CODEFLOW_SESSION_ID}'" > "$_tmp_env"
+    cat > "$_tmp_env" <<ENVEOF
+export CODEFLOW_SESSION_ID='${CODEFLOW_SESSION_ID}'
+export CF_PROJECT_ROOT='$(basename "$REPO_ROOT")'
+ENVEOF
     mv "$_tmp_env" "$_env_file"
 fi
 export CODEFLOW_SESSION_ID
+CF_PROJECT_ROOT="${CF_PROJECT_ROOT:-$(basename "$REPO_ROOT")}"
+export CF_PROJECT_ROOT
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 

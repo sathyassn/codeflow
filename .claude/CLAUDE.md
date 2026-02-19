@@ -977,7 +977,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 - **pathflow-sentinel**: PostToolUse hook that automatically creates sentinels when phase markers complete. Agents never need to create sentinels manually.
 - **team-guard**: Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
 - **edit-write**: Scope enforcement for file operations.
-- **protected-resource**: Routes protected files through staging area.
+- **protected-resource**: Enforces tiered protection for critical, high, and moderate resources.
 
 ### Commands (14)
 

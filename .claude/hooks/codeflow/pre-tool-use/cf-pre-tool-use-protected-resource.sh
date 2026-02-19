@@ -105,15 +105,17 @@ if [[ "$FILE_PATH" == "$REPO_ROOT"/* ]]; then
 fi
 
 # =============================================================================
-# STAGING AREA EXCEPTION (V3 spec: allow edits to staging area)
+# STAGING AREA EXCEPTION (allow edits to project-scoped staging area)
 # =============================================================================
 
-# Protected edits staging area is allowed
-STAGING_AREA="/tmp/claude/managed/codeflow/protected-edits"
+# Source project env if not already set
+if [[ -z "${CF_PROJECT_ROOT:-}" ]] && [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+fi
+STAGING_AREA="/tmp/claude/${CF_PROJECT_ROOT:-$(basename "$REPO_ROOT")}/managed/protected-edits"
 
-# Check if path is in staging area (absolute or relative)
-if [[ "$FILE_PATH" == "$STAGING_AREA"/* ]] || [[ "$FILE_PATH" == /tmp/claude/managed/codeflow/protected-edits/* ]]; then
-    # Log allowed staging area access
+# Check if path is in staging area
+if [[ "$FILE_PATH" == "$STAGING_AREA"/* || "$FILE_PATH" == /tmp/claude/*/managed/protected-edits/* ]]; then
     if declare -f log_protection &>/dev/null; then
         log_protection "staging_area_access" "$TOOL_NAME" "$FILE_PATH" "staging" "allowed"
     fi

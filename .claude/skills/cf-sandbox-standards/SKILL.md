@@ -231,6 +231,74 @@ Procedure:
 Output: Pre-flight check result (pass/warn/block with details)
 ```
 
+## Sandbox Network AllowedDomains
+
+Claude Code's sandbox has **two independent layers** that can block network access:
+
+| Layer | Control | Prompt Message |
+|-------|---------|---------------|
+| **Permissions** | `permissions.allow/ask/deny` + `defaultMode` | Standard permission prompt |
+| **Sandbox Network** | `sandbox.network.allowedDomains` | "Network request outside of sandbox" |
+
+These layers operate independently:
+
+- `bypassPermissions` mode does **NOT** bypass sandbox network checks
+- `dangerouslyDisableSandbox: true` bypasses **both** layers
+- `sandbox.network.allowedDomains` pre-approves specific domains for the sandbox layer only
+- **PermissionRequest hooks do NOT fire** for sandbox network prompts (confirmed by testing)
+
+### AllowedDomains Configuration
+
+```json
+"sandbox": {
+  "enabled": true,
+  "autoAllowBashIfSandboxed": true,
+  "network": {
+    "allowedDomains": [
+      "github.com",
+      "api.github.com",
+      "*.githubusercontent.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org",
+      "pypi.org",
+      "files.pythonhosted.org"
+    ]
+  }
+}
+```
+
+### Domain Tiers
+
+| Tier | Domains | Used By |
+|------|---------|---------|
+| **Standard** | github.com, api.github.com, *.githubusercontent.com, objects.githubusercontent.com, registry.npmjs.org, pypi.org, files.pythonhosted.org | standard, autonomous, permissive templates |
+| **None** | (no allowedDomains) | strict template -- prompts for every network request |
+
+### Impact on dangerouslyDisableSandbox
+
+With `allowedDomains` configured for common development domains, `dangerouslyDisableSandbox: true` is **rarely needed** for:
+
+- `git push/pull/fetch/clone` to GitHub (github.com is allowed)
+- `gh pr/issue/api` calls (api.github.com is allowed)
+- `npm install` (registry.npmjs.org is allowed)
+- `pip install` (pypi.org, files.pythonhosted.org are allowed)
+
+`dangerouslyDisableSandbox: true` is **still needed** for:
+
+- Custom git remotes (non-GitHub hosts)
+- Private package registries
+- Domains not in the allowedDomains list
+- Operations that also need filesystem sandbox bypass
+
+### Template Differences
+
+| Template | sandbox.network | autoAllowBashIfSandboxed |
+|----------|----------------|--------------------------|
+| strict | Not configured (prompt for all) | false |
+| standard | Standard tier domains | true |
+| autonomous | Standard tier domains | true |
+| permissive | Standard tier domains | true |
+
 ## Resources
 
 Companion resources provide expanded detail beyond the operation summaries above. Load when the inline guidance is insufficient for the task at hand.

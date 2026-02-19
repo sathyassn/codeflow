@@ -290,27 +290,50 @@ fi
 echo ""
 echo "--- Staging Area Exception ---"
 
-# Test 28: Allows Edit to staging area
-result=$(TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/managed/codeflow/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+# Test 28: Allows Edit to staging area (with CF_PROJECT_ROOT)
+result=$(CF_PROJECT_ROOT="codeflow" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/codeflow/managed/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Allows Edit to staging area"
+    pass "Allows Edit to staging area (CF_PROJECT_ROOT=codeflow)"
 else
-    fail "Should allow Edit to staging area"
+    fail "Should allow Edit to staging area with CF_PROJECT_ROOT"
 fi
 
-# Test 29: Allows Write to staging area
-result=$(TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/managed/codeflow/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+# Test 29: Allows Write to staging area (with CF_PROJECT_ROOT)
+result=$(CF_PROJECT_ROOT="codeflow" TOOL_NAME="Write" TOOL_INPUT='{"file_path":"/tmp/claude/codeflow/managed/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Allows Write to staging area"
+    pass "Allows Write to staging area (CF_PROJECT_ROOT=codeflow)"
 else
-    fail "Should allow Write to staging area"
+    fail "Should allow Write to staging area with CF_PROJECT_ROOT"
 fi
 
-# Test 30: Has staging area constant
-if grep -q "STAGING_AREA" "$HOOK" && grep -q "protected-edits" "$HOOK"; then
-    pass "Has staging area constant"
+# Test 30: Has staging area constant using CF_PROJECT_ROOT
+if grep -q "STAGING_AREA" "$HOOK" && grep -q "CF_PROJECT_ROOT" "$HOOK" && grep -q "protected-edits" "$HOOK"; then
+    pass "Has staging area constant using CF_PROJECT_ROOT"
 else
-    fail "Should have staging area constant"
+    fail "Should have staging area constant using CF_PROJECT_ROOT"
+fi
+
+# Test 30b: Staging area works with custom CF_PROJECT_ROOT value
+result=$(CF_PROJECT_ROOT="my-custom-project" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/my-custom-project/managed/protected-edits/settings.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Staging area works with custom CF_PROJECT_ROOT"
+else
+    fail "Should allow staging area with custom CF_PROJECT_ROOT"
+fi
+
+# Test 30c: Staging area wildcard fallback allows any project name
+result=$(CF_PROJECT_ROOT="" TOOL_NAME="Edit" TOOL_INPUT='{"file_path":"/tmp/claude/any-project/managed/protected-edits/test.json"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Staging area wildcard fallback allows any project name"
+else
+    fail "Should allow staging area via wildcard pattern /tmp/claude/*/managed/protected-edits/*"
+fi
+
+# Test 30d: Staging area sources CF_PROJECT_ROOT from env file
+if grep -q 'source.*codeflow-env.sh' "$HOOK"; then
+    pass "Sources codeflow-env.sh for CF_PROJECT_ROOT"
+else
+    fail "Should source codeflow-env.sh when CF_PROJECT_ROOT is unset"
 fi
 
 echo ""

@@ -700,14 +700,14 @@
     }
   },
   "managed_tmp": {
-    "allow_prefix": "/tmp/claude/managed/",
+    "_note": "${CF_PROJECT_ROOT} is an env variable set at session start (codeflow-env.sh), containing the project root folder basename (e.g. 'codeflow')",
+    "allow_prefix": "/tmp/claude/${CF_PROJECT_ROOT}/managed/",
     "protected_folders": [
-      "/tmp/claude/managed",
-      "/tmp/claude/managed/codeflow/protected-edits",
-      "/tmp/claude/managed/state"
+      "/tmp/claude/${CF_PROJECT_ROOT}/managed",
+      "/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits",
+      "/tmp/claude/${CF_PROJECT_ROOT}/managed/state"
     ],
-    "staging_ttl": 3600,
-    "state_folder": "/tmp/claude/managed/state",
+    "state_folder": "/tmp/claude/${CF_PROJECT_ROOT}/managed/state",
     "state_protection": "block_delete_only"
   },
   "session_end": {
