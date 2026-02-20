@@ -254,6 +254,7 @@ fi
 
 # Source PathFlow state library for flag creation
 _PFS_LIB="$REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
+_IS_RECOVERY="false"
 if [[ -f "$_PFS_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$_PFS_LIB"
@@ -261,7 +262,6 @@ if [[ -f "$_PFS_LIB" ]]; then
     # Guard: only create flag if it doesn't already exist
     # Prevents teammate spawns from resetting tracking_level to "pending"
     # Track whether flag pre-existed for Section 7b recovery decision
-    _IS_RECOVERY="false"
     if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]]; then
         echo "SessionStart: PathFlow flag already exists, preserving" >&2
         _IS_RECOVERY="true"

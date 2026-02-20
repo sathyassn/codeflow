@@ -1,0 +1,51 @@
+# Test Suite CI
+#
+# Runs the CodeFlow test suite with coverage enforcement on PRs and pushes to main.
+# Ensures all tests pass and coverage thresholds are met before merge.
+
+name: Test Suite
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov ruff
+
+      - name: Run test suite with coverage
+        run: |
+          chmod +x ./codeflow
+          ./codeflow test --coverage
+
+      - name: Tests passed
+        if: success()
+        run: echo "All tests passed with coverage enforcement"
+
+      - name: Tests failed
+        if: failure()
+        run: |
+          echo "Test suite failed"
+          echo ""
+          echo "To reproduce locally:"
+          echo "  ./codeflow test --coverage"
+          exit 1

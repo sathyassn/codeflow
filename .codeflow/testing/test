@@ -239,6 +239,12 @@ Examples:
     config = load_config()
     thresholds = get_thresholds(config)
 
+    # Auto-upgrade to full mode when --coverage is enabled (unless user
+    # explicitly set a mode).  Per-file coverage enforcement requires all
+    # test files to run so that every source file's tests are executed.
+    if args.coverage and args.mode == "standard":
+        args.mode = "full"
+
     # Determine test file(s)
     test_file = args.file or args.file_opt
 

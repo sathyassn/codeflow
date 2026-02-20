@@ -4,7 +4,7 @@ test_logging.py - Tests for structured logging module.
 Tests JSONFormatter, CodeFlowLogger, setup_logging, and get_logger functions.
 """
 
-import importlib.util
+import importlib
 import json
 import logging as stdlib_logging
 import sys
@@ -13,15 +13,9 @@ from pathlib import Path
 
 import pytest
 
-# Import our logging module using importlib to avoid conflict with stdlib logging
-SCRIPTS_PATH = (
-    Path(__file__).parent.parent.parent.parent / "scripts" / "codeflow_py_lib"
-)
-spec = importlib.util.spec_from_file_location(
-    "codeflow_logging", SCRIPTS_PATH / "logging.py"
-)
-codeflow_logging = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(codeflow_logging)
+# Import through the package so coverage tracks the right module object.
+# codeflow_py_lib.logging is already loaded by __init__.py; grab a reference.
+import codeflow_py_lib.logging as codeflow_logging  # noqa: E402
 
 JSONFormatter = codeflow_logging.JSONFormatter
 CodeFlowLogger = codeflow_logging.CodeFlowLogger
@@ -265,3 +259,109 @@ class TestGetLogger:
         logger = get_logger(name="custom.logger")
         # First call sets the singleton
         assert logger.name == "custom.logger"
+
+    def test_different_name_replaces_singleton(self, reset_logger):
+        """Getting logger with different name replaces the singleton."""
+        logger1 = get_logger(name="first")
+        logger2 = get_logger(name="second")
+        assert logger2.name == "second"
+        assert logger1 is not logger2
+
+
+class TestJSONFormatterExtraFields:
+    """Tests for JSONFormatter with extra fields and exceptions."""
+
+    def test_no_extra_field_on_record(self):
+        """Should not include extra when record has no extra attribute."""
+        formatter = JSONFormatter()
+        record = stdlib_logging.LogRecord(
+            name="test",
+            level=stdlib_logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="No extras",
+            args=(),
+            exc_info=None,
+        )
+        # Standard LogRecord has no 'extra' attribute
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert "task_id" not in parsed
+
+    def test_format_with_no_exception(self):
+        """Should not include exception key when exc_info is None."""
+        formatter = JSONFormatter()
+        record = stdlib_logging.LogRecord(
+            name="test",
+            level=stdlib_logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="Normal message",
+            args=(),
+            exc_info=None,
+        )
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert "exception" not in parsed
+
+
+class TestCodeFlowLoggerLog:
+    """Tests for CodeFlowLogger._log method and context merging."""
+
+    def test_log_merges_context_into_extra(self, tmp_path):
+        """_log should merge _extra context into the extra dict."""
+        stdlib_logging.setLoggerClass(CodeFlowLogger)
+        logger = stdlib_logging.getLogger("test.merge_context")
+        logger.setLevel(stdlib_logging.DEBUG)
+        logger.handlers.clear()
+
+        formatter = JSONFormatter()
+        handler = stdlib_logging.StreamHandler(StringIO())
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+        logger.with_context(session_id="ses-123")
+        logger.info("Test message")
+
+        output = handler.stream.getvalue()
+        parsed = json.loads(output)
+        assert parsed["session_id"] == "ses-123"
+
+    def test_log_with_none_extra(self, tmp_path):
+        """_log should handle None extra parameter."""
+        stdlib_logging.setLoggerClass(CodeFlowLogger)
+        logger = stdlib_logging.getLogger("test.none_extra")
+        logger.setLevel(stdlib_logging.DEBUG)
+        logger.handlers.clear()
+
+        formatter = JSONFormatter()
+        handler = stdlib_logging.StreamHandler(StringIO())
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+        # This exercises the `if extra is None: extra = {}` branch
+        logger.info("Test with no extra")
+        output = handler.stream.getvalue()
+        assert output  # Some output was produced
+
+
+class TestSetupLoggingTextFormat:
+    """Tests for text format in setup_logging."""
+
+    def test_text_formatter_format_string(self):
+        """Text formatter should use expected format pattern."""
+        logger = setup_logging(name="test.text_fmt", log_format="text")
+        handler = logger.handlers[0]
+        assert isinstance(handler.formatter, stdlib_logging.Formatter)
+        assert "%(levelname)s" in handler.formatter._fmt
+
+    def test_file_handler_with_text_format(self, tmp_path):
+        """File handler should also use text format."""
+        log_file = tmp_path / "text.log"
+        logger = setup_logging(
+            name="test.file_text", log_format="text", log_file=log_file
+        )
+        assert len(logger.handlers) == 2
+        # Both handlers should use text formatter
+        for handler in logger.handlers:
+            assert isinstance(handler.formatter, stdlib_logging.Formatter)

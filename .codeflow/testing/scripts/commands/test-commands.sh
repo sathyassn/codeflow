@@ -284,7 +284,7 @@ test_claude_md_updates() {
     local content
     content=$(cat "$claude_md")
 
-    assert_contains "$content" "Stage-Gated Availability" "CLAUDE.md has Stage-Gated Availability table"
+    assert_contains "$content" "Command Availability" "CLAUDE.md has Command Availability table"
     assert_contains "$content" "14 slash command definitions" "CLAUDE.md has updated commands directory description"
 }
 

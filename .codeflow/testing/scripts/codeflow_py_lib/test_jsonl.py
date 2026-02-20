@@ -323,6 +323,159 @@ class TestFilterEvents:
         assert result[0]["data"] == 3
 
 
+class TestWriteJSONLEdgeCases:
+    """Tests for additional write_jsonl edge cases."""
+
+    def test_write_empty_list(self, temp_dir):
+        """Writing empty list should create file but write nothing."""
+        jsonl_file = temp_dir / "empty_write.jsonl"
+        count = write_jsonl(jsonl_file, [])
+        assert count == 0
+        assert jsonl_file.exists()
+        assert jsonl_file.read_text() == ""
+
+    def test_write_compact_json_no_spaces(self, temp_dir):
+        """write_jsonl should produce compact JSON (no spaces)."""
+        jsonl_file = temp_dir / "compact.jsonl"
+        write_jsonl(jsonl_file, [{"key": "value", "num": 42}])
+        content = jsonl_file.read_text().strip()
+        assert " " not in content.replace('"key"', "key").replace('"value"', "value")
+        # Verify separators are compact: colon without space, comma without space
+        assert ',"' in content or content.count(":") >= 1
+
+    def test_write_append_mode_default(self, temp_dir):
+        """Default mode should append, not overwrite."""
+        jsonl_file = temp_dir / "append_default.jsonl"
+        write_jsonl(jsonl_file, [{"first": 1}])
+        write_jsonl(jsonl_file, [{"second": 2}])
+        result = list(read_jsonl(jsonl_file))
+        assert len(result) == 2
+        assert result[0] == {"first": 1}
+        assert result[1] == {"second": 2}
+
+
+class TestAppendJSONLEdgeCases:
+    """Tests for additional append_jsonl edge cases."""
+
+    def test_append_with_event_type_no_data(self, temp_dir):
+        """Appending with event type string and no data dict."""
+        jsonl_file = temp_dir / "no_data.jsonl"
+        result = append_jsonl(jsonl_file, "simple_event")
+        assert result["e"] == "simple_event"
+        assert "ts" in result
+        assert "id" in result
+
+    def test_append_dict_is_copied(self, temp_dir):
+        """Appending should not mutate the original dict."""
+        jsonl_file = temp_dir / "copy_test.jsonl"
+        original = {"key": "value"}
+        append_jsonl(jsonl_file, original)
+        # Original should not have ts/id added
+        assert "ts" not in original
+        assert "id" not in original
+
+    def test_append_returns_complete_event(self, temp_dir):
+        """Append should return the complete event as written."""
+        jsonl_file = temp_dir / "return_test.jsonl"
+        result = append_jsonl(jsonl_file, {"data": 42})
+        # Read back and verify it matches
+        events = list(read_jsonl(jsonl_file))
+        assert len(events) == 1
+        assert events[0]["data"] == result["data"]
+        assert events[0]["ts"] == result["ts"]
+        assert events[0]["id"] == result["id"]
+
+
+class TestCountEventsEdgeCases:
+    """Tests for additional count_events edge cases."""
+
+    def test_count_with_nonmatching_type(self, temp_dir):
+        """Counting with a type that doesn't exist should return 0."""
+        jsonl_file = temp_dir / "events.jsonl"
+        write_jsonl(jsonl_file, [
+            {"e": "type_a", "data": 1},
+            {"e": "type_b", "data": 2},
+        ])
+        count = count_events(jsonl_file, event_type="nonexistent")
+        assert count == 0
+
+    def test_count_events_without_e_field(self, temp_dir):
+        """Events without 'e' field should be counted when no type filter."""
+        jsonl_file = temp_dir / "no_e.jsonl"
+        write_jsonl(jsonl_file, [
+            {"data": 1},
+            {"data": 2},
+            {"e": "typed", "data": 3},
+        ])
+        count = count_events(jsonl_file)
+        assert count == 3
+
+    def test_count_events_without_e_field_with_filter(self, temp_dir):
+        """Events without 'e' field should not match a type filter."""
+        jsonl_file = temp_dir / "no_e_filter.jsonl"
+        write_jsonl(jsonl_file, [
+            {"data": 1},
+            {"e": "typed", "data": 2},
+        ])
+        count = count_events(jsonl_file, event_type="typed")
+        assert count == 1
+
+
+class TestFilterEventsEdgeCases:
+    """Tests for additional filter_events edge cases."""
+
+    def test_filter_nonexistent_file(self, temp_dir):
+        """Filtering nonexistent file should return empty generator."""
+        missing = temp_dir / "missing.jsonl"
+        result = list(filter_events(missing))
+        assert result == []
+
+    def test_filter_empty_file(self, temp_dir):
+        """Filtering empty file should return empty generator."""
+        empty = temp_dir / "empty.jsonl"
+        empty.touch()
+        result = list(filter_events(empty))
+        assert result == []
+
+    def test_filter_no_criteria(self, temp_dir):
+        """Filtering with no criteria should return all events."""
+        jsonl_file = temp_dir / "all.jsonl"
+        write_jsonl(jsonl_file, [
+            {"e": "a", "data": 1},
+            {"e": "b", "data": 2},
+        ])
+        result = list(filter_events(jsonl_file))
+        assert len(result) == 2
+
+    def test_filter_since_excludes_equal(self, temp_dir):
+        """Filter since should exclude events at exact boundary."""
+        jsonl_file = temp_dir / "boundary.jsonl"
+        write_jsonl(jsonl_file, [
+            {"e": "event", "ts": "2024-06-01T00:00:00+00:00", "data": 1},
+            {"e": "event", "ts": "2024-06-01T00:00:01+00:00", "data": 2},
+        ])
+        # since = exact time of first event
+        since = datetime(2024, 6, 1, 0, 0, 1, tzinfo=timezone.utc)
+        result = list(filter_events(jsonl_file, since=since))
+        # Only the second event (at 00:00:01) should pass since >= check fails for < comparison
+        assert len(result) == 1
+        assert result[0]["data"] == 2
+
+    def test_filter_until_excludes_equal(self, temp_dir):
+        """Filter until should exclude events at exact boundary."""
+        jsonl_file = temp_dir / "boundary_until.jsonl"
+        write_jsonl(jsonl_file, [
+            {"e": "event", "ts": "2024-06-01T00:00:00+00:00", "data": 1},
+            {"e": "event", "ts": "2024-06-02T00:00:00+00:00", "data": 2},
+        ])
+        until = datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+        result = list(filter_events(jsonl_file, until=until))
+        # First event at exact boundary: ts > until is false, so included
+        # The code checks `if until and ts > until: continue`
+        assert len(result) == 1
+        assert result[0]["data"] == 1
+
+
 class TestFlockAtomicWrites:
     """Tests for flock-based atomic write safety."""
 

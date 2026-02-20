@@ -307,17 +307,26 @@
       "max_qa_retries": 2,
       "rework_target": "primary",
       "max_parallel": 1,
-      "batch_size": 1
+      "batch_size": 1,
+      "tasks": [
+        {
+          "id": "WS-QA-TSK-01",
+          "task_order": 1,
+          "description": "Run test suite with coverage enforcement",
+          "assigned_to": "cf-quality-assurance",
+          "operation": "./codeflow test --coverage"
+        }
+      ]
     }
   },
   "pipelines": {
     "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
     "FIX": ["WS-DEV", "WS-REV", "WS-QA"],
-    "HTFX": ["WS-DEV", "WS-REV"],
+    "HTFX": ["WS-DEV", "WS-REV", "WS-QA"],
     "RFCT": ["WS-DEV", "WS-REV", "WS-QA"],
     "DOCS": ["WS-DOCS", "WS-REV"],
-    "TEST": ["WS-TEST", "WS-REV"],
-    "CHOR": ["WS-DEV", "WS-REV"],
+    "TEST": ["WS-TEST", "WS-REV", "WS-QA"],
+    "CHOR": ["WS-DEV", "WS-REV", "WS-QA"],
     "CICD": ["WS-DEV", "WS-REV", "WS-QA"],
     "SPKE": ["WS-PLAN", "WS-REV"],
     "PLAN": ["WS-PLAN", "WS-REV"]

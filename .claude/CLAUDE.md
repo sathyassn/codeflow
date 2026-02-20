@@ -179,14 +179,14 @@ Route to pipeline by work type:
     +--FEAT/FIX/RFCT/CICD--> WS-DEV --> WS-REV --> WS-QA
     |                         [cf-dev]  [cf-rev]   [cf-qa]
     |
-    +--HTFX/CHOR-----------> WS-DEV --> WS-REV
-    |                         [cf-dev]  [cf-rev]
+    +--HTFX/CHOR-----------> WS-DEV --> WS-REV --> WS-QA
+    |                         [cf-dev]  [cf-rev]   [cf-qa]
     |
     +--DOCS-----------------> WS-DOCS --> WS-REV
     |                          [cf-doc]   [cf-rev]
     |
-    +--TEST-----------------> WS-TEST --> WS-REV
-    |                          [cf-qa]    [cf-rev]
+    +--TEST-----------------> WS-TEST --> WS-REV --> WS-QA
+    |                          [cf-qa]    [cf-rev]   [cf-qa]
     |
     +--PLAN/SPKE------------> WS-PLAN --> WS-REV
                                [cf-plan]  [cf-rev]
@@ -643,10 +643,10 @@ The work type determines which stages execute during PF4-EXECUTE:
 | FIX | WS-DEV --> WS-REV --> WS-QA | cf-development |
 | RFCT | WS-DEV --> WS-REV --> WS-QA | cf-development |
 | CICD | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| HTFX | WS-DEV --> WS-REV | cf-development |
-| CHOR | WS-DEV --> WS-REV | cf-development |
+| HTFX | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| CHOR | WS-DEV --> WS-REV --> WS-QA | cf-development |
 | DOCS | WS-DOCS --> WS-REV | cf-documentation |
-| TEST | WS-TEST --> WS-REV | cf-quality-assurance |
+| TEST | WS-TEST --> WS-REV --> WS-QA | cf-quality-assurance |
 | PLAN | WS-PLAN --> WS-REV | cf-planning |
 | SPKE | WS-PLAN --> WS-REV | cf-planning |
 
@@ -739,10 +739,10 @@ Entry point commands (`/cf-plan`, `/cf-develop`, `/cf-document`, `/cf-test`, `/c
 | fix, bug, broken, error, issue | FIX | WS-DEV --> WS-REV --> WS-QA |
 | refactor, restructure, clean up | RFCT | WS-DEV --> WS-REV --> WS-QA |
 | ci, cd, pipeline, deploy, github actions | CICD | WS-DEV --> WS-REV --> WS-QA |
-| hotfix, urgent, production | HTFX | WS-DEV --> WS-REV |
-| chore, maintenance, update deps | CHOR | WS-DEV --> WS-REV |
+| hotfix, urgent, production | HTFX | WS-DEV --> WS-REV --> WS-QA |
+| chore, maintenance, update deps | CHOR | WS-DEV --> WS-REV --> WS-QA |
 | document, write docs, update docs | DOCS | WS-DOCS --> WS-REV |
-| test, write tests, add coverage | TEST | WS-TEST --> WS-REV |
+| test, write tests, add coverage | TEST | WS-TEST --> WS-REV --> WS-QA |
 | plan, design, architect, analyze | PLAN | WS-PLAN --> WS-REV |
 | spike, investigate, prototype, POC | SPKE | WS-PLAN --> WS-REV |
 

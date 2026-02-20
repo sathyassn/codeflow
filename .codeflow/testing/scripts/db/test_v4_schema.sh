@@ -137,8 +137,8 @@ test_tasks_stage_history_column_exists() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
-    db_query "INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain) VALUES ('test-task-1', 'test-epic-1', 'Test Task', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain) VALUES ('test-task-1', 'TST-TSK-001', 'test-epic-1', 'Test Task', 'TST', 'TST', 'TST');"
 
     local default_value
     default_value=$(db_query "SELECT stage_history FROM tasks WHERE id = 'test-task-1';")
@@ -238,20 +238,20 @@ test_tasks_stage_accepts_valid_values() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
 
     local valid_stages=("dev" "work" "review" "qa" "done")
     local i=1
     for stage in "${valid_stages[@]}"; do
         assert_success \
-            "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-stage-$i', 'test-epic-1', 'Test $stage', 'TST', 'TST', 'TST', '$stage');\"" \
+            "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-stage-$i', 'TST-TSK-STG-$i', 'test-epic-1', 'Test $stage', 'TST', 'TST', 'TST', '$stage');\"" \
             "tasks.stage accepts '$stage'"
         i=$((i + 1))
     done
 
     # NULL should also be accepted (it's the default)
     assert_success \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-stage-null', 'test-epic-1', 'Test null', 'TST', 'TST', 'TST', NULL);\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-stage-null', 'TST-TSK-STG-N', 'test-epic-1', 'Test null', 'TST', 'TST', 'TST', NULL);\"" \
         "tasks.stage accepts NULL"
 
     teardown_test_db
@@ -265,18 +265,18 @@ test_tasks_stage_rejects_invalid_values() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
 
     assert_fails \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-1', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'invalid');\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-1', 'TST-TSK-BAD-1', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'invalid');\"" \
         "tasks.stage rejects 'invalid'"
 
     assert_fails \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-2', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'DEV');\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-2', 'TST-TSK-BAD-2', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'DEV');\"" \
         "tasks.stage rejects uppercase 'DEV'"
 
     assert_fails \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-3', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'testing');\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage) VALUES ('task-bad-3', 'TST-TSK-BAD-3', 'test-epic-1', 'Bad stage', 'TST', 'TST', 'TST', 'testing');\"" \
         "tasks.stage rejects 'testing'"
 
     teardown_test_db
@@ -294,20 +294,20 @@ test_tasks_stage_status_accepts_valid_values() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
 
     local valid_statuses=("pending" "in_progress" "complete" "failed")
     local i=1
     for status in "${valid_statuses[@]}"; do
         assert_success \
-            "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-ss-$i', 'test-epic-1', 'Test $status', 'TST', 'TST', 'TST', 'dev', '$status');\"" \
+            "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-ss-$i', 'TST-TSK-SS-$i', 'test-epic-1', 'Test $status', 'TST', 'TST', 'TST', 'dev', '$status');\"" \
             "tasks.stage_status accepts '$status'"
         i=$((i + 1))
     done
 
     # NULL should also be accepted
     assert_success \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage_status) VALUES ('task-ss-null', 'test-epic-1', 'Test null', 'TST', 'TST', 'TST', NULL);\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage_status) VALUES ('task-ss-null', 'TST-TSK-SS-N', 'test-epic-1', 'Test null', 'TST', 'TST', 'TST', NULL);\"" \
         "tasks.stage_status accepts NULL"
 
     teardown_test_db
@@ -321,14 +321,14 @@ test_tasks_stage_status_rejects_invalid_values() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
 
     assert_fails \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-bss-1', 'test-epic-1', 'Bad status', 'TST', 'TST', 'TST', 'dev', 'running');\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-bss-1', 'TST-TSK-BSS-1', 'test-epic-1', 'Bad status', 'TST', 'TST', 'TST', 'dev', 'running');\"" \
         "tasks.stage_status rejects 'running'"
 
     assert_fails \
-        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-bss-2', 'test-epic-1', 'Bad status', 'TST', 'TST', 'TST', 'dev', 'PENDING');\"" \
+        "sqlite3 '$TEST_DB' \"INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage, stage_status) VALUES ('task-bss-2', 'TST-TSK-BSS-2', 'test-epic-1', 'Bad status', 'TST', 'TST', 'TST', 'dev', 'PENDING');\"" \
         "tasks.stage_status rejects uppercase 'PENDING'"
 
     teardown_test_db
@@ -410,10 +410,10 @@ test_stage_history_stores_json() {
     db_query "INSERT OR IGNORE INTO area_types (code, name) VALUES ('TST', 'Test');"
     db_query "INSERT OR IGNORE INTO work_types (code, name, branch_prefix) VALUES ('TST', 'Test', 'test/');"
     db_query "INSERT OR IGNORE INTO domains (code, name) VALUES ('TST', 'Test');"
-    db_query "INSERT INTO epics (id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'Test Epic', 'TST', 'TST', 'TST');"
+    db_query "INSERT INTO epics (id, format_id, title, area_type, work_type, domain) VALUES ('test-epic-1', 'TST-EPC-001', 'Test Epic', 'TST', 'TST', 'TST');"
 
     local json_value='[{"stage":"dev","status":"complete","at":"2025-01-01T00:00:00Z"}]'
-    db_query "INSERT INTO tasks (id, epic_id, title, area_type, work_type, domain, stage, stage_history) VALUES ('task-json-1', 'test-epic-1', 'JSON Test', 'TST', 'TST', 'TST', 'work', '$json_value');"
+    db_query "INSERT INTO tasks (id, format_id, epic_id, title, area_type, work_type, domain, stage, stage_history) VALUES ('task-json-1', 'TST-TSK-JSON-1', 'test-epic-1', 'JSON Test', 'TST', 'TST', 'TST', 'work', '$json_value');"
 
     local retrieved
     retrieved=$(db_query "SELECT stage_history FROM tasks WHERE id = 'task-json-1';")

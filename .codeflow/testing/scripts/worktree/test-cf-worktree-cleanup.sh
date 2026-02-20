@@ -164,7 +164,7 @@ test_section "Dry Run Mode"
 test_dry_run_no_worktrees() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force 2>&1) || true
 
     assert_contains "$output" "DRY RUN" "Dry run mode indicated in output"
 }
@@ -172,7 +172,7 @@ test_dry_run_no_worktrees() {
 test_dry_run_with_days() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run --days 7 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force --days 7 2>&1) || true
 
     assert_contains "$output" "7 days" "Custom days threshold shown"
 }
@@ -189,7 +189,7 @@ test_section "Prune Mode"
 test_prune_runs() {
     local output exit_code=0
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --prune 2>&1) || exit_code=$?
+    output=$("$SCRIPT_UNDER_TEST" --prune --force 2>&1) || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
         test_pass "Prune mode runs successfully"
@@ -202,7 +202,7 @@ test_prune_runs() {
 test_prune_dry_run() {
     local output exit_code=0
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --prune --dry-run 2>&1) || exit_code=$?
+    output=$("$SCRIPT_UNDER_TEST" --prune --dry-run --force 2>&1) || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
         test_pass "Prune dry-run mode runs successfully"
@@ -358,7 +358,7 @@ test_create_and_cleanup_worktree() {
 test_path_nonexistent() {
     local output exit_code=0
     output=$(REPO_ROOT="$REPO_ROOT" \
-        "$SCRIPT_UNDER_TEST" --path "/tmp/nonexistent-worktree-path" 2>&1) || exit_code=$?
+        "$SCRIPT_UNDER_TEST" --path "/tmp/nonexistent-worktree-path" --force 2>&1) || exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
         test_pass "--path with nonexistent path fails"
@@ -430,7 +430,7 @@ test_section "Config-Driven Behavior"
 test_default_stale_days() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force 2>&1) || true
 
     # Default threshold should appear (14 days unless config overrides)
     assert_contains "$output" "days" "Stale threshold displayed"
@@ -439,7 +439,7 @@ test_default_stale_days() {
 test_custom_days_override() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run --days 30 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force --days 30 2>&1) || true
 
     assert_contains "$output" "30 days" "Custom days override displayed"
 }
@@ -456,7 +456,7 @@ test_section "Output Format"
 test_header_shown() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force 2>&1) || true
 
     assert_contains "$output" "Worktree Cleanup" "Cleanup header shown"
 }
@@ -464,7 +464,7 @@ test_header_shown() {
 test_status_filter_shown() {
     local output
     cd "$REPO_ROOT"
-    output=$("$SCRIPT_UNDER_TEST" --dry-run --status merged 2>&1) || true
+    output=$("$SCRIPT_UNDER_TEST" --dry-run --force --status merged 2>&1) || true
 
     assert_contains "$output" "Filter: merged" "Status filter displayed"
 }

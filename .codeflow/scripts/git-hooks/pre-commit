@@ -12,11 +12,15 @@
 #   - Runs linters on changed files
 #   - Blocks commits of sensitive files
 #   - Enforces coding standards
+#   - Runs test suite (essential mode -- CRITICAL tests only, ~10s)
 #
 # Coverage Policy:
 #   This hook runs FAST validation only (shellcheck, ruff, markdownlint, JSON).
-#   Full test coverage is enforced in CI via:
-#     .codeflow/testing/run-coverage.sh --strict
+#   Pre-commit runs only CRITICAL tests via --mode essential (~10s).
+#   Full test coverage is enforced in:
+#     - WS-QA stage (cf-quality-assurance teammate)
+#     - GitHub CI via .github/workflows/test-suite.yml
+#     - Manual: .codeflow/testing/run-coverage.sh --strict
 #
 #   For manual coverage check before commit:
 #     .codeflow/testing/run-coverage.sh
@@ -427,6 +431,35 @@ if [[ -f "$COVERAGE_LIB" ]]; then
     echo -e "${GREEN}✓ Staged script coverage check passed${NC}"
 else
     echo -e "${YELLOW}⚠ Coverage library not found, skipping staged coverage check${NC}"
+fi
+
+# =============================================================================
+# TEST SUITE (Essential mode -- CRITICAL tests only)
+# =============================================================================
+# Pre-commit runs only CRITICAL tests (~10s) to keep commits fast.
+# Full test suite runs in WS-QA stage and GitHub CI.
+# Uses the CodeFlow CLI test runner with --mode essential.
+
+# Clean up exported TEST_FRAMEWORK_VERSION from coverage check above.
+# If leaked into child processes, it prevents test-common.sh from sourcing
+# (test-helpers.sh skips sourcing when TEST_FRAMEWORK_VERSION is set),
+# leaving BOLD/CYAN/etc undefined and causing unbound variable errors.
+unset TEST_FRAMEWORK_VERSION
+
+CODEFLOW_CLI="$REPO_ROOT/codeflow"
+
+if [[ -x "$CODEFLOW_CLI" ]]; then
+    echo "Running test suite (essential mode)..."
+    if ! "$CODEFLOW_CLI" test --mode essential; then
+        echo -e "${RED}${BOLD}❌ TEST SUITE FAILED${NC}" >&2
+        echo "" >&2
+        echo "Fix failing tests before committing." >&2
+        echo "Run: ./codeflow test --mode essential" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Test suite passed (essential)${NC}"
+else
+    echo -e "${YELLOW}⚠ CodeFlow CLI not found, skipping test suite${NC}"
 fi
 
 # =============================================================================

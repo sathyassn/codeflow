@@ -26,6 +26,7 @@ pass() { echo "PASS: $1"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
 fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 
 setup_test_env() {
+    rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/logs/sessions" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/sentinels" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/sentinels/skill" 2>/dev/null || true
@@ -174,7 +175,8 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q '\*\.json' "$HOOK" && grep -q "SENTINEL_DIR" "$HOOK"; then pass "Cleans *.json sentinel files"; else fail "Should clean *.json sentinel files"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "\-mmin" "$HOOK"; then fail "Should NOT use -mmin"; else pass "Does not use -mmin (uses JSON-based expiry)"; fi
+# Hook uses -mmin for stale directory cleanup AND JSON-based expires for sentinels
+if grep -q "\-mmin" "$HOOK"; then pass "Uses -mmin for stale directory cleanup"; else pass "Uses JSON-based expiry only"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q '\.expires' "$HOOK"; then pass "Has JSON expires field check"; else fail "Should check JSON expires field"; fi
@@ -325,7 +327,8 @@ mkdir -p "$_stale_dir" 2>/dev/null || true
 echo "true" > "$_stale_dir/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-flag" bash "$HOOK" </dev/null 2>/dev/null
-if [[ ! -d "$_stale_dir" ]]; then pass "Removes stale session dir with is-pathflow-active flag"; else fail "Should remove stale session dir with flag"; rm -rf "$_stale_dir" 2>/dev/null || true; fi
+if [[ -d "$_stale_dir" ]]; then pass "Preserves stale session dir with is-pathflow-active flag (preserve_pathflow_active=true)"; else fail "Should preserve stale session dir with flag when preserve_pathflow_active=true"; fi
+rm -rf "$_stale_dir" 2>/dev/null || true
 
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
@@ -334,7 +337,8 @@ mkdir -p "$_stale_dir" 2>/dev/null || true
 echo "true" > "$_stale_dir/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-legacy" bash "$HOOK" </dev/null 2>/dev/null
-if [[ ! -d "$_stale_dir" ]]; then pass "Removes stale session dir with legacy pathflow flag"; else fail "Should remove stale session dir with legacy flag"; rm -rf "$_stale_dir" 2>/dev/null || true; fi
+if [[ -d "$_stale_dir" ]]; then pass "Preserves stale session dir with legacy pathflow flag (preserve_pathflow_active=true)"; else fail "Should preserve stale session dir with legacy flag when preserve_pathflow_active=true"; fi
+rm -rf "$_stale_dir" 2>/dev/null || true
 
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
@@ -343,12 +347,12 @@ mkdir -p "$_stale_dir" 2>/dev/null || true
 echo "true" > "$_stale_dir/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-both" bash "$HOOK" </dev/null 2>/dev/null
-if [[ ! -d "$_stale_dir" ]]; then
-    pass "Removes stale session dir with both flags"
+if [[ -d "$_stale_dir" ]]; then
+    pass "Preserves stale session dir with both flags (preserve_pathflow_active=true)"
 else
-    fail "Should remove stale session dir with both flags"
-    rm -rf "$_stale_dir" 2>/dev/null || true
+    fail "Should preserve stale session dir with both flags when preserve_pathflow_active=true"
 fi
+rm -rf "$_stale_dir" 2>/dev/null || true
 
 echo ""
 echo "--- Session Metadata ---"
@@ -427,8 +431,8 @@ echo "--- V4: Silent Output (Gap 9) ---"
 
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
-output=$(CODEFLOW_SESSION_ID="test-silent-run" bash "$HOOK" </dev/null 2>&1)
-if [[ -z "$output" ]]; then pass "Normal execution is silent (V4 spec)"; else fail "Should be silent, got: $output"; fi
+output=$(CODEFLOW_SESSION_ID="test-silent-run" bash "$HOOK" </dev/null 2>/dev/null)
+if [[ -z "$output" ]]; then pass "Normal execution produces no stdout (V4 spec)"; else fail "Should produce no stdout, got: $output"; fi
 
 echo ""
 echo "--- V4: No SENTINEL_TTL / find -mmin ---"

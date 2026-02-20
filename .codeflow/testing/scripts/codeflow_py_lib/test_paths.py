@@ -333,3 +333,40 @@ class TestIsPathflowActive:
             "_codeflow": {"pathflow_mode": "always"}
         }))
         assert is_pathflow_active() is False
+
+
+class TestGetRepoRootFallbacks:
+    """Tests for get_repo_root fallback paths."""
+
+    def test_git_subprocess_error_falls_through(
+        self, reset_repo_root_cache, monkeypatch, tmp_path
+    ):
+        """Should fall through when git subprocess raises error."""
+        monkeypatch.delenv("CODEFLOW_REPO_ROOT", raising=False)
+        (tmp_path / ".codeflow").mkdir()
+
+        original_cwd = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            with patch("subprocess.run", side_effect=FileNotFoundError("git not found")):
+                result = get_repo_root()
+                assert result == tmp_path
+        finally:
+            os.chdir(original_cwd)
+
+    def test_falls_back_to_cwd_when_no_codeflow_dir(
+        self, reset_repo_root_cache, monkeypatch, tmp_path
+    ):
+        """Should return cwd when no .codeflow dir found anywhere."""
+        monkeypatch.delenv("CODEFLOW_REPO_ROOT", raising=False)
+        # tmp_path has no .codeflow directory
+
+        original_cwd = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 1
+                result = get_repo_root()
+                assert result == tmp_path
+        finally:
+            os.chdir(original_cwd)

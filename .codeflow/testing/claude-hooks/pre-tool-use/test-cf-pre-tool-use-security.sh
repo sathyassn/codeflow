@@ -375,24 +375,46 @@ fi
 echo ""
 echo "--- Tmp Protection ---"
 
-# Test 41: Blocks rm -rf /tmp/claude/managed
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"rm -rf /tmp/claude/managed"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
-if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
-    pass "Blocks rm -rf /tmp/claude/managed"
-else
-    fail "Should block rm -rf /tmp/claude/managed"
+# The enforcement-policy.json uses ${CF_PROJECT_ROOT} template variable in paths.
+# Create env file in isolated repo so the hook can resolve it.
+_CF_ROOT="testproject"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='test-sec-session'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo "export CF_PROJECT_ROOT='$_CF_ROOT'" >> "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+
+# Also update the test config to use literal paths for tmp protection
+# so the hook's regex matching works regardless of template expansion
+_test_config="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
+if [[ -f "$_test_config" ]] && command -v jq &>/dev/null; then
+    _tmp_cfg=$(mktemp)
+    jq --arg root "$_CF_ROOT" '
+        .managed_tmp.protected_folders = [
+            "/tmp/claude/\($root)/managed",
+            "/tmp/claude/\($root)/managed/protected-edits",
+            "/tmp/claude/\($root)/managed/state"
+        ] |
+        .managed_tmp.state_folder = "/tmp/claude/\($root)/managed/state"
+    ' "$_test_config" > "$_tmp_cfg" && mv "$_tmp_cfg" "$_test_config"
 fi
 
-# Test 42: Blocks mv /tmp/claude/managed
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"mv /tmp/claude/managed /tmp/elsewhere"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+# Test 41: Blocks rm -rf /tmp/claude/{project}/managed
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"rm -rf /tmp/claude/$_CF_ROOT/managed\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
-    pass "Blocks mv /tmp/claude/managed"
+    pass "Blocks rm -rf /tmp/claude/{project}/managed"
 else
-    fail "Should block mv /tmp/claude/managed"
+    fail "Should block rm -rf /tmp/claude/{project}/managed"
+fi
+
+# Test 42: Blocks mv /tmp/claude/{project}/managed
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"mv /tmp/claude/$_CF_ROOT/managed /tmp/elsewhere\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks mv /tmp/claude/{project}/managed"
+else
+    fail "Should block mv /tmp/claude/{project}/managed"
 fi
 
 # Test 43: Allows operations in managed folder contents
-result=$(TOOL_NAME="Bash" TOOL_INPUT='{"command":"touch /tmp/claude/managed/codeflow/protected-edits/file.txt"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+result=$(TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"touch /tmp/claude/$_CF_ROOT/managed/protected-edits/file.txt\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Allows operations in managed folder contents"
 else

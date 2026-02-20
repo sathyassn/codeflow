@@ -253,3 +253,75 @@ class TestConfigFromFileEdgeCases:
         config_file.write_text("null")
         cfg = Config.from_file(config_file)
         assert cfg.log_level == "INFO"
+
+    def test_yaml_no_pyyaml_raises_config_error(self, temp_config_dir, monkeypatch):
+        """Should raise ConfigError when YAML file but no PyYAML installed."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "yaml":
+                raise ImportError("No module named 'yaml'")
+            return real_import(name, *args, **kwargs)
+
+        config_file = temp_config_dir / ".codeflow" / "config" / "test.yml"
+        config_file.write_text("log_level: DEBUG")
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        with pytest.raises(ConfigError, match="PyYAML not installed"):
+            Config.from_file(config_file)
+
+    def test_load_yml_extension(self, temp_config_dir):
+        """Should load .yml extension as YAML."""
+        pytest.importorskip("yaml")
+        import yaml
+
+        config_file = temp_config_dir / ".codeflow" / "config" / "test.yml"
+        config_data = {"db_timeout": 20.0}
+        config_file.write_text(yaml.dump(config_data))
+
+        cfg = Config.from_file(config_file)
+        assert cfg.db_timeout == 20.0
+
+    def test_partial_override(self, temp_config_dir):
+        """Should override only specified fields, keep defaults for rest."""
+        config_file = temp_config_dir / ".codeflow" / "config" / "partial.json"
+        config_file.write_text(json.dumps({"db_timeout": 99.0}))
+        cfg = Config.from_file(config_file)
+        assert cfg.db_timeout == 99.0
+        assert cfg.db_retries == 3  # default
+        assert cfg.log_level == "INFO"  # default
+
+
+class TestConfigFromEnvEdgeCases:
+    """Additional edge case tests for Config.from_env."""
+
+    def test_custom_prefix(self, monkeypatch):
+        """Should support custom env prefix."""
+        monkeypatch.setenv("MYAPP_DB_PATH", "/custom/db.sqlite")
+        monkeypatch.setenv("MYAPP_LOG_LEVEL", "ERROR")
+        cfg = Config.from_env(prefix="MYAPP_")
+        assert cfg.db_path == "/custom/db.sqlite"
+        assert cfg.log_level == "ERROR"
+
+    def test_empty_env_value_ignored(self, monkeypatch):
+        """Empty env value should be treated as not set."""
+        monkeypatch.setenv("CODEFLOW_DB_PATH", "")
+        cfg = Config.from_env()
+        # Empty string is falsy, so it should use default
+        assert cfg.db_path != ""
+
+    def test_type_conversion_float(self, monkeypatch):
+        """Should convert DB_TIMEOUT to float."""
+        monkeypatch.setenv("CODEFLOW_DB_TIMEOUT", "7.5")
+        cfg = Config.from_env()
+        assert cfg.db_timeout == 7.5
+        assert isinstance(cfg.db_timeout, float)
+
+    def test_type_conversion_int(self, monkeypatch):
+        """Should convert DB_RETRIES to int."""
+        monkeypatch.setenv("CODEFLOW_DB_RETRIES", "7")
+        cfg = Config.from_env()
+        assert cfg.db_retries == 7
+        assert isinstance(cfg.db_retries, int)

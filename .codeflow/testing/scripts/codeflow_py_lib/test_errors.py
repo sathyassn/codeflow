@@ -266,3 +266,139 @@ class TestScriptError:
         assert result["error"] == "SCRIPT_ERROR"
         assert result["details"]["script"] == "long_task.sh"
         assert result["details"]["timeout"] == 30
+
+
+class TestCodeFlowErrorWithDetails:
+    """Additional edge case tests for CodeFlowError."""
+
+    def test_with_details(self):
+        """Should store details dictionary."""
+        details = {"file": "test.py", "line": 42}
+        error = CodeFlowError("Test", details=details)
+        assert error.details == details
+
+    def test_none_details_becomes_empty(self):
+        """None details should become empty dict."""
+        error = CodeFlowError("Test", details=None)
+        assert error.details == {}
+
+    def test_none_code_becomes_default(self):
+        """None code should become default."""
+        error = CodeFlowError("Test", code=None)
+        assert error.code == "CODEFLOW_ERROR"
+
+    def test_str_representation(self):
+        """str() should return the message."""
+        error = CodeFlowError("My error message")
+        assert str(error) == "My error message"
+
+
+class TestConfigErrorEdgeCases:
+    """Edge case tests for ConfigError."""
+
+    def test_none_details(self):
+        """Should handle None details."""
+        error = ConfigError("Error", details=None)
+        assert error.details == {}
+
+    def test_empty_details(self):
+        """Should handle empty details dict."""
+        error = ConfigError("Error", details={})
+        assert error.details == {}
+
+    def test_inherits_to_dict(self):
+        """Should use parent to_dict with CONFIG_ERROR code."""
+        error = ConfigError("Bad config")
+        result = error.to_dict()
+        assert result["error"] == "CONFIG_ERROR"
+        assert result["message"] == "Bad config"
+        assert result["details"] == {}
+
+
+class TestValidationErrorEdgeCases:
+    """Edge case tests for ValidationError."""
+
+    def test_no_field_no_value(self):
+        """Should work with no field and no value."""
+        error = ValidationError("Invalid input")
+        assert "field" not in error.details
+        assert "value" not in error.details
+
+    def test_field_only(self):
+        """Should store field without value."""
+        error = ValidationError("Invalid", field="name")
+        assert error.details["field"] == "name"
+        assert "value" not in error.details
+
+    def test_value_zero(self):
+        """Should store zero value (not None)."""
+        error = ValidationError("Invalid", value=0)
+        assert error.details["value"] == repr(0)
+
+    def test_value_empty_string(self):
+        """Should store empty string value."""
+        error = ValidationError("Invalid", value="")
+        assert error.details["value"] == repr("")
+
+
+class TestDatabaseErrorEdgeCases:
+    """Edge case tests for DatabaseError."""
+
+    def test_none_operation(self):
+        """Should handle None operation."""
+        error = DatabaseError("Error", operation=None)
+        assert "operation" not in error.details
+
+    def test_none_details(self):
+        """Should handle None details."""
+        error = DatabaseError("Error", details=None)
+        assert error.details == {}
+
+
+class TestJSONLErrorEdgeCases:
+    """Edge case tests for JSONLError."""
+
+    def test_none_line_number(self):
+        """Should handle None line_number."""
+        error = JSONLError("Error", line_number=None)
+        assert "line_number" not in error.details
+
+    def test_none_details(self):
+        """Should handle None details."""
+        error = JSONLError("Error", details=None)
+        assert error.details == {}
+
+
+class TestCRDTErrorEdgeCases:
+    """Edge case tests for CRDTError."""
+
+    def test_none_operation(self):
+        """Should handle None operation."""
+        error = CRDTError("Error", operation=None)
+        assert "operation" not in error.details
+
+    def test_none_details(self):
+        """Should handle None details."""
+        error = CRDTError("Error", details=None)
+        assert error.details == {}
+
+    def test_to_dict_with_operation(self):
+        """Should include operation in to_dict output."""
+        error = CRDTError("Conflict", operation="merge")
+        result = error.to_dict()
+        assert result["error"] == "CRDT_ERROR"
+        assert result["details"]["operation"] == "merge"
+
+
+class TestScriptErrorEdgeCases:
+    """Edge case tests for ScriptError."""
+
+    def test_none_script(self):
+        """Should handle None script."""
+        error = ScriptError("Error", script=None)
+        assert "script" not in error.details
+
+    def test_none_details(self):
+        """Should handle None details."""
+        error = ScriptError("Error", details=None)
+        assert error.details == {}
