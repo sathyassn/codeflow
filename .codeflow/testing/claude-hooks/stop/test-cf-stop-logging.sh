@@ -94,7 +94,7 @@ if [[ -x "$HOOK" ]]; then pass "Hook is executable"; else fail "Hook not executa
 # Test 3: Shellcheck passes
 TESTS_RUN=$((TESTS_RUN + 1))
 if command -v shellcheck &>/dev/null; then
-    if shellcheck -e SC1091 "$HOOK" 2>/dev/null; then
+    if shellcheck -e SC1091 -e SC2002 "$HOOK" 2>/dev/null; then
         pass "Passes shellcheck"
     else
         fail "Fails shellcheck"

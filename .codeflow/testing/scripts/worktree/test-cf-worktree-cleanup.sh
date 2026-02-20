@@ -238,6 +238,8 @@ test_pathflow_blocks_when_active() {
        "$fake_repo/.codeflow/scripts/security/lib/" 2>/dev/null || true
 
     git -C "$fake_repo" init -q 2>/dev/null || true
+    git -C "$fake_repo" config user.email "test@codeflow.local" 2>/dev/null || true
+    git -C "$fake_repo" config user.name "CodeFlow Test" 2>/dev/null || true
     git -C "$fake_repo" commit --allow-empty -m "init" -q 2>/dev/null || true
 
     local output exit_code=0
@@ -268,6 +270,8 @@ test_pathflow_force_overrides() {
        "$fake_repo/.codeflow/scripts/security/lib/" 2>/dev/null || true
 
     git -C "$fake_repo" init -q 2>/dev/null || true
+    git -C "$fake_repo" config user.email "test@codeflow.local" 2>/dev/null || true
+    git -C "$fake_repo" config user.name "CodeFlow Test" 2>/dev/null || true
     git -C "$fake_repo" commit --allow-empty -m "init" -q 2>/dev/null || true
 
     local output exit_code=0
@@ -291,6 +295,8 @@ test_no_pathflow_allows() {
        "$fake_repo/.codeflow/scripts/security/lib/" 2>/dev/null || true
 
     git -C "$fake_repo" init -q 2>/dev/null || true
+    git -C "$fake_repo" config user.email "test@codeflow.local" 2>/dev/null || true
+    git -C "$fake_repo" config user.name "CodeFlow Test" 2>/dev/null || true
     git -C "$fake_repo" commit --allow-empty -m "init" -q 2>/dev/null || true
 
     local output exit_code=0
@@ -318,12 +324,15 @@ test_create_and_cleanup_worktree() {
     # Create a test git repo with a worktree
     local test_repo="$TEST_TMPDIR/func-repo"
     mkdir -p "$test_repo"
-    git -C "$test_repo" init -q 2>/dev/null
-    git -C "$test_repo" commit --allow-empty -m "init" -q 2>/dev/null
+    git -C "$test_repo" init -q 2>/dev/null || true
+    # Configure git user for CI environments where global config may not exist
+    git -C "$test_repo" config user.email "test@codeflow.local" 2>/dev/null || true
+    git -C "$test_repo" config user.name "CodeFlow Test" 2>/dev/null || true
+    git -C "$test_repo" commit --allow-empty -m "init" -q 2>/dev/null || true
 
     # Create a worktree
     local wt_dir="$TEST_TMPDIR/func-wt"
-    git -C "$test_repo" worktree add "$wt_dir" -b test-cleanup-branch 2>/dev/null
+    git -C "$test_repo" worktree add "$wt_dir" -b test-cleanup-branch 2>/dev/null || true
 
     # Verify worktree exists
     if [[ -d "$wt_dir" ]]; then
@@ -372,11 +381,14 @@ test_dry_run_preserves_worktree() {
     # Create a test git repo with a worktree
     local test_repo="$TEST_TMPDIR/preserve-repo"
     mkdir -p "$test_repo"
-    git -C "$test_repo" init -q 2>/dev/null
-    git -C "$test_repo" commit --allow-empty -m "init" -q 2>/dev/null
+    git -C "$test_repo" init -q 2>/dev/null || true
+    # Configure git user for CI environments where global config may not exist
+    git -C "$test_repo" config user.email "test@codeflow.local" 2>/dev/null || true
+    git -C "$test_repo" config user.name "CodeFlow Test" 2>/dev/null || true
+    git -C "$test_repo" commit --allow-empty -m "init" -q 2>/dev/null || true
 
     local wt_dir="$TEST_TMPDIR/preserve-wt"
-    git -C "$test_repo" worktree add "$wt_dir" -b test-preserve-branch 2>/dev/null
+    git -C "$test_repo" worktree add "$wt_dir" -b test-preserve-branch 2>/dev/null || true
 
     # Run cleanup with --dry-run --path
     local output exit_code=0

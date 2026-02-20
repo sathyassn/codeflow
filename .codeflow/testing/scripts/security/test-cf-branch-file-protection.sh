@@ -240,7 +240,7 @@ _test_protected_path_skip "sed -i '' 's/a/b/' .codeflow/config/test.json" \
 echo "--- Feature branch bypass ---"
 
 # Switch isolated repo to a feature branch
-git -C "$REPO_ROOT" checkout -b feat/test-branch 2>/dev/null
+git -C "$REPO_ROOT" checkout -b feat/test-branch 2>/dev/null || true
 
 test_allows_command "echo test > src/file.txt" \
     "Allow redirect on feature branch"
@@ -255,7 +255,7 @@ test_allows_command "cp file1.txt file2.txt" \
     "Allow cp on feature branch"
 
 # Switch back to main for remaining tests
-git -C "$REPO_ROOT" checkout main 2>/dev/null
+git -C "$REPO_ROOT" checkout main 2>/dev/null || true
 
 # =========================================================================
 # SECTION: Block message content

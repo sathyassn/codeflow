@@ -74,6 +74,9 @@ mkdir -p "$TEST_REPO_ROOT/.state/db"
 
 # Initialize as git repo (hooks call git branch, git status, etc.)
 git -C "$TEST_REPO_ROOT" init -q 2>/dev/null || true
+# Configure git user for CI environments where global config may not exist
+git -C "$TEST_REPO_ROOT" config user.email "test@codeflow.local" 2>/dev/null || true
+git -C "$TEST_REPO_ROOT" config user.name "CodeFlow Test" 2>/dev/null || true
 git -C "$TEST_REPO_ROOT" commit --allow-empty -m "init" -q 2>/dev/null || true
 # Create non-protected branch so tests aren't affected by real repo's branch
 git -C "$TEST_REPO_ROOT" checkout -b test-branch -q 2>/dev/null || true
