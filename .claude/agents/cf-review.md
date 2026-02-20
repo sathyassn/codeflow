@@ -1,6 +1,7 @@
 ---
 name: "cf-review"
 description: "Independent work reviewer with four review modes (code, design, documentation, test). Spawn at WS-REV stage for peer review of completed work."
+model: opus
 ---
 
 # cf-review

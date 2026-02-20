@@ -7,6 +7,12 @@
       "subject": "PF1-INIT: Initialize session",
       "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Initializing PathFlow session",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF1-TSK-01, PF1-TSK-02, PF1-TSK-03)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF1-TSK-01",
@@ -37,6 +43,12 @@
       "subject": "PF2-CONTEXT: Load context",
       "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Loading session context",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF2-TSK-01",
@@ -74,6 +86,12 @@
       "subject": "PF3-CLASSIFY: Classify and register work",
       "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Classifying work and creating branch",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF3-TSK-01, PF3-TSK-02, PF3-TSK-03, PF3-TSK-04, PF3-TSK-05)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF3-TSK-01",
@@ -118,6 +136,12 @@
       "subject": "PF4-EXECUTE: Run work pipeline",
       "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Executing work pipeline",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF4-TSK-01, PF4-TSK-02, PF4-TSK-03, PF4-TSK-04); also TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA, etc.)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF4-TSK-01",
@@ -155,6 +179,12 @@
       "subject": "PF5-VERIFY: Verify acceptance criteria",
       "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Verifying acceptance criteria",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF5-TSK-01, PF5-TSK-02)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF5-TSK-01",
@@ -178,6 +208,12 @@
       "subject": "PF6-COMPLETE: Finalize and create PR",
       "description": "Update task status, record session memory, commit state files, squash branch, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Finalizing work and creating PR",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF6-TSK-01, PF6-TSK-02, PF6-TSK-03, PF6-TSK-04, PF6-TSK-05)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
       "tasks": [
         {
           "id": "PF6-TSK-01",
@@ -222,6 +258,13 @@
       "subject": "PF7-END: Shutdown and cleanup",
       "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Shutting down session",
+      "task_tracker": {
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF7-TSK-01, PF7-TSK-02, PF7-TSK-03)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
+      "cleanup_note": "The pathflow-active flag (.state/session/{SID}/is-pathflow-active) is removed automatically by the SessionEnd hook — the lead does NOT need to delete it manually. TeamDelete is the lead's final action after all teammates confirm shutdown.",
       "tasks": [
         {
           "id": "PF7-TSK-01",

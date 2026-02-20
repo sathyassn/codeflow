@@ -1,6 +1,7 @@
 ---
 name: "cf-documentation"
 description: "Documentation writing specialist. Writes and maintains project documentation, guides, runbooks, ADRs, and reference materials. Spawn at WS-DOCS stage."
+model: sonnet
 ---
 
 # cf-documentation

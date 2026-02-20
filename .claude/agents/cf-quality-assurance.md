@@ -1,6 +1,7 @@
 ---
 name: "cf-quality-assurance"
 description: "Quality assurance and testing specialist. Runs acceptance verification as quality gate (WS-QA) and implements tests as primary deliverable (WS-TEST). Spawn at WS-QA or WS-TEST stage."
+model: sonnet
 ---
 
 # cf-quality-assurance

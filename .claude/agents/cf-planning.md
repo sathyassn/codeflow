@@ -1,6 +1,7 @@
 ---
 name: "cf-planning"
 description: "Design, architecture, and analysis specialist. Creates design documents, ADRs, epic/task breakdowns, and implementation plans. Spawn at WS-PLAN stage."
+model: opus
 ---
 
 # cf-planning

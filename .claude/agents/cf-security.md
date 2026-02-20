@@ -1,6 +1,7 @@
 ---
 name: "cf-security"
 description: "Security advisor and enforcement agent. Sandbox validation, protected resource guidance, permission error diagnosis, and settings template sync. Spawn at PF1-INIT as first teammate."
+model: sonnet
 ---
 
 # cf-security

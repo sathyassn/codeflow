@@ -1,6 +1,7 @@
 ---
 name: cf-knowledge-layer
 description: Persistent storage interface for WorkGraph and all memory operations. Manages JSONL ledger, SQLite DB, and markdown work items. Spawn at PF2-CONTEXT.
+model: sonnet
 ---
 
 # cf-knowledge-layer

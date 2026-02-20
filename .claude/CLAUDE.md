@@ -227,7 +227,7 @@ SESSION END
 - Create `pathflow-active` flag at `.state/session/{SID}/is-pathflow-active`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
-- Task Tracker: TaskCreate for PF1-INIT phase, then individual PF1-TSK-{NN} entries per pathflow-config.json
+- Task Tracker: TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02, PF1-TSK-03; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 2: Context Loading (PF2-CONTEXT)**
 
@@ -235,7 +235,7 @@ SESSION END
 - If active work found: Present "Previous work: '{topic}' on {branch}. 1. Resume 2. Fresh start"
 - If user chooses resume: Route to `/cf-resume`
 - If no active work: Display "Ready for new task." Wait for user request
-- Task Tracker: TaskCreate for PF2-CONTEXT phase
+- Task Tracker: TaskCreate for PF2-CONTEXT phase entry; TaskCreate for PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 3: Tracking Decision**
 
@@ -266,6 +266,7 @@ SESSION END
 - Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→ci/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→experiment/
 - pf-3 sentinel auto-created by hook (UNLOCKS Edit/Write operations)
 - → See Section 6 for work type classification details
+- Task Tracker: TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 5: Work Execution (PF4-EXECUTE)**
 
@@ -281,18 +282,20 @@ SESSION END
 - Rework: If WS-QA returns `fail`, re-spawn cf-development (max 2)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
 - For parallel work: spawn multiple instances per `max_parallel`/`batch_size` (→ See Section 5)
+- Task Tracker: TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-04; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
 **Step 6: Verification (PF5-VERIFY)**
 
 - Verify all pipeline stages completed with pass verdict
 - Check acceptance criteria met against task definition
 - Query cf-knowledge-layer for stage completion records
+- Task Tracker: TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; TaskUpdate to completed when verification passes.
 
 **Step 7: Completion (PF6-COMPLETE)**
 
-- cf-knowledge-layer: complete-work to record summary and mark task complete
-- cf-git-operations: Create PR via /cf-ship
-- Update markdown task status (Tier 2)
+- cf-knowledge-layer: complete-work (PF6-TSK-01), then record-session-summary (PF6-TSK-02)
+- cf-git-operations: commit-outstanding-changes (PF6-TSK-03), squash-branch (PF6-TSK-04), create-pr (PF6-TSK-05)
+- Task Tracker: TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-05 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is created.
 
 **Step 8: Session End (PF7-END)**
 
@@ -300,6 +303,8 @@ SESSION END
 - TeamDelete (ONLY after all teammates shut down and pathflow-active flag removed)
 - SessionEnd hook handles cleanup
 - One PR per tracked session. New work = new session.
+- Note: The pathflow-active flag is removed automatically by the SessionEnd hook. The lead's only cleanup actions are: shutdown teammates → TeamDelete.
+- Task Tracker: TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate phase entry completed after TeamDelete.
 
 ### 4.3 Phase Reference
 
@@ -362,23 +367,23 @@ In autorun mode (no human present), phase transitions happen automatically:
 
 ### Persistent Function Teammates (3)
 
-| Teammate | Spawned At | Purpose | Embedded SOPs From | Shutdown |
-|----------|-----------|---------|-------------------|----------|
-| cf-security | PF1-INIT | Security checks, sandbox validation, protected resource consultation | cf-security-management | PF7-END |
-| cf-knowledge-layer | PF2-CONTEXT | WorkGraph CRUD, memory ops, DB operations, session tracking | cf-memory-management, cf-task-management, cf-db-operations | PF7-END |
-| cf-git-operations | PF3-CLASSIFY | All git operations: branch, commit, PR, sync | cf-git-workflow | PF7-END |
+| Teammate | Spawned At | Model | Purpose | Embedded SOPs From | Shutdown |
+|----------|-----------|-------|---------|-------------------|----------|
+| cf-security | PF1-INIT | Sonnet | Security checks, sandbox validation, protected resource consultation | cf-security-management | PF7-END |
+| cf-knowledge-layer | PF2-CONTEXT | Sonnet | WorkGraph CRUD, memory ops, DB operations, session tracking | cf-memory-management, cf-task-management, cf-db-operations | PF7-END |
+| cf-git-operations | PF3-CLASSIFY | Haiku | All git operations: branch, commit, PR, sync | cf-git-workflow | PF7-END |
 
 ### On-Demand Role Teammates (5)
 
 All on-demand teammates operate during **PF4-EXECUTE**. Single instance per stage. Shut down after their stage completes (or after delivering a verdict). May be re-spawned for rework loops.
 
-| Teammate | Work Stage | Purpose | Entry Command |
-|----------|-----------|---------|---------------|
-| cf-development | WS-DEV | Code implementation + unit tests + CICD work | /cf-develop |
-| cf-planning | WS-PLAN | Design, architecture, analysis, investigation | /cf-plan |
-| cf-documentation | WS-DOCS | Documentation writing | /cf-document |
-| cf-review | WS-REV | Independent review (4 modes: CODE, DESIGN, DOCS, TEST) | /cf-review |
-| cf-quality-assurance | WS-QA / WS-TEST | Quality gate (WS-QA) or primary test implementer (WS-TEST) | /cf-test |
+| Teammate | Work Stage | Model | Purpose | Entry Command |
+|----------|-----------|-------|---------|---------------|
+| cf-development | WS-DEV | Opus | Code implementation + unit tests + CICD work | /cf-develop |
+| cf-planning | WS-PLAN | Opus | Design, architecture, analysis, investigation | /cf-plan |
+| cf-documentation | WS-DOCS | Sonnet | Documentation writing | /cf-document |
+| cf-review | WS-REV | Opus | Independent review (4 modes: CODE, DESIGN, DOCS, TEST) | /cf-review |
+| cf-quality-assurance | WS-QA / WS-TEST | Sonnet | Quality gate (WS-QA) or primary test implementer (WS-TEST) | /cf-test |
 
 ### Ad-Hoc Teammates
 
@@ -401,6 +406,12 @@ Format: 5-section (Identity, Constraints, SOPs, Communication, Quality Checklist
 
 **Loading at spawn:** Agent definitions are NOT auto-injected by `subagent_type`. The spawn prompt MUST include an explicit instruction to read the definition file.
 
+**Model selection:** Each agent definition specifies a `model` field in its YAML frontmatter. Read this value and pass it as the `model` parameter when spawning. This controls cost/capability trade-offs per teammate role:
+
+- Opus: cf-development, cf-review, cf-planning (complex reasoning)
+- Sonnet: cf-documentation, cf-quality-assurance, cf-security, cf-knowledge-layer (structured work)
+- Haiku: cf-git-operations (procedural git mechanics)
+
 **Spawn pattern:**
 
 ```text
@@ -408,6 +419,7 @@ Task(
   name="{teammate-name}",
   team_name="{team-name}",
   subagent_type="general-purpose",
+  model="{model from agent .md frontmatter}",
   description="Spawn {teammate-name}",
   prompt="You are {teammate-name}. Read your agent definition at .claude/agents/cf-{role}.md and follow all instructions there. Then: {detailed task with scope, acceptance criteria, and context}"
 )

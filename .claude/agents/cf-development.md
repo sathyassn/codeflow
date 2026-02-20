@@ -1,6 +1,7 @@
 ---
 name: "cf-development"
 description: "Code implementation specialist with broadest write access. Handles feature implementation, bug fixes, unit tests, and CI/CD work. Spawn at WS-DEV stage."
+model: opus
 ---
 
 # cf-development
