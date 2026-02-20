@@ -109,10 +109,10 @@ def run_pytest(
             f"--cov-report=json:{cov_json}",
         ]
 
-        # Only enforce overall threshold in multi-file mode
-        # Single-file mode relies on per-file check instead
-        if not single_file_mode:
-            args.append(f"--cov-fail-under={thresholds['fail_under']}")
+        # Per-file coverage check (default) is the authoritative gate.
+        # Do NOT add --cov-fail-under here — it causes false failures
+        # when overall coverage dips below threshold due to subprocess
+        # tests, even though every individual file meets the threshold.
 
     if verbose:
         print(f"{BLUE}[INFO]{NC} Running: {' '.join(args)}")
@@ -312,7 +312,7 @@ Examples:
             for failure in failures:
                 print(f"  {RED}✗{NC} {failure}")
             all_passed = False
-        else:
+        elif all_passed:
             print(f"\n{GREEN}[SUCCESS]{NC} All files meet {thresholds['fail_under']}% coverage threshold")
 
     # Summary

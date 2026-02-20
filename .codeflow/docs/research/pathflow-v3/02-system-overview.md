@@ -21,11 +21,13 @@
 PathFlow is a **logical progression framework** that guides Claude Code sessions through a series of phases. It is to a session what a flowchart is to a process: it defines the logical steps, their order, and the decision points. The actual work happens between the steps.
 
 PathFlow is NOT:
+
 - A task manager (it uses Claude's Task system, but does not replace it)
 - A project tracker (the CodeFlow WorkGraph handles persistent project tracking)
 - A rigid pipeline (phases can be skipped, stages can loop, tasks can be inserted dynamically)
 
 PathFlow IS:
+
 - A session lifecycle framework with 7 phases (PF-1 through PF-7)
 - A work execution model with stages (WS-DEV, WS-REV, WS-QA, WS-WORK)
 - A coordination protocol between the team lead and teammates
@@ -37,7 +39,7 @@ PathFlow IS:
 
 PathFlow orchestrates sessions through three complementary mechanisms. Each serves a distinct purpose, and all three are needed:
 
-```
+```text
 +-------------------------------------------------------------+
 |                    THREE-MECHANISM MODEL                      |
 +-------------------------------------------------------------+
@@ -76,12 +78,14 @@ Instructions drive the flow logic: the team lead's instructions tell it to creat
 Tasks provide visibility into session progress. They are the "dashboard" of PathFlow.
 
 The Claude Task system (TaskCreate, TaskList, TaskUpdate) serves a dual purpose:
+
 1. **Phase markers** -- tasks that represent PathFlow milestones (PF-1, PF-2, ...)
 2. **Work tasks** -- tasks that represent actual work to be done between milestones
 
 Both coexist in the same task list. Dependencies between tasks create an ordering graph that everyone on the team can see.
 
 Key properties:
+
 - Every teammate can call `TaskList` to see overall session state
 - Phase markers are visible as milestones in the list
 - Task dependencies show what must complete before what
@@ -107,7 +111,7 @@ Hooks provide defense-in-depth. Even if a teammate ignores task dependencies (wh
 
 PathFlow uses **progressive orchestration**: the team lead creates the next phase only when the current phase completes. This contrasts with upfront choreography, where the entire task graph is defined at session start.
 
-```
+```text
 Upfront Choreography (NOT PathFlow)        Progressive Orchestration (PathFlow)
 ====================================        ====================================
 
@@ -134,7 +138,7 @@ In practice, the team lead may create a few phases ahead when the path is predic
 
 ## 2.4 PathFlow Architecture Diagram
 
-```
+```text
 +=================================================================+
 |                      PATHFLOW SESSION                            |
 +=================================================================+
@@ -201,7 +205,7 @@ In practice, the team lead may create a few phases ahead when the path is predic
 | PathFlow sentinels | Hook/State | `.state/sentinels/` | Phase completion markers |
 | PreToolUse hooks | Hook | `.claude/hooks/codeflow/pre-tool-use/` | Enforcement before operations |
 | PostToolUse hooks | Hook | `.claude/hooks/codeflow/post-tool-use/` | State updates after operations |
-| Stop hooks | Hook | `.claude/hooks/codeflow/Stop/` | Work verification before session end |
+| Stop hooks | Hook | `.claude/hooks/codeflow/stop/` | Work verification before session end |
 
 ### Supporting Components (CodeFlow Infrastructure)
 
@@ -229,7 +233,7 @@ In practice, the team lead may create a few phases ahead when the path is predic
 
 Here is a concrete example showing all three mechanisms working together during a transition from PF-3 to PF-4:
 
-```
+```text
 1. INSTRUCTION (agent def tells lead what to do):
    "After PF-3 completes, determine required work stages.
     Spawn cf-developer for WS-DEV. Create Claude Tasks for
@@ -251,6 +255,7 @@ Here is a concrete example showing all three mechanisms working together during 
 ```
 
 Each mechanism reinforces the others:
+
 - Instructions tell agents WHAT to do
 - Tasks make the plan VISIBLE to everyone
 - Hooks ENFORCE that the plan was followed
@@ -263,7 +268,7 @@ PathFlow uses Claude's Task system to create a dependency graph that represents 
 
 ### Example: Feature Development Session
 
-```
+```text
 #1  [PF-1] Session Start                    phase marker
 #2  Initialize session record                task (cf-knowledge-layer)
 #3  [PF-2] Context Awareness                phase marker (blocked by #2)
