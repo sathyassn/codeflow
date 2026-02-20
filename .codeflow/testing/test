@@ -300,6 +300,7 @@ Examples:
     # Run shell tests
     for shell_test in shell_tests:
         if not run_shell_test(shell_test, args.verbose):
+            print(f"{RED}[FAIL]{NC} Shell test failed: {shell_test}")
             all_passed = False
 
     # Per-file coverage check
