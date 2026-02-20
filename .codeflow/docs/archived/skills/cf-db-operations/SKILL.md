@@ -255,7 +255,7 @@ Procedure:
 
 DB Tables: sessions
 Executed by: codeflow db exec (Go CLI; see .codeflow/scripts/db/schema.sql for schema)
-Hook: Stop/stop-session-record.sh
+Hook: stop/stop-session-record.sh
 
 📚 Resource: [schema-reference.md](resources/schema-reference.md)
    Load when: Understanding session event types or duration tracking
