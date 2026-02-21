@@ -114,11 +114,11 @@ Templates:
 
   | Template | Path |
   |----------|------|
-  | ADR | project-management/templates/adr-template.md |
-  | Brief | project-management/templates/brief-template.md |
+  | ADR | resources/templates/adr-template.md |
+  | Brief | resources/templates/brief-template.md |
   | Epic | project-management/templates/epic-template.md |
   | Task | project-management/templates/task-template.md |
-  | Runbook | project-management/templates/runbook-template.md |
+  | Runbook | resources/templates/runbook-template.md |
 
 Procedure:
   1. Look up the document type (from classify-document) in the Frontmatter Requirements table
@@ -234,4 +234,5 @@ Companion resources provide expanded detail beyond the operation summaries above
 |----------|-------------|----------|
 | `resources/document-type-decision-tree.md` | classify-document | Full decision flowchart with edge cases |
 | `resources/lint-rules-quick-ref.md` | validate-structure, fix-violations | Lint rule before/after examples, fix patterns |
-| `project-management/templates/` | apply-template | Document templates (ADR, brief, epic, task, runbook) |
+| `resources/templates/` | apply-template | Documentation templates (ADR, brief, runbook) |
+| `project-management/templates/` | apply-template | Project management templates (epic, task) |
