@@ -19,7 +19,7 @@
           "task_order": 1,
           "description": "Initialize PathFlow session record",
           "assigned_to": "team-lead",
-          "operation": "TeamCreate + create pathflow-active flag"
+          "operation": "TeamCreate (pathflow-active flag is auto-created by SessionStart hook)"
         },
         {
           "id": "PF1-TSK-02",

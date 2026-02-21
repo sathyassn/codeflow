@@ -133,7 +133,7 @@ Loads cf-working-protocol
     v
 PF1-INIT                                               [team-lead]
 TeamCreate (config + task list directory)
-Create pathflow-active flag
+pathflow-active flag (auto-created by SessionStart hook)
 Spawn cf-security                                       [cf-security]
     |
     v
@@ -224,7 +224,7 @@ SESSION END
 
 - SessionStart hook fires automatically, loading cf-working-protocol
 - TeamCreate to establish team infrastructure (config + task list directory, zero teammates)
-- Create `pathflow-active` flag at `.state/session/{SID}/is-pathflow-active`
+- `pathflow-active` flag auto-created by SessionStart hook at `.state/session/{SID}/is-pathflow-active`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
 - Task Tracker: TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02, PF1-TSK-03; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
@@ -371,7 +371,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 |----------|-----------|-------|---------|-------------------|----------|
 | cf-security | PF1-INIT | Sonnet | Security checks, sandbox validation, protected resource consultation | cf-security-management | PF7-END |
 | cf-knowledge-layer | PF2-CONTEXT | Sonnet | WorkGraph CRUD, memory ops, DB operations, session tracking | cf-memory-management, cf-task-management, cf-db-operations | PF7-END |
-| cf-git-operations | PF3-CLASSIFY | Haiku | All git operations: branch, commit, PR, sync | cf-git-workflow | PF7-END |
+| cf-git-operations | PF3-CLASSIFY | Sonnet | All git operations: branch, commit, PR, sync | cf-git-workflow | PF7-END |
 
 ### On-Demand Role Teammates (5)
 
@@ -409,8 +409,8 @@ Format: 5-section (Identity, Constraints, SOPs, Communication, Quality Checklist
 **Model selection:** Each agent definition specifies a `model` field in its YAML frontmatter. Read this value and pass it as the `model` parameter when spawning. This controls cost/capability trade-offs per teammate role:
 
 - Opus: cf-development, cf-review, cf-planning (complex reasoning)
-- Sonnet: cf-documentation, cf-quality-assurance, cf-security, cf-knowledge-layer (structured work)
-- Haiku: cf-git-operations (procedural git mechanics)
+- Sonnet: cf-documentation, cf-quality-assurance, cf-security, cf-knowledge-layer, cf-git-operations (structured work)
+- Haiku: (none currently)
 
 **Spawn pattern:**
 

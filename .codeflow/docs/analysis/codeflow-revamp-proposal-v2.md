@@ -2,7 +2,14 @@
 
 > From V3 sub-agents to agent-teams-only: PathFlow lifecycle, teammate architecture, DB strategy, and Claude component transformation plan.
 
-**Task:** INF-TSK-SPKE-GENL-001
+> **Historical Context (2026-02-21):** This proposal was written during the V4 architecture spike (2026-02-14). It references the old verbose format ID convention: `{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NNN}` (e.g., `INF-TSK-SPKE-GENL-001`, `PLN-EPC-PLAN-GENL-001`, `FRT-TSK-FEAT-AUTH-001`). The project has since adopted a simplified convention:
+>
+> - **Primary key:** ULID-based (e.g., `epic-01KHSQPQRNQP0XTXCRHXX9YW1T`, `task-01BRZ4PDFLUTW5SSGG70H6GBW`)
+> - **Format ID (human-readable):** Epic `{AREA}-EPC-{NNN}` (e.g., `INF-EPC-005`), Task `{AREA}-TSK-{NNN}-{NNN}` (e.g., `PLN-TSK-001-001`)
+>
+> All format IDs in this document use the old verbose convention. The underlying dual-ID architecture (ULID primary keys + human-readable format IDs) described in Section 1 remains valid; only the format ID naming pattern has been simplified. Directory structures referencing old format IDs (e.g., Section 4.5) now use the new convention in practice. This document is preserved as a historical architectural record.
+
+**Task:** INF-TSK-SPKE-GENL-001 *(old format ID convention; see Historical Context above)*
 **Branch:** spike/workflow-revamp
 **Date:** 2026-02-14
 **Status:** Proposal v2 (corrects 9 errors from v1)
@@ -96,7 +103,7 @@ This proposal replaces the V3 architecture with an agent-teams-only model built 
 
 - V4 Phases 1-3 (complete): foundation, CLI, hooks infrastructure
 - Three-tier data model (JSONL -> SQLite -> Markdown)
-- Dual-ID system (ULID primary keys + human-readable format_ids)
+- Dual-ID system (ULID primary keys + human-readable format_ids) *(format_id naming simplified post-proposal; see Historical Context)*
 - Existing epics, tasks, and project management structure
 - Security hooks (always-on, team-wide)
 - Protected resource enforcement
@@ -1017,7 +1024,7 @@ CREATE TABLE pathflow_tasks (
 
 | Aspect | PathFlow Tasks (pathflow_tasks) | Project Tasks (tasks) |
 |--------|--------------------------------|----------------------|
-| ID Format | PF{N}-TSK-{NN} | {AREA}-TSK-{TYPE}-{DOMAIN}-{NNN} + ULID PK |
+| ID Format | PF{N}-TSK-{NN} | {AREA}-TSK-{NNN}-{NNN} + ULID PK *(was `{AREA}-TSK-{TYPE}-{DOMAIN}-{NNN}` at time of writing)* |
 | Scope | Session-local, ephemeral | Project-wide, persistent |
 | Lifecycle | Created at phase entry, disposed at session end | Created at planning, persist across sessions |
 | Purpose | Phase/stage checklist items | Development work items |

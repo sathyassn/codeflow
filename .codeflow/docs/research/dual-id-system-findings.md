@@ -1,8 +1,15 @@
 # Dual-ID System: Findings & Implementation Tracker
 
+> **Historical Context (2026-02-21):** This document was written during the initial dual-ID system migration (2026-02-12). At that time, CodeFlow used a verbose format ID convention: `{AREA}-{ENTITY}-{TYPE}-{DOMAIN}-{NNN}` (e.g., `INF-EPC-RFCT-IDSY-001`, `FRT-TSK-FEAT-AUTH-001`). The project has since adopted a simplified convention:
+>
+> - **Primary key:** ULID-based (e.g., `epic-01KHSQPQRNQP0XTXCRHXX9YW1T`, `task-01BRZ4PDFLUTW5SSGG70H6GBW`)
+> - **Format ID (human-readable):** Epic `{AREA}-EPC-{NNN}` (e.g., `INF-EPC-005`), Task `{AREA}-TSK-{NNN}-{NNN}` (e.g., `INF-TSK-005-007`)
+>
+> All format IDs referenced in this document (e.g., `INF-TSK-FIX-GENL-005`, `INF-EPC-RFCT-IDSY-001`, `INF-TSK-RFCT-IDSY-001` through `009`) use the old verbose convention. The underlying dual-ID architecture (ULID primary keys + human-readable format IDs) remains valid; only the format ID naming convention has changed. This document is preserved as a historical record of the migration research and implementation.
+
 **Date**: 2026-02-12
 **Branch**: fix/pre-phase4-gaps
-**Task**: INF-TSK-FIX-GENL-005
+**Task**: INF-TSK-FIX-GENL-005 *(old format ID convention; see Historical Context above)*
 **Decision**: Tier 3 - Project-wide architectural change
 
 ## 1. Design Decision

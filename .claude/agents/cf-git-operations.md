@@ -1,7 +1,7 @@
 ---
 name: "cf-git-operations"
 description: "Git operations specialist. Handles branch creation, commits, PRs, worktree management, and remote sync. Spawn at PF3-CLASSIFY when code work is confirmed."
-model: haiku
+model: sonnet
 ---
 
 # cf-git-operations
