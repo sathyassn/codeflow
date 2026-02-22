@@ -200,7 +200,8 @@ Event types:
 
 🔒 **Must be invoked BEFORE cf-git-operations creates a commit.**
 
-1. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
+1. Run validate-task-fields on the task markdown: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`. If validation fails, report errors and BLOCK completion until fields are fixed.
+2. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
 2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
 4. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
@@ -274,9 +275,9 @@ Work type classification:
 
 #### Ensure Work Registered
 
-**When:** Informal work request (no task_id provided) before any Edit/Write/Bash modifications.
+**When:** Informal (adhoc) work request with no pre-existing task_id. Runs after the pf-3 sentinel is created (PF3-TSK-04), so Edit/Write operations are unlocked for DB and markdown writes. Skipped when the task has `origin: planned` (task already exists in WorkGraph).
 
-🔒 **Prerequisite:** classify-work must have been run to provide area_type, work_type, domain.
+🔒 **Prerequisite:** classify-work must have been run to provide area_type, work_type, domain. The pf-3 sentinel must exist (branch created).
 
 Dual-ID system:
 
@@ -301,6 +302,24 @@ The script requires no external dependencies (pure Python, stdlib only). For mul
 5. Team lead can then invoke begin-work with the returned task_id
 
 Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF->INF/, SHR->SHR/, DOC->DOC/, PLN->PLN/
+
+#### Validate Task Fields
+
+**When:** PF4-TSK-02 (before work execution starts), during complete-work (PF6-TSK-01), and on-demand from cf-planning during WS-PLAN.
+
+**Purpose:** Run deterministic validation on task and epic YAML frontmatter to catch missing or invalid fields before they cause downstream issues.
+
+**Procedure:**
+
+1. Determine the task markdown path from the task record (query tasks table for `markdown_path` or derive from `epic_id` + `task_id`)
+2. Run validation: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
+3. If the task has a parent epic, also run: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+4. Parse script output for errors and warnings
+5. If errors found: report `"KNOWLEDGE: validate-task-fields - FAIL: {n} errors: {details}"` and BLOCK the operation
+6. If warnings only: report `"KNOWLEDGE: validate-task-fields - PASS with {n} warnings: {details}"` and proceed
+7. If clean: report `"KNOWLEDGE: validate-task-fields - PASS"`
+
+**Error handling:** If validation scripts are not found at the expected paths, report: `"KNOWLEDGE: validate-task-fields - SKIPPED: validation scripts not found at .codeflow/scripts/validation/"` and proceed with a warning.
 
 #### Ongoing Epics
 
@@ -327,7 +346,7 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 
 **Create:** Validate epic exists and is active. Generate both IDs. INSERT into tasks (epic_id as ULID FK). INSERT task_dependencies if specified. Append to JSONL. Create markdown file at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/tasks/INF-TSK-005-001.md`). Use templates at `project-management/templates/task-template.md`. Return both IDs.
 
-Optional autorun fields (set by cf-planning only): autorun_eligible, auto_commit, raise_pr, auto_merge, target_branch.
+Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, auto_merge, target_branch.
 
 **Update:** Validate task exists. Execute UPDATE on permitted fields (status, stage, stage_status, branch, pr_number). Append to JSONL. Check if this unblocks dependent tasks. Re-render markdown. If stage transition, record stage_transition memory_event.
 

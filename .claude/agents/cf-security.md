@@ -166,6 +166,29 @@ If the protected file is a settings file: also advise running sync-settings-temp
 
 **Response format:** `"SECURITY: handle-protected-resource -- staged {path} to /tmp/claude/$CF_PROJECT_ROOT/managed/protected-edits/{relative-path} | apply_command: {command}"`
 
+### Step 2b: Merge Protection Policy
+
+**When:** A teammate queries whether a `gh pr merge` operation is allowed, or when verifying security posture at session start.
+
+**Policy:** `gh pr merge` commands targeting protected branches are **hard-blocked** by the PreToolUse hook (`cf-pre-tool-use-gh-pr.sh`). This is defense-in-depth: the hook blocks the command, agent instructions forbid it, and GitHub branch protection rules provide the final safety net.
+
+**Protected branches** (from `enforcement-policy.json merge_protection.protected_branches`):
+
+- `main`
+- `master`
+- `release/*`
+- `production`
+
+**Merge rules:**
+
+| Target Branch | Allowed? | Method |
+|--------------|----------|--------|
+| Protected branch (`main`, `master`, `release/*`, `production`) | No | Human merge via GitHub UI or admin override only |
+| Integration branch (`autorun/{batch-name}`) | Yes | `gh pr merge {number} --delete-branch` (regular merge, not squash) |
+| Feature/work branch | Yes | Standard merge operations |
+
+**Response format:** `"SECURITY: merge-protection-check -- target: {branch} | allowed: {true|false} | policy: {hard_block|allowed}"`
+
 ### Step 3: Permission Error Diagnosis
 
 **When:** A teammate encounters an unexpected permission error. Reactive diagnostic -- no enforcement.
@@ -245,6 +268,7 @@ If the protected file is a settings file: also advise running sync-settings-temp
 | Settings templates out of sync | Report drift, provide sync commands to user |
 | Unknown permission error pattern | Diagnose best-effort, escalate to team lead if unresolvable |
 | Managed tmp folder deletion attempted | Block and explain: managed folders are protected by design |
+| `gh pr merge` to protected branch | Confirm hard-block is correct behavior. Reference `enforcement-policy.json merge_protection` section. Advise human merge via GitHub UI. |
 
 ## Communication
 

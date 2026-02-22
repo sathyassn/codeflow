@@ -48,6 +48,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
     DOCUMENT ── Apply document template, validate structure
        │
        ▼
+    VALIDATE ── Run validate-task.sh / validate-epic.sh on created files
+       │
+       ▼
     COMMIT ──── SendMessage to cf-git-operations
        │
        ▼
@@ -178,11 +181,20 @@ Before requesting commit, validate:
 - Links valid
 - Acceptance criteria objective and testable
 
-### Step 6: Request Commit
+### Step 6: Validate Artifacts
+
+Before requesting commit, run validation on all created epic and task markdown files:
+
+1. For each task markdown created: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
+2. For each epic markdown created: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+3. If validation errors found: fix the YAML frontmatter fields before proceeding
+4. If validation scripts are not found at `.codeflow/scripts/validation/`: skip validation with a warning and proceed
+
+### Step 7: Request Commit
 
 SendMessage to cf-git-operations: `"Please commit: plan: {description}"`
 
-### Step 7: Report Completion
+### Step 8: Report Completion
 
 SendMessage to team lead with summary. Include `STAGE-COMPLETE: WS-PLAN` in your final message. Before reporting, re-read acceptance criteria from the original task and verify each is met.
 

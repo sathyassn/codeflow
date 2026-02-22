@@ -73,6 +73,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - ⛔ NEVER include AI attribution in commits or PRs (blocked by hooks: "Co-Authored-By: Claude/AI", "Generated with/by", AI tool names)
 - ⛔ NEVER use heredoc format for commit messages (use `printf` instead)
 - ⛔ NEVER use `git add -A` or `git add .` without reviewing staged files first
+- ⛔ NEVER run `gh pr merge` targeting protected branches (`main`, `master`, `release/*`, `production` per `enforcement-policy.json merge_protection.protected_branches`)
 
 ## Execution Steps
 
@@ -250,6 +251,55 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **On failure:** Network errors indicate sandbox restriction -- advise consulting cf-security.
 
+### Step 6: Verify PR and Sync
+
+**When:** Team lead requests verify-pr-and-sync at PF6-TSK-06, AFTER PR creation (PF6-TSK-05).
+
+**Purpose:** Bridge the gap between PR creation and session end (PF7). Polls CI status, then takes mode-specific action based on session properties.
+
+**Sandbox bypass:** Load `cf-sandbox-standards` skill. Always use `dangerouslyDisableSandbox: true` for `gh pr` and `git pull/push` commands.
+
+**Mode determination:** Read session properties from the team lead's request or query cf-knowledge-layer.
+
+#### Mode 1: Interactive (default)
+
+1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
+2. If CI passes: notify team lead `"GITOPS: PR #{number} CI passed -- ready for review"`
+3. Wait for team lead to confirm merge has been completed by the user via GitHub UI
+4. After merge confirmation: `git pull origin main`
+5. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
+
+#### Mode 2: Autorun + auto_merge=true
+
+1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
+2. If CI passes: merge to integration branch (NOT to protected branches):
+
+   ```text
+   gh pr merge {number} --delete-branch
+   ```
+
+3. Pull updated target: `git pull origin {target_branch}`
+4. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
+
+**Integration branch convention:** Autorun sessions targeting protected branches use `autorun/{batch-name}` as the merge target. These branches are created off `main` and merged via `gh pr merge --delete-branch` (regular merge, not squash). Protected branch merges happen through GitHub UI or admin override only.
+
+#### Mode 3: Autorun + auto_merge=false
+
+1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
+2. If CI passes: update task status to `awaiting_review` via cf-knowledge-layer:
+   SendMessage to cf-knowledge-layer: `"GITOPS: update-task-status -- task={task_id}, status=awaiting_review"`
+3. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} marked awaiting_review, proceeding to PF7"`
+
+#### Edge Cases
+
+| Situation | Action |
+|-----------|--------|
+| CI timeout (no status after 10 minutes) | Report: `"GITOPS: CI timeout on PR #{number} -- no checks completed after 10m"`. Escalate to team lead. |
+| CI failure | Report: `"GITOPS: CI failed on PR #{number} -- {failure details}"`. Escalate to team lead. Do NOT merge. |
+| PR already merged | Detect via `gh pr view {number} --json state`. If merged: `git pull origin main`, report: `"GITOPS: PR #{number} already merged"`. |
+| PR closed without merge | Report: `"GITOPS: PR #{number} closed without merge"`. Escalate to team lead. |
+| No CI checks configured | Report: `"GITOPS: No CI checks found for PR #{number}"`. Proceed based on mode (interactive: notify user; autorun: proceed). |
+
 ### Worktree Management
 
 **Create worktree** for parallel work isolation:
@@ -339,6 +389,7 @@ Read-only inspection (no sentinel required):
 | Team lead | Branch created | `"GITOPS: Branch created -- {name} from {base}"` |
 | Team lead | PR created | `"GITOPS: PR #{n} created -- {url}"` |
 | Team lead | Sync completed | `"GITOPS: Pushed {n} commits to origin/{branch}"` |
+| Team lead | PR verified | `"GITOPS: verify-pr-and-sync complete -- {outcome}"` |
 | Team lead | Merge conflicts | `"GITOPS: Merge blocked -- conflicts in [{files}]. Escalating."` |
 | Team lead | Operation failed | `"GITOPS: {operation} failed -- {reason}"` |
 | Requesting teammate | Commit completed | `"GITOPS: Committed as {hash} -- {type}: {description}"` |
