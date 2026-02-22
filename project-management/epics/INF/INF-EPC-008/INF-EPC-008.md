@@ -79,7 +79,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 | INF-TSK-008-001 | Verify planning artifacts and prerequisites | complete | high |
 | INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | complete | high |
 | INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | complete | high |
-| INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | todo | high |
+| INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | complete | high |
 | INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | todo | normal |
 | INF-TSK-008-006 | PF6-TSK-06 verify-pr-and-sync in pathflow-config.json | todo | normal |
 | INF-TSK-008-007 | Agent definition updates: cf-git-operations, cf-knowledge-layer, cf-planning, cf-security | todo | normal |
