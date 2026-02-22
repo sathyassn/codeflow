@@ -11,7 +11,7 @@
       "task_tracker": {
         "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
-        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF1-TSK-01, PF1-TSK-02, PF1-TSK-03)",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF1-TSK-01, PF1-TSK-03)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
         "on_phase_complete": "TaskUpdate status=completed for the phase entry"
       },
@@ -22,13 +22,6 @@
           "description": "Initialize PathFlow session record",
           "assigned_to": "team-lead",
           "operation": "TeamCreate (pathflow-active flag is auto-created by SessionStart hook)"
-        },
-        {
-          "id": "PF1-TSK-02",
-          "task_order": 2,
-          "description": "Register session in DB/JSONL with tracking_level='pending'",
-          "assigned_to": "team-lead",
-          "operation": "Register session — deferred to cf-knowledge-layer at PF2"
         },
         {
           "id": "PF1-TSK-03",
@@ -183,7 +176,8 @@
           "task_order": 5,
           "description": "Execute WS-QA stage (if pipeline includes it)",
           "assigned_to": "team-lead",
-          "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)"
+          "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
+          "condition": "if_pipeline_includes_qa"
         }
       ]
     },
@@ -371,8 +365,9 @@
       "subject": "WS-QA: Quality Assurance ({task_id})",
       "description": "Integration testing and acceptance verification. Stage: {stage_id}, Teammate: cf-quality-assurance, Task: {task_id}, Retry: {retry}.",
       "activeForm": "Running quality assurance checks",
-      "max_qa_retries": 2,
+      "max_qa_retries": 3,
       "rework_target": "primary",
+      "rework_target_description": "Send rework back to the primary stage teammate for the pipeline (e.g., cf-development for FEAT/FIX/RFCT, cf-planning for PLAN/SPKE, cf-documentation for DOCS)",
       "max_parallel": 1,
       "batch_size": 1
     }
@@ -432,9 +427,10 @@
   },
   "rework": {
     "max_rework_iterations": 3,
-    "max_qa_retries": 2,
+    "max_qa_retries": 3,
     "stage_timeout_minutes": 30,
-    "escalation": "lead"
+    "escalation": "lead",
+    "precedence_note": "Stage-level rework limits take precedence over these global defaults"
   },
   "commit_standards": {
     "delegate_to": "cf-git-operations",
