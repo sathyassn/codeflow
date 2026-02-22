@@ -441,11 +441,12 @@
   },
   "task_tracker": {
     "purpose": "Mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility and context overflow recovery",
+    "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EVERY PF{N}-TSK-{NN} task using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
     "mirroring": {
       "enabled": true,
       "source_of_truth": "jsonl",
       "mirror_target": "Claude Code internal task tracker (TaskCreate/TaskUpdate API tools)",
-      "description": "Each PathFlow phase and task MUST be a separate entry. Template properties (subject, description, activeForm) are inline in phases and stages sections. See CLAUDE.md Section 7."
+      "description": "Each PathFlow phase and task MUST be a separate entry. Template properties (subject, description, activeForm) are inline in phases and stages sections. The task tracker step is embedded as a mandatory sub-step within each Section 4.2 phase step in CLAUDE.md."
     }
   }
 }

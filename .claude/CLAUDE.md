@@ -227,7 +227,8 @@ SESSION END
 - `pathflow-active` flag auto-created by SessionStart hook at `.state/session/{SID}/is-pathflow-active`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
-- Task Tracker: TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02, PF1-TSK-03; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+
+6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02, PF1-TSK-03; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 2: Context Loading (PF2-CONTEXT)**
 
@@ -235,7 +236,8 @@ SESSION END
 - If active work found: Present "Previous work: '{topic}' on {branch}. 1. Resume 2. Fresh start"
 - If user chooses resume: Route to `/cf-resume`
 - If no active work: Display "Ready for new task." Wait for user request
-- Task Tracker: TaskCreate for PF2-CONTEXT phase entry; TaskCreate for PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+
+5. **Task Tracker (MANDATORY):** TaskCreate for PF2-CONTEXT phase entry; TaskCreate for PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 3: Tracking Decision**
 
@@ -260,17 +262,25 @@ SESSION END
 
 **Step 4: Work Classification (PF3-CLASSIFY)**
 
-- Classify work type and area
-- Register task in WorkGraph via cf-knowledge-layer: `"LEAD: begin-work -- task_id={id}, topic={title}, branch={branch}, scope={scope}"`
-- Spawn cf-git-operations: `"Read .claude/agents/cf-git-operations.md, then create branch {prefix}/{name}"`
+1. Classify work type and area (PF3-TSK-01, team-lead)
+2. Spawn cf-git-operations (PF3-TSK-02, team-lead): `"Read .claude/agents/cf-git-operations.md, then create branch {prefix}/{name}"`
+3. Create feature branch (PF3-TSK-03, cf-git-operations) — triggers pf-3 sentinel via PostToolUse hook, UNLOCKS Edit/Write operations
+4. Register task in WorkGraph (PF3-TSK-04, cf-knowledge-layer) — **CONDITIONAL: `adhoc_only`** — skip if `origin=planned`. The `condition: adhoc_only` field means this task runs only for adhoc/unplanned work; planned tasks already have a task_id from the epic task list.
+5. Begin work session (PF3-TSK-05, cf-knowledge-layer) — writes `begin_work` event to ledger. For planned tasks, task_id comes from the epic task list; for adhoc tasks, task_id comes from PF3-TSK-04.
+
 - Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→ci/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→experiment/
-- pf-3 sentinel auto-created by hook (UNLOCKS Edit/Write operations)
 - → See Section 6 for work type classification details
-- Task Tracker: TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+
+6. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 5: Work Execution (PF4-EXECUTE)**
 
-- Determine pipeline from work type (→ See Section 6: Work Pipelines)
+1. Lookup pipeline from work type (PF4-TSK-01, team-lead — → See Section 6: Work Pipelines)
+2. Validate task and epic fields via cf-knowledge-layer (PF4-TSK-02, cf-knowledge-layer — `validate-task-fields` before spawning primary stage)
+3. Execute primary stage — WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST (PF4-TSK-03, team-lead — spawn stage teammate per pipeline)
+4. Execute WS-REV stage — universal review (PF4-TSK-04, team-lead — spawn cf-review with mode per work type)
+5. Execute WS-QA stage — if pipeline includes it (PF4-TSK-05, team-lead — spawn cf-quality-assurance)
+
 - For each stage in the pipeline:
   1. Spawn the stage's on-demand teammate with full task specification (→ See Section 5: Spawn Patterns)
   2. Teammate executes work
@@ -282,20 +292,30 @@ SESSION END
 - Rework: If WS-QA returns `fail`, re-spawn cf-development (max 2)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
 - For parallel work: spawn multiple instances per `max_parallel`/`batch_size` (→ See Section 5)
-- Task Tracker: TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-04; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
+
+6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
 **Step 6: Verification (PF5-VERIFY)**
 
 - Verify all pipeline stages completed with pass verdict
 - Check acceptance criteria met against task definition
 - Query cf-knowledge-layer for stage completion records
-- Task Tracker: TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; TaskUpdate to completed when verification passes.
+
+4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; TaskUpdate to completed when verification passes.
 
 **Step 7: Completion (PF6-COMPLETE)**
 
-- cf-knowledge-layer: complete-work (PF6-TSK-01), then record-session-summary (PF6-TSK-02)
-- cf-git-operations: commit-outstanding-changes (PF6-TSK-03), squash-branch (PF6-TSK-04), create-pr (PF6-TSK-05)
-- Task Tracker: TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-05 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is created.
+1. Complete task in WorkGraph (PF6-TSK-01, cf-knowledge-layer — `complete-work`, syncs Tier 2 markdown)
+2. Update project memory (PF6-TSK-02, cf-knowledge-layer — `record-session-summary`)
+3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown)
+4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
+5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`)
+6. Verify PR and sync (PF6-TSK-06, cf-git-operations — `verify-pr-and-sync`):
+   - **Mode 1** (`auto_merge:true` + non-protected target): auto-merge PR via `gh pr merge --delete-branch`
+   - **Mode 2** (`auto_merge:false` OR protected target): set status to `awaiting_review`, notify user
+   - **Mode 3** (CI failed): report failures, keep PR open
+
+7. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-06 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
 
 **Step 8: Session End (PF7-END)**
 
@@ -304,7 +324,8 @@ SESSION END
 - SessionEnd hook handles cleanup
 - One PR per tracked session. New work = new session.
 - Note: The pathflow-active flag is removed automatically by the SessionEnd hook. The lead's only cleanup actions are: shutdown teammates → TeamDelete.
-- Task Tracker: TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate phase entry completed after TeamDelete.
+
+6. **Task Tracker (MANDATORY):** TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate phase entry completed after TeamDelete.
 
 ### 4.3 Phase Reference
 
@@ -314,10 +335,10 @@ SESSION END
 |-------|----------------------|-------------------------------|------------|-------------|
 | PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security | pathflow-active flag, team config |
 | PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer | Active work state, tracking decision |
-| PF3-CLASSIFY | pf-2 | pathflow-pf-3 | Create branch (UNLOCKS Edit/Write) | Task record, branch, tracking_level='tracked' |
+| PF3-CLASSIFY | pf-2 | pathflow-pf-3 (auto-created by PostToolUse hook on branch creation) | Create branch (UNLOCKS Edit/Write). Conditional task registration for adhoc tasks (skipped when origin=planned). | Task record (adhoc), branch, tracking_level='tracked' |
 | PF4-EXECUTE | pf-3 | pathflow-ws-* | Run work pipeline | Code, docs, tests, reviews |
 | PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
-| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR | PR created, task status updated |
+| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR, verify CI, sync | PR created, PR verified, task status updated |
 | PF7-END | pf-6 | (cleanup) | Shutdown, remove flag | Clean session end |
 
 ### Phase Task IDs
@@ -810,7 +831,7 @@ PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped
 
 ### Task Tracker Mirroring
 
-The team lead MUST mirror PathFlow state into Claude Code's internal task tracker (TaskCreate/TaskUpdate tools) for UI visibility:
+🔒 **MANDATORY:** The team lead MUST create INDIVIDUAL task tracker entries for EVERY PF{N}-TSK-{NN} task using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it `in_progress` when work begins, and `completed` when done. NO EXCEPTIONS.
 
 | PathFlow Event | Task Tracker Action |
 |---|---|
@@ -828,6 +849,7 @@ The team lead MUST mirror PathFlow state into Claude Code's internal task tracke
 - Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
 - Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
 - JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
+- The task tracker step is embedded as a mandatory sub-step within each Section 4.2 phase step.
 
 **Reference:** `pathflow-config.json` -- template properties (subject, description, activeForm) are inline in the `phases` and `stages` sections.
 
@@ -894,8 +916,32 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 1. Work completes in PF4-EXECUTE (all stages pass)
 2. PF5-VERIFY confirms acceptance criteria
 3. cf-git-operations creates PR in PF6-COMPLETE
-4. Lead proceeds to PF7-END
-5. New session for new work
+4. cf-git-operations verifies CI and syncs (PF6-TSK-06)
+5. Lead proceeds to PF7-END
+6. New session for new work
+
+### Merge Protection
+
+🔒 **Hard block on protected branch merge.** The following branches are protected (from `enforcement-policy.json` `merge_protection`):
+
+- `main`, `master`, `release/*`, `production`
+
+| Scenario | Behavior |
+|----------|----------|
+| `gh pr merge` targeting protected branch | BLOCKED by `cf-pre-tool-use-gh-pr.sh` hook. PR must be merged via GitHub UI. |
+| `auto_merge:true` + protected target | FORBIDDEN. Validation error at batch parsing time. |
+| Interactive session `/cf-ship` | Verifies CI, notifies user to merge via GitHub UI. Does NOT execute merge. |
+| Autorun `auto_merge:true` + non-protected target | Auto-merges via `gh pr merge --delete-branch` to integration branch. |
+
+### Task Status: `awaiting_review`
+
+Tasks and workers can reach an `awaiting_review` terminal state when:
+
+- `/cf-ship` verifies a PR targeting a protected branch (interactive sessions)
+- Autorun workers complete with `auto_merge:false`
+- PR CI passes but merge requires human intervention
+
+The `awaiting_review` status indicates the PR is ready for human review and merge. The task is NOT yet `complete` — it transitions to `complete` only after the PR is merged.
 
 ### Decision Tiers
 
