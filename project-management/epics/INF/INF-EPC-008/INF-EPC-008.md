@@ -83,10 +83,10 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 | INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | complete | normal |
 | INF-TSK-008-006 | PF6-TSK-06 verify-pr-and-sync in pathflow-config.json | complete | normal |
 | INF-TSK-008-007 | Agent definition updates: cf-git-operations, cf-knowledge-layer, cf-planning, cf-security | complete | normal |
-| INF-TSK-008-008 | Command definition updates: cf-ship, cf-autorun | todo | normal |
-| INF-TSK-008-009 | CLAUDE.md updates: Sections 4.2, 4.3, 6 | todo | normal |
-| INF-TSK-008-010 | Template updates: task-template.md | todo | low |
-| INF-TSK-008-011 | V4 spec alignment: session-lifecycle, autorun, commands | todo | low |
+| INF-TSK-008-008 | Command definition updates: cf-ship, cf-autorun | complete | normal |
+| INF-TSK-008-009 | CLAUDE.md updates: Sections 4.2, 4.3, 6 | complete | normal |
+| INF-TSK-008-010 | Template updates: task-template.md | complete | low |
+| INF-TSK-008-011 | V4 spec alignment: session-lifecycle, autorun, commands | complete | low |
 
 ## Dependencies
 
