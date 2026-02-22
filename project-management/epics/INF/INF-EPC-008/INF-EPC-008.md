@@ -80,9 +80,9 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 | INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | complete | high |
 | INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | complete | high |
 | INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | complete | high |
-| INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | todo | normal |
-| INF-TSK-008-006 | PF6-TSK-06 verify-pr-and-sync in pathflow-config.json | todo | normal |
-| INF-TSK-008-007 | Agent definition updates: cf-git-operations, cf-knowledge-layer, cf-planning, cf-security | todo | normal |
+| INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | complete | normal |
+| INF-TSK-008-006 | PF6-TSK-06 verify-pr-and-sync in pathflow-config.json | complete | normal |
+| INF-TSK-008-007 | Agent definition updates: cf-git-operations, cf-knowledge-layer, cf-planning, cf-security | complete | normal |
 | INF-TSK-008-008 | Command definition updates: cf-ship, cf-autorun | todo | normal |
 | INF-TSK-008-009 | CLAUDE.md updates: Sections 4.2, 4.3, 6 | todo | normal |
 | INF-TSK-008-010 | Template updates: task-template.md | todo | low |
