@@ -195,10 +195,14 @@ if [[ "$TOOL_NAME" != "Task" ]]; then
             exit 0
         fi
 
+        # Strip quoted strings to prevent matching content inside commit messages/arguments
+        # Prevents false positive: commit message containing "gh pr merge" triggering push/PR gate
+        COMMAND_FOR_CLASSIFY=$(echo "$COMMAND" | sed -E "s/\"([^\"\\\\]|\\\\.)*\"//g; s/'[^']*'//g")
+
         # Classify the bash command
-        if echo "$COMMAND" | grep -qE '(^|\s|&&|\|)(git\s+push|gh\s+pr)(\s|$)'; then
+        if echo "$COMMAND_FOR_CLASSIFY" | grep -qE '(^|\s|&&|\|)(git\s+push|gh\s+pr)(\s|$)'; then
             GATE_TYPE="git_push_pr"
-        elif echo "$COMMAND" | grep -qE '(^|\s|&&|\|)git\s+commit(\s|$)'; then
+        elif echo "$COMMAND_FOR_CLASSIFY" | grep -qE '(^|\s|&&|\|)git\s+commit(\s|$)'; then
             GATE_TYPE="git_commit"
         else
             # Non-gated bash command

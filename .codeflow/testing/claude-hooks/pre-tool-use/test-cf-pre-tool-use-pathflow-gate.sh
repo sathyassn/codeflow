@@ -12,6 +12,7 @@
 #   - Graceful degradation: non-critical gates ALLOW, critical gates BLOCK
 #   - Session-unknown early check: critical gates BLOCK immediately
 #   - Exits 0 for non-gated Bash commands
+#   - Quoted string false positive prevention (commit message content)
 
 set -euo pipefail
 
@@ -664,6 +665,81 @@ if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Falls back to hook input session_id when env file missing"
 else
     fail "Should fall back to hook input session_id when env file missing"
+fi
+
+echo ""
+echo "--- Execution Tests: Quoted String False Positive Prevention ---"
+
+# Test 56: git commit with "gh pr merge" in double-quoted message → git_commit (NOT git_push_pr)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-56"
+touch "$flag_file"
+create_test_sentinel "sess-56" "pf-3"
+result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-56" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"no gh pr merge\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Commit with 'gh pr merge' in double-quoted message classifies as git_commit"
+else
+    fail "Should allow commit when 'gh pr merge' is inside quoted message (got: $result)"
+fi
+
+# Test 57: git commit with 'gh pr create' in single-quoted message → git_commit (NOT git_push_pr)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-57"
+touch "$flag_file"
+create_test_sentinel "sess-57" "pf-3"
+result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-57" TOOL_NAME="Bash" TOOL_INPUT="{\"command\":\"git commit -m 'message with gh pr create'\"}" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Commit with 'gh pr create' in single-quoted message classifies as git_commit"
+else
+    fail "Should allow commit when 'gh pr create' is inside single-quoted message (got: $result)"
+fi
+
+# Test 58: git commit && git push → git_push_pr (compound command with actual push)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-58"
+touch "$flag_file"
+create_test_sentinel "sess-58" "pf-3"
+output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-58" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git commit -m \"msg\" && git push"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -ne 0 && "$output" == *"git_push_pr"* ]]; then
+    pass "Compound commit+push still classifies as git_push_pr"
+else
+    fail "Should block compound commit+push as git_push_pr (got exit=$exit_code)"
+fi
+
+# Test 59: git push origin main → git_push_pr (unchanged behavior)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-59"
+touch "$flag_file"
+create_test_sentinel "sess-59" "pf-3"
+output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-59" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push origin main"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -ne 0 && "$output" == *"git_push_pr"* ]]; then
+    pass "Bare git push still classifies as git_push_pr"
+else
+    fail "Should block bare git push as git_push_pr (got exit=$exit_code)"
+fi
+
+# Test 60: gh pr create --title "test" → git_push_pr (unchanged behavior)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-60"
+touch "$flag_file"
+create_test_sentinel "sess-60" "pf-3"
+output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-60" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test\""}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -ne 0 && "$output" == *"git_push_pr"* ]]; then
+    pass "gh pr create still classifies as git_push_pr"
+else
+    fail "Should block gh pr create as git_push_pr (got exit=$exit_code)"
+fi
+
+# Test 61: git add . && git commit → git_commit (compound without push)
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-61"
+touch "$flag_file"
+create_test_sentinel "sess-61" "pf-3"
+result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-61" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git add . && git commit -m \"update\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Compound add+commit (no push) classifies as git_commit"
+else
+    fail "Should allow compound add+commit without push (got: $result)"
 fi
 
 echo ""
