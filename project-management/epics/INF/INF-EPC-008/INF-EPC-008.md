@@ -3,7 +3,7 @@ id: "epic-01KJ12VSN1YSWYQ03CDK8ENG78"
 format_id: "INF-EPC-008"
 title: "PathFlow PR Verification, Merge Protection & Validation Hardening"
 summary: "Add PF6 PR verification step, configurable merge protection for protected branches, autorun integration branch convention, task/epic field validation scripts, schema updates (awaiting_review status, deprecate auto_commit), and V4 spec alignment"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "CHOR"
 domain: "PMGT"
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-21"
-updated_at: "2026-02-21"
+updated_at: "2026-02-22"
 ---
 
 # INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening
