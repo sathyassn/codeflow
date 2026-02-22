@@ -3,7 +3,7 @@ id: "epic-01KJ12VSN1YSWYQ03CDK8ENG78"
 format_id: "INF-EPC-008"
 title: "PathFlow PR Verification, Merge Protection & Validation Hardening"
 summary: "Add PF6 PR verification step, configurable merge protection for protected branches, autorun integration branch convention, task/epic field validation scripts, schema updates (awaiting_review status, deprecate auto_commit), and V4 spec alignment"
-status: planning
+status: in_progress
 area_type: "INF"
 work_type: "CHOR"
 domain: "PMGT"
@@ -77,8 +77,8 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | INF-TSK-008-001 | Verify planning artifacts and prerequisites | complete | high |
-| INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | todo | high |
-| INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | todo | high |
+| INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | complete | high |
+| INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | complete | high |
 | INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | todo | high |
 | INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | todo | normal |
 | INF-TSK-008-006 | PF6-TSK-06 verify-pr-and-sync in pathflow-config.json | todo | normal |
