@@ -86,8 +86,6 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 For example, when planning INF-EPC-008, the planning session is tracked as PLN-TSK-001-NNN under PLN-EPC-001. The resulting implementation tasks (INF-TSK-008-*) go under INF-EPC-008. This separation ensures planning work is tracked in the PLN area while implementation work stays in its target area.
 
-**Design analysis documents go to `docs/analysis/` with descriptive names referencing the epic ID (e.g., `inf-epc-008-pathflow-pr-verification-merge-protection-validation.md`), NOT inside `project-management/` subdirectories.** The `project-management/` directory is for epics, tasks, and templates only.
-
 ## Execution Steps
 
 ### Step 1: Receive Assignment
