@@ -14,7 +14,7 @@ pr_number: null
 external_id: "INF-EPC-PLAN-PMGT-001"
 external_url: null
 created_at: "2026-02-18T23:00:00Z"
-updated_at: "2026-02-18T23:00:00Z"
+updated_at: "2026-02-21T00:00:00Z"
 ---
 
 # INF-EPC-005: Project Management Standardization
@@ -66,10 +66,10 @@ Rationalize format IDs, folder structure, DB schema, validation scripts, and doc
 | INF-TSK-005-006 | Update project-management READMEs | todo | normal |
 | INF-TSK-005-007 | Update dual-id-system-findings.md and revamp-proposal | todo | low |
 | INF-TSK-005-008 | Update cf-markdown-standards templates | todo | normal |
-| INF-TSK-005-009 | Update agent definitions for new format | todo | normal |
-| INF-TSK-005-010 | Delete old epic/task folders | todo | normal |
-| INF-TSK-005-011 | Update CLAUDE.md process references | todo | normal |
-| INF-TSK-005-012 | Remaining pre-Phase 4 infrastructure gaps | todo | low |
+| INF-TSK-005-009 | Update agent definitions for new format | complete | normal |
+| INF-TSK-005-010 | Delete old epic/task folders | complete | normal |
+| INF-TSK-005-011 | Update CLAUDE.md process references | complete | normal |
+| INF-TSK-005-012 | Remaining pre-Phase 4 infrastructure gaps | complete | low |
 
 ## Dependencies
 
