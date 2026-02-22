@@ -78,6 +78,15 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Create work items directly in the database (route through cf-knowledge-layer)
 - Skip codebase analysis before designing a solution
 - Leave placeholder text in deliverables (all sections must be populated)
+- Track planning work as a task within the target epic (planning tasks belong under PLN-EPC-001)
+
+### Planning Work Routing
+
+🔒 **Planning work that produces epics and tasks for other areas MUST be tracked as a task under PLN-EPC-001 (Ongoing Planning epic), NOT as a task within the target epic itself.**
+
+For example, when planning INF-EPC-008, the planning session is tracked as PLN-TSK-001-NNN under PLN-EPC-001. The resulting implementation tasks (INF-TSK-008-*) go under INF-EPC-008. This separation ensures planning work is tracked in the PLN area while implementation work stays in its target area.
+
+**Design analysis documents go to `docs/analysis/` with descriptive names referencing the epic ID (e.g., `inf-epc-008-pathflow-pr-verification-merge-protection-validation.md`), NOT inside `project-management/` subdirectories.** The `project-management/` directory is for epics, tasks, and templates only.
 
 ## Execution Steps
 

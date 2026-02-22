@@ -47,6 +47,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | PLN-TSK-001-001 | Plan PM Standardization | complete | normal |
+| PLN-TSK-001-002 | Plan INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening | complete | high |
 
 ## Dependencies
 
@@ -65,3 +66,4 @@ This is an ongoing epic with no planned completion date. New planning tasks are 
 ## Related
 
 - INF-EPC-005: Project Management Standardization (produced by PLN-TSK-001-001)
+- INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening (produced by PLN-TSK-001-002)

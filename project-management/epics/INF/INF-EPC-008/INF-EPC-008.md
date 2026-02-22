@@ -76,7 +76,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-008-001 | Plan INF-EPC-008: PR Verification, Merge Protection & Validation | in_progress | high |
+| INF-TSK-008-001 | Verify planning artifacts and prerequisites | complete | high |
 | INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | todo | high |
 | INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | todo | high |
 | INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | todo | high |
@@ -100,7 +100,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 
 ## Technical Notes
 
-- **Design analysis**: See [analysis/design-analysis.md](analysis/design-analysis.md) for full design rationale, flow diagrams, and decision log (11 decisions: D1-D11).
+- **Design analysis**: See [design analysis](../../../../docs/analysis/inf-epc-008-pathflow-pr-verification-merge-protection-validation.md) for full design rationale, flow diagrams, and decision log (11 decisions: D1-D11).
 - **Task ordering**: INF-TSK-008-002 (schema) must complete before INF-TSK-008-004 (validation scripts) because validation checks the new `awaiting_review` status value. INF-TSK-008-003 (merge protection) and INF-TSK-008-004 (validation) are independent and can be parallelized.
 - **PF3 reorder rationale**: Branch creation triggers the pf-3 sentinel which unlocks Edit/Write. Moving it before task registration ensures cf-knowledge-layer can write task records after the gate opens.
 - **SQLite CHECK constraint limitation**: SQLite does not support `ALTER TABLE ... ALTER COLUMN`. The migration must recreate the tasks table with the updated CHECK constraint, preserving all data.
@@ -109,6 +109,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 
 ## Related
 
+- PLN-TSK-001-002: Planning session that produced this epic (tracked under PLN-EPC-001)
 - INF-EPC-005: Project Management Standardization (schema foundation)
 - INF-EPC-006: Sandbox Network Settings & Templates (enforcement patterns)
 - INF-EPC-007: QA Pipeline & Test Coverage (quality gate patterns)

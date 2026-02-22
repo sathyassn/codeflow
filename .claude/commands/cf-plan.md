@@ -214,6 +214,8 @@ Next: /cf-review (WS-REV, DESIGN_REVIEW mode)
     - **Finalize:** `"Finalize epic {epic-id}. Validate all sections complete, acceptance criteria testable, no placeholders. Lock status."`
 - Wait for teammate completion message
 
+> **PLN area routing:** The planning session itself is tracked as a task under PLN-EPC-001 (Ongoing Planning epic). The resulting epic and tasks go under their target area (INF/, DOC/, etc.). Design analysis documents go to `docs/analysis/` with descriptive names referencing the epic ID, not inside `project-management/` subdirectories.
+
 **Step 7: Complete Work**
 
 - Send to cf-knowledge-layer:
