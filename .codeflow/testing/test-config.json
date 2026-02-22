@@ -307,8 +307,8 @@
   },
   "coverage_enforcement": {
     "enabled": true,
-    "validation_mode": "warn",
-    "pre_commit_mode": "new_only",
+    "validation_mode": "fail",
+    "pre_commit_mode": "all",
     "python": {
       "enabled": true,
       "enforcement": "line_coverage",

@@ -346,6 +346,8 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final
 
 Before delivering any verdict, verify:
 
+🔒 **New code logic, hook extensions, or script modifications WITHOUT corresponding test updates = automatic CHANGES_REQUESTED. Missing or outdated tests is NEVER classified as MINOR. Test coverage is a hard requirement, not advisory.**
+
 - [ ] All applicable review checklist items evaluated for the assigned mode
 - [ ] Verdict clearly stated (`APPROVED` or `CHANGES_REQUESTED`)
 - [ ] Every finding is specific, actionable, and includes a file location

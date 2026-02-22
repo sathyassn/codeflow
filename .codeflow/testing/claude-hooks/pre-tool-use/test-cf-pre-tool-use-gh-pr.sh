@@ -757,6 +757,170 @@ else
 fi
 
 echo ""
+echo "--- PR Merge Protection ---"
+
+# Set up mock gh for merge protection tests
+MOCK_DIR="$TEST_TMPDIR/mock-bin"
+mkdir -p "$MOCK_DIR"
+cat > "$MOCK_DIR/gh" <<'MOCK_GH'
+#!/usr/bin/env bash
+# Mock gh for merge protection tests
+# Returns preset branch names for gh pr view based on PR number
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+    PR_NUM="$3"
+    case "$PR_NUM" in
+        100) echo "main" ;;
+        101) echo "master" ;;
+        102) echo "feature/foo" ;;
+        103) echo "release/1.0" ;;
+        104) echo "release-notes" ;;
+        105) echo "production" ;;
+        *) exit 1 ;;
+    esac
+    exit 0
+fi
+exit 0
+MOCK_GH
+chmod +x "$MOCK_DIR/gh"
+
+# Test 79: gh pr merge command is detected (blocked when targeting protected branch)
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]]; then
+    pass "gh pr merge command is detected and processed"
+else
+    fail "gh pr merge command should be detected"
+fi
+
+# Test 80: Merge to protected branch 'main' is blocked
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks merge to protected branch 'main'"
+else
+    fail "Should block merge to 'main'"
+fi
+
+# Test 81: Merge to protected branch 'master' is blocked
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 101"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks merge to protected branch 'master'"
+else
+    fail "Should block merge to 'master'"
+fi
+
+# Test 82: Merge to non-protected branch is allowed
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 102"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows merge to non-protected branch 'feature/foo'"
+else
+    fail "Should allow merge to non-protected branch"
+fi
+
+# Test 83: Glob pattern - merge to 'release/1.0' matches release/* (blocked)
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 103"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks merge to 'release/1.0' (matches release/*)"
+else
+    fail "Should block merge to 'release/1.0'"
+fi
+
+# Test 84: 'release-notes' does NOT match release/* (allowed)
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 104"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows merge to 'release-notes' (does not match release/*)"
+else
+    fail "Should allow merge to 'release-notes'"
+fi
+
+# Test 85: PR number extraction works with trailing flags
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100 --squash"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"#100"* ]]; then
+    pass "PR number extracted from args with trailing flags"
+else
+    fail "Should extract PR number from args with trailing flags"
+fi
+
+# Test 86: Missing PR number - graceful pass-through (exit 0)
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Gracefully passes through when no PR number"
+else
+    fail "Should pass through when no PR number"
+fi
+
+# Test 87: Block message includes branch name and PR number
+HOOK_OUTPUT=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100"}' bash "$HOOK" </dev/null 2>&1 || true)
+if [[ "$HOOK_OUTPUT" == *"main"* ]] && [[ "$HOOK_OUTPUT" == *"#100"* ]]; then
+    pass "Block message includes branch name and PR number"
+else
+    fail "Block message should include branch name and PR number"
+fi
+
+# Test 88: Config-driven - hook references merge_protection config section
+if grep -q "merge_protection" "$HOOK"; then
+    pass "References merge_protection config"
+else
+    fail "Should reference merge_protection config"
+fi
+
+# Test 89: API failure fallback - gh pr view fails, allows through
+FAIL_MOCK_DIR="$TEST_TMPDIR/fail-mock-bin"
+mkdir -p "$FAIL_MOCK_DIR"
+cat > "$FAIL_MOCK_DIR/gh" <<'FAIL_GH'
+#!/usr/bin/env bash
+# Mock gh that always fails (simulates API failure)
+exit 1
+FAIL_GH
+chmod +x "$FAIL_MOCK_DIR/gh"
+result=$(PATH="$FAIL_MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 999"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows through when gh pr view fails (API failure)"
+else
+    fail "Should allow through when gh pr view fails"
+fi
+
+# Test 90: Merge to 'production' is blocked (exact match from config)
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 105"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Blocks merge to 'production' (exact match)"
+else
+    fail "Should block merge to 'production'"
+fi
+
+# Test 91: Block message includes matched protection pattern
+HOOK_OUTPUT=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 103"}' bash "$HOOK" </dev/null 2>&1 || true)
+if [[ "$HOOK_OUTPUT" == *"release/*"* ]]; then
+    pass "Block message includes matched protection pattern"
+else
+    fail "Block message should include matched protection pattern"
+fi
+
+# Test 92: Merge with --squash --delete-branch flags still detected
+result=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100 --squash --delete-branch"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
+    pass "Merge with --squash --delete-branch flags still detected"
+else
+    fail "Should detect merge command with extra flags"
+fi
+
+# Test 93: Block message includes MUST directive
+HOOK_OUTPUT=$(PATH="$MOCK_DIR:$PATH" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr merge 100"}' bash "$HOOK" </dev/null 2>&1 || true)
+if [[ "$HOOK_OUTPUT" == *"MUST:"* ]]; then
+    pass "Block message includes MUST directive"
+else
+    fail "Block message should include MUST directive"
+fi
+
+# Test 94: Reads protected_branches from config
+if grep -q "protected_branches" "$HOOK"; then
+    pass "Reads protected_branches from config"
+else
+    fail "Should read protected_branches from config"
+fi
+
+# Clean up mock dirs
+rm -rf "$MOCK_DIR" "$FAIL_MOCK_DIR"
+
+echo ""
 echo "=== Test Summary ==="
 echo "Passed: $TESTS_PASSED"
 echo "Failed: $TESTS_FAILED"
