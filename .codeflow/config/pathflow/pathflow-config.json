@@ -1,5 +1,6 @@
 {
   "version": "1.0.0",
+  "orchestration_note": "Tasks assigned to 'team-lead' are orchestration actions (team formation, routing decisions, verification checkpoints). They do NOT violate the delegation-only principle. Implementation work (code, docs, tests, commits) is ALWAYS delegated to teammates.",
   "phases": {
     "PF1-INIT": {
       "name": "Session Start",
@@ -8,6 +9,7 @@
       "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Initializing PathFlow session",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF1-TSK-01, PF1-TSK-02, PF1-TSK-03)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -44,6 +46,7 @@
       "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Loading session context",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -87,6 +90,7 @@
       "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Classifying work and creating branch",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF3-TSK-01, PF3-TSK-02, PF3-TSK-03, PF3-TSK-04, PF3-TSK-05)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -125,7 +129,7 @@
         {
           "id": "PF3-TSK-05",
           "task_order": 5,
-          "description": "Activate session: set tracking_level='tracked', populate work_type, area_type",
+          "description": "Begin work session: for planned tasks (origin=planned), task_id comes from the epic task list; for adhoc tasks (origin=adhoc), task_id comes from PF3-TSK-04 ensure-work-registered. Writes begin_work event to ledger.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "begin-work"
         }
@@ -138,6 +142,7 @@
       "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Executing work pipeline",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF4-TSK-01, PF4-TSK-02, PF4-TSK-03, PF4-TSK-04, PF4-TSK-05); also TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA, etc.)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -147,7 +152,7 @@
         {
           "id": "PF4-TSK-01",
           "task_order": 1,
-          "description": "Look up stage pipeline from work_type_stages",
+          "description": "Lookup the work stage pipeline for the classified work_type from the work_type_stages table in this config (e.g., FEAT → WS-DEV, WS-REV, WS-QA). This determines which teammates to spawn and in what order during PF4-EXECUTE.",
           "assigned_to": "team-lead",
           "operation": "Lookup pipeline from work_type_stages in this config"
         },
@@ -188,6 +193,7 @@
       "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Verifying acceptance criteria",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF5-TSK-01, PF5-TSK-02)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -217,6 +223,7 @@
       "description": "Update task status, record session memory, commit state files, squash branch, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Finalizing work and creating PR",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF6-TSK-01, PF6-TSK-02, PF6-TSK-03, PF6-TSK-04, PF6-TSK-05, PF6-TSK-06)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -274,6 +281,7 @@
       "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Shutting down session",
       "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
         "per_task": "TaskCreate one entry per task ID in tasks[] below (PF7-TSK-01, PF7-TSK-02, PF7-TSK-03)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
@@ -365,16 +373,7 @@
       "max_qa_retries": 2,
       "rework_target": "primary",
       "max_parallel": 1,
-      "batch_size": 1,
-      "tasks": [
-        {
-          "id": "WS-QA-TSK-01",
-          "task_order": 1,
-          "description": "Run test suite with coverage enforcement",
-          "assigned_to": "cf-quality-assurance",
-          "operation": "./codeflow test --coverage"
-        }
-      ]
+      "batch_size": 1
     }
   },
   "pipelines": {

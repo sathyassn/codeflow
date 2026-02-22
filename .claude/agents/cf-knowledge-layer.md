@@ -211,6 +211,24 @@ Event types:
 8. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
 9. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
 
+#### Step 6: Record Session Summary
+
+**Trigger:** Lead sends `record-session-summary` message (PF6-TSK-02, after complete-work)
+**Purpose:** Capture a structured session summary in project memory for cross-session continuity.
+
+1. Query active_work table for the current work_id to get: topic, branch, work_type, domain
+2. Query tasks table for all tasks modified this session (filter by branch or work_id)
+3. Collect stage verdicts from pathflow-events.jsonl (WS-DEV, WS-REV, WS-QA results)
+4. Compose session summary with:
+   - Work completed: task IDs, titles, final statuses
+   - Branch: name, commit count, PR number (if created)
+   - Pipeline results: stage verdicts (pass/fail/approved)
+   - Key decisions: any Tier 2/3 decisions made during session
+   - Open items: anything deferred or blocked
+5. Write summary to `.claude/memory/{domain}/current-work.md` (overwrite previous)
+6. Append `session_summary` event to memory-events.jsonl with summary content
+7. Report: `"KNOWLEDGE: record-session-summary — session summary written to memory/{domain}/current-work.md"`
+
 #### Memory Lifecycle Management
 
 **When:** Periodic maintenance, `/cf-cleanup`, or when `.state/db/codeflow.db` exceeds 50 MB.
