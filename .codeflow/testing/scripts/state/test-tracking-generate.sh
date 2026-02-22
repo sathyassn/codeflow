@@ -132,7 +132,7 @@ test_empty_project() {
 test_single_active_epic() {
     test_section "Single active epic"
     setup_tracking_env
-    create_epic "infrastructure" "INF-EPA-AUTH-001" "Auth System" "active" "high"
+    create_epic "INF" "INF-EPA-AUTH-001" "Auth System" "active" "high"
     bash "$SCRIPT_UNDER_TEST" "$REPO_ROOT" 2>&1 || true
     local tracker="$REPO_ROOT/project-management/tracking/epic-tracker.md"
     local content
@@ -157,7 +157,7 @@ test_single_active_epic() {
 test_completed_epic() {
     test_section "Completed epic not active"
     setup_tracking_env
-    create_epic "infrastructure" "INF-EPC-DONE-001" "Done Feature" "complete"
+    create_epic "INF" "INF-EPC-DONE-001" "Done Feature" "complete"
     bash "$SCRIPT_UNDER_TEST" "$REPO_ROOT" 2>&1 || true
     local tracker="$REPO_ROOT/project-management/tracking/epic-tracker.md"
     local content
@@ -174,7 +174,7 @@ test_multiple_areas() {
     setup_tracking_env
     create_epic "frontend" "FE-EPC-UI-001" "UI Redesign" "active"
     create_epic "backend" "BE-EPC-API-001" "API Layer" "active"
-    create_epic "infrastructure" "INF-EPA-CI-001" "CI Pipeline" "active"
+    create_epic "INF" "INF-EPA-CI-001" "CI Pipeline" "active"
     bash "$SCRIPT_UNDER_TEST" "$REPO_ROOT" 2>&1 || true
     local tracker="$REPO_ROOT/project-management/tracking/epic-tracker.md"
     local content
@@ -194,8 +194,8 @@ test_multiple_areas() {
 test_task_counting() {
     test_section "Task counting"
     setup_tracking_env
-    create_epic "infrastructure" "INF-EPA-TSK-001" "Task Test" "active"
-    local epic_dir="$REPO_ROOT/project-management/epics/infrastructure/INF-EPA-TSK-001"
+    create_epic "INF" "INF-EPA-TSK-001" "Task Test" "active"
+    local epic_dir="$REPO_ROOT/project-management/epics/INF/INF-EPA-TSK-001"
     create_task "$epic_dir" "task-001" "todo"
     create_task "$epic_dir" "task-002" "in_progress"
     create_task "$epic_dir" "task-003" "complete"
@@ -332,7 +332,7 @@ test_epic_without_tasks() {
 test_quoted_title_stripped() {
     test_section "Quoted titles have quotes stripped"
     setup_tracking_env
-    local epic_dir="$REPO_ROOT/project-management/epics/infrastructure/INF-EPC-QT-001"
+    local epic_dir="$REPO_ROOT/project-management/epics/INF/INF-EPC-QT-001"
     mkdir -p "$epic_dir/tasks"
     cat > "$epic_dir/INF-EPC-QT-001-epic.md" <<'EPICEOF'
 ---
@@ -408,17 +408,17 @@ test_no_epics_directory() {
 test_ongoing_epic_tracking() {
     test_section "Ongoing epic tracking"
     setup_tracking_env
-    create_epic "infrastructure" "INF-EPC-ONG-001" "Ongoing Epic" "active" "normal" "true"
-    create_epic "infrastructure" "INF-EPC-REG-001" "Regular Epic" "active" "normal" "false"
+    create_epic "INF" "INF-EPC-ONG-001" "Ongoing Epic" "active" "normal" "true"
+    create_epic "INF" "INF-EPC-REG-001" "Regular Epic" "active" "normal" "false"
     bash "$SCRIPT_UNDER_TEST" "$REPO_ROOT" 2>&1 || true
     local tracker="$REPO_ROOT/project-management/tracking/epic-tracker.md"
     local content
     content=$(cat "$tracker")
     # Area table should show 1 ongoing
-    if echo "$content" | grep -q "| infrastructure | 2 | 2 | 1 |"; then
+    if echo "$content" | grep -q "| INF | 2 | 2 | 1 |"; then
         test_pass "Ongoing count correct in area table"
     else
-        test_fail "Should show 1 ongoing in infrastructure area"
+        test_fail "Should show 1 ongoing in INF area"
     fi
 }
 
