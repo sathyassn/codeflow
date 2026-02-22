@@ -1,5 +1,5 @@
 ---
-description: "Merge approved PR to main branch"
+description: "Prepare and verify PR for merging"
 argument-hint: "[pr-number]"
 ---
 
@@ -22,7 +22,7 @@ Apply cognitive operations throughout execution:
 
 ## 1. Purpose & Usage
 
-**Purpose:** Merge an approved pull request to the main branch, clean up the feature branch, and complete work tracking in the WorkGraph.
+**Purpose:** Prepare and verify an approved pull request for merging. For protected branches (main, master, release/\*, production), verify CI status and notify the user to merge via GitHub UI. Does NOT execute `gh pr merge` on protected branches.
 
 **Usage:**
 
@@ -70,7 +70,18 @@ Next: /cf-cleanup (session end)
 - If no PR exists for the current branch: error with guidance to create PR first
 - If multiple PRs exist: present list and ask user to specify
 
-**Merge Strategy:**
+**Protected Branch Handling:**
+
+Protected branches (from `enforcement-policy.json` `merge_protection`):
+
+- `main`, `master`, `release/*`, `production`
+
+| Target Branch | Behavior |
+|---------------|----------|
+| Protected (main, master, release/\*, production) | Verify CI, notify user to merge via GitHub UI. Does NOT call `gh pr merge`. |
+| Non-protected | Future consideration: automated merge may be supported in a later version. Currently treated the same as protected (verify + notify). |
+
+**Merge Strategy (when merge is automated for non-protected branches):**
 
 | Strategy | When Used | Command |
 |----------|-----------|---------|
@@ -78,7 +89,7 @@ Next: /cf-cleanup (session end)
 | Merge commit | Explicitly requested by user | `gh pr merge --merge` |
 | Rebase | Explicitly requested by user | `gh pr merge --rebase` |
 
-The default strategy is squash merge, which produces a clean single commit on main. The team lead can override this via user instruction.
+The default strategy is squash merge. Automated merge is reserved for non-protected target branches only. Protected branch merges are always performed by the user via GitHub UI.
 
 **Examples:**
 
@@ -185,25 +196,29 @@ Advance to PF6-COMPLETE                                 [cf-knowledge-layer]
 (cf-knowledge-layer: log phase transition)
     |
     v
-Merge PR via cf-git-operations                           [cf-git-operations]
-(squash merge by default)
+Verify CI status via `gh pr checks`                     [cf-git-operations]
     |
     v
-Merge successful? ---NO---> ERROR: merge failed
+CI passed? ---NO---> Report failures, suggest fixes
     |
     YES
     |
     v
-Delete feature branch                                   [cf-git-operations]
-(remote + local, via --delete-branch)
+Target is protected branch?                              [cf-git-operations]
+    |
+    +---YES---> Notify user: "PR #{number} ready to merge via GitHub UI"
+    |           Update WorkGraph (status: awaiting_review)
+    |           |
+    +---NO----> (Future: may auto-merge non-protected targets)
+    |           Currently: same as protected (notify user)
     |
     v
 Update WorkGraph                                         [cf-knowledge-layer]
-(cf-knowledge-layer: complete task, log event)
+(cf-knowledge-layer: update task status, log event)
     |
     v
 Present results
-(merge commit, branch cleanup, next steps)
+(CI status, merge readiness, next steps)
     |
     v
 Next: /cf-cleanup (PF7-END)
@@ -234,39 +249,40 @@ Next: /cf-cleanup (PF7-END)
 - Log phase transition event to JSONL
 - Create PF6-COMPLETE sentinel
 
-**Step 4: Merge PR**
+**Step 4: Verify CI Status**
 
 - Send to cf-git-operations:
-  - `"Merge PR #{number} using squash strategy. Include --delete-branch to clean up."`
-- cf-git-operations executes: `gh pr merge {number} --squash --delete-branch`
-- Receive merge confirmation with commit hash
+  - `"Check CI status for PR #{number} via gh pr checks"`
+- Evaluate CI results:
+  - All checks passed: proceed to Step 5
+  - Any checks failing: report failures with details, suggest fixes, STOP
 
-**Step 5: Branch Cleanup**
+**Step 5: Protected Branch Check**
 
-- cf-git-operations handles via `--delete-branch` flag:
-  - Deletes remote feature branch
-  - Deletes local feature branch
-  - Checks out main branch locally
-- If cleanup fails: warn but do not block (merge succeeded)
+- Determine if target branch is protected (main, master, release/\*, production)
+- **Protected target branch:**
+  - Do NOT call `gh pr merge`
+  - Notify user: `"PR #{number} is ready to merge via GitHub UI"`
+  - Update WorkGraph status to `awaiting_review`
+- **Non-protected target branch:**
+  - Future consideration: automated merge may be supported
+  - Currently: same as protected (verify + notify)
 
 **Step 6: Update WorkGraph**
 
 - Send to cf-knowledge-layer:
-  - `"LEAD: complete-task -- task_id={task-id}, pr_number={number}, merge_commit={hash}"`
-- Task status updated to `complete`
-- Send to cf-knowledge-layer:
-  - `"LEAD: complete-work -- active_work_id={id}, summary=Merged PR #{number} to main"`
-- active_work.status updated to 'complete'
-- Logs events: type='task_completed', type='work_completed'
+  - `"LEAD: update-task -- task_id={task-id}, pr_number={number}, status=awaiting_review"`
+- Task status updated to `awaiting_review`
+- Logs events: type='pr_verified', type='phase_transition'
 
 **Step 7: Present Results**
 
-- Show merge summary:
+- Show verification summary:
   - PR number and title
-  - Merge commit hash on main
-  - Branch deleted (remote + local)
-  - Task status: complete
-- Show next steps: "Session work merged. Proceed to `/cf-cleanup` to end session."
+  - CI status: all checks passed
+  - Target branch and protection status
+  - Action required: "Merge PR #{number} via GitHub UI"
+- Show next steps: "After merging, proceed to `/cf-cleanup` to end session."
 
 ---
 
@@ -278,9 +294,9 @@ Next: /cf-cleanup (PF7-END)
 | cf-git-operations | check-branch-status | Verify branch and PR state |
 | cf-git-operations | review-changes | Inspect pending changes before merge |
 | cf-git-operations | sync-remote | Ensure remote is up to date |
-| cf-git-operations | merge-branch | Execute PR merge via `gh pr merge` |
-| cf-knowledge-layer | complete-task | Mark task as complete in WorkGraph |
-| cf-knowledge-layer | complete-work | Finalize active work tracking |
+| cf-git-operations | verify-pr-and-sync | Verify CI status, check protected branch, notify user |
+| cf-knowledge-layer | update-task | Update task status to `awaiting_review` |
+| cf-knowledge-layer | complete-work | Finalize active work tracking (after user merges) |
 | cf-knowledge-layer | phase-transition | Log PF6-COMPLETE transition |
 
 ---
@@ -301,21 +317,17 @@ Next: /cf-cleanup (PF7-END)
 
 ## 7. Memory Integration
 
-### 7.1 Work Completion
+### 7.1 PR Verification
 
-**On Merge (Step 6):**
+**On Verification (Step 6):**
 
-- Invoke cf-knowledge-layer:complete-task:
+- Invoke cf-knowledge-layer:update-task:
   - task_id: from WorkGraph
-  - pr_number: merged PR number
-  - merge_commit: merge commit hash
-  - status: 'complete'
-- Invoke cf-knowledge-layer:complete-work:
-  - active_work_id: from session
-  - summary: merge summary
-  - status: 'complete'
-- Events logged: type='task_completed', type='work_completed'
+  - pr_number: verified PR number
+  - status: 'awaiting_review'
+- Events logged: type='pr_verified', type='phase_transition'
 - Phase transition logged: PF6-COMPLETE
+- Note: Task status moves to `complete` only after user merges the PR via GitHub UI
 
 ### 7.2 Three-Tier Data Model
 
@@ -335,8 +347,7 @@ Next: /cf-cleanup (PF7-END)
 | PR not approved | Missing review approval | Complete review via `/cf-review` |
 | CI checks failing | Pipeline failures | Fix CI issues, push fixes, retry |
 | Merge conflicts | Base branch diverged since PR creation | Rebase feature branch via cf-git-operations |
-| Merge failed | GitHub API error or permissions | Check GitHub permissions, retry |
-| Branch cleanup failed | Branch protection or remote issue | Warn; merge still succeeded |
+| Protected branch merge attempted | Target branch is protected | Notify user to merge via GitHub UI |
 | Network error | Sandbox or connectivity issue | Consult cf-security for sandbox configuration |
 | Session not at PF5+ | Shipping before verification | Complete all pipeline stages first |
 
@@ -370,7 +381,7 @@ ON "Session not at PF5+" error:
 
 ## 9. Examples
 
-**Example 1: Ship Current Branch PR (Auto-Detect)**
+**Example 1: Ship Current Branch PR (Auto-Detect, Protected Target)**
 
 ```bash
 /cf-ship
@@ -379,30 +390,24 @@ ON "Session not at PF5+" error:
 Output:
 
 ```text
-Shipping: PR #42 "feat(auth): configure OAuth2 provider integration"
-Branch: feat/oauth2-providers
+Verifying: PR #42 "feat(auth): configure OAuth2 provider integration"
+Branch: feat/oauth2-providers → main (protected)
 
 Pre-merge checks:
   [OK] PR approved (1 approval)
   [OK] CI checks passed (3/3)
   [OK] No merge conflicts
 
-Merging...
-  Strategy: squash merge
-  Commit: abc1234 on main
-
-Cleanup:
-  Branch deleted: feat/oauth2-providers (remote + local)
-  Checked out: main
+Target branch 'main' is protected.
+PR #42 is ready to merge via GitHub UI.
 
 WorkGraph updated:
-  Task INF-TSK-AUTH-001: complete
-  Active work: complete
+  Task INF-TSK-AUTH-001: awaiting_review
 
-Next: Session work merged. Proceed to /cf-cleanup to end session.
+Next: Merge PR #42 via GitHub UI, then proceed to /cf-cleanup.
 ```
 
-**Example 2: Ship a Specific PR**
+**Example 2: Ship a Specific PR (Protected Target)**
 
 ```bash
 /cf-ship 42
@@ -411,18 +416,18 @@ Next: Session work merged. Proceed to /cf-cleanup to end session.
 Output:
 
 ```text
-Shipping: PR #42 "fix(webhooks): add retry logic to webhook handler"
+Verifying: PR #42 "fix(webhooks): add retry logic to webhook handler"
 
 Pre-merge checks:
   [OK] PR approved (1 approval)
   [OK] CI checks passed
   [OK] No merge conflicts
 
-Merged: squash-merged to main as def5678
-Branch deleted: fix/webhook-retry (remote + local)
-Task BKD-TSK-FIX-WEBHOOK-001: complete
+Target branch 'main' is protected.
+PR #42 is ready to merge via GitHub UI.
+Task BKD-TSK-FIX-WEBHOOK-001: awaiting_review
 
-Next: Proceed to /cf-cleanup to end session.
+Next: Merge via GitHub UI, then /cf-cleanup.
 ```
 
 **Example 3: Ship Blocked by Failing CI**

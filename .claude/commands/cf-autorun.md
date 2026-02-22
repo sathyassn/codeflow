@@ -145,6 +145,8 @@ Before launching workers, the CLI validates:
 4. All task IDs resolve in the WorkGraph
 5. Target branch exists
 6. Sufficient disk space for worktrees
+7. If auto_merge:true, target_branch must be non-null
+8. If auto_merge:true, target_branch must NOT be a protected branch (main, master, release/*, production)
 ```
 
 ---
@@ -421,10 +423,52 @@ tasks:
   - FRT-TSK-FEAT-AUTH-001
   - FRT-TSK-FEAT-AUTH-002
   - FRT-TSK-FEAT-AUTH-003
-target_branch: develop
+target_branch: develop          # REQUIRED when auto_merge:true; must NOT be a protected branch
+auto_merge: false               # true: auto-merge worker PRs to target_branch; false: leave for human review
 max_session_workers: 3
 timeout: 1h
 ```
+
+**Validation Rules:**
+
+| Rule | Condition | Result |
+|------|-----------|--------|
+| `auto_merge:true` requires `target_branch` | `auto_merge:true` and `target_branch` is null | Validation error at batch parsing time |
+| `auto_merge:true` + protected target is FORBIDDEN | `auto_merge:true` and `target_branch` is main, master, release/\*, or production | Validation error at batch parsing time |
+| `auto_merge:false` terminal state | Workers with `auto_merge:false` end in `awaiting_review` | Worker creates PR but does not merge; status set to `awaiting_review` |
+
+**Deprecated fields:**
+
+| Field | Status | Replacement |
+|-------|--------|-------------|
+| `auto_commit` | Deprecated | Commits are always created by workers via cf-git-operations. Field is ignored if present. |
+
+### Integration Branch Convention
+
+When `auto_merge:true`, autorun uses an integration branch pattern:
+
+```text
+main
+  └── autorun/{batch-name}              ← integration branch (created off main)
+        ├── feat/task-001               ← worker branch (created off integration)
+        ├── feat/task-002               ← worker branch (created off integration)
+        └── fix/task-003                ← worker branch (created off integration)
+```
+
+- The integration branch `autorun/{batch-name}` is created off `main` before workers start
+- Each worker creates its feature branch off the integration branch
+- Worker PRs target the integration branch (NOT main)
+- Worker PRs are merged via `gh pr merge --delete-branch` (NOT `--squash`, to preserve commit history on the integration branch)
+- After all workers complete: human reviews the summary PR from integration branch to main
+
+### Worker Terminal States
+
+| `auto_merge` | CI Status | Worker End State | Action |
+|-------------|-----------|-----------------|--------|
+| `true` | Passed | `complete` | Worker PR auto-merged to integration branch via `gh pr merge --delete-branch` |
+| `true` | Failed | `failed` | PR left open, failures reported |
+| `false` | Passed | `awaiting_review` | PR created, human review required |
+| `false` | Failed | `failed` | PR left open, failures reported |
 
 ### Configuration
 
@@ -438,7 +482,7 @@ timeouts:
   per_session: 8h
 pr:
   create: true
-  merge: false    # Human review required
+  auto_merge: false             # Default: human review required
 worktree:
   cleanup_on_merged: true
   preserve_on_failure: true
@@ -453,6 +497,8 @@ worktree:
 | Active PathFlow session | PathFlow flag exists | Complete or clean up current session first (`/cf-cleanup` or `/cf-doctor --repair`) |
 | Dirty working tree | Uncommitted changes | Commit or stash changes before starting |
 | Invalid batch file | Malformed YAML or missing fields | Fix batch file syntax; required: `name`, `tasks`, `target_branch` |
+| auto_merge + protected target | `auto_merge:true` with main/master/release/\*/production | FORBIDDEN: Change `target_branch` to a non-protected branch or set `auto_merge:false` |
+| auto_merge + missing target | `auto_merge:true` with null `target_branch` | Set `target_branch` to a valid non-protected branch |
 | Task not found | Task ID not in WorkGraph | Register task first via `/cf-plan`; verify task IDs |
 | Worker timeout | Task exceeded time limit | Check logs (`/cf-autorun logs`); worktree preserved for debugging |
 | Worker failure | Task execution error | Review worker logs; worktree preserved on failure |
