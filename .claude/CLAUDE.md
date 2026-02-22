@@ -277,7 +277,7 @@ SESSION END
 
 1. Lookup pipeline from work type (PF4-TSK-01, team-lead — → See Section 6: Work Pipelines)
 2. Validate task and epic fields via cf-knowledge-layer (PF4-TSK-02, cf-knowledge-layer — `validate-task-fields` before spawning primary stage)
-3. Execute primary stage — WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST (PF4-TSK-03, team-lead — spawn stage teammate per pipeline)
+3. Execute primary stage — WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST (PF4-TSK-03, team-lead — assess parallel batch need, then spawn stage teammate(s) per pipeline. → See Section 5: Parallel Batch Execution)
 4. Execute WS-REV stage — universal review (PF4-TSK-04, team-lead — spawn cf-review with mode per work type)
 5. Execute WS-QA stage — if pipeline includes it (PF4-TSK-05, team-lead — spawn cf-quality-assurance)
 
@@ -291,7 +291,7 @@ SESSION END
 - Rework: If WS-REV returns `changes_requested`, re-spawn primary stage teammate (max 3)
 - Rework: If WS-QA returns `fail`, re-spawn cf-development (max 2)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
-- For parallel work: spawn multiple instances per `max_parallel`/`batch_size` (→ See Section 5)
+- **Parallel batch assessment (MANDATORY for PF4-TSK-03):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
@@ -548,7 +548,7 @@ This should be rare for function teammates whose context is bounded.
 
 ### Parallel Batch Execution
 
-When a work stage involves multiple independent items (files, components, docs), the lead MAY spawn multiple instances of the same teammate type to work in parallel.
+When a work stage involves multiple independent items (files, components, docs), the lead SHOULD spawn multiple instances of the same teammate type to work in parallel. Defaulting to parallel execution prevents context exhaustion — a single teammate processing many files will hit context limits, requiring respawn and rework that costs more than upfront parallelization.
 
 **When to parallelize:**
 
@@ -558,6 +558,7 @@ When a work stage involves multiple independent items (files, components, docs),
 | Files that import/depend on each other | No | Component + its tests in the same module |
 | Large single file | No | One big refactor — single teammate |
 | Mixed independent + dependent | Batch the independent ones | 2 independent + 1 dependent = batch of 2, then 1 |
+| Scope exceeds batch_size for the stage | Yes | 5 files in WS-DOCS (batch_size=2) → 3 instances |
 
 **Batch sizing rules:**
 
@@ -572,6 +573,13 @@ Source: `pathflow-config.json` stage definitions.
 - Process items in batches of `batch_size`
 - Reserve at least 30% of session token budget for review, commit, and PR phases
 - If unsure about remaining budget, reduce batch size to 1
+
+**Context exhaustion prevention:**
+
+- A single on-demand teammate can typically handle 2-4 files before context pressure
+- If the total scope involves reading + modifying more files than `batch_size`, split proactively
+- Do NOT assign all work to one teammate and wait for context exhaustion — split upfront
+- When a teammate reports context pressure or goes idle without completing, immediately split remaining work across new instances
 
 **Naming convention for parallel instances:**
 
