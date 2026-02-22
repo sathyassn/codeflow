@@ -86,6 +86,8 @@
         "scripts/security/test-cf-promote-protection.sh",
         "scripts/security/validation/test-cf-validate-shell.sh",
         "scripts/security/validation/test-cf-validate-python.sh",
+        "scripts/validation/test-validate-task.sh",
+        "scripts/validation/test-validate-epic.sh",
         "scripts/security/test-main-branch-protection.sh",
         "scripts/security/validation/test-cf-validate-json.sh",
         "scripts/security/validation/test-cf-validate-yaml.sh",
@@ -235,6 +237,11 @@
       "description": "Security validation script tests",
       "language": "bash"
     },
+    "scripts-validation": {
+      "directory": "scripts/validation",
+      "description": "Task and epic frontmatter validation tests",
+      "language": "bash"
+    },
     "scripts-security-sentinel": {
       "directory": "scripts/security/sentinel",
       "description": "Sentinel system tests",
@@ -362,6 +369,11 @@
           "pattern": ".codeflow/scripts/security/validation/*",
           "tested_by": "scripts/security/validation/test-cf-*.sh",
           "reason": "Validation scripts have dedicated tests in validation subdirectory"
+        },
+        {
+          "pattern": ".codeflow/scripts/validation/*",
+          "tested_by": "scripts/validation/test-validate-*.sh",
+          "reason": "Task/epic validation scripts have dedicated tests"
         },
         {
           "pattern": ".claude/hooks/codeflow/**/*.sh",
