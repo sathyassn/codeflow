@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Purpose:   Enforce git-workflow skill PR format AND block AI attribution
+# Purpose:   Enforce git-workflow skill PR format, block AI attribution, AND
+#            block gh pr merge on protected branches
 # Location:  .claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh
 # Hook Type: PreToolUse
 # Matcher:   Bash
 # Teammate:  cf-git-operations
 # Operation: create-pull-request
 #
-# Configuration: Reads from enforcement-policy.json (git_format section)
+# Configuration: Reads from enforcement-policy.json (git_format + merge_protection)
 #                Falls back to defaults if config unavailable
 #
 # Exit codes:
@@ -113,6 +114,82 @@ fi
 
 # Exit early if no command extracted
 [[ -z "$COMMAND" ]] && exit 0
+
+# ============================================
+# DETECT PR MERGE (merge protection)
+# ============================================
+
+if echo "$COMMAND" | grep -qE "gh[[:space:]]+pr[[:space:]]+merge"; then
+
+    # Load merge protection config
+    MERGE_PROTECTED_BRANCHES=()
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        while IFS= read -r branch; do
+            [[ -n "$branch" ]] && MERGE_PROTECTED_BRANCHES+=("$branch")
+        done < <(jq -r '.merge_protection.protected_branches[]? // empty' "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    # Fallback to defaults if config unavailable
+    if [[ ${#MERGE_PROTECTED_BRANCHES[@]} -eq 0 ]]; then
+        MERGE_PROTECTED_BRANCHES=("main" "master" "release/*" "production")
+    fi
+
+    # Extract PR number from command (first positional arg after 'gh pr merge')
+    PR_NUMBER=""
+    if [[ "$COMMAND" =~ gh[[:space:]]+pr[[:space:]]+merge[[:space:]]+([0-9]+) ]]; then
+        PR_NUMBER="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -z "$PR_NUMBER" ]]; then
+        # No PR number found — cannot determine target branch, allow through
+        exit 0
+    fi
+
+    # Resolve target branch via gh pr view
+    TARGET_BRANCH=""
+    TARGET_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName --jq '.baseRefName' 2>/dev/null || true)
+
+    if [[ -z "$TARGET_BRANCH" ]]; then
+        # Cannot resolve target branch (API failure, PR not found) — allow through
+        # The gh pr merge command itself will fail with a proper error
+        exit 0
+    fi
+
+    # Check if target branch matches any protected branch pattern
+    for protected in "${MERGE_PROTECTED_BRANCHES[@]}"; do
+        matched=false
+
+        # Exact match
+        if [[ "$TARGET_BRANCH" == "$protected" ]]; then
+            matched=true
+        fi
+
+        # Glob/fnmatch match (e.g., release/*)
+        if [[ "$matched" == "false" ]] && [[ "$protected" == *"*"* ]]; then
+            # shellcheck disable=SC2053
+            if [[ "$TARGET_BRANCH" == $protected ]]; then
+                matched=true
+            fi
+        fi
+
+        if [[ "$matched" == "true" ]]; then
+            if declare -f log_security_event &>/dev/null; then
+                log_security_event "blocked" "pr_merge_protected" "Bash" "$COMMAND" "Protected branch: $TARGET_BRANCH"
+            fi
+            cat >&2 <<EOF
+BLOCKED: Cannot merge PR #${PR_NUMBER} into protected branch '${TARGET_BRANCH}'.
+Protected branches require manual merge via GitHub UI or admin override.
+Matched protection pattern: ${protected}
+
+MUST: Do not attempt to merge into protected branches via CLI.
+EOF
+            exit 2
+        fi
+    done
+
+    # Target branch is not protected — allow merge
+    exit 0
+fi
 
 # ============================================
 # DETECT PR CREATION

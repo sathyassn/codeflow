@@ -1,5 +1,5 @@
 -- CodeFlow Database Schema
--- Version: 1.1.0
+-- Version: 1.2.0
 -- Generated from v3 specification; V4 PathFlow and Agent Teams columns
 --
 -- This schema defines all 37 tables for the Knowledge Layer plus 3 FTS virtual tables.
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT DEFAULT 'todo'
-        CHECK(status IN ('todo', 'blocked', 'in_progress', 'complete')),
+        CHECK(status IN ('todo', 'blocked', 'in_progress', 'awaiting_review', 'complete')),
     area_type TEXT NOT NULL,
     work_type TEXT NOT NULL,
     domain TEXT NOT NULL,
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS tasks (
         CHECK(priority IN ('low', 'normal', 'high', 'critical')),
     assignee_id TEXT REFERENCES users(id),
     autorun_eligible BOOLEAN DEFAULT FALSE,
-    auto_commit BOOLEAN DEFAULT TRUE,
+    auto_commit BOOLEAN DEFAULT TRUE,  -- DEPRECATED: Scheduled for removal. Do not use in new code.
     raise_pr BOOLEAN DEFAULT TRUE,
     auto_merge BOOLEAN DEFAULT FALSE,
     target_branch TEXT,
@@ -789,7 +789,7 @@ END;
 -- =============================================================================
 
 -- Insert schema version
-INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 
 -- Seed domains
 INSERT OR IGNORE INTO domains (code, name, is_reserved) VALUES ('GENL', 'General', TRUE);

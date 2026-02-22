@@ -408,6 +408,17 @@
       "project/tech-stack/**"
     ]
   },
+  "merge_protection": {
+    "description": "Blocks gh pr merge commands targeting protected branches",
+    "protected_branches": [
+      "main",
+      "master",
+      "release/*",
+      "production"
+    ],
+    "policy": "hard_block",
+    "message": "BLOCKED: Cannot merge PR into protected branch '%s'. Protected branches require manual merge via GitHub UI or admin override."
+  },
   "protected_branches": [
     "main",
     "master",
