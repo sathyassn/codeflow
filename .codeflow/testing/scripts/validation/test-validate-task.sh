@@ -435,6 +435,258 @@ assert_contains "$output" "bad_status" \
     "Reports invalid status"
 teardown
 
+# --------------------------------------------------------------------------
+# Test 15: Valid work_type values accepted
+# --------------------------------------------------------------------------
+test_subsection "Valid work_type values"
+
+for valid_wt in FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN; do
+    setup
+    filepath="$TEST_DIR/wt-$valid_wt.md"
+    cat > "$filepath" <<TASKEOF
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "$valid_wt"
+---
+TASKEOF
+    assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+        "work_type '$valid_wt' is accepted"
+    teardown
+done
+
+# --------------------------------------------------------------------------
+# Test 16: Invalid work_type value
+# --------------------------------------------------------------------------
+test_subsection "Invalid work_type value"
+
+setup
+filepath="$TEST_DIR/invalid-work-type.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "INVALID"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid work_type 'INVALID' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "INVALID" \
+    "Error message mentions the invalid work_type"
+assert_contains "$output" "work_type" \
+    "Error message mentions the field name"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 17: Tests field warning for code-producing types with code files
+# --------------------------------------------------------------------------
+test_subsection "Tests field warning for code-producing types"
+
+setup
+filepath="$TEST_DIR/code-no-tests.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+file_scope: ["src/feature.sh"]
+tests: []
+---
+TASKEOF
+# Should still pass (warning, not error)
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Code task with empty tests passes (warning only)"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "WARN" \
+    "Warning is emitted for code task without tests"
+assert_contains "$output" "tests" \
+    "Warning mentions the tests field"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 18: No warning for DOCS work_type (non-code-producing)
+# --------------------------------------------------------------------------
+test_subsection "No warning for non-code-producing types"
+
+setup
+filepath="$TEST_DIR/docs-no-tests.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test docs task"
+status: todo
+area_type: "DOC"
+work_type: "DOCS"
+file_scope: ["docs/guide.md"]
+tests: []
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "DOCS task with empty tests passes without warning"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "WARN" \
+    "No warning emitted for DOCS work_type"
+teardown
+
+# Test PLAN work_type also does not warn
+setup
+filepath="$TEST_DIR/plan-no-tests.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test plan task"
+status: todo
+area_type: "PLN"
+work_type: "PLAN"
+file_scope: ["docs/plan.md"]
+tests: []
+---
+TASKEOF
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "WARN" \
+    "No warning emitted for PLAN work_type"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 19: No warning when file_scope is empty
+# --------------------------------------------------------------------------
+test_subsection "No warning when file_scope is empty"
+
+setup
+filepath="$TEST_DIR/code-empty-scope.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+file_scope: []
+tests: []
+---
+TASKEOF
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "WARN" \
+    "No warning when file_scope is empty (no specific files yet)"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 20: No warning when file_scope has no code files
+# --------------------------------------------------------------------------
+test_subsection "No warning when file_scope has no code files"
+
+setup
+filepath="$TEST_DIR/no-code-files.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+file_scope: ["config/settings.json", "README.md"]
+tests: []
+---
+TASKEOF
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "WARN" \
+    "No warning when file_scope has no .sh or .py files"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 21: autorun_eligible=true with empty acceptance fails
+# --------------------------------------------------------------------------
+test_subsection "autorun_eligible + acceptance constraint"
+
+setup
+filepath="$TEST_DIR/autorun-no-acceptance.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+autorun_eligible: true
+acceptance: []
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "autorun_eligible=true with empty acceptance fails"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "autorun_eligible" \
+    "Error message mentions autorun_eligible"
+assert_contains "$output" "acceptance" \
+    "Error message mentions acceptance"
+teardown
+
+# autorun_eligible=true with non-empty acceptance passes
+setup
+filepath="$TEST_DIR/autorun-with-acceptance.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+autorun_eligible: true
+acceptance: ["criterion 1", "criterion 2"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "autorun_eligible=true with non-empty acceptance passes"
+teardown
+
+# autorun_eligible=false with empty acceptance passes
+setup
+filepath="$TEST_DIR/no-autorun-no-acceptance.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+autorun_eligible: false
+acceptance: []
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "autorun_eligible=false with empty acceptance passes"
+teardown
+
 # ============================================================================
 # SUMMARY
 # ============================================================================

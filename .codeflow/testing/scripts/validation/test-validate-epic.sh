@@ -333,6 +333,77 @@ assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
     "Valid epic with all optional fields null passes"
 teardown
 
+# --------------------------------------------------------------------------
+# Test 12: Valid work_type values accepted
+# --------------------------------------------------------------------------
+test_subsection "Valid work_type values"
+
+for valid_wt in FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN; do
+    setup
+    filepath="$TEST_DIR/wt-$valid_wt.md"
+    cat > "$filepath" <<EPICEOF
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "$valid_wt"
+---
+EPICEOF
+    assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+        "work_type '$valid_wt' is accepted"
+    teardown
+done
+
+# --------------------------------------------------------------------------
+# Test 13: Invalid work_type value
+# --------------------------------------------------------------------------
+test_subsection "Invalid work_type value"
+
+setup
+filepath="$TEST_DIR/invalid-work-type.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "INVALID"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid work_type 'INVALID' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "INVALID" \
+    "Error message mentions the invalid work_type"
+assert_contains "$output" "work_type" \
+    "Error message mentions the field name"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 14: Null work_type is accepted (optional field)
+# --------------------------------------------------------------------------
+test_subsection "Null work_type accepted"
+
+setup
+filepath="$TEST_DIR/null-work-type.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: null
+---
+EPICEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Null work_type passes (field is optional for epics)"
+teardown
+
 # ============================================================================
 # SUMMARY
 # ============================================================================

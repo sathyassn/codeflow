@@ -141,6 +141,7 @@
       "subject": "PF4-EXECUTE: Run work pipeline",
       "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Executing work pipeline",
+      "notes": "All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END. No teammate is shut down between stages or after pipeline completion. On-demand teammates stay alive through PF5-VERIFY and PF6-COMPLETE, then are shut down at PF7-END alongside persistent teammates. This preserves context for rework loops and avoids expensive re-spawns.",
       "task_tracker": {
         "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",

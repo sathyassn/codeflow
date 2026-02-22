@@ -286,10 +286,10 @@ SESSION END
   2. Teammate executes work
   3. Teammate requests commit via cf-git-operations (peer-to-peer)
   4. Wait for stage completion message
-  5. Shut down the stage teammate
-  6. Spawn next stage's teammate, passing context
-- Rework: If WS-REV returns `changes_requested`, re-spawn primary stage teammate (max 3)
-- Rework: If WS-QA returns `fail`, re-spawn cf-development (max 2)
+  5. Spawn next stage's teammate, passing context (previous teammate remains active)
+- All PF4 on-demand teammates remain active through PF5/PF6 and are shut down at PF7-END
+- Rework: If WS-REV returns `changes_requested`, re-assign work to primary stage teammate (still active, no re-spawn needed) (max 3 iterations)
+- Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 2 retries)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
 - **Parallel batch assessment (MANDATORY for PF4-TSK-03):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
 
@@ -396,7 +396,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 
 ### On-Demand Role Teammates (5)
 
-All on-demand teammates operate during **PF4-EXECUTE**. Single instance per stage. Shut down after their stage completes (or after delivering a verdict). May be re-spawned for rework loops.
+All on-demand teammates operate during **PF4-EXECUTE**. Single instance per stage. All on-demand teammates remain active until PF7-END -- no teammate is shut down between stages (→ See Deferred Shutdown below). Available for rework without re-spawning.
 
 | Teammate | Work Stage | Model | Purpose | Entry Command |
 |----------|-----------|-------|---------|---------------|
@@ -506,9 +506,10 @@ Fix the session start hook to validate things better.
 **Stage transition spawning:** When a stage completes (e.g., WS-DEV done), the lead:
 
 1. Receives completion message from the stage teammate
-2. Shuts down the completed stage teammate (`SendMessage type="shutdown_request"`)
-3. Spawns the next stage teammate per the pipeline
-4. Passes relevant context (branch, files changed, review scope) in the spawn prompt
+2. Spawns the next stage teammate per the pipeline
+3. Passes relevant context (branch, files changed, review scope) in the spawn prompt
+
+Note: The completed stage teammate remains active (not shut down). It is available for rework if later stages request changes. All PF4 on-demand teammates are shut down at PF7-END alongside persistent teammates (→ See Deferred Shutdown below).
 
 ### Communication Patterns
 
@@ -545,6 +546,45 @@ If a persistent teammate's context fills up (auto-compaction at ~95%):
 4. Re-send any necessary state via messages
 
 This should be rare for function teammates whose context is bounded.
+
+### Deferred Shutdown
+
+🔒 **All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END.**
+
+On-demand teammates (cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance) are NOT shut down between pipeline stages or after pipeline completion. Instead:
+
+1. Each teammate completes its stage work and reports completion
+2. The lead spawns the next stage's teammate while previous teammates remain active
+3. If a later stage requests rework (WS-REV `changes_requested` or WS-QA `fail`), the original teammate is still alive and can receive the rework assignment directly -- no re-spawn needed
+4. On-demand teammates remain active through PF4-EXECUTE, PF5-VERIFY, and PF6-COMPLETE, and are shut down at PF7-END alongside persistent teammates
+
+**Benefits:**
+
+- Eliminates expensive re-spawns for rework loops
+- Preserves full implementation context across review and QA cycles
+- Reduces total token usage by avoiding context reconstruction
+
+**Shutdown sequence (at PF7-END):**
+
+```text
+PF7-END reached
+    |
+    v
+Shut down on-demand teammates first (any order):
+    SendMessage(type="shutdown_request", recipient="cf-development")
+    SendMessage(type="shutdown_request", recipient="cf-review")
+    SendMessage(type="shutdown_request", recipient="cf-quality-assurance")
+    ... (any other PF4 on-demand teammates)
+    |
+    v
+Then shut down persistent teammates:
+    SendMessage(type="shutdown_request", recipient="cf-git-operations")
+    SendMessage(type="shutdown_request", recipient="cf-knowledge-layer")
+    SendMessage(type="shutdown_request", recipient="cf-security")
+    |
+    v
+TeamDelete
+```
 
 ### Parallel Batch Execution
 
@@ -661,7 +701,7 @@ tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
 🔒 **NEVER call TeamDelete during active session.**
 
 - Persistent function teammates (cf-security, cf-knowledge-layer, cf-git-operations) stay alive PF1 through PF7
-- On-demand role teammates are shut down after their stage completes
+- On-demand role teammates remain active through PF4-EXECUTE, PF5-VERIFY, and PF6-COMPLETE, and are shut down at PF7-END alongside persistent teammates (→ See Deferred Shutdown above)
 - Individual teammate shutdown via `SendMessage(type="shutdown_request")` is SAFE -- does not affect team or task list
 - Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER removing pathflow-active flag
 - A PreToolUse hook (`cf-pre-tool-use-team-guard.sh`) blocks accidental team dissolution while pathflow-active flag exists

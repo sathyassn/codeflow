@@ -19,6 +19,8 @@ readonly VERSION="1.0.0"
 
 readonly REQUIRED_FIELDS="id format_id epic_id title status area_type work_type"
 readonly VALID_STATUSES="todo blocked in_progress awaiting_review complete"
+readonly VALID_WORK_TYPES="FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN"
+readonly CODE_WORK_TYPES="FEAT FIX RFCT HTFX CHOR CICD TEST"
 readonly FORMAT_ID_PATTERN='^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$'
 
 # =============================================================================
@@ -65,6 +67,10 @@ info() {
 
 error() {
     echo "[ERROR] $*" >&2
+}
+
+warn() {
+    echo "[WARN] $*" >&2
 }
 
 # Extract a field value from YAML frontmatter content
@@ -218,6 +224,7 @@ $line"
     # ==========================================================================
 
     local ERRORS=0
+    local WARNINGS=0
 
     # Check required fields
     local field
@@ -291,6 +298,69 @@ $line"
         ERRORS=$((ERRORS + 1))
     fi
 
+    # Validate work_type enum
+    local work_type
+    work_type=$(get_field "work_type" "$frontmatter")
+    if [[ -n "$work_type" ]]; then
+        local valid_wt="false"
+        local wt
+        for wt in $VALID_WORK_TYPES; do
+            if [[ "$work_type" == "$wt" ]]; then
+                valid_wt="true"
+                break
+            fi
+        done
+        if [[ "$valid_wt" == "false" ]]; then
+            error "Invalid work_type '$work_type': must be one of: $VALID_WORK_TYPES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate tests field for code-producing work types
+    if [[ -n "$work_type" ]]; then
+        local is_code_type="false"
+        local ct
+        for ct in $CODE_WORK_TYPES; do
+            if [[ "$work_type" == "$ct" ]]; then
+                is_code_type="true"
+                break
+            fi
+        done
+
+        if [[ "$is_code_type" == "true" ]]; then
+            # Check if file_scope contains .sh or .py files
+            local file_scope
+            file_scope=$(echo "$frontmatter" | grep -E "^file_scope:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' || true)
+            local has_code_files="false"
+            if [[ -n "$file_scope" && "$file_scope" != "[]" && "$file_scope" != "null" && "$file_scope" != "~" ]]; then
+                if echo "$file_scope" | grep -qE '\.(sh|py)'; then
+                    has_code_files="true"
+                fi
+            fi
+
+            if [[ "$has_code_files" == "true" ]]; then
+                local tests_field
+                tests_field=$(echo "$frontmatter" | grep -E "^tests:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' || true)
+                if [[ -z "$tests_field" || "$tests_field" == "[]" || "$tests_field" == "null" || "$tests_field" == "~" ]]; then
+                    warn "Tasks modifying code files should have tests defined in the 'tests' field"
+                    WARNINGS=$((WARNINGS + 1))
+                fi
+            fi
+        fi
+    fi
+
+    # Validate acceptance field when autorun_eligible is true
+    local autorun_eligible
+    autorun_eligible=$(get_field "autorun_eligible" "$frontmatter")
+    if [[ "$autorun_eligible" == "true" ]]; then
+        local acceptance_field
+        acceptance_field=$(echo "$frontmatter" | grep -E "^acceptance:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' || true)
+        if [[ -z "$acceptance_field" || "$acceptance_field" == "[]" || "$acceptance_field" == "null" || "$acceptance_field" == "~" ]]; then
+            error "autorun_eligible is true but acceptance is empty: acceptance criteria are required for autorun tasks"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
     # ==========================================================================
     # RESULT
     # ==========================================================================
@@ -300,7 +370,11 @@ $line"
         exit 1
     fi
 
-    info "Validation PASSED"
+    if [[ $WARNINGS -gt 0 ]]; then
+        info "Validation PASSED with $WARNINGS warning(s)"
+    else
+        info "Validation PASSED"
+    fi
     exit 0
 }
 

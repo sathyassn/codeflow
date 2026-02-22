@@ -17,6 +17,7 @@ readonly VERSION="1.0.0"
 
 readonly REQUIRED_FIELDS="id format_id title status area_type"
 readonly VALID_STATUSES="draft planning in_progress blocked complete archived"
+readonly VALID_WORK_TYPES="FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN"
 readonly FORMAT_ID_PATTERN='^[A-Z]{2,4}-EPC-[0-9]{3}$'
 
 # =============================================================================
@@ -208,6 +209,24 @@ $line"
         done
         if [[ "$valid" == "false" ]]; then
             error "Invalid status '$status': must be one of: $VALID_STATUSES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate work_type enum (if present)
+    local work_type
+    work_type=$(get_field "work_type" "$frontmatter")
+    if [[ -n "$work_type" ]]; then
+        local valid_wt="false"
+        local wt
+        for wt in $VALID_WORK_TYPES; do
+            if [[ "$work_type" == "$wt" ]]; then
+                valid_wt="true"
+                break
+            fi
+        done
+        if [[ "$valid_wt" == "false" ]]; then
+            error "Invalid work_type '$work_type': must be one of: $VALID_WORK_TYPES"
             ERRORS=$((ERRORS + 1))
         fi
     fi

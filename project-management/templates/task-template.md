@@ -21,7 +21,9 @@ raise_pr: true
 auto_merge: false
 target_branch: null
 acceptance: []                         # JSON array -- required if autorun_eligible
-tests: []                              # JSON array -- recommended for autorun
+tests: []                              # JSON array -- REQUIRED for code-producing work types (FEAT, FIX, RFCT, HTFX, CHOR, CICD, TEST)
+                                       # Format: JSON array of test file paths relative to .codeflow/testing/
+                                       # Example: ["scripts/validation/test-validate-task.sh"]
 branch: null
 pr_number: null
 external_id: null
@@ -59,6 +61,7 @@ stage_history: "[]"                    # JSON array of stage transition records
 
 1. {Specific, measurable criterion with file:line if applicable}
 2. {Specific, measurable criterion}
+3. All modified script/code files (.sh, .py) have corresponding test files created/updated and registered in test-config.json
 
 ## Dependencies
 
@@ -75,6 +78,7 @@ stage_history: "[]"                    # JSON array of stage transition records
 ### Automated
 
 - [ ] {Test or script that validates the change}
+- [ ] Test coverage validation passes (bash .codeflow/testing/lib/test-coverage.sh --audit)
 
 ### Manual
 
