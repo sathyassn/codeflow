@@ -5,7 +5,7 @@ epic_id: "{epic-ULID}"                # FK to epics(id)
 epic_format_id: "{AREA}-EPC-{NNN}"    # Cross-reference to epic format_id (convenience; not yet in DB tasks table)
 title: "{Title}"
 description: "{One-line description}"
-status: todo                           # todo|blocked|in_progress|awaiting_review|complete
+status: todo                           # todo|blocked|in_progress|complete|cancelled
 area_type: "{AREA}"                    # FRT|BKD|INF|SHR|DOC|PLN
 work_type: "{TYPE}"                    # FEAT|FIX|HTFX|RFCT|DOCS|TEST|CHOR|CICD|SPKE|PLAN
 domain: "{domain}"                     # GENL|PMGT|QUAL|{custom}

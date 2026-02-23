@@ -105,7 +105,7 @@ Frontmatter Requirements:
   | id | required | required | required | required | required |
   | date/created | date | created, updated | created_at | created_at | created, updated |
   | author | - | required | - | - | required |
-  | status values | proposed/accepted/deprecated/superseded | draft/review/approved | draft/planning/in_progress/complete | todo/blocked/in_progress/awaiting_review/complete | active/retired |
+  | status values | proposed/accepted/deprecated/superseded | draft/review/approved | draft/planning/in_progress/complete | todo/blocked/in_progress/complete/cancelled | active/retired |
   | area_type | - | - | required | required | - |
   | work_type | - | - | required | required | - |
   | epic_id | - | optional | - | required | - |

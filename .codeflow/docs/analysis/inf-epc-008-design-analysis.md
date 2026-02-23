@@ -67,13 +67,13 @@ A new final step in PF6-COMPLETE that bridges the gap between PR creation and te
 |------|---------|----------|
 | Interactive | `interaction=interactive` | Poll CI status -> notify user "PR ready for review" -> wait for user to merge via GitHub UI -> `git pull` to sync main |
 | Autorun + auto_merge=true | `interaction=autorun`, `auto_merge=true` | Poll CI status -> `gh pr merge --delete-branch` to integration branch (NOT squash) -> `git pull` target branch |
-| Autorun + auto_merge=false | `interaction=autorun`, `auto_merge=false` | Poll CI status -> mark task `status=awaiting_review` -> proceed to PF7 |
+| Autorun + auto_merge=false | `interaction=autorun`, `auto_merge=false` | Poll CI status -> task already complete from PF6-TSK-01 -> proceed to PF7 |
 
 **CI polling design:**
 
 - Poll interval: 15 seconds
 - Max wait: 10 minutes (configurable in pathflow-config.json)
-- On timeout: warn user (interactive) or mark `awaiting_review` (autorun)
+- On timeout: warn user (interactive) or proceed to PF7 (autorun)
 - Uses: `gh pr checks {number} --watch --fail-fast` (built-in polling)
 
 **Integration branch merge:**
@@ -147,17 +147,17 @@ The `auto_commit` field is vestigial. PathFlow commits unconditionally at PF6-TS
 
 **Rationale:** Dropping the column would break existing DB records and require data migration. Deprecation-in-place is safer and communicates intent.
 
-### D6: New Task Status — `awaiting_review`
+### D6: Task Status — `awaiting_review` (REMOVED)
 
-Add `awaiting_review` to the task status CHECK constraint. This status represents "PR created, CI passed, waiting for human merge."
+**Decision reversed.** The `awaiting_review` status has been removed. Task completion = work done (code written, reviewed, tested). PR review state is self-evident from GitHub and does not need to be duplicated in the task status machine.
 
-**Status lifecycle (updated):**
+**Status lifecycle (simplified):**
 
 ```text
-todo --> in_progress --> awaiting_review --> complete
-  |         |                                  ^
-  v         v                                  |
-blocked --> in_progress ----------------------+
+todo --> in_progress --> complete
+  |         |
+  v         v
+blocked --> in_progress
 ```
 
 **Valid transitions:**
@@ -168,11 +168,9 @@ blocked --> in_progress ----------------------+
 | todo | blocked | Dependency not met |
 | blocked | in_progress | Blocker resolved |
 | in_progress | blocked | New blocker discovered |
-| in_progress | awaiting_review | PR ready, CI passed, waiting for human |
-| in_progress | complete | Work done (no PR needed, or manual flow) |
-| awaiting_review | complete | PR merged |
+| in_progress | complete | Work done |
 
-**Schema change:** ALTER TABLE tasks CHECK constraint; new migration file `002_add_awaiting_review_status.sql`.
+**Schema change:** Migration `004_remove_awaiting_review_status.sql` removes `awaiting_review` from CHECK constraint. Existing rows migrated to `complete`.
 
 ### D7: `/cf-ship` as Notification for Protected Branches
 
@@ -269,8 +267,8 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 
 | # | File | Changes |
 |---|------|---------|
-| 8 | `.codeflow/scripts/db/schema.sql` | Add `awaiting_review` to tasks status CHECK constraint; add deprecation comment to auto_commit |
-| 9 | `.codeflow/scripts/db/migrations/002_add_awaiting_review_status.sql` | New migration: recreate tasks table with updated CHECK constraint (SQLite limitation) |
+| 8 | `.codeflow/scripts/db/schema.sql` | Remove `awaiting_review` from tasks status CHECK constraint; add deprecation comment to auto_commit |
+| 9 | `.codeflow/scripts/db/migrations/004_remove_awaiting_review_status.sql` | Migration: remove `awaiting_review` from CHECK constraint, migrate existing rows to `complete` |
 | 10 | `project-management/templates/task-template.md` | Update status values in YAML comment; remove auto_commit field |
 | 11 | `project-management/templates/epic-template.md` | Verify status values are correct (no change expected) |
 
@@ -297,7 +295,7 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 |---|------|---------|
 | 17 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/06-flows/session-lifecycle.md` | PF3 reorder, PF4 validation gate, PF6 verify-pr-and-sync |
 | 18 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/09-autorun/architecture.md` | Integration branch model, merge protection |
-| 19 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/09-autorun/worker-lifecycle.md` | awaiting_review terminal state, merge flow |
+| 19 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/09-autorun/worker-lifecycle.md` | Worker lifecycle, merge flow |
 | 20 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/09-autorun/batch-files.md` | Validation rules, deprecate auto_commit |
 | 21 | `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/10-implementation/phase-5-commands.md` | cf-ship as notification for protected branches |
 
@@ -309,7 +307,7 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 |------|-------|-------|
 | Required fields | id, format_id, epic_id, title, status, area_type, work_type present and non-empty | "Missing required field: {field}" |
 | Format ID | Matches `^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$` | "Invalid format_id: {value}" |
-| Status value | In: todo, blocked, in_progress, awaiting_review, complete | "Invalid status: {value}" |
+| Status value | In: todo, blocked, in_progress, complete, cancelled | "Invalid status: {value}" |
 | auto_merge + target | If auto_merge=true: target_branch must be non-null and not in protected_branches | "auto_merge requires non-protected target_branch" |
 | raise_pr + auto_merge | If raise_pr=false: auto_merge must be false | "auto_merge requires raise_pr=true" |
 | Acceptance criteria | Non-empty for tracked tasks (autorun_eligible=true) | "Autorun tasks require acceptance criteria" |
@@ -322,7 +320,7 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 | Required fields | id, format_id, title, status, area_type present and non-empty | "Missing required field: {field}" |
 | Format ID | Matches `^[A-Z]{2,4}-EPC-[0-9]{3}$` | "Invalid format_id: {value}" |
 | Status value | In: draft, planning, in_progress, blocked, complete, archived | "Invalid status: {value}" |
-| Completeness | If status=complete: all tasks must be complete or awaiting_review | "Epic marked complete but task {id} is {status}" |
+| Completeness | If status=complete: all tasks must be complete or cancelled | "Epic marked complete but task {id} is {status}" |
 
 ## 5. Field Matrix (Final)
 
@@ -353,7 +351,7 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 | D3 | autorun/{batch-name} integration branch | Accepted | Prevents automated merge to main |
 | D4 | auto_merge + main = FORBIDDEN | Accepted | Defense-in-depth with D2 |
 | D5 | Deprecate auto_commit (leave column) | Accepted | Safe, non-breaking, communicates intent |
-| D6 | awaiting_review task status | Accepted | Fills semantic gap in status lifecycle |
+| D6 | awaiting_review task status | Reversed | Removed — PR state is self-evident from GitHub |
 | D7 | /cf-ship as notification | Accepted | Aligns with merge protection policy |
 | D8 | PF3 reorder (conditional for adhoc) | Accepted | Fixes ordering fragility |
 | D9 | Deterministic validation scripts | Accepted | Guards against LLM data errors |

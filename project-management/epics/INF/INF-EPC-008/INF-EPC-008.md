@@ -2,7 +2,7 @@
 id: "epic-01KJ12VSN1YSWYQ03CDK8ENG78"
 format_id: "INF-EPC-008"
 title: "PathFlow PR Verification, Merge Protection & Validation Hardening"
-summary: "Add PF6 PR verification step, configurable merge protection for protected branches, autorun integration branch convention, task/epic field validation scripts, schema updates (awaiting_review status, deprecate auto_commit), and V4 spec alignment"
+summary: "Add PF6 PR verification step, configurable merge protection for protected branches, autorun integration branch convention, task/epic field validation scripts, schema updates (deprecate auto_commit), and V4 spec alignment"
 status: complete
 area_type: "INF"
 work_type: "CHOR"
@@ -29,7 +29,7 @@ Close three gaps in the PathFlow pipeline and perform two cleanup items:
 4. **Deprecate `auto_commit`**: Leave column in schema with deprecation comment, remove from templates and agent references.
 5. **PF3 reorder**: Move branch creation before task registration (conditional for adhoc tasks only).
 
-Additionally, add `awaiting_review` as a new task status, establish the `autorun/{batch-name}` integration branch convention, redefine `/cf-ship` as notification for protected branches, and update V4 specs to align with implementation.
+Additionally, establish the `autorun/{batch-name}` integration branch convention, redefine `/cf-ship` as notification for protected branches, and update V4 specs to align with implementation.
 
 ## Scope
 
@@ -39,7 +39,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 - Merge protection: enforcement-policy.json config + PreToolUse hook extension
 - Autorun integration branch convention (`autorun/{batch-name}`)
 - Deterministic validation scripts for task and epic fields
-- DB schema: `awaiting_review` status, `auto_commit` deprecation
+- DB schema: `auto_commit` deprecation
 - PF3 task reordering (conditional for adhoc tasks)
 - `/cf-ship` redefinition as notification for protected branches
 - Agent definition updates (cf-git-operations, cf-knowledge-layer, cf-planning, cf-security)
@@ -65,7 +65,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 - [ ] enforcement-policy.json has `merge_protection` section with configurable protected_branches
 - [ ] Validation scripts (`validate-task.sh`, `validate-epic.sh`) exist and pass on valid inputs
 - [ ] PF4-TSK-02 in pathflow-config.json gates work execution with validation
-- [ ] DB schema migration adds `awaiting_review` to tasks status CHECK constraint
+- [x] DB schema migration manages tasks status CHECK constraint (added in 002, then simplified in 004)
 - [ ] `auto_commit` column has deprecation comment in schema.sql; removed from task template
 - [ ] PF3 tasks reordered: branch creation before task registration (conditional for adhoc)
 - [ ] `/cf-ship` command redefined as notification for protected branches
@@ -77,7 +77,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | INF-TSK-008-001 | Verify planning artifacts and prerequisites | complete | high |
-| INF-TSK-008-002 | Schema changes: awaiting_review status + deprecate auto_commit | complete | high |
+| INF-TSK-008-002 | Schema changes: deprecate auto_commit + status simplification | complete | high |
 | INF-TSK-008-003 | Merge protection: enforcement-policy.json + hook extension | complete | high |
 | INF-TSK-008-004 | Validation scripts: validate-task.sh + validate-epic.sh | complete | high |
 | INF-TSK-008-005 | PF3 reorder + PF4 validation gate in pathflow-config.json | complete | normal |
@@ -101,7 +101,7 @@ Additionally, add `awaiting_review` as a new task status, establish the `autorun
 ## Technical Notes
 
 - **Design analysis**: See [design analysis](../../../../.codeflow/docs/analysis/inf-epc-008-design-analysis.md) for full design rationale, flow diagrams, and decision log (11 decisions: D1-D11).
-- **Task ordering**: INF-TSK-008-002 (schema) must complete before INF-TSK-008-004 (validation scripts) because validation checks the new `awaiting_review` status value. INF-TSK-008-003 (merge protection) and INF-TSK-008-004 (validation) are independent and can be parallelized.
+- **Task ordering**: INF-TSK-008-002 (schema) must complete before INF-TSK-008-004 (validation scripts) because validation checks status values. INF-TSK-008-003 (merge protection) and INF-TSK-008-004 (validation) are independent and can be parallelized. Note: Status values simplified in migration 004 to: todo, blocked, in_progress, complete, cancelled.
 - **PF3 reorder rationale**: Branch creation triggers the pf-3 sentinel which unlocks Edit/Write. Moving it before task registration ensures cf-knowledge-layer can write task records after the gate opens.
 - **SQLite CHECK constraint limitation**: SQLite does not support `ALTER TABLE ... ALTER COLUMN`. The migration must recreate the tasks table with the updated CHECK constraint, preserving all data.
 - **auto_commit deprecation**: Column stays in schema for backward compatibility. Agents stop reading/writing it. Templates and docs remove it.

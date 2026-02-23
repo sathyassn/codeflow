@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT DEFAULT 'todo'
-        CHECK(status IN ('todo', 'blocked', 'in_progress', 'awaiting_review', 'complete', 'cancelled')),
+        CHECK(status IN ('todo', 'blocked', 'in_progress', 'complete', 'cancelled')),
     area_type TEXT NOT NULL,
     work_type TEXT NOT NULL,
     domain TEXT NOT NULL,
