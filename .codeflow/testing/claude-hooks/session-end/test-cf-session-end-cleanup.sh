@@ -41,7 +41,7 @@ cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/session"/*-test-session* 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/session"/memory-progress-* 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
-    rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-* 2>/dev/null || true
     rm -rf /tmp/claude/sessions/test-session 2>/dev/null || true
 }
@@ -464,15 +464,15 @@ fi
 # New behavior: hook detects _PATHFLOW_ACTIVE == true and exits 0 early.
 # The flag is NOT removed here — team-guard removes it during PF7-END.
 setup_test_dirs
-mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
-echo "active" > "$REPO_ROOT/.state/session/test-session/is-pathflow-active"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
 CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
-if [[ -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" ]]; then
+if [[ -f "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active" ]]; then
     pass "Skips cleanup when pathflow-active (flag preserved for team-guard)"
 else
     fail "Should skip cleanup when pathflow-active (flag should be preserved)"
 fi
-rm -f "$REPO_ROOT/.state/session/test-session/is-pathflow-active" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 
 # Test 49: Actually removes PathFlow sentinels (session-scoped)
 setup_test_dirs

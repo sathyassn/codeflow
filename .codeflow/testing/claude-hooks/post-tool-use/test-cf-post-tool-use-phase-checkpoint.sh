@@ -39,8 +39,8 @@ echo ""
 create_test_flag() {
     local session_id="$1"
     local session_dir="$REPO_ROOT/.state/session/$session_id"
-    mkdir -p "$session_dir"
-    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/is-pathflow-active"
+    mkdir -p "$session_dir/pathflow"
+    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/pathflow/is-pathflow-active"
 }
 
 create_test_env_file() {
@@ -56,12 +56,12 @@ remove_test_env_file() {
 
 has_checkpoint_file() {
     local session_id="$1"
-    [[ -f "$REPO_ROOT/.state/checkpoints/pathflow/$session_id/phase-tasks.json" ]]
+    [[ -f "$REPO_ROOT/.state/session/$session_id/pathflow/pathflow-phase-tasks.json" ]]
 }
 
 read_checkpoint() {
     local session_id="$1"
-    local ckpt="$REPO_ROOT/.state/checkpoints/pathflow/$session_id/phase-tasks.json"
+    local ckpt="$REPO_ROOT/.state/session/$session_id/pathflow/pathflow-phase-tasks.json"
     if [[ -f "$ckpt" ]]; then
         cat "$ckpt"
     else
@@ -71,7 +71,7 @@ read_checkpoint() {
 
 cleanup_test() {
     local session_id="$1"
-    rm -rf "$REPO_ROOT/.state/checkpoints/pathflow/$session_id" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.state/session/$session_id/pathflow" 2>/dev/null || true
     rm -rf "$REPO_ROOT/.state/session/$session_id" 2>/dev/null || true
     remove_test_env_file
 }
@@ -259,7 +259,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 reg_session="ses-register-19"
 create_test_flag "$reg_session"
 create_test_env_file "$reg_session"
-mkdir -p "$REPO_ROOT/.state/checkpoints/pathflow/$reg_session"
+mkdir -p "$REPO_ROOT/.state/session/$reg_session/pathflow"
 stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF1-TSK-01: Initialize PathFlow"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 if has_checkpoint_file "$reg_session"; then

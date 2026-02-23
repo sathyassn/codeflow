@@ -7,7 +7,7 @@
 #   - References env file (codeflow-env.sh) for session ID
 #   - Env-file-first session ID resolution (env file takes priority over stdin)
 #   - Fallback to stdin session_id when env file missing
-#   - Sentinel creation for each phase/stage trigger
+#   - Sentinel creation for stage triggers (STAGE-COMPLETE via SendMessage)
 #
 # Exit codes:
 #   0 - All tests passed
@@ -38,8 +38,8 @@ echo ""
 create_test_flag() {
     local session_id="$1"
     local session_dir="$REPO_ROOT/.state/session/$session_id"
-    mkdir -p "$session_dir"
-    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/is-pathflow-active"
+    mkdir -p "$session_dir/pathflow"
+    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/pathflow/is-pathflow-active"
 }
 
 # Create a codeflow-env.sh with the given session ID
@@ -208,16 +208,16 @@ create_test_flag "$env_session"
 create_test_env_file "$env_session"
 # Create sentinel dir for env session so we can verify sentinel lands there
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$env_session"
-# Run hook with TeamCreate (triggers pf-1 sentinel) — stdin has DIFFERENT session_id
-stdin_json="{\"tool_name\":\"TeamCreate\",\"tool_input\":{\"team_name\":\"test\"},\"session_id\":\"$stdin_session\"}"
+# Run hook with SendMessage STAGE-COMPLETE (triggers ws-dev sentinel) — stdin has DIFFERENT session_id
+stdin_json="{\"tool_name\":\"SendMessage\",\"tool_input\":{\"content\":\"STAGE-COMPLETE: WS-DEV\",\"type\":\"message\"},\"session_id\":\"$stdin_session\"}"
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$env_session" "pf-1"; then
+if has_test_sentinel "$env_session" "ws-dev"; then
     pass "Sentinel created under env file session ID (not stdin UUID)"
 else
     fail "Sentinel should be created under env file session ID '$env_session'"
 fi
 # Verify it was NOT created under the stdin session
-if has_test_sentinel "$stdin_session" "pf-1"; then
+if has_test_sentinel "$stdin_session" "ws-dev"; then
     fail "Sentinel should NOT be under stdin session ID '$stdin_session'"
 else
     pass "Sentinel correctly NOT under stdin session ID"
@@ -231,58 +231,16 @@ fallback_session="uuid-fallback-17"
 create_test_flag "$fallback_session"
 remove_test_env_file
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$fallback_session"
-stdin_json="{\"tool_name\":\"TeamCreate\",\"tool_input\":{\"team_name\":\"test\"},\"session_id\":\"$fallback_session\"}"
+stdin_json="{\"tool_name\":\"SendMessage\",\"tool_input\":{\"content\":\"STAGE-COMPLETE: WS-DEV\",\"type\":\"message\"},\"session_id\":\"$fallback_session\"}"
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$fallback_session" "pf-1"; then
+if has_test_sentinel "$fallback_session" "ws-dev"; then
     pass "Falls back to stdin session_id when env file missing"
 else
     fail "Should fall back to stdin session_id for sentinel creation"
 fi
 
 echo ""
-echo "--- Execution Tests: Sentinel Triggers ---"
-
-# Test 18: TeamCreate triggers pf-1 sentinel
-TESTS_RUN=$((TESTS_RUN + 1))
-tc_session="ses-teamcreate-18"
-create_test_flag "$tc_session"
-create_test_env_file "$tc_session"
-stdin_json='{"tool_name":"TeamCreate","tool_input":{"team_name":"test"},"session_id":"ignored"}'
-bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$tc_session" "pf-1"; then
-    pass "TeamCreate triggers pf-1 sentinel"
-else
-    fail "TeamCreate should create pf-1 sentinel"
-fi
-remove_test_env_file
-
-# Test 19: Task with cf-knowledge-layer triggers pf-2 sentinel
-TESTS_RUN=$((TESTS_RUN + 1))
-kl_session="ses-knowledgelayer-19"
-create_test_flag "$kl_session"
-create_test_env_file "$kl_session"
-stdin_json='{"tool_name":"Task","tool_input":{"name":"cf-knowledge-layer","prompt":"test"},"session_id":"ignored"}'
-bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$kl_session" "pf-2"; then
-    pass "Task(cf-knowledge-layer) triggers pf-2 sentinel"
-else
-    fail "Task with cf-knowledge-layer should create pf-2 sentinel"
-fi
-remove_test_env_file
-
-# Test 20: Bash git checkout -b triggers pf-3 sentinel
-TESTS_RUN=$((TESTS_RUN + 1))
-gc_session="ses-gitcheckout-20"
-create_test_flag "$gc_session"
-create_test_env_file "$gc_session"
-stdin_json='{"tool_name":"Bash","tool_input":{"command":"git checkout -b feat/test-branch"},"session_id":"ignored"}'
-bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$gc_session" "pf-3"; then
-    pass "git checkout -b triggers pf-3 sentinel"
-else
-    fail "git checkout -b should create pf-3 sentinel"
-fi
-remove_test_env_file
+echo "--- Execution Tests: Stage Sentinel Triggers ---"
 
 # Test 21: SendMessage STAGE-COMPLETE: WS-DEV triggers ws-dev sentinel
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -298,19 +256,7 @@ else
 fi
 remove_test_env_file
 
-# Test 22: Bash gh pr create triggers pf-6 sentinel
-TESTS_RUN=$((TESTS_RUN + 1))
-pr_session="ses-prcreate-22"
-create_test_flag "$pr_session"
-create_test_env_file "$pr_session"
-stdin_json='{"tool_name":"Bash","tool_input":{"command":"gh pr create --title \"test\""},"session_id":"ignored"}'
-bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$pr_session" "pf-6"; then
-    pass "gh pr create triggers pf-6 sentinel"
-else
-    fail "gh pr create should create pf-6 sentinel"
-fi
-remove_test_env_file
+# Test 22: (removed — phase trigger pf-6 via gh pr no longer exists)
 
 # Test 23: Exits 0 when pathflow not active
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -337,19 +283,7 @@ else
 fi
 remove_test_env_file
 
-# Test 25: git switch -c triggers pf-3 sentinel
-TESTS_RUN=$((TESTS_RUN + 1))
-sw_session="ses-gitswitch-25"
-create_test_flag "$sw_session"
-create_test_env_file "$sw_session"
-stdin_json='{"tool_name":"Bash","tool_input":{"command":"git switch -c fix/my-bugfix"},"session_id":"ignored"}'
-bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
-if has_test_sentinel "$sw_session" "pf-3"; then
-    pass "git switch -c triggers pf-3 sentinel"
-else
-    fail "git switch -c should create pf-3 sentinel"
-fi
-remove_test_env_file
+# Test 25: (removed — phase trigger pf-3 via git switch no longer exists)
 
 echo ""
 echo "=== Test Summary ==="

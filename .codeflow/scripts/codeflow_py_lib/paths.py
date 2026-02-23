@@ -129,5 +129,5 @@ def is_pathflow_active() -> bool:
         return True
     else:
         session_id = os.environ.get("CODEFLOW_SESSION_ID", "unknown")
-        flag = get_state_dir() / "session" / session_id / "is-pathflow-active"
+        flag = get_state_dir() / "session" / session_id / "pathflow" / "is-pathflow-active"
         return flag.exists()

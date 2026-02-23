@@ -20,7 +20,7 @@
 #   - checkpoint_is_phase_complete: Check if all expected tasks are done/skipped
 #
 # Flag file:
-#   .state/session/{SESSION_ID}/is-pathflow-active
+#   .state/session/{SESSION_ID}/pathflow/is-pathflow-active
 #   Contains JSON: {session_id, team_name, created_at, tracking_level}
 #
 # Sentinel files:
@@ -28,7 +28,7 @@
 #   Empty files (existence = truth). Created by touch, checked by [[ -f ]].
 #
 # Checkpoint file:
-#   .state/checkpoints/pathflow/{SESSION_ID}/phase-tasks.json
+#   .state/session/{SESSION_ID}/pathflow/pathflow-phase-tasks.json
 #   Contains JSON: {PF1: {expected, registered, completed, skipped, sentinel_created}, ...}
 #
 # Environment:
@@ -64,10 +64,11 @@ if [[ -f "$_env_file" ]]; then
 fi
 readonly _PFS_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 readonly _PFS_SESSION_DIR="$REPO_ROOT/.state/session/$_PFS_SESSION_ID"
-readonly _PFS_FLAG_FILE="$_PFS_SESSION_DIR/is-pathflow-active"
+readonly _PFS_PATHFLOW_DIR="$_PFS_SESSION_DIR/pathflow"
+readonly _PFS_FLAG_FILE="$_PFS_PATHFLOW_DIR/is-pathflow-active"
 readonly _PFS_SENTINEL_DIR="$REPO_ROOT/.state/sentinels/pathflow/$_PFS_SESSION_ID"
-readonly _PFS_CHECKPOINT_DIR="$REPO_ROOT/.state/checkpoints/pathflow/$_PFS_SESSION_ID"
-readonly _PFS_CHECKPOINT_FILE="$_PFS_CHECKPOINT_DIR/phase-tasks.json"
+readonly _PFS_CHECKPOINT_DIR="$_PFS_PATHFLOW_DIR"
+readonly _PFS_CHECKPOINT_FILE="$_PFS_CHECKPOINT_DIR/pathflow-phase-tasks.json"
 readonly _PFS_PATHFLOW_CONFIG="$REPO_ROOT/.codeflow/config/pathflow/pathflow-config.json"
 
 # =============================================================================
@@ -81,7 +82,7 @@ create_pathflow_flag() {
     local session_id="${1:-$_PFS_SESSION_ID}"
     local team_name="${2:-}"
 
-    mkdir -p "$_PFS_SESSION_DIR" 2>/dev/null || true
+    mkdir -p "$_PFS_PATHFLOW_DIR" 2>/dev/null || true
 
     local created_at
     created_at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)

@@ -307,7 +307,7 @@ class TestIsPathflowActive:
         monkeypatch.delenv("CODEFLOW_PATHFLOW_OVERRIDE", raising=False)
         monkeypatch.setenv("CODEFLOW_SESSION_ID", "test-session")
         # Create session-scoped flag file
-        flag_dir = temp_repo / ".state" / "session" / "test-session"
+        flag_dir = temp_repo / ".state" / "session" / "test-session" / "pathflow"
         flag_dir.mkdir(parents=True, exist_ok=True)
         (flag_dir / "is-pathflow-active").touch()
         assert is_pathflow_active() is True

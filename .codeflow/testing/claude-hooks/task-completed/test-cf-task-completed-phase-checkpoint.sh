@@ -39,8 +39,8 @@ echo ""
 create_test_flag() {
     local session_id="$1"
     local session_dir="$REPO_ROOT/.state/session/$session_id"
-    mkdir -p "$session_dir"
-    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/is-pathflow-active"
+    mkdir -p "$session_dir/pathflow"
+    echo "{\"session_id\":\"$session_id\"}" > "$session_dir/pathflow/is-pathflow-active"
 }
 
 create_test_env_file() {
@@ -62,7 +62,7 @@ has_test_sentinel() {
 
 read_checkpoint() {
     local session_id="$1"
-    local ckpt="$REPO_ROOT/.state/checkpoints/pathflow/$session_id/phase-tasks.json"
+    local ckpt="$REPO_ROOT/.state/session/$session_id/pathflow/pathflow-phase-tasks.json"
     if [[ -f "$ckpt" ]]; then
         cat "$ckpt"
     else
@@ -78,7 +78,7 @@ setup_checkpoint() {
     shift 2
     local task_ids=("$@")
 
-    local ckpt_dir="$REPO_ROOT/.state/checkpoints/pathflow/$session_id"
+    local ckpt_dir="$REPO_ROOT/.state/session/$session_id/pathflow"
     mkdir -p "$ckpt_dir"
 
     # Build expected array and registered map
@@ -91,12 +91,12 @@ setup_checkpoint() {
 
     jq -n --arg pf "$phase_id" --argjson exp "$expected_json" --argjson reg "$registered_json" \
         '{($pf): {expected: $exp, registered: $reg, completed: {}, skipped: {}, sentinel_created: false}}' \
-        > "$ckpt_dir/phase-tasks.json"
+        > "$ckpt_dir/pathflow-phase-tasks.json"
 }
 
 cleanup_test() {
     local session_id="$1"
-    rm -rf "$REPO_ROOT/.state/checkpoints/pathflow/$session_id" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.state/session/$session_id/pathflow" 2>/dev/null || true
     rm -rf "$REPO_ROOT/.state/session/$session_id" 2>/dev/null || true
     rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$session_id" 2>/dev/null || true
     remove_test_env_file
@@ -277,7 +277,7 @@ create_test_env_file "$tc_session"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$tc_session"
 # Set up PF1 with 2 tasks, complete the first manually
 setup_checkpoint "$tc_session" "PF1" "PF1-TSK-01" "PF1-TSK-02"
-ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$tc_session/phase-tasks.json"
+ckpt_file="$REPO_ROOT/.state/session/$tc_session/pathflow/pathflow-phase-tasks.json"
 jq '.PF1.completed["PF1-TSK-01"] = "2026-01-01T00:00:00Z"' "$ckpt_file" > "${ckpt_file}.tmp" && mv "${ckpt_file}.tmp" "$ckpt_file"
 # Now complete the second task via hook — should trigger sentinel
 stdin_json='{"task_subject":"PF1-TSK-02: Spawn security","task_id":"2","session_id":"ignored"}'

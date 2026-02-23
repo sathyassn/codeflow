@@ -366,8 +366,8 @@ touch "$TEMP_DIR/state/pathflow-active"
 # Create pf-6 sentinel and pathflow-active flag at REPO_ROOT paths
 mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session"
 touch "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session/pathflow-pf-6"
-mkdir -p "$TEMP_DIR/.state/session/pf7-test-session"
-echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active"
+mkdir -p "$TEMP_DIR/.state/session/pf7-test-session/pathflow"
+echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active"
 output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 # Should exit 0 (allowed) and remove the flag
 if [[ $exit_code -eq 0 ]]; then
@@ -376,7 +376,7 @@ else
     fail "TeamDelete should be allowed when pf-6 sentinel exists (got exit=$exit_code)"
 fi
 # Verify flag was removed
-if [[ ! -f "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active" ]]; then
+if [[ ! -f "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active" ]]; then
     TESTS_RUN=$((TESTS_RUN + 1))
     pass "PF7-END gate removes pathflow-active flag"
 else
@@ -392,8 +392,8 @@ mkdir -p "$TEMP_DIR/state"
 touch "$TEMP_DIR/state/pathflow-active"
 # Create pathflow dirs but NO pf-6 sentinel
 mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session"
-mkdir -p "$TEMP_DIR/.state/session/pf7-test-session"
-echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/is-pathflow-active"
+mkdir -p "$TEMP_DIR/.state/session/pf7-test-session/pathflow"
+echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active"
 output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
 if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
     pass "TeamDelete blocked when pf-6 sentinel missing"

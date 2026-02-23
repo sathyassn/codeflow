@@ -191,7 +191,7 @@ class TestModeDetection:
 
     def test_active_when_flag_present(self, tmp_path):
         repo = tmp_path / "repo"
-        flag_dir = repo / ".state" / "session" / "test-sess"
+        flag_dir = repo / ".state" / "session" / "test-sess" / "pathflow"
         flag_dir.mkdir(parents=True)
         (flag_dir / "is-pathflow-active").touch()
         with patch.dict(os.environ, {

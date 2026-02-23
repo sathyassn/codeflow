@@ -255,14 +255,15 @@ Instead, the system uses dependency-based ordering: tasks that genuinely depend 
 All checkpoint state is session-scoped to prevent cross-session interference:
 
 ```text
-.state/checkpoints/pathflow/{session-id}/
-    phase-tasks.json             <-- checkpoint state file
+.state/session/{session-id}/pathflow/
+    is-pathflow-active           <-- PathFlow flag (moved from .state/session/{SID}/)
+    pathflow-phase-tasks.json    <-- checkpoint state file
 
 .state/sentinels/pathflow/{session-id}/
-    pathflow-pf-1                <-- created by checkpoint hook (NEW)
-    pathflow-pf-2                <-- created by checkpoint hook (NEW)
-    pathflow-pf-3                <-- created by checkpoint hook (NEW)
-    pathflow-pf-6                <-- created by checkpoint hook (NEW)
+    pathflow-pf-1                <-- created by checkpoint hook
+    pathflow-pf-2                <-- created by checkpoint hook
+    pathflow-pf-3                <-- created by checkpoint hook
+    pathflow-pf-6                <-- created by checkpoint hook
     pathflow-ws-dev              <-- created by sentinel hook (UNCHANGED)
     pathflow-ws-rev              <-- created by sentinel hook (UNCHANGED)
     pathflow-ws-qa               <-- created by sentinel hook (UNCHANGED)
@@ -294,11 +295,11 @@ All checkpoint state is session-scoped to prevent cross-session interference:
 
 | Event | Action |
 |-------|--------|
-| First PF task registered | Checkpoint file created at `.state/checkpoints/pathflow/{SID}/phase-tasks.json` |
+| First PF task registered | Checkpoint file created at `.state/session/{SID}/pathflow/pathflow-phase-tasks.json` |
 | Task registered | Entry added to `registered` map with timestamp |
 | Task completed | Entry added to `completed` map with timestamp |
 | All phase tasks done | Phase sentinel created, `sentinel_created` set to `true` |
-| Session ends | SessionEnd hook cleans up `.state/checkpoints/pathflow/{SID}/` |
+| Session ends | SessionEnd hook cleans up `.state/session/{SID}/pathflow/` |
 
 ### Parallel sessions
 
@@ -306,7 +307,7 @@ Each session has a unique SID. Checkpoint files are namespaced under the SID dir
 
 ### Git tracking
 
-`.state/checkpoints/` is not git-tracked (lives under `.state/` which is partially gitignored). Checkpoint state is ephemeral and session-scoped -- it does not need to persist across sessions.
+`.state/session/{SID}/pathflow/` is under `.state/session/` which is gitignored. Checkpoint state is ephemeral and session-scoped -- it does not need to persist across sessions.
 
 ## Conditional task handling
 

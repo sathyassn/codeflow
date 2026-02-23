@@ -40,7 +40,7 @@ cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}"/memory-progress* 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
-    rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-test-* 2>/dev/null || true
 }
 
@@ -323,8 +323,8 @@ if grep -q "create_pathflow_flag" "$HOOK" || grep -q "pathflow" "$HOOK"; then pa
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 _stale_dir="$REPO_ROOT/.state/session/stale-pf-flag-session"
-mkdir -p "$_stale_dir" 2>/dev/null || true
-echo "true" > "$_stale_dir/is-pathflow-active"
+mkdir -p "$_stale_dir/pathflow" 2>/dev/null || true
+echo "true" > "$_stale_dir/pathflow/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-flag" bash "$HOOK" </dev/null 2>/dev/null
 if [[ -d "$_stale_dir" ]]; then pass "Preserves stale session dir with is-pathflow-active flag (preserve_pathflow_active=true)"; else fail "Should preserve stale session dir with flag when preserve_pathflow_active=true"; fi
@@ -333,8 +333,8 @@ rm -rf "$_stale_dir" 2>/dev/null || true
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 _stale_dir="$REPO_ROOT/.state/session/stale-pf-legacy-session"
-mkdir -p "$_stale_dir" 2>/dev/null || true
-echo "true" > "$_stale_dir/is-pathflow-active"
+mkdir -p "$_stale_dir/pathflow" 2>/dev/null || true
+echo "true" > "$_stale_dir/pathflow/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-legacy" bash "$HOOK" </dev/null 2>/dev/null
 if [[ -d "$_stale_dir" ]]; then pass "Preserves stale session dir with legacy pathflow flag (preserve_pathflow_active=true)"; else fail "Should preserve stale session dir with legacy flag when preserve_pathflow_active=true"; fi
@@ -343,8 +343,8 @@ rm -rf "$_stale_dir" 2>/dev/null || true
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 _stale_dir="$REPO_ROOT/.state/session/stale-pf-both-session"
-mkdir -p "$_stale_dir" 2>/dev/null || true
-echo "true" > "$_stale_dir/is-pathflow-active"
+mkdir -p "$_stale_dir/pathflow" 2>/dev/null || true
+echo "true" > "$_stale_dir/pathflow/is-pathflow-active"
 touch -t 202401010000 "$_stale_dir"
 CODEFLOW_SESSION_ID="test-pf-both" bash "$HOOK" </dev/null 2>/dev/null
 if [[ -d "$_stale_dir" ]]; then

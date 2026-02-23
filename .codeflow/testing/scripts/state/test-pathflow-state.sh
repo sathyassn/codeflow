@@ -55,7 +55,7 @@ setup_pfs_env() {
     unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID"
     mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
-    rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"/pathflow-* 2>/dev/null || true
 }
 
@@ -146,7 +146,7 @@ test_create_flag_file_exists() {
     result=$(
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" ""
-        [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active" ]] && echo "EXISTS" || echo "MISSING"
+        [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" ]] && echo "EXISTS" || echo "MISSING"
     )
     if [[ "$result" == "EXISTS" ]]; then
         test_pass "Flag file created"
@@ -162,7 +162,7 @@ test_create_flag_valid_json() {
         test_skip "flag_json" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" "my-team"
@@ -181,7 +181,7 @@ test_create_flag_fields() {
         test_skip "flag_fields" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" "test-team"
@@ -202,7 +202,7 @@ test_create_flag_values() {
         test_skip "flag_values" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" "my-team"
@@ -237,7 +237,7 @@ test_create_flag_empty_team() {
         test_skip "empty_team" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" ""
@@ -258,7 +258,7 @@ test_create_flag_defaults() {
         test_skip "defaults" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag  # No args — should use CODEFLOW_SESSION_ID
@@ -279,7 +279,7 @@ test_create_flag_defaults() {
 test_remove_flag() {
     test_section "remove_pathflow_flag removes file"
     setup_pfs_env
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     (
         source "$LIBRARY_UNDER_TEST"
         create_pathflow_flag "$TEST_SESSION_ID" ""
@@ -588,8 +588,8 @@ test_sentinel_env_file_cross_teammate() {
 setup_checkpoint_env() {
     setup_pfs_env
     # Clean checkpoint directory
-    rm -rf "$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID" 2>/dev/null || true
-    mkdir -p "$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID"
+    rm -rf "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow"
 }
 
 # --- checkpoint_read ---
@@ -621,7 +621,7 @@ test_checkpoint_read_valid_json() {
         test_skip "ckpt_read_valid" "jq not installed"
         return
     fi
-    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    local ckpt_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/pathflow-phase-tasks.json"
     echo '{"PF1":{"expected":["PF1-TSK-01"]}}' > "$ckpt_file"
     local result
     result=$(
@@ -643,7 +643,7 @@ test_checkpoint_read_corrupted() {
         test_skip "ckpt_read_corrupt" "jq not installed"
         return
     fi
-    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    local ckpt_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/pathflow-phase-tasks.json"
     echo 'not valid json {{{' > "$ckpt_file"
     local result
     result=$(
@@ -673,7 +673,7 @@ test_checkpoint_write_creates_file() {
         source "$LIBRARY_UNDER_TEST"
         checkpoint_write '{"PF1":{"expected":[]}}'
     )
-    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    local ckpt_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/pathflow-phase-tasks.json"
     if [[ -f "$ckpt_file" ]]; then
         test_pass "Checkpoint file created"
     else
@@ -693,7 +693,7 @@ test_checkpoint_write_valid_json() {
         source "$LIBRARY_UNDER_TEST"
         checkpoint_write '{"PF1":{"expected":["PF1-TSK-01"]}}'
     )
-    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    local ckpt_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/pathflow-phase-tasks.json"
     if jq -e '.' "$ckpt_file" >/dev/null 2>&1; then
         test_pass "Written content is valid JSON"
     else
@@ -1222,7 +1222,7 @@ test_flag_and_sentinels_lifecycle() {
         test_skip "lifecycle" "jq not installed"
         return
     fi
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     local sdir="$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
 
     # Create flag

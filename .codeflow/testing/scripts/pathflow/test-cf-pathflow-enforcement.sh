@@ -70,15 +70,16 @@ TEST_SESSION_ID="ses-test-enf-$$"
 export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
 
 setup_env() {
-    mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID"
+    mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow"
     mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
-    rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"/pathflow-* 2>/dev/null || true
 }
 
 # Create pathflow-active flag for tests that need it
 create_flag() {
-    touch "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow"
+    touch "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
 }
 
 # Create sentinel for tests
@@ -109,7 +110,7 @@ test_init_hook_creates_flag() {
         return
     fi
     echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
-    if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active" ]]; then
+    if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" ]]; then
         test_pass "Flag file created by init hook"
     else
         test_fail "Flag file not created by init hook"
@@ -128,7 +129,7 @@ test_init_hook_flag_json() {
         return
     fi
     echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
     if jq -e '.' "$flag_file" >/dev/null 2>&1; then
         test_pass "Flag contains valid JSON"
     else
@@ -190,38 +191,6 @@ run_sentinel_hook() {
     echo "$stdin_json" | bash "$SENTINEL_HOOK" 2>/dev/null
 }
 
-test_sentinel_teamcreate() {
-    test_section "Sentinel: TeamCreate → pf-1"
-    setup_env
-    create_flag
-    if [[ ! -f "$SENTINEL_HOOK" ]]; then
-        test_skip "sentinel_tc" "Hook not yet installed"
-        return
-    fi
-    run_sentinel_hook '{"tool_name":"TeamCreate","tool_input":{"team_name":"test"}}'
-    if [[ -f "$SDIR/pathflow-pf-1" ]]; then
-        test_pass "Created pathflow-pf-1"
-    else
-        test_fail "pathflow-pf-1 not created"
-    fi
-}
-
-test_sentinel_knowledge_layer() {
-    test_section "Sentinel: Task(cf-knowledge-layer) → pf-2"
-    setup_env
-    create_flag
-    if [[ ! -f "$SENTINEL_HOOK" ]]; then
-        test_skip "sentinel_kl" "Hook not yet installed"
-        return
-    fi
-    run_sentinel_hook '{"tool_name":"Task","tool_input":{"name":"cf-knowledge-layer","prompt":"test"}}'
-    if [[ -f "$SDIR/pathflow-pf-2" ]]; then
-        test_pass "Created pathflow-pf-2"
-    else
-        test_fail "pathflow-pf-2 not created"
-    fi
-}
-
 test_sentinel_task_other() {
     test_section "Sentinel: Task(cf-security) → no pf-2"
     setup_env
@@ -235,38 +204,6 @@ test_sentinel_task_other() {
         test_pass "No pf-2 for non-knowledge-layer task"
     else
         test_fail "Should not create pf-2 for cf-security"
-    fi
-}
-
-test_sentinel_git_checkout() {
-    test_section "Sentinel: git checkout -b → pf-3"
-    setup_env
-    create_flag
-    if [[ ! -f "$SENTINEL_HOOK" ]]; then
-        test_skip "sentinel_checkout" "Hook not yet installed"
-        return
-    fi
-    run_sentinel_hook '{"tool_name":"Bash","tool_input":{"command":"git checkout -b feat/test-branch"}}'
-    if [[ -f "$SDIR/pathflow-pf-3" ]]; then
-        test_pass "Created pathflow-pf-3"
-    else
-        test_fail "pathflow-pf-3 not created"
-    fi
-}
-
-test_sentinel_git_switch() {
-    test_section "Sentinel: git switch -c → pf-3"
-    setup_env
-    create_flag
-    if [[ ! -f "$SENTINEL_HOOK" ]]; then
-        test_skip "sentinel_switch" "Hook not yet installed"
-        return
-    fi
-    run_sentinel_hook '{"tool_name":"Bash","tool_input":{"command":"git switch -c feat/test2"}}'
-    if [[ -f "$SDIR/pathflow-pf-3" ]]; then
-        test_pass "Created pathflow-pf-3 (switch -c)"
-    else
-        test_fail "pathflow-pf-3 not created for switch -c"
     fi
 }
 
@@ -366,22 +303,6 @@ test_sentinel_stage_complete_test() {
     fi
 }
 
-test_sentinel_gh_pr() {
-    test_section "Sentinel: gh pr create → pf-6"
-    setup_env
-    create_flag
-    if [[ ! -f "$SENTINEL_HOOK" ]]; then
-        test_skip "sentinel_pr" "Hook not yet installed"
-        return
-    fi
-    run_sentinel_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr create --title test --body test"}}'
-    if [[ -f "$SDIR/pathflow-pf-6" ]]; then
-        test_pass "Created pathflow-pf-6"
-    else
-        test_fail "pathflow-pf-6 not created"
-    fi
-}
-
 test_sentinel_non_matching_bash() {
     test_section "Sentinel: non-matching bash → no sentinel"
     setup_env
@@ -424,12 +345,12 @@ test_sentinel_idempotent() {
         test_skip "sentinel_idem" "Hook not yet installed"
         return
     fi
-    run_sentinel_hook '{"tool_name":"TeamCreate","tool_input":{"team_name":"test"}}'
-    run_sentinel_hook '{"tool_name":"TeamCreate","tool_input":{"team_name":"test2"}}'
+    run_sentinel_hook '{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}'
+    run_sentinel_hook '{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}'
     local count
-    count=$(find "$SDIR" -maxdepth 1 -name 'pathflow-pf-1*' -type f 2>/dev/null | wc -l | tr -d ' ')
+    count=$(find "$SDIR" -maxdepth 1 -name 'pathflow-ws-dev*' -type f 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$count" -eq 1 ]]; then
-        test_pass "Single sentinel after double TeamCreate"
+        test_pass "Single sentinel after double STAGE-COMPLETE"
     else
         test_fail "Expected 1 sentinel, got $count"
     fi
@@ -723,7 +644,7 @@ test_full_lifecycle() {
 
     # Step 1: Session start creates flag
     echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
-    if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/is-pathflow-active" ]]; then
+    if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" ]]; then
         test_pass "Lifecycle 1: Flag created"
     else
         test_fail "Lifecycle 1: Flag not created"
@@ -739,10 +660,11 @@ test_full_lifecycle() {
         test_fail "Lifecycle 2: Edit should be blocked"
     fi
 
-    # Step 3: Sentinel hook creates pf-3 on branch creation
-    run_sentinel_hook '{"tool_name":"Bash","tool_input":{"command":"git checkout -b feat/test"}}'
+    # Step 3: Create pf-3 sentinel manually (phase triggers removed;
+    # in production, checkpoint hooks create pf-3 when PF3 tasks complete)
+    create_test_sentinel "pf-3"
     if [[ -f "$SDIR/pathflow-pf-3" ]]; then
-        test_pass "Lifecycle 3: pf-3 sentinel created"
+        test_pass "Lifecycle 3: pf-3 sentinel exists"
     else
         test_fail "Lifecycle 3: pf-3 not created"
     fi
@@ -805,20 +727,15 @@ main() {
     test_init_hook_flag_json
     test_init_hook_graceful_no_lib
 
-    # Sentinel hook (PostToolUse)
+    # Sentinel hook (PostToolUse) — stage triggers only (phase triggers removed)
     test_sentinel_hook_exists
-    test_sentinel_teamcreate
-    test_sentinel_knowledge_layer
     test_sentinel_task_other
-    test_sentinel_git_checkout
-    test_sentinel_git_switch
     test_sentinel_stage_complete_dev
     test_sentinel_stage_complete_rev
     test_sentinel_stage_complete_qa
     test_sentinel_stage_complete_plan
     test_sentinel_stage_complete_docs
     test_sentinel_stage_complete_test
-    test_sentinel_gh_pr
     test_sentinel_non_matching_bash
     test_sentinel_early_exit_no_flag
     test_sentinel_idempotent
