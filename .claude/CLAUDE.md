@@ -332,16 +332,16 @@ SESSION END
 
 ### 4.3 Phase Reference
 
-> **Sentinels are created automatically by PostToolUse hooks** when phase markers complete. Agents must NOT attempt to create sentinels directly. If a sentinel appears missing, verify the correct session ID path at `.state/sentinels/pathflow/{session-id}/` before assuming it doesn't exist.
+> **Phase sentinels** (pf-1 through pf-7) are created by the **checkpoint system**: the `phase-checkpoint` PostToolUse hook registers tasks, the `task-completed-phase-checkpoint` TaskCompleted hook marks them done, and when all phase tasks complete, the sentinel is created automatically. **Stage sentinels** (ws-dev, ws-rev, etc.) are created by the `pathflow-sentinel` PostToolUse hook via pattern-matching on stage completion messages. Agents must NOT create sentinels manually.
 
-| Phase | Gate (what must exist) | Sentinel (auto-created by hook) | Key Action | Key Outputs |
+| Phase | Gate (what must exist) | Sentinel (auto-created) | Key Action | Key Outputs |
 |-------|----------------------|-------------------------------|------------|-------------|
-| PF1-INIT | (none) | pathflow-pf-1 | TeamCreate, spawn cf-security | pathflow-active flag, team config |
-| PF2-CONTEXT | pf-1 | pathflow-pf-2 | Spawn cf-knowledge-layer | Active work state, tracking decision |
-| PF3-CLASSIFY | pf-2 | pathflow-pf-3 (auto-created by PostToolUse hook on branch creation) | Create branch (UNLOCKS Edit/Write). Conditional task registration for adhoc tasks (skipped when origin=planned). | Task record (adhoc), branch, tracking_level='tracked' |
-| PF4-EXECUTE | pf-3 | pathflow-ws-* | Run work pipeline | Code, docs, tests, reviews |
+| PF1-INIT | (none) | pathflow-pf-1 (checkpoint-driven) | TeamCreate, spawn cf-security | pathflow-active flag, team config |
+| PF2-CONTEXT | pf-1 | pathflow-pf-2 (checkpoint-driven) | Spawn cf-knowledge-layer | Active work state, tracking decision |
+| PF3-CLASSIFY | pf-2 | pathflow-pf-3 (checkpoint-driven, on all PF3 tasks complete) | Create branch (UNLOCKS Edit/Write). Conditional task registration for adhoc tasks (skipped when origin=planned). | Task record (adhoc), branch, tracking_level='tracked' |
+| PF4-EXECUTE | pf-3 | pathflow-ws-* (pattern-matched) | Run work pipeline | Code, docs, tests, reviews |
 | PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
-| PF6-COMPLETE | ws-rev | pathflow-pf-6 | Create PR, verify CI, sync | PR created, PR verified, task status updated |
+| PF6-COMPLETE | ws-rev | pathflow-pf-6 (checkpoint-driven) | Create PR, verify CI, sync | PR created, PR verified, task status updated |
 | PF7-END | pf-6 | (cleanup) | Shutdown, remove flag | Clean session end |
 
 ### Phase Task IDs
@@ -876,7 +876,21 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 
 ### Sentinel System
 
-PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped, no TTL, and **automatically created by the `pathflow-sentinel` PostToolUse hook** when phase markers complete. Checked by `pathflow-gate` hook before Edit/Write operations. Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
+PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped, no TTL, and created automatically by two complementary mechanisms:
+
+**Phase sentinels** (pf-1 through pf-7) are created by the **checkpoint enforcement system** -- a three-layer architecture:
+
+| Layer | Hook | Event | Purpose |
+|-------|------|-------|---------|
+| 1. Registration | `cf-post-tool-use-phase-checkpoint.sh` | PostToolUse (on TaskCreate) | Registers PF{N}-TSK-{NN} tasks in the checkpoint file |
+| 2. Completion | `cf-task-completed-phase-checkpoint.sh` | TaskCompleted | Marks tasks complete; creates phase sentinel when all tasks in a phase are done/skipped |
+| 3. Gate | `cf-pre-tool-use-pathflow-gate.sh` | PreToolUse | Blocks Edit/Write until `pf-3` sentinel exists |
+
+The checkpoint file (`.state/session/{SID}/pathflow/pathflow-phase-tasks.json`) tracks expected tasks, registrations, completions, and skips per phase. All phases are pre-initialized at session start by the SessionStart hook calling `checkpoint_init_all_phases()`.
+
+**Stage sentinels** (ws-dev, ws-rev, etc.) are created by the `pathflow-sentinel` PostToolUse hook via pattern-matching on stage completion messages (e.g., `STAGE-COMPLETE: WS-DEV`).
+
+Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
 → See Section 4 (Phase Reference) for sentinel-to-phase mapping
 
@@ -1059,7 +1073,7 @@ These skills provide detailed standards and can be loaded by agents as needed:
 
 **Location:** `.claude/agents/cf-*.md`
 
-### Hooks (20 scripts)
+### Hooks (22 scripts)
 
 Hooks fire automatically at lifecycle points. Configured in `.claude/settings.json`.
 
@@ -1068,7 +1082,8 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 | SessionStart | 3 | init, instructions, logging |
 | UserPromptSubmit | 2 | validation, logging |
 | PreToolUse | 7 | pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch |
-| PostToolUse | 4 | logging, pathflow-sentinel, settings-templates, tmp-workflow |
+| PostToolUse | 5 | logging, pathflow-sentinel, phase-checkpoint, settings-templates, tmp-workflow |
+| TaskCompleted | 1 | phase-checkpoint |
 | Stop | 2 | pathflow-gate, logging |
 | SubagentStop | 1 | pathflow-gate (shared with Stop) |
 | SessionEnd | 2 | cleanup, logging |
@@ -1076,7 +1091,9 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 **Key hooks:**
 
 - **pathflow-gate**: Blocks Edit/Write before PF3-CLASSIFY. Enforces PathFlow sentinel checks.
-- **pathflow-sentinel**: PostToolUse hook that automatically creates sentinels when phase markers complete. Agents never need to create sentinels manually.
+- **pathflow-sentinel**: PostToolUse hook that creates stage sentinels (ws-dev, ws-rev, etc.) via pattern-matching on stage completion messages.
+- **phase-checkpoint** (PostToolUse): Registers PF{N}-TSK-{NN} tasks in the checkpoint file when TaskCreate fires for PathFlow tasks.
+- **phase-checkpoint** (TaskCompleted): Marks tasks complete in the checkpoint; creates phase sentinels (pf-1, pf-2, etc.) when all phase tasks are done/skipped.
 - **team-guard**: Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
 - **edit-write**: Scope enforcement for file operations.
 - **protected-resource**: Enforces tiered protection for critical, high, and moderate resources.

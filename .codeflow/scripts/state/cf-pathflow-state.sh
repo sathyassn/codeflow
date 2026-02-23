@@ -18,6 +18,7 @@
 #   - checkpoint_complete_task: Mark a task complete, return phase completion status
 #   - checkpoint_skip_task: Mark a task as skipped (conditional tasks not applicable)
 #   - checkpoint_is_phase_complete: Check if all expected tasks are done/skipped
+#   - checkpoint_init_all_phases: Pre-initialize all phases from pathflow-config.json
 #
 # Flag file:
 #   .state/session/{SESSION_ID}/pathflow/is-pathflow-active
@@ -549,6 +550,47 @@ checkpoint_is_phase_complete() {
     ' 2>/dev/null)
 
     [[ "$result" == "complete" ]]
+}
+
+# Pre-initialize ALL phases from pathflow-config.json in the checkpoint file.
+# This ensures PF1 (and all other phases) exist before any tasks register,
+# preventing the lazy-init gap where early tasks are lost.
+# Idempotent: only initializes phases that don't already exist.
+# Returns: 0 on success, 1 on error
+checkpoint_init_all_phases() {
+    if ! command -v jq &>/dev/null; then
+        echo "checkpoint_init_all_phases: jq required" >&2
+        return 1
+    fi
+
+    if [[ ! -f "$_PFS_PATHFLOW_CONFIG" ]]; then
+        echo "checkpoint_init_all_phases: pathflow-config.json not found" >&2
+        return 1
+    fi
+
+    # Extract all phase IDs (PF1, PF2, ...) from config keys (PF1-INIT, PF2-CONTEXT, ...)
+    local phase_keys
+    phase_keys=$(jq -r '.phases | keys[]' "$_PFS_PATHFLOW_CONFIG" 2>/dev/null) || {
+        echo "checkpoint_init_all_phases: failed to read phases from config" >&2
+        return 1
+    }
+
+    if [[ -z "$phase_keys" ]]; then
+        echo "checkpoint_init_all_phases: no phases found in config" >&2
+        return 1
+    fi
+
+    local phase_key phase_id
+    for phase_key in $phase_keys; do
+        # Extract phase prefix: PF1-INIT -> PF1, PF2-CONTEXT -> PF2
+        phase_id="${phase_key%%-*}"
+        checkpoint_init_phase "$phase_id" || {
+            echo "checkpoint_init_all_phases: failed to init phase $phase_id" >&2
+            return 1
+        }
+    done
+
+    return 0
 }
 
 # =============================================================================

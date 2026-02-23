@@ -9,6 +9,7 @@
 #   - create_sentinel: creates file, empty name error, idempotent
 #   - has_sentinel: exists/missing/empty-name checks
 #   - list_sentinels: multiple sentinels, empty directory, no directory
+#   - checkpoint_init_all_phases: creates all phases, idempotent, expected tasks
 #
 # Usage:
 #   ./test-pathflow-state.sh       Run all tests
@@ -1212,6 +1213,149 @@ test_checkpoint_functions_available() {
 }
 
 # ============================================================================
+# TESTS: checkpoint_init_all_phases
+# ============================================================================
+
+test_checkpoint_init_all_phases_creates_all() {
+    test_section "checkpoint_init_all_phases: creates entries for all phases"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_initall_creates" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_all_phases
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    for pf in PF1 PF2 PF3 PF4 PF5 PF6 PF7; do
+        if echo "$result" | jq -e ".$pf.expected" >/dev/null 2>&1; then
+            test_pass "Phase $pf initialized"
+        else
+            test_fail "Phase $pf not initialized"
+        fi
+    done
+}
+
+test_checkpoint_init_all_phases_expected_tasks() {
+    test_section "checkpoint_init_all_phases: expected tasks match config"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_initall_expected" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_all_phases
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    # PF1 should have PF1-TSK-01 and PF1-TSK-02
+    local pf1_count
+    pf1_count=$(echo "$result" | jq '.PF1.expected | length' 2>/dev/null)
+    if [[ "$pf1_count" == "2" ]]; then
+        test_pass "PF1 has 2 expected tasks"
+    else
+        test_fail "PF1 expected 2 tasks, got $pf1_count"
+    fi
+    # PF3 should have 5 expected tasks
+    local pf3_count
+    pf3_count=$(echo "$result" | jq '.PF3.expected | length' 2>/dev/null)
+    if [[ "$pf3_count" == "5" ]]; then
+        test_pass "PF3 has 5 expected tasks"
+    else
+        test_fail "PF3 expected 5 tasks, got $pf3_count"
+    fi
+}
+
+test_checkpoint_init_all_phases_idempotent() {
+    test_section "checkpoint_init_all_phases: idempotent (preserves existing data)"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_initall_idem" "jq not installed"
+        return
+    fi
+    # Init all, register a task in PF1, then init all again
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_all_phases
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_init_all_phases  # Should not overwrite
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.registered["PF1-TSK-01"]' >/dev/null 2>&1; then
+        test_pass "Existing registrations preserved after re-init"
+    else
+        test_fail "Re-init should not overwrite existing data"
+    fi
+}
+
+test_checkpoint_init_all_phases_has_all_fields() {
+    test_section "checkpoint_init_all_phases: each phase has all required fields"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_initall_fields" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_all_phases
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    # Spot-check PF4 has all fields
+    for field in expected registered completed skipped sentinel_created; do
+        if echo "$result" | jq -e ".PF4 | has(\"$field\")" >/dev/null 2>&1; then
+            test_pass "PF4 has field: $field"
+        else
+            test_fail "PF4 missing field: $field"
+        fi
+    done
+}
+
+test_checkpoint_init_all_phases_function_exists() {
+    test_section "checkpoint_init_all_phases: function available after source"
+    setup_checkpoint_env
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        if type checkpoint_init_all_phases >/dev/null 2>&1; then
+            echo "OK"
+        else
+            echo "MISSING"
+        fi
+    )
+    if [[ "$result" == "OK" ]]; then
+        test_pass "Function checkpoint_init_all_phases available"
+    else
+        test_fail "Function checkpoint_init_all_phases not found"
+    fi
+}
+
+# ============================================================================
 # TESTS: Integration
 # ============================================================================
 
@@ -1355,6 +1499,13 @@ main() {
     test_checkpoint_is_phase_complete_true
     test_checkpoint_is_phase_complete_false
     test_checkpoint_is_phase_complete_uninit
+
+    # checkpoint_init_all_phases
+    test_checkpoint_init_all_phases_function_exists
+    test_checkpoint_init_all_phases_creates_all
+    test_checkpoint_init_all_phases_expected_tasks
+    test_checkpoint_init_all_phases_idempotent
+    test_checkpoint_init_all_phases_has_all_fields
 
     # Integration
     test_flag_and_sentinels_lifecycle

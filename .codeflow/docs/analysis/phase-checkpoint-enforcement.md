@@ -295,11 +295,13 @@ All checkpoint state is session-scoped to prevent cross-session interference:
 
 | Event | Action |
 |-------|--------|
-| First PF task registered | Checkpoint file created at `.state/session/{SID}/pathflow/pathflow-phase-tasks.json` |
+| Session start | Checkpoint file **pre-initialized** at `.state/session/{SID}/pathflow/pathflow-phase-tasks.json` by `checkpoint_init_all_phases()` called from the SessionStart hook. All phases (PF1-PF7) are created with their expected tasks from `pathflow-config.json`. |
 | Task registered | Entry added to `registered` map with timestamp |
 | Task completed | Entry added to `completed` map with timestamp |
 | All phase tasks done | Phase sentinel created, `sentinel_created` set to `true` |
 | Session ends | SessionEnd hook cleans up `.state/session/{SID}/pathflow/` |
+
+**Root cause for pre-initialization:** The original design used lazy creation — the checkpoint file was created on the first `PF{N}-TSK-{NN}` task registration (PostToolUse on TaskCreate). This caused a critical gap: PF1 tasks were created *before* any PostToolUse checkpoint hook fired (because the hooks themselves needed the checkpoint file to exist). When PF2 tasks eventually triggered the lazy creation, PF1 was never retroactively added. Pre-initializing all phases at session start ensures every phase exists before any task registration hooks fire.
 
 ### Parallel sessions
 
@@ -315,7 +317,7 @@ Some tasks are conditional based on session context. For example, PF3-TSK-04 (re
 
 ### How conditional tasks are evaluated
 
-1. At session start, all tasks are loaded into the checkpoint with their `condition` field from `pathflow-config.json`
+1. At session start, `checkpoint_init_all_phases()` (called from the SessionStart hook) pre-initializes all phases in the checkpoint file with their expected tasks and `condition` fields from `pathflow-config.json`
 2. When the tracking decision is made at PF2-CONTEXT, the session's `origin` value (`planned`, `informal`, `auto`) is written to the checkpoint file
 3. The TaskCompleted hook evaluates conditions when checking phase completion:
 
@@ -474,7 +476,8 @@ A development session should never be BLOCKED by an enforcement system failure. 
 | File | Change |
 |------|--------|
 | `.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-pathflow-sentinel.sh` | Remove phase sentinel triggers (pf-1, pf-2, pf-3, pf-6). Keep stage sentinel triggers. |
-| `.codeflow/scripts/state/cf-pathflow-state.sh` | Add checkpoint read/write helper functions |
+| `.codeflow/scripts/state/cf-pathflow-state.sh` | Add checkpoint read/write helper functions + `checkpoint_init_all_phases()` for pre-initialization |
+| `.claude/hooks/codeflow/session-start/cf-session-start-init.sh` | Call `checkpoint_init_all_phases()` in new Section 7c after flag creation |
 | `.claude/settings.json` | Register new PostToolUse hook entry + new TaskCompleted hook entry |
 | `.claude/CLAUDE.md` | Update Section 7 (Enforcement) to document checkpoint enforcement |
 | `.codeflow/config/pathflow/pathflow-config.json` | Add required_tasks per phase; fix PF1-TSK-02, PF4-TSK-05 condition, max_qa_retries |

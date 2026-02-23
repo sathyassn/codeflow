@@ -4,17 +4,18 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.3.0
+# Version:   1.4.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
 #   Section 2: Setup (REPO_ROOT, libraries)
 #   Section 3: Directory creation
-#   Section 4: Stale session cleanup (config-driven)
+#   Section 4: Stale session detection (warning-only)
 #   Section 5: Sentinel cleanup (expires-based)
 #   Section 6: Active task context expiry
 #   Section 7: PathFlow flag creation (with guard)
 #   Section 7b: Sentinel recovery (context overflow)
+#   Section 7c: Checkpoint pre-initialization
 #   Section 8: Session metadata
 #   Section 9: Stale team detection
 #
@@ -26,7 +27,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.3.0"
+readonly VERSION="1.4.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -41,8 +42,12 @@ fi
 # Each agent context (lead + each teammate) receives a unique UUID from Claude Code.
 # Using it as session ID causes sentinel lookup failures across teammates.
 _CLAUDE_UUID=""
+# Session source: startup (fresh claude command), resume (/resume), clear (/clear), compact (auto-compaction)
+_SESSION_SOURCE="unknown"
 if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
     _CLAUDE_UUID=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null) || true
+    _SESSION_SOURCE=$(echo "$_HOOK_STDIN" | jq -r '.source // "unknown"' 2>/dev/null) || _SESSION_SOURCE="unknown"
+    [[ -z "$_SESSION_SOURCE" ]] && _SESSION_SOURCE="unknown"
 fi
 
 # =============================================================================
@@ -138,73 +143,62 @@ mkdir -p "$SESSION_STATE_DIR" 2>/dev/null || true
 mkdir -p "$SHARED_STATE_DIR" 2>/dev/null || true
 
 # =============================================================================
-# SECTION 4: STALE SESSION CLEANUP (config-driven)
+# SECTION 4: STALE SESSION DETECTION (warning-only)
 # =============================================================================
+# Design decision: Auto-cleanup at startup was REJECTED because /resume requires
+# going through startup first — auto-cleanup would destroy state before the user
+# can type /resume. Instead: warn at startup + manual /cf-cleanup --sessions.
+# See: .codeflow/docs/analysis/stale-session-cleanup-design.md
 
-# Read cleanup config from enforcement-policy.json (fallback to defaults)
-_STALE_THRESHOLD_HOURS=24
-_PRESERVE_PATHFLOW_ACTIVE="true"
-_CLEAN_SESSION_DIRS="true"
-_CLEAN_PATHFLOW_SENTINELS="true"
-_CLEAN_SKILL_SENTINELS="true"
+_stale_session_warnings=()
 
-if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
-    _cfg_hours=$(jq -r '.cleanup.stale_threshold_hours // 24' "$CONFIG" 2>/dev/null) || true
-    case "${_cfg_hours:-}" in
-        ''|*[!0-9]*) _cfg_hours=24 ;;
-    esac
-    _STALE_THRESHOLD_HOURS="$_cfg_hours"
+if [[ -d "$SHARED_STATE_DIR" ]]; then
+    for _session_dir in "$SHARED_STATE_DIR"/ses-*; do
+        [[ -d "$_session_dir" ]] || continue
+        _sid=$(basename "$_session_dir")
 
-    _cfg_preserve=$(jq -r '.cleanup.preserve_pathflow_active // true' "$CONFIG" 2>/dev/null) || true
-    [[ "$_cfg_preserve" == "true" ]] && _PRESERVE_PATHFLOW_ACTIVE="true" || _PRESERVE_PATHFLOW_ACTIVE="false"
+        # Skip current session
+        [[ "$_sid" == "$CODEFLOW_SESSION_ID" ]] && continue
 
-    _cfg_sd=$(jq -r '.cleanup.targets.session_dirs // true' "$CONFIG" 2>/dev/null) || true
-    [[ "$_cfg_sd" == "false" ]] && _CLEAN_SESSION_DIRS="false"
+        # Only check sessions with pathflow-active flag (those that didn't clean up)
+        [[ -f "$_session_dir/pathflow/is-pathflow-active" ]] || continue
 
-    _cfg_pf=$(jq -r '.cleanup.targets.pathflow_sentinels // true' "$CONFIG" 2>/dev/null) || true
-    [[ "$_cfg_pf" == "false" ]] && _CLEAN_PATHFLOW_SENTINELS="false"
+        # Check if any tmux panes from this session's team are alive
+        # Read team_name from flag file if possible
+        _is_stale="true"
+        if command -v jq &>/dev/null && [[ -f "$_session_dir/pathflow/is-pathflow-active" ]]; then
+            _flag_team=$(jq -r '.team_name // empty' "$_session_dir/pathflow/is-pathflow-active" 2>/dev/null) || true
+            if [[ -n "$_flag_team" ]]; then
+                _team_cfg="${HOME}/.claude/teams/${_flag_team}/config.json"
+                if [[ -f "$_team_cfg" ]]; then
+                    # Check if any member pane is alive
+                    _mc=$(jq -r '.members | length // 0' "$_team_cfg" 2>/dev/null) || _mc=0
+                    case "$_mc" in ''|*[!0-9]*) _mc=0 ;; esac
+                    _mi=0
+                    while [[ "$_mi" -lt "$_mc" ]]; do
+                        _pid=$(jq -r ".members[$_mi].tmuxPaneId // empty" "$_team_cfg" 2>/dev/null) || true
+                        if [[ -n "$_pid" ]] && tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -q "^${_pid}$"; then
+                            _is_stale="false"
+                            break
+                        fi
+                        _mi=$(( _mi + 1 ))
+                    done
+                fi
+            fi
+        fi
 
-    _cfg_sk=$(jq -r '.cleanup.targets.skill_sentinels // true' "$CONFIG" 2>/dev/null) || true
-    [[ "$_cfg_sk" == "false" ]] && _CLEAN_SKILL_SENTINELS="false"
+        if [[ "$_is_stale" == "true" ]]; then
+            _stale_session_warnings+=("$_sid")
+        fi
+    done
 fi
 
-# Convert hours to minutes for find -mmin
-_STALE_THRESHOLD_MIN=$(( _STALE_THRESHOLD_HOURS * 60 ))
-
-# Helper: check if a session dir has an active pathflow flag
-_has_active_flag() {
-    local dir="$1"
-    local sid
-    sid=$(basename "$dir")
-    [[ -f "$REPO_ROOT/.state/session/$sid/pathflow/is-pathflow-active" ]]
-}
-
-if [[ "$_CLEAN_SKILL_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
-    while IFS= read -r _stale_dir; do
-        [[ -z "$_stale_dir" ]] && continue
-        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
-            continue
-        fi
-        rm -rf "$_stale_dir" 2>/dev/null || true
-    done < <(find "$REPO_ROOT/.state/sentinels/skill" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
-fi
-if [[ "$_CLEAN_PATHFLOW_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/pathflow" ]]; then
-    while IFS= read -r _stale_dir; do
-        [[ -z "$_stale_dir" ]] && continue
-        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && _has_active_flag "$_stale_dir"; then
-            continue
-        fi
-        rm -rf "$_stale_dir" 2>/dev/null || true
-    done < <(find "$REPO_ROOT/.state/sentinels/pathflow" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
-fi
-if [[ "$_CLEAN_SESSION_DIRS" == "true" ]] && [[ -d "$REPO_ROOT/.state/session" ]]; then
-    while IFS= read -r _stale_dir; do
-        [[ -z "$_stale_dir" ]] && continue
-        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && [[ -f "$_stale_dir/pathflow/is-pathflow-active" ]]; then
-            continue
-        fi
-        rm -rf "$_stale_dir" 2>/dev/null || true
-    done < <(find "$REPO_ROOT/.state/session" -mindepth 1 -maxdepth 1 -type d -mmin +"$_STALE_THRESHOLD_MIN" 2>/dev/null)
+if [[ ${#_stale_session_warnings[@]} -gt 0 ]]; then
+    echo "WARNING: STALE SESSIONS DETECTED:" >&2
+    for _sw in "${_stale_session_warnings[@]}"; do
+        echo "  - $_sw (pathflow-active flag set, no live tmux panes)" >&2
+    done
+    echo "Run '/cf-cleanup --sessions' to clean up stale session state." >&2
 fi
 
 # =============================================================================
@@ -299,6 +293,21 @@ if [[ "$_IS_RECOVERY" == "true" ]] && [[ -d "$_PF_SENTINEL_DIR" ]]; then
 fi
 
 # =============================================================================
+# SECTION 7c: CHECKPOINT PRE-INITIALIZATION
+# =============================================================================
+# Pre-initialize the checkpoint file with ALL phases from pathflow-config.json.
+# This fixes the PF1 gap: without this, PF1 tasks register before the checkpoint
+# file exists (because checkpoint_init_phase is called lazily on first register).
+# By calling checkpoint_init_all_phases here, all phases exist before any
+# TaskCreate hook fires.
+
+if type checkpoint_init_all_phases &>/dev/null; then
+    checkpoint_init_all_phases 2>/dev/null || {
+        echo "SessionStart: checkpoint_init_all_phases failed (non-fatal)" >&2
+    }
+fi
+
+# =============================================================================
 # SECTION 8: SESSION METADATA
 # =============================================================================
 
@@ -313,13 +322,14 @@ if command -v jq &>/dev/null; then
     jq -nc \
         --arg session_id "$CODEFLOW_SESSION_ID" \
         --arg claude_uuid "${_CLAUDE_UUID:-unknown}" \
+        --arg source "$_SESSION_SOURCE" \
         --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
         --argjson started_epoch "$(date +%s)" \
         --arg repo_root "$REPO_ROOT" \
         --arg git_branch "$GIT_BRANCH" \
         --arg git_commit "$GIT_COMMIT" \
         --arg user "${USER:-unknown}" \
-        '{session_id: $session_id, claude_uuid: $claude_uuid, started_at: $started_at, started_epoch: $started_epoch, repo_root: $repo_root, git_branch: $git_branch, git_commit: $git_commit, user: $user}' \
+        '{session_id: $session_id, claude_uuid: $claude_uuid, source: $source, started_at: $started_at, started_epoch: $started_epoch, repo_root: $repo_root, git_branch: $git_branch, git_commit: $git_commit, user: $user}' \
         > "$SESSION_META_FILE" 2>/dev/null || true
 fi
 
