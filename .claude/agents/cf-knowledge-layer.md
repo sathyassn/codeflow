@@ -319,7 +319,7 @@ python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py
 
 The script requires no external dependencies (pure Python, stdlib only). For multiple IDs: `--count N`. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic. This is a bridge solution until the Go CLI handles ULID generation natively.
 
-1. Search for existing ongoing epic matching area_type + work_type
+1. Search for existing open epic (status != complete) matching area_type + work_type. **Never add tasks to a completed epic** — if no open epic exists, create a new one.
 2. If no ongoing epic found, create one (generate id: `epic-{ulid}`, format_id, INSERT into epics, create markdown, append to JSONL)
 3. Create task under epic (generate id: `task-{ulid}`, format_id, INSERT into tasks, create markdown, append to JSONL)
 4. Return task_id and epic_id (both ULID PKs) to team lead

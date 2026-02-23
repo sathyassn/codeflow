@@ -263,7 +263,7 @@
         {
           "id": "PF6-TSK-06",
           "task_order": 6,
-          "description": "Verify PR CI status and sync via cf-git-operations (verify-pr-and-sync). Interactive: poll CI, notify user, wait for merge. Autorun+auto_merge: poll CI, merge, pull target. Autorun+no_merge: poll CI, mark awaiting_review. Records PR lifecycle event and notifies cf-knowledge-layer for DB update.",
+          "description": "Verify PR CI status and sync via cf-git-operations (verify-pr-and-sync). Interactive: poll CI, notify user to merge via GitHub UI, wait for merge confirmation, pull main. Autorun+auto_merge: poll CI, merge, pull target branch. Autorun+no_merge: poll CI, mark awaiting_review. Records PR lifecycle event and notifies cf-knowledge-layer for DB update.",
           "assigned_to": "cf-git-operations",
           "operation": "verify-pr-and-sync"
         }

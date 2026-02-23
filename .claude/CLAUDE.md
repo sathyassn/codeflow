@@ -311,9 +311,9 @@ SESSION END
 4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
 5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`)
 6. Verify PR and sync (PF6-TSK-06, cf-git-operations — `verify-pr-and-sync`):
-   - **Mode 1** (`auto_merge:true` + non-protected target): auto-merge PR via `gh pr merge --delete-branch`
-   - **Mode 2** (`auto_merge:false` OR protected target): set status to `awaiting_review`, notify user
-   - **Mode 3** (CI failed): report failures, keep PR open
+   - **Interactive** (default): poll CI, notify user to merge via GitHub UI, wait for merge confirmation, pull main
+   - **Autorun + auto_merge** (non-protected target): poll CI, auto-merge via `gh pr merge --delete-branch`, pull target branch
+   - **Autorun + no auto_merge**: poll CI, mark `awaiting_review`, proceed to PF7
 
 7. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-06 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
 

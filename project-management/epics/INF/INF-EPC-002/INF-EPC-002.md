@@ -14,8 +14,8 @@ pr_number: null
 external_id: "INF-EPC-CHOR-GENL-001"
 external_url: null
 created_at: "2026-02-13T00:00:00Z"
-updated_at: "2026-02-17T00:00:00Z"
-completed_at: "2026-02-17T00:00:00Z"
+updated_at: "2026-02-23T01:30:00Z"
+completed_at: "2026-02-23T01:30:00Z"
 ---
 
 # INF-EPC-002: Infrastructure Chores
@@ -51,6 +51,7 @@ Routine infrastructure maintenance including file relocations, config restructur
 | INF-TSK-002-002 | Fix pre-PR memory update flow in PF6-COMPLETE | complete | normal |
 | INF-TSK-002-003 | Restructure pathflow-config with task_order objects | complete | normal |
 | INF-TSK-002-004 | Fix PF6-COMPLETE gaps: epic status rollup and PR event recording | complete | normal |
+| INF-TSK-002-005 | Fix PF6 verify-pr-and-sync: add wait-for-merge and pull-main | complete | normal |
 
 ## Dependencies
 
