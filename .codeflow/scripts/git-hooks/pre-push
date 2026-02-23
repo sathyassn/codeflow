@@ -130,7 +130,7 @@ log_override() {
 # Git hooks run outside Claude sessions, so glob for any active session's flag.
 is_pathflow_active() {
     local flag_files
-    flag_files=("$REPO_ROOT"/.state/session/*/is-pathflow-active)
+    flag_files=("$REPO_ROOT"/.state/session/*/pathflow/is-pathflow-active)
     [[ -e "${flag_files[0]}" ]]
 }
 
