@@ -207,7 +207,7 @@ CI passed? ---NO---> Report failures, suggest fixes
 Target is protected branch?                              [cf-git-operations]
     |
     +---YES---> Notify user: "PR #{number} ready to merge via GitHub UI"
-    |           Update WorkGraph (status: awaiting_review)
+    |           Update WorkGraph (task already complete)
     |           |
     +---NO----> (Future: may auto-merge non-protected targets)
     |           Currently: same as protected (notify user)
@@ -263,7 +263,7 @@ Next: /cf-cleanup (PF7-END)
 - **Protected target branch:**
   - Do NOT call `gh pr merge`
   - Notify user: `"PR #{number} is ready to merge via GitHub UI"`
-  - Update WorkGraph status to `awaiting_review`
+  - Task is already complete from PF6-TSK-01
 - **Non-protected target branch:**
   - Future consideration: automated merge may be supported
   - Currently: same as protected (verify + notify)
@@ -271,8 +271,8 @@ Next: /cf-cleanup (PF7-END)
 **Step 6: Update WorkGraph**
 
 - Send to cf-knowledge-layer:
-  - `"LEAD: update-task -- task_id={task-id}, pr_number={number}, status=awaiting_review"`
-- Task status updated to `awaiting_review`
+  - `"LEAD: update-task -- task_id={task-id}, pr_number={number}, status=complete"`
+- Task status is already `complete` from PF6-TSK-01
 - Logs events: type='pr_verified', type='phase_transition'
 
 **Step 7: Present Results**
@@ -295,7 +295,7 @@ Next: /cf-cleanup (PF7-END)
 | cf-git-operations | review-changes | Inspect pending changes before merge |
 | cf-git-operations | sync-remote | Ensure remote is up to date |
 | cf-git-operations | verify-pr-and-sync | Verify CI status, check protected branch, notify user |
-| cf-knowledge-layer | update-task | Update task status to `awaiting_review` |
+| cf-knowledge-layer | update-task | Update task with PR number |
 | cf-knowledge-layer | complete-work | Finalize active work tracking (after user merges) |
 | cf-knowledge-layer | phase-transition | Log PF6-COMPLETE transition |
 
@@ -324,7 +324,7 @@ Next: /cf-cleanup (PF7-END)
 - Invoke cf-knowledge-layer:update-task:
   - task_id: from WorkGraph
   - pr_number: verified PR number
-  - status: 'awaiting_review'
+  - status: 'complete'
 - Events logged: type='pr_verified', type='phase_transition'
 - Phase transition logged: PF6-COMPLETE
 - Note: Task status moves to `complete` only after user merges the PR via GitHub UI
@@ -402,7 +402,7 @@ Target branch 'main' is protected.
 PR #42 is ready to merge via GitHub UI.
 
 WorkGraph updated:
-  Task INF-TSK-AUTH-001: awaiting_review
+  Task INF-TSK-AUTH-001: complete
 
 Next: Merge PR #42 via GitHub UI, then proceed to /cf-cleanup.
 ```
@@ -425,7 +425,7 @@ Pre-merge checks:
 
 Target branch 'main' is protected.
 PR #42 is ready to merge via GitHub UI.
-Task BKD-TSK-FIX-WEBHOOK-001: awaiting_review
+Task BKD-TSK-FIX-WEBHOOK-001: complete
 
 Next: Merge via GitHub UI, then /cf-cleanup.
 ```

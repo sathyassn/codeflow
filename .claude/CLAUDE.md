@@ -314,7 +314,7 @@ SESSION END
 7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
    - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
    - **Autorun + auto_merge** (non-protected target): auto-merge via `gh pr merge --delete-branch`
-   - **Autorun + no auto_merge**: mark `awaiting_review`, proceed to PF7
+   - **Autorun + no auto_merge**: task is already complete from PF6-TSK-01, proceed to PF7
 8. Record PR outcome (PF6-TSK-08, cf-knowledge-layer — `record-pr-outcome`, must run before sync-local)
 9. Sync local (PF6-TSK-09, cf-git-operations — `sync-local`): pull main/target branch
 
@@ -986,16 +986,6 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 | `auto_merge:true` + protected target | FORBIDDEN. Validation error at batch parsing time. |
 | Interactive session `/cf-ship` | Verifies CI, notifies user to merge via GitHub UI. Does NOT execute merge. |
 | Autorun `auto_merge:true` + non-protected target | Auto-merges via `gh pr merge --delete-branch` to integration branch. |
-
-### Task Status: `awaiting_review`
-
-Tasks and workers can reach an `awaiting_review` terminal state when:
-
-- `/cf-ship` verifies a PR targeting a protected branch (interactive sessions)
-- Autorun workers complete with `auto_merge:false`
-- PR CI passes but merge requires human intervention
-
-The `awaiting_review` status indicates the PR is ready for human review and merge. The task is NOT yet `complete` — it transitions to `complete` only after the PR is merged.
 
 ### Decision Tiers
 

@@ -298,14 +298,14 @@
         {
           "id": "PF6-TSK-07",
           "task_order": 7,
-          "description": "Await PR merge disposition via cf-git-operations (await-pr-merge). Interactive: notify user to merge via GitHub UI, wait for confirmation. Autorun+auto_merge: execute gh pr merge --delete-branch. Autorun+no_merge: mark awaiting_review.",
+          "description": "Await PR merge disposition via cf-git-operations (await-pr-merge). Interactive: notify user to merge via GitHub UI, wait for confirmation. Autorun+auto_merge: execute gh pr merge --delete-branch. Autorun+no_auto_merge: task is already complete from PF6-TSK-01, just proceed to PF7.",
           "assigned_to": "cf-git-operations",
           "operation": "await-pr-merge"
         },
         {
           "id": "PF6-TSK-08",
           "task_order": 8,
-          "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_merged or pr_awaiting_review event. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
+          "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_merged or pr_created event. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "record-pr-outcome"
         },

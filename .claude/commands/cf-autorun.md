@@ -435,7 +435,7 @@ timeout: 1h
 |------|-----------|--------|
 | `auto_merge:true` requires `target_branch` | `auto_merge:true` and `target_branch` is null | Validation error at batch parsing time |
 | `auto_merge:true` + protected target is FORBIDDEN | `auto_merge:true` and `target_branch` is main, master, release/\*, or production | Validation error at batch parsing time |
-| `auto_merge:false` terminal state | Workers with `auto_merge:false` end in `awaiting_review` | Worker creates PR but does not merge; status set to `awaiting_review` |
+| `auto_merge:false` terminal state | Workers with `auto_merge:false` end in `complete` | Worker creates PR but does not merge; task is already complete |
 
 **Deprecated fields:**
 
@@ -467,7 +467,7 @@ main
 |-------------|-----------|-----------------|--------|
 | `true` | Passed | `complete` | Worker PR auto-merged to integration branch via `gh pr merge --delete-branch` |
 | `true` | Failed | `failed` | PR left open, failures reported |
-| `false` | Passed | `awaiting_review` | PR created, human review required |
+| `false` | Passed | `complete` | PR created, human review required |
 | `false` | Failed | `failed` | PR left open, failures reported |
 
 ### Configuration

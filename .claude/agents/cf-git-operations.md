@@ -321,10 +321,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 #### Mode 3: Autorun + auto_merge=false
 
 1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
-2. If CI passes: update task status to `awaiting_review` via cf-knowledge-layer:
-   SendMessage to cf-knowledge-layer: `"GITOPS: update-task-status -- task={task_id}, status=awaiting_review"`
-3. Record `pr_awaiting_review` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_awaiting_review"), `pr_number`, `task_id`, `session_id`.
-4. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} marked awaiting_review, proceeding to PF7"`
+2. If CI passes: verify PR was created successfully.
+3. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `task_id`, `session_id`.
+4. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} created, task already complete, proceeding to PF7"`
 
 #### Edge Cases
 
