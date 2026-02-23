@@ -235,6 +235,21 @@ Event types:
 6. Append `session_summary` event to memory-events.jsonl with summary content
 7. Report: `"KNOWLEDGE: record-session-summary — session summary written to memory/{domain}/current-work.md"`
 
+#### Step 7: Record PR Outcome (PF6-TSK-08)
+
+**When:** Team lead requests after PR merge disposition (PF6-TSK-07) and before sync-local (PF6-TSK-09).
+
+**Purpose:** Record PR lifecycle event to work-graph.jsonl while still on feature branch.
+
+1. Receive PR outcome from team lead (merged/awaiting_review, pr_number, merge_sha if applicable)
+2. Write event to `.state/ledger/work-graph.jsonl`:
+   - pr_merged: `{"event_type":"pr_merged","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
+   - pr_awaiting_review: `{"event_type":"pr_awaiting_review","task_id":"{id}","pr_number":{N},"ts":"{ISO8601}"}`
+3. Sync to SQLite (update tasks table pr_status field)
+4. Report: `"KL-UPDATE: PR outcome recorded — {event_type} for task {task_id}"`
+
+**IMPORTANT:** This MUST run before cf-git-operations sync-local (PF6-TSK-09) because pulling main triggers security hook blocking writes on protected branches.
+
 #### Memory Lifecycle Management
 
 **When:** Periodic maintenance, `/cf-cleanup`, or when `.state/db/codeflow.db` exceeds 50 MB.

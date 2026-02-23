@@ -228,7 +228,7 @@ SESSION END
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02, PF1-TSK-03; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 2: Context Loading (PF2-CONTEXT)**
 
@@ -309,13 +309,16 @@ SESSION END
 2. Update project memory (PF6-TSK-02, cf-knowledge-layer — `record-session-summary`)
 3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown)
 4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
-5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`)
-6. Verify PR and sync (PF6-TSK-06, cf-git-operations — `verify-pr-and-sync`):
-   - **Interactive** (default): poll CI, notify user to merge via GitHub UI, wait for merge confirmation, pull main
-   - **Autorun + auto_merge** (non-protected target): poll CI, auto-merge via `gh pr merge --delete-branch`, pull target branch
-   - **Autorun + no auto_merge**: poll CI, mark `awaiting_review`, proceed to PF7
+5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event)
+6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)
+7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
+   - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
+   - **Autorun + auto_merge** (non-protected target): auto-merge via `gh pr merge --delete-branch`
+   - **Autorun + no auto_merge**: mark `awaiting_review`, proceed to PF7
+8. Record PR outcome (PF6-TSK-08, cf-knowledge-layer — `record-pr-outcome`, must run before sync-local)
+9. Sync local (PF6-TSK-09, cf-git-operations — `sync-local`): pull main/target branch
 
-7. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-06 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
+10. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-09 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
 
 **Step 8: Session End (PF7-END)**
 
@@ -963,10 +966,13 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 1. Work completes in PF4-EXECUTE (all stages pass)
 2. PF5-VERIFY confirms acceptance criteria
-3. cf-git-operations creates PR in PF6-COMPLETE
-4. cf-git-operations verifies CI and syncs (PF6-TSK-06)
-5. Lead proceeds to PF7-END
-6. New session for new work
+3. cf-git-operations creates PR (PF6-TSK-05)
+4. cf-git-operations verifies PR CI (PF6-TSK-06)
+5. cf-git-operations awaits PR merge disposition (PF6-TSK-07)
+6. cf-knowledge-layer records PR outcome (PF6-TSK-08)
+7. cf-git-operations syncs local repository (PF6-TSK-09)
+8. Lead proceeds to PF7-END
+9. New session for new work
 
 ### Merge Protection
 

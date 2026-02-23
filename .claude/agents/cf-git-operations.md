@@ -277,6 +277,15 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 **When:** Team lead requests verify-pr-and-sync at PF6-TSK-06, AFTER PR creation (PF6-TSK-05).
 
+**Sub-operations (invoked separately by lead per PF6 tasks):**
+
+| Task | Operation | What |
+|------|-----------|------|
+| PF6-TSK-06 | verify-pr-ci | Poll CI status (universal across all modes) |
+| PF6-TSK-07 | await-pr-merge | Mode-specific merge handling |
+| PF6-TSK-08 | record-pr-outcome | (cf-knowledge-layer, not this agent) |
+| PF6-TSK-09 | sync-local | Pull main/target branch |
+
 **Purpose:** Bridge the gap between PR creation and session end (PF7). Polls CI status, then takes mode-specific action based on session properties.
 
 **Sandbox bypass:** Load `cf-sandbox-standards` skill. Always use `dangerouslyDisableSandbox: true` for `gh pr` and `git pull/push` commands.
