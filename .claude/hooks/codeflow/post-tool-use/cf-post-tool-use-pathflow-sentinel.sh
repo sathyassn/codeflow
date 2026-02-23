@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# Purpose:   PostToolUse hook for automatic PathFlow sentinel creation
+# Purpose:   PostToolUse hook for automatic PathFlow stage sentinel creation
 # Location:  .claude/hooks/codeflow/post-tool-use/cf-post-tool-use-pathflow-sentinel.sh
 # Hook Type: PostToolUse
-# Matcher:   TeamCreate|Task|SendMessage|Bash (configured in settings.json)
+# Matcher:   SendMessage (configured in settings.json)
 # Usage:     Called by Claude Code PostToolUse hook system
 # Platform:  macOS/Linux
 #
 # This hook:
-#   - Detects phase-transition events from tool calls
-#   - Creates sentinel files to track PathFlow phase progression
+#   - Detects stage-completion events from SendMessage tool calls
+#   - Creates stage sentinel files to track PathFlow work stage progression
 #   - Enables pathflow-gate enforcement without requiring JSONL writes
 #
+# Note: Phase sentinels (pf-1, pf-2, pf-3, pf-6) are created by the
+#       phase checkpoint hooks (session-start, post-tool-use checkpoint hooks).
+#
 # Sentinel detection:
-#   tool_name=TeamCreate                        -> pathflow-pf-1
-#   tool_name=Task, name has cf-knowledge-layer -> pathflow-pf-2
-#   tool_name=Bash, git checkout -b/switch -c   -> pathflow-pf-3
-#   tool_name=Bash, git checkout/switch <feat/>  -> pathflow-pf-3 (resume flow)
 #   tool_name=SendMessage, STAGE-COMPLETE: WS-* -> pathflow-ws-{stage}
-#   tool_name=Bash, gh pr create                -> pathflow-pf-6
 #
 # Idempotent: touch on existing file is a no-op.
 # Early exit: If is_pathflow_active() returns false, exit 0.
@@ -113,89 +111,27 @@ if ! source "$_PFS_LIB"; then
 fi
 
 # =============================================================================
-# SENTINEL DETECTION
+# SENTINEL DETECTION — Stage completion via SendMessage
 # =============================================================================
 
-case "$TOOL_NAME" in
-
-    TeamCreate)
-        # PF1-INIT: Team infrastructure created
-        if create_sentinel "pf-1"; then
-            echo "PostToolUse[sentinel]: created sentinel pf-1" >&2
-        else
-            echo "PostToolUse[sentinel]: FAILED to create sentinel pf-1" >&2
-        fi
-        ;;
-
-    Task)
-        # PF2-CONTEXT: cf-knowledge-layer teammate spawned
-        if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
-            _task_name=$(echo "$TOOL_INPUT" | jq -r '.name // empty' 2>/dev/null) || true
-            if [[ "${_task_name:-}" == *"cf-knowledge-layer"* ]]; then
-                if create_sentinel "pf-2"; then
-                    echo "PostToolUse[sentinel]: created sentinel pf-2" >&2
+if [[ "$TOOL_NAME" == "SendMessage" ]]; then
+    if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
+        _content=$(echo "$TOOL_INPUT" | jq -r '.content // empty' 2>/dev/null) || true
+        if [[ -n "${_content:-}" ]]; then
+            # Match STAGE-COMPLETE: WS-{STAGE} pattern
+            if [[ "$_content" =~ STAGE-COMPLETE:\ WS-(DEV|REV|QA|TEST|PLAN|DOCS) ]]; then
+                _stage="${BASH_REMATCH[1]}"
+                # Convert to lowercase for sentinel name
+                _stage_lower=$(echo "$_stage" | tr '[:upper:]' '[:lower:]')
+                if create_sentinel "ws-${_stage_lower}"; then
+                    echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
                 else
-                    echo "PostToolUse[sentinel]: FAILED to create sentinel pf-2" >&2
+                    echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
                 fi
             fi
         fi
-        ;;
-
-    Bash)
-        # PF3-CLASSIFY: git branch creation or switching to feature branch
-        # PF6-COMPLETE: gh pr create
-        if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
-            _command=$(echo "$TOOL_INPUT" | jq -r '.command // empty' 2>/dev/null) || true
-            if [[ -n "${_command:-}" ]]; then
-                # Check for git branch creation (new branch)
-                if echo "$_command" | grep -qE 'git\s+(checkout\s+-b|switch\s+-c)\s'; then
-                    if create_sentinel "pf-3"; then
-                        echo "PostToolUse[sentinel]: created sentinel pf-3" >&2
-                    else
-                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-3" >&2
-                    fi
-                fi
-                # Check for switching to an existing feature branch (resume flow)
-                if echo "$_command" | grep -qE 'git\s+(checkout|switch)\s+(feat|fix|plan|docs|refactor|test|chore|ci|experiment|hotfix)/'; then
-                    if create_sentinel "pf-3"; then
-                        echo "PostToolUse[sentinel]: created sentinel pf-3 (resume)" >&2
-                    else
-                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-3 (resume)" >&2
-                    fi
-                fi
-                # Check for PR creation
-                if echo "$_command" | grep -qE 'gh\s+pr\s+create'; then
-                    if create_sentinel "pf-6"; then
-                        echo "PostToolUse[sentinel]: created sentinel pf-6" >&2
-                    else
-                        echo "PostToolUse[sentinel]: FAILED to create sentinel pf-6" >&2
-                    fi
-                fi
-            fi
-        fi
-        ;;
-
-    SendMessage)
-        # Stage completion: STAGE-COMPLETE: WS-{STAGE}
-        if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
-            _content=$(echo "$TOOL_INPUT" | jq -r '.content // empty' 2>/dev/null) || true
-            if [[ -n "${_content:-}" ]]; then
-                # Match STAGE-COMPLETE: WS-{STAGE} pattern
-                if [[ "$_content" =~ STAGE-COMPLETE:\ WS-(DEV|REV|QA|TEST|PLAN|DOCS) ]]; then
-                    _stage="${BASH_REMATCH[1]}"
-                    # Convert to lowercase for sentinel name
-                    _stage_lower=$(echo "$_stage" | tr '[:upper:]' '[:lower:]')
-                    if create_sentinel "ws-${_stage_lower}"; then
-                        echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
-                    else
-                        echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
-                    fi
-                fi
-            fi
-        fi
-        ;;
-
-esac
+    fi
+fi
 
 # =============================================================================
 # SUCCESS
