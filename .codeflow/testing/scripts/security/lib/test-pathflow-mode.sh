@@ -56,7 +56,7 @@ source "$TESTING_DIR/lib/test-helpers.sh"
 TEST_TMPDIR=""
 
 # Flag file path used by is_pathflow_active()
-FLAG_FILE="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active"
+FLAG_FILE="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow/is-pathflow-active"
 
 # Setup: create temp directory structure
 setup_test_env() {
@@ -117,7 +117,7 @@ test_is_pathflow_active_with_flag() {
     setup_test_env
 
     # Create the flag file where the function will look (under TEST_TMPDIR)
-    local test_flag="$TEST_TMPDIR/repo/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+    local test_flag="$TEST_TMPDIR/repo/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
     mkdir -p "$(dirname "$test_flag")"
     touch "$test_flag"
 
@@ -154,7 +154,7 @@ test_is_pathflow_active_env_file() {
     echo "export CODEFLOW_SESSION_ID='$test_session'" > "$env_dir/codeflow-env.sh"
 
     # Create the flag file at the path the function will look for (using env file session ID)
-    local test_flag="$TEST_TMPDIR/repo/.state/session/$test_session/is-pathflow-active"
+    local test_flag="$TEST_TMPDIR/repo/.state/session/$test_session/pathflow/is-pathflow-active"
     mkdir -p "$(dirname "$test_flag")"
     touch "$test_flag"
 

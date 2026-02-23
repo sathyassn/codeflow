@@ -735,7 +735,7 @@ fi
 
 # Test 82: sentinel_is_pathflow_mode returns 1 when inactive
 # Ensure no flag file exists
-rm -f "$SENTINEL_REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID}/is-pathflow-active" 2>/dev/null || true
+rm -f "$SENTINEL_REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID}/pathflow/is-pathflow-active" 2>/dev/null || true
 sentinel_is_pathflow_mode && pf_mode_result=true || pf_mode_result=false
 if [[ "$pf_mode_result" == "false" ]]; then
     pass "sentinel_is_pathflow_mode returns 1 when PathFlow inactive"
@@ -744,7 +744,7 @@ else
 fi
 
 # Test 83: sentinel_is_pathflow_mode returns 0 when flag exists
-PF_FLAG_DIR="$SENTINEL_REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID}"
+PF_FLAG_DIR="$SENTINEL_REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID}/pathflow"
 mkdir -p "$PF_FLAG_DIR"
 touch "$PF_FLAG_DIR/is-pathflow-active"
 if sentinel_is_pathflow_mode; then

@@ -683,8 +683,8 @@ rm -rf "$PF_TEST_DIR"
 # Test: Returns 0 when flag file exists
 TESTS_RUN=$((TESTS_RUN + 1))
 PF_TEST_DIR="/tmp/claude/test-pathflow-active-$$"
-mkdir -p "$PF_TEST_DIR/repo/.state/session/test-pf-session"
-touch "$PF_TEST_DIR/repo/.state/session/test-pf-session/is-pathflow-active"
+mkdir -p "$PF_TEST_DIR/repo/.state/session/test-pf-session/pathflow"
+touch "$PF_TEST_DIR/repo/.state/session/test-pf-session/pathflow/is-pathflow-active"
 result=$(
     export REPO_ROOT="$PF_TEST_DIR/repo"
     export CODEFLOW_SESSION_ID="test-pf-session"
@@ -720,9 +720,9 @@ rm -rf "$PF_TEST_DIR"
 # Test: Returns 1 after flag file removed (simulates session end)
 TESTS_RUN=$((TESTS_RUN + 1))
 PF_TEST_DIR="/tmp/claude/test-pathflow-removed-$$"
-mkdir -p "$PF_TEST_DIR/repo/.state/session/test-pf-session"
-touch "$PF_TEST_DIR/repo/.state/session/test-pf-session/is-pathflow-active"
-rm -f "$PF_TEST_DIR/repo/.state/session/test-pf-session/is-pathflow-active"
+mkdir -p "$PF_TEST_DIR/repo/.state/session/test-pf-session/pathflow"
+touch "$PF_TEST_DIR/repo/.state/session/test-pf-session/pathflow/is-pathflow-active"
+rm -f "$PF_TEST_DIR/repo/.state/session/test-pf-session/pathflow/is-pathflow-active"
 result=$(
     export REPO_ROOT="$PF_TEST_DIR/repo"
     export CODEFLOW_SESSION_ID="test-pf-session"
@@ -956,9 +956,9 @@ echo "--- Env File Session ID ---"
 # Test: is_pathflow_active sources env file for session ID
 TESTS_RUN=$((TESTS_RUN + 1))
 PF_TEST_DIR="/tmp/claude/test-pathflow-envfile-$$"
-mkdir -p "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx"
+mkdir -p "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx/pathflow"
 mkdir -p "$PF_TEST_DIR/repo/.state/runtime"
-touch "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx/is-pathflow-active"
+touch "$PF_TEST_DIR/repo/.state/session/ses-envtest-ctx/pathflow/is-pathflow-active"
 echo "export CODEFLOW_SESSION_ID='ses-envtest-ctx'" > "$PF_TEST_DIR/repo/.state/runtime/codeflow-env.sh"
 result=$(
     export REPO_ROOT="$PF_TEST_DIR/repo"

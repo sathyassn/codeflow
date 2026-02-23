@@ -223,7 +223,7 @@ test_section "PathFlow Awareness"
 
 test_pathflow_blocks_when_active() {
     # Create a fake pathflow-active flag
-    local fake_session_dir="$TEST_TMPDIR/fake-repo/.state/session/test-session"
+    local fake_session_dir="$TEST_TMPDIR/fake-repo/.state/session/test-session/pathflow"
     mkdir -p "$fake_session_dir"
     touch "$fake_session_dir/is-pathflow-active"
 
@@ -258,7 +258,7 @@ test_pathflow_blocks_when_active() {
 }
 
 test_pathflow_force_overrides() {
-    local fake_session_dir="$TEST_TMPDIR/fake-repo2/.state/session/test-session2"
+    local fake_session_dir="$TEST_TMPDIR/fake-repo2/.state/session/test-session2/pathflow"
     mkdir -p "$fake_session_dir"
     touch "$fake_session_dir/is-pathflow-active"
 

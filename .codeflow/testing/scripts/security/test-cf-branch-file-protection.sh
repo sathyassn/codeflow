@@ -285,15 +285,15 @@ test_blocks_with_message "echo test > src/file.txt" \
     "Standalone mode shows 'Create a feature branch first'"
 
 # Create pathflow-active flag to simulate agent-teams mode
-mkdir -p "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}"
-echo "test" > "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+mkdir -p "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow"
+echo "test" > "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
 
 test_blocks_with_message "echo test > src/file.txt" \
     "cf-git-operations teammate" \
     "PathFlow mode shows cf-git-operations teammate instruction"
 
 # Clean up flag
-rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+rm -f "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
 
 # =========================================================================
 # SECTION: Compound / edge-case commands

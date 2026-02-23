@@ -12,7 +12,7 @@
 #   - Ignores non-PathFlow TaskCreate calls silently
 #
 # Checkpoint file:
-#   .state/checkpoints/pathflow/{SID}/phase-tasks.json
+#   .state/session/{SID}/pathflow/pathflow-phase-tasks.json
 #
 # Exit codes:
 #   0 - Always succeeds (PostToolUse hooks should not block)

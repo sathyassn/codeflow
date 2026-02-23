@@ -746,6 +746,6 @@ sentinel_is_pathflow_mode() {
 
     # Direct flag file check as fallback
     local repo_root="${SENTINEL_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-    local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+    local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
     [ -f "$flag_file" ]
 }

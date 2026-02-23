@@ -342,7 +342,7 @@
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
         "on_phase_complete": "TaskUpdate status=completed for the phase entry"
       },
-      "cleanup_note": "The pathflow-active flag (.state/session/{SID}/is-pathflow-active) is removed automatically by the SessionEnd hook — the lead does NOT need to delete it manually. TeamDelete is the lead's final action after all teammates confirm shutdown.",
+      "cleanup_note": "The pathflow-active flag (.state/session/{SID}/pathflow/is-pathflow-active) is removed automatically by the SessionEnd hook — the lead does NOT need to delete it manually. TeamDelete is the lead's final action after all teammates confirm shutdown.",
       "tasks": [
         {
           "id": "PF7-TSK-01",

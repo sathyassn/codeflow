@@ -463,7 +463,7 @@ test_mode_flag_absent() {
     setup_test_stage_sync
 
     # Ensure flag does NOT exist
-    local flag_file="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/is-pathflow-active"
+    local flag_file="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow/is-pathflow-active"
     local flag_existed=false
     if [[ -f "$flag_file" ]]; then
         flag_existed=true
@@ -497,7 +497,7 @@ test_mode_flag_present() {
     setup_test_stage_sync
 
     # Create the flag file
-    local flag_dir="$REPO_ROOT/.state/session"
+    local flag_dir="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow"
     local flag_file="$flag_dir/is-pathflow-active"
     local flag_existed=false
     if [[ -f "$flag_file" ]]; then

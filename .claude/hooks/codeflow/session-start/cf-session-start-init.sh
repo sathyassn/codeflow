@@ -176,7 +176,7 @@ _has_active_flag() {
     local dir="$1"
     local sid
     sid=$(basename "$dir")
-    [[ -f "$REPO_ROOT/.state/session/$sid/is-pathflow-active" ]]
+    [[ -f "$REPO_ROOT/.state/session/$sid/pathflow/is-pathflow-active" ]]
 }
 
 if [[ "$_CLEAN_SKILL_SENTINELS" == "true" ]] && [[ -d "$REPO_ROOT/.state/sentinels/skill" ]]; then
@@ -200,7 +200,7 @@ fi
 if [[ "$_CLEAN_SESSION_DIRS" == "true" ]] && [[ -d "$REPO_ROOT/.state/session" ]]; then
     while IFS= read -r _stale_dir; do
         [[ -z "$_stale_dir" ]] && continue
-        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && [[ -f "$_stale_dir/is-pathflow-active" ]]; then
+        if [[ "$_PRESERVE_PATHFLOW_ACTIVE" == "true" ]] && [[ -f "$_stale_dir/pathflow/is-pathflow-active" ]]; then
             continue
         fi
         rm -rf "$_stale_dir" 2>/dev/null || true
@@ -262,7 +262,7 @@ if [[ -f "$_PFS_LIB" ]]; then
     # Guard: only create flag if it doesn't already exist
     # Prevents teammate spawns from resetting tracking_level to "pending"
     # Track whether flag pre-existed for Section 7b recovery decision
-    if [[ -f "$SESSION_STATE_DIR/is-pathflow-active" ]]; then
+    if [[ -f "$SESSION_STATE_DIR/pathflow/is-pathflow-active" ]]; then
         echo "SessionStart: PathFlow flag already exists, preserving" >&2
         _IS_RECOVERY="true"
     else

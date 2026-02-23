@@ -124,7 +124,7 @@ if [[ "$IS_TEAM_DELETE" == "true" ]]; then
     _sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
     if [[ -f "$_sentinel_dir/pathflow-pf-6" ]]; then
         # PF7-END: remove flag so SessionEnd cleanup will proceed
-        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/is-pathflow-active" 2>/dev/null || true
+        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
         if declare -f log_security_event &>/dev/null; then
             log_security_event "allowed" "team_guard_pf7_gate" "$TOOL_NAME" "TeamDelete" "PF7-END: pf-6 sentinel found, flag removed, TeamDelete allowed"
         fi

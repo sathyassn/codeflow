@@ -136,7 +136,7 @@ _is_pathflow_active() {
         is_pathflow_active
     else
         # Direct flag check as fallback when security-lib.sh unavailable
-        local flag_file="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+        local flag_file="$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
         [[ -f "$flag_file" ]]
     fi
 }

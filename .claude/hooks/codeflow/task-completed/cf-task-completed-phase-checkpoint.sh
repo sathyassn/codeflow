@@ -13,7 +13,7 @@
 #   - Ignores non-PathFlow task completions silently
 #
 # Checkpoint file:
-#   .state/checkpoints/pathflow/{SID}/phase-tasks.json
+#   .state/session/{SID}/pathflow/pathflow-phase-tasks.json
 #
 # TaskCompleted stdin JSON fields:
 #   task_id:          Internal Claude Code task tracker ID

@@ -14,6 +14,7 @@
 .state/db/schema.sql
 .state/backups/
 .state/ledger/*.lock
+.state/checkpoints/
 # Sentinel and session state (session-scoped, not persistent)
 .state/sentinels/skill/*
 !.state/sentinels/skill/.gitkeep

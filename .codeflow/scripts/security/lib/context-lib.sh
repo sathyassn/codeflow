@@ -170,7 +170,7 @@ is_pathflow_active() {
         source "$_env_file"
     fi
 
-    local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/is-pathflow-active"
+    local flag_file="$repo_root/.state/session/${CODEFLOW_SESSION_ID:-unknown}/pathflow/is-pathflow-active"
     [[ -f "$flag_file" ]]
 }
 

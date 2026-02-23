@@ -224,7 +224,7 @@ SESSION END
 
 - SessionStart hook fires automatically, loading cf-working-protocol
 - TeamCreate to establish team infrastructure (config + task list directory, zero teammates)
-- `pathflow-active` flag auto-created by SessionStart hook at `.state/session/{SID}/is-pathflow-active`
+- `pathflow-active` flag auto-created by SessionStart hook at `.state/session/{SID}/pathflow/is-pathflow-active`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
 
@@ -1201,7 +1201,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/runtime/active-task.json` | Bridge file: current task for hook context |
 | `.state/runtime/current-session-id` | Current session ID reference |
 | `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
-| `.state/session/{SID}/is-pathflow-active` | Flag file: PathFlow session is active |
+| `.state/session/{SID}/pathflow/is-pathflow-active` | Flag file: PathFlow session is active |
 | `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
 ---
@@ -1223,7 +1223,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 |---------|----------|
 | Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
 | Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `pathflow-sentinel` PostToolUse hook pipeline -- do not create sentinels manually. |
-| pathflow-active flag stale | Manually remove `.state/session/{SID}/is-pathflow-active` via PF7 flow |
+| pathflow-active flag stale | Manually remove `.state/session/{SID}/pathflow/is-pathflow-active` via PF7 flow |
 | Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
 
 ### Teammate Recovery

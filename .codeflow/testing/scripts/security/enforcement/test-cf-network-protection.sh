@@ -441,8 +441,8 @@ run_network_check_pathflow() {
         export CODEFLOW_SESSION_ID="test-network-pathflow-$$"
         mkdir -p "$REPO_ROOT/.state/logs/security"/{audit,blocked,protection,sentinel,network} 2>/dev/null || true
         # Create PathFlow active flag for this session
-        mkdir -p "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID" 2>/dev/null || true
-        touch "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/is-pathflow-active"
+        mkdir -p "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow" 2>/dev/null || true
+        touch "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow/is-pathflow-active"
 
         source "$MODULE" 2>&1
     )
@@ -476,7 +476,7 @@ run_network_check_standalone() {
         export CODEFLOW_SESSION_ID="test-network-standalone-$$"
         mkdir -p "$REPO_ROOT/.state/logs/security"/{audit,blocked,protection,sentinel,network} 2>/dev/null || true
         # Ensure no PathFlow flag exists
-        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/is-pathflow-active" 2>/dev/null || true
+        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
 
         source "$MODULE" 2>&1
     )
