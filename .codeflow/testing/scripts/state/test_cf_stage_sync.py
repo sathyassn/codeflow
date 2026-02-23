@@ -382,11 +382,11 @@ class TestUpdateEpicMarkdownStage:
         md_file.write_text(
             "# Epic\n\n"
             "## Tasks\n\n"
-            "- [ ] FRT-TSK-FEAT-TEST-001: Implement feature\n"
+            "- [ ] FRT-TSK-001-001: Implement feature\n"
         )
 
         result = update_epic_markdown_stage(
-            md_file, "FRT-TSK-FEAT-TEST-001", "dev", "in_progress"
+            md_file, "FRT-TSK-001-001", "dev", "in_progress"
         )
         assert result is True
 
@@ -398,11 +398,11 @@ class TestUpdateEpicMarkdownStage:
         md_file = tmp_path / "epic.md"
         md_file.write_text(
             "# Epic\n\n"
-            "- [ ] FRT-TSK-FEAT-TEST-001 [stage: dev/pending]: Implement\n"
+            "- [ ] FRT-TSK-001-001 [stage: dev/pending]: Implement\n"
         )
 
         result = update_epic_markdown_stage(
-            md_file, "FRT-TSK-FEAT-TEST-001", "review", "in_progress"
+            md_file, "FRT-TSK-001-001", "review", "in_progress"
         )
         assert result is True
 

@@ -200,16 +200,22 @@ Event types:
 
 🔒 **Must be invoked BEFORE cf-git-operations creates a commit.**
 
-1. Run validate-task-fields on the task markdown: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`. If validation fails, report errors and BLOCK completion until fields are fixed.
+1. Run the validate-task-fields operation (see Part 2: Validate Task Fields) which validates both the task markdown and its parent epic. If validation fails, report errors and BLOCK completion until fields are fixed.
 2. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
-2. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
-3. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-4. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
-5. Append completion event to `.state/logs/pathflow-events.jsonl`
-6. Record completion memory_event (event_type='milestone', data includes deliverables summary)
-7. Update `.state/runtime/active-task.json` status to "completed", then delete the file
-8. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
-9. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
+3. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
+4. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
+5. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
+6. Epic status rollup: Query sibling tasks in the same epic: `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`, then:
+   a. Update epic status in DB: `UPDATE epics SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
+   b. Update epic markdown file frontmatter `status` field to `complete` (derive path from epic_id or query `epics.markdown_path`)
+   c. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"epic_status_changed","epic_id":"{epic_id}","old_status":"{old}","new_status":"complete","trigger":"all_tasks_complete","task_id":"{task_id}","timestamp":"{ISO8601}"}`
+   d. Run `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}` to validate the updated epic
+   If NOT all sibling tasks are complete, skip this step (no action needed).
+7. Append completion event to `.state/logs/pathflow-events.jsonl`
+8. Record completion memory_event (event_type='milestone', data includes deliverables summary)
+9. Update `.state/runtime/active-task.json` status to "completed", then delete the file
+10. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
+11. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
 
 #### Step 6: Record Session Summary
 

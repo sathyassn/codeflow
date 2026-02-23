@@ -72,7 +72,7 @@ None.
 /cf-resume
 
 # Resume specific work item
-/cf-resume "FRT-TSK-FEAT-AUTH-001"
+/cf-resume "FRT-TSK-001-001"
 ```
 
 ---
@@ -322,7 +322,7 @@ Work Type: FEAT
 
 Current Work:
 - Topic: User authentication system
-- Task: FRT-TSK-FEAT-AUTH-001
+- Task: FRT-TSK-001-001
 - PathFlow Phase: PF4-EXECUTE
 - Current Stage: WS-DEV (in progress)
 - Progress: WS-DEV started, WS-REV and WS-QA pending
@@ -353,7 +353,7 @@ Which would you like to resume? (1 or 2)
 **Example 3: Resume specific work item by ID**
 
 ```bash
-/cf-resume "FRT-TSK-FEAT-AUTH-001"
+/cf-resume "FRT-TSK-001-001"
 ```
 
 Output:
@@ -361,7 +361,7 @@ Output:
 ```text
 Context Recovery Summary
 
-Resuming: FRT-TSK-FEAT-AUTH-001 (User authentication system)
+Resuming: FRT-TSK-001-001 (User authentication system)
 Branch: feat/user-auth
 Phase: PF4-EXECUTE / WS-DEV
 

@@ -228,7 +228,7 @@
         {
           "id": "PF6-TSK-01",
           "task_order": 1,
-          "description": "Complete task in WorkGraph (cf-knowledge-layer syncs Tier 2 markdown)",
+          "description": "Complete work in WorkGraph via cf-knowledge-layer (complete-work). Includes task status update, epic status rollup if all sibling tasks complete, and Tier 2 markdown sync.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "complete-work"
         },
@@ -256,14 +256,14 @@
         {
           "id": "PF6-TSK-05",
           "task_order": 5,
-          "description": "Create PR via cf-git-operations",
+          "description": "Create PR via cf-git-operations (create-pr). Record pr_created event. Notify cf-knowledge-layer with PR number for DB update.",
           "assigned_to": "cf-git-operations",
           "operation": "create-pr"
         },
         {
           "id": "PF6-TSK-06",
           "task_order": 6,
-          "description": "Verify PR CI status and sync: interactive (poll CI, notify user, wait for merge, pull main), autorun+auto_merge (poll CI, merge to integration branch, pull target), autorun+no_merge (poll CI, mark awaiting_review, proceed to PF7)",
+          "description": "Verify PR CI status and sync via cf-git-operations (verify-pr-and-sync). Interactive: poll CI, notify user, wait for merge. Autorun+auto_merge: poll CI, merge, pull target. Autorun+no_merge: poll CI, mark awaiting_review. Records PR lifecycle event and notifies cf-knowledge-layer for DB update.",
           "assigned_to": "cf-git-operations",
           "operation": "verify-pr-and-sync"
         }

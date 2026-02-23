@@ -26,7 +26,7 @@ claude
 
 # Use commands
 /cf-plan "Add user authentication"
-/cf-develop FRT-TSK-FEAT-AUTH-001
+/cf-develop INF-TSK-008-001
 /cf-review
 ```
 

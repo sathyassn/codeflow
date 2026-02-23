@@ -246,7 +246,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
    ```
 
 6. Capture PR URL and number from output
-7. Report to team lead: `"PR #{number} created: {url}"`
+7. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
+8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update `tasks.pr_number` in SQLite
+9. Report to team lead: `"PR #{number} created: {url}"`
 
 **On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry.
 
@@ -287,7 +289,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 2. If CI passes: notify team lead `"GITOPS: PR #{number} CI passed -- ready for review"`
 3. Wait for team lead to confirm merge has been completed by the user via GitHub UI
 4. After merge confirmation: `git pull origin main`
-5. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
+5. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
+6. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
+7. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
 
 #### Mode 2: Autorun + auto_merge=true
 
@@ -299,7 +303,9 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
    ```
 
 3. Pull updated target: `git pull origin {target_branch}`
-4. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
+4. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
+5. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
+6. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
 
 **Integration branch convention:** Autorun sessions targeting protected branches use `autorun/{batch-name}` as the merge target. These branches are created off `main` and merged via `gh pr merge --delete-branch` (regular merge, not squash). Protected branch merges happen through GitHub UI or admin override only.
 
@@ -308,7 +314,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
 2. If CI passes: update task status to `awaiting_review` via cf-knowledge-layer:
    SendMessage to cf-knowledge-layer: `"GITOPS: update-task-status -- task={task_id}, status=awaiting_review"`
-3. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} marked awaiting_review, proceeding to PF7"`
+3. Record `pr_awaiting_review` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_awaiting_review"), `pr_number`, `task_id`, `session_id`.
+4. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} marked awaiting_review, proceeding to PF7"`
 
 #### Edge Cases
 

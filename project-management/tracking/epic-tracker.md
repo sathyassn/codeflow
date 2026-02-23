@@ -1,6 +1,8 @@
 ---
 # GENERATED — DO NOT EDIT
 # Regenerate with: bash .codeflow/scripts/state/cf-tracking-generate.sh
+# TODO: Regenerate — contains stale pre-migration format_id references (e.g., DOC-EPC-DOCS-GENL-001).
+#       Run cf-tracking-generate.sh to rebuild with rationalized format IDs.
 generated_at: 2026-02-13T16:40:05Z
 total_epics: 4
 active_epics: 4

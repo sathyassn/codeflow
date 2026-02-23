@@ -5,6 +5,10 @@
 # Tests .codeflow/scripts/db/generate-format-id.sh which generates
 # human-readable format IDs for epics and tasks.
 #
+# Format (v2):
+#   Epic:  {AREA}-EPC-{NNN}           (e.g., INF-EPC-011)
+#   Task:  {AREA}-TSK-{NNN}-{NNN}     (e.g., INF-TSK-008-006)
+#
 # Usage:
 #   ./test-generate-format-id.sh           Run all tests
 #   ./test-generate-format-id.sh -h        Show help
@@ -17,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_NAME
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="2.0.0"
 readonly SCRIPT_VERSION
 TESTING_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly TESTING_DIR
@@ -68,8 +72,8 @@ test_help_flag() {
     local output
     output=$(bash "$SOURCE_SCRIPT" --help 2>&1)
     assert_contains "$output" "Usage:" "--help shows Usage"
-    assert_contains "$output" "kind" "--help describes kind argument"
     assert_contains "$output" "AREA" "--help describes AREA argument"
+    assert_contains "$output" "EPIC_NNN" "--help describes EPIC_NNN argument"
 }
 
 # ============================================================================
@@ -80,10 +84,9 @@ test_arg_count_validation() {
     test_section "generate-format-id: argument count validation"
 
     assert_fails "bash \"$SOURCE_SCRIPT\"" "no args fails"
-    assert_fails "bash \"$SOURCE_SCRIPT\" epic" "1 arg fails"
-    assert_fails "bash \"$SOURCE_SCRIPT\" epic INF" "2 args fails"
-    assert_fails "bash \"$SOURCE_SCRIPT\" epic INF FEAT" "3 args fails"
-    assert_fails "bash \"$SOURCE_SCRIPT\" epic INF FEAT GENL extra" "5 args fails"
+    assert_fails "bash \"$SOURCE_SCRIPT\" epic" "1 arg fails (epic needs AREA)"
+    assert_fails "bash \"$SOURCE_SCRIPT\" task INF" "2 args fails (task needs AREA + EPIC_NNN)"
+    assert_fails "bash \"$SOURCE_SCRIPT\" epic INF FEAT" "3 args fails for epic (only needs AREA)"
 
     # Verify error message content for no-args case
     local err_output
@@ -101,7 +104,7 @@ test_invalid_kind() {
     local exit_code=0
     local err_output
 
-    err_output=$(bash "$SOURCE_SCRIPT" widget INF FEAT GENL 2>&1) || exit_code=$?
+    err_output=$(bash "$SOURCE_SCRIPT" widget INF 2>&1) || exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         test_pass "invalid kind 'widget' exits non-zero"
     else
@@ -110,7 +113,7 @@ test_invalid_kind() {
     assert_contains "$err_output" "Error" "invalid kind produces error message"
 
     exit_code=0
-    err_output=$(bash "$SOURCE_SCRIPT" Epic INF FEAT GENL 2>&1) || exit_code=$?
+    err_output=$(bash "$SOURCE_SCRIPT" Epic INF 2>&1) || exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         test_pass "mixed-case kind 'Epic' exits non-zero"
     else
@@ -123,25 +126,47 @@ test_invalid_kind() {
 # ============================================================================
 
 test_invalid_codes() {
-    test_section "generate-format-id: invalid AREA/TYPE/DOMAIN codes rejected"
+    test_section "generate-format-id: invalid AREA codes rejected"
 
     local err_output
 
     # Lowercase AREA (must be uppercase)
-    err_output=$(bash "$SOURCE_SCRIPT" epic inf FEAT GENL 2>&1 || true)
+    err_output=$(bash "$SOURCE_SCRIPT" epic inf 2>&1 || true)
     assert_contains "$err_output" "Error" "lowercase AREA produces error"
 
-    # Single-char TYPE (minimum 2 chars)
-    err_output=$(bash "$SOURCE_SCRIPT" epic INF F GENL 2>&1 || true)
-    assert_contains "$err_output" "Error" "1-char TYPE produces error"
+    # Single-char AREA (minimum 2 chars)
+    err_output=$(bash "$SOURCE_SCRIPT" epic I 2>&1 || true)
+    assert_contains "$err_output" "Error" "1-char AREA produces error"
 
-    # 5-char DOMAIN (maximum 4 chars)
-    err_output=$(bash "$SOURCE_SCRIPT" epic INF FEAT TOOLNG 2>&1 || true)
-    assert_contains "$err_output" "Error" "5-char DOMAIN produces error"
+    # 5-char AREA (maximum 4 chars)
+    err_output=$(bash "$SOURCE_SCRIPT" epic TOOLNG 2>&1 || true)
+    assert_contains "$err_output" "Error" "5-char AREA produces error"
 
     # Digits in code (letters only)
-    err_output=$(bash "$SOURCE_SCRIPT" epic IN1 FEAT GENL 2>&1 || true)
+    err_output=$(bash "$SOURCE_SCRIPT" epic IN1 2>&1 || true)
     assert_contains "$err_output" "Error" "AREA with digit produces error"
+}
+
+# ============================================================================
+# TEST: Invalid EPIC_NNN for tasks
+# ============================================================================
+
+test_invalid_epic_nnn() {
+    test_section "generate-format-id: invalid EPIC_NNN rejected"
+
+    local err_output
+
+    # Non-numeric
+    err_output=$(bash "$SOURCE_SCRIPT" task INF abc 2>&1 || true)
+    assert_contains "$err_output" "Error" "non-numeric EPIC_NNN produces error"
+
+    # Too few digits
+    err_output=$(bash "$SOURCE_SCRIPT" task INF 01 2>&1 || true)
+    assert_contains "$err_output" "Error" "2-digit EPIC_NNN produces error"
+
+    # Too many digits
+    err_output=$(bash "$SOURCE_SCRIPT" task INF 0001 2>&1 || true)
+    assert_contains "$err_output" "Error" "4-digit EPIC_NNN produces error"
 }
 
 # ============================================================================
@@ -149,15 +174,15 @@ test_invalid_codes() {
 # ============================================================================
 
 test_epic_id_generation() {
-    test_section "generate-format-id: epic ID generation"
+    test_section "generate-format-id: epic ID generation (v2 format)"
 
     local id
-    id=$(bash "$SOURCE_SCRIPT" epic TST UNIT TEST 2>/dev/null)
+    id=$(bash "$SOURCE_SCRIPT" epic TST 2>/dev/null)
 
     assert_not_empty "$id" "epic ID output is not empty"
-    assert_matches "$id" "^TST-EPC-UNIT-TEST-[0-9]{3}$" "epic ID matches format TST-EPC-UNIT-TEST-NNN"
+    assert_matches "$id" "^TST-EPC-[0-9]{3}$" "epic ID matches format TST-EPC-NNN"
     assert_contains "$id" "EPC" "epic ID contains 'EPC' kind code"
-    assert_contains "$id" "TST-EPC-UNIT-TEST-" "epic ID contains correct prefix"
+    assert_contains "$id" "TST-EPC-" "epic ID contains correct prefix"
 
     # Verify sequence is zero-padded 3 digits
     local seq="${id##*-}"
@@ -170,15 +195,15 @@ test_epic_id_generation() {
 # ============================================================================
 
 test_task_id_generation() {
-    test_section "generate-format-id: task ID generation"
+    test_section "generate-format-id: task ID generation (v2 format)"
 
     local id
-    id=$(bash "$SOURCE_SCRIPT" task TST UNIT TEST 2>/dev/null)
+    id=$(bash "$SOURCE_SCRIPT" task TST 001 2>/dev/null)
 
     assert_not_empty "$id" "task ID output is not empty"
-    assert_matches "$id" "^TST-TSK-UNIT-TEST-[0-9]{3}$" "task ID matches format TST-TSK-UNIT-TEST-NNN"
+    assert_matches "$id" "^TST-TSK-001-[0-9]{3}$" "task ID matches format TST-TSK-001-NNN"
     assert_contains "$id" "TSK" "task ID contains 'TSK' kind code"
-    assert_contains "$id" "TST-TSK-UNIT-TEST-" "task ID contains correct prefix"
+    assert_contains "$id" "TST-TSK-001-" "task ID contains correct prefix with epic NNN"
 }
 
 # ============================================================================
@@ -189,8 +214,8 @@ test_kind_code_distinction() {
     test_section "generate-format-id: epic uses EPC, task uses TSK"
 
     local epic_id task_id
-    epic_id=$(bash "$SOURCE_SCRIPT" epic XYZ FEAT GENL 2>/dev/null)
-    task_id=$(bash "$SOURCE_SCRIPT" task XYZ FEAT GENL 2>/dev/null)
+    epic_id=$(bash "$SOURCE_SCRIPT" epic XYZ 2>/dev/null)
+    task_id=$(bash "$SOURCE_SCRIPT" task XYZ 001 2>/dev/null)
 
     assert_contains "$epic_id" "-EPC-" "epic ID contains -EPC-"
     assert_contains "$task_id" "-TSK-" "task ID contains -TSK-"
@@ -206,10 +231,24 @@ test_output_to_stdout() {
     test_section "generate-format-id: ID written to stdout only"
 
     local stdout_only
-    stdout_only=$(bash "$SOURCE_SCRIPT" epic TST FEAT CHCK 2>/dev/null)
+    stdout_only=$(bash "$SOURCE_SCRIPT" epic TST 2>/dev/null)
 
     assert_not_empty "$stdout_only" "stdout is non-empty for valid input"
-    assert_matches "$stdout_only" "^TST-EPC-FEAT-CHCK-[0-9]{3}$" "stdout matches ID format"
+    assert_matches "$stdout_only" "^TST-EPC-[0-9]{3}$" "stdout matches epic ID format"
+}
+
+# ============================================================================
+# TEST: Task ID includes epic NNN
+# ============================================================================
+
+test_task_id_includes_epic_nnn() {
+    test_section "generate-format-id: task ID includes parent epic NNN"
+
+    local id
+    id=$(bash "$SOURCE_SCRIPT" task QAT 042 2>/dev/null)
+
+    assert_matches "$id" "^QAT-TSK-042-[0-9]{3}$" "task ID includes epic NNN (042)"
+    assert_contains "$id" "-042-" "task ID contains -042- from EPIC_NNN"
 }
 
 # ============================================================================
@@ -237,10 +276,12 @@ main() {
     test_arg_count_validation
     test_invalid_kind
     test_invalid_codes
+    test_invalid_epic_nnn
     test_epic_id_generation
     test_task_id_generation
     test_kind_code_distinction
     test_output_to_stdout
+    test_task_id_includes_epic_nnn
 
     print_test_summary
 

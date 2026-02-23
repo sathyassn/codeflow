@@ -63,7 +63,7 @@ Next: /cf-review (CODE_REVIEW mode)
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `task-id` | Yes (formal) | Task identifier from WorkGraph (e.g., "INF-TSK-FEAT-AUTH-001") |
+| `task-id` | Yes (formal) | Task identifier from WorkGraph (e.g., "INF-TSK-008-001") |
 | `description` | Yes (informal) | Free-text description of work to implement |
 
 **Flags:**
@@ -84,16 +84,16 @@ Next: /cf-review (CODE_REVIEW mode)
 
 ```bash
 # Formal: implement a planned task
-/cf-develop "INF-TSK-FEAT-AUTH-001"
+/cf-develop "INF-TSK-008-001"
 
 # Formal: with model override
-/cf-develop "INF-TSK-FEAT-AUTH-001" --model opus
+/cf-develop "INF-TSK-008-001" --model opus
 
 # Informal: ad-hoc implementation
 /cf-develop "Add retry logic to the webhook handler"
 
 # Dry run: validate without executing
-/cf-develop "INF-TSK-FEAT-AUTH-001" --dry-run
+/cf-develop "INF-TSK-008-001" --dry-run
 ```
 
 ---
@@ -424,13 +424,13 @@ ON "Scope violation" during implementation:
 **Example 1: Formal Implementation of Planned Task**
 
 ```bash
-/cf-develop "INF-TSK-FEAT-AUTH-001"
+/cf-develop "INF-TSK-008-001"
 ```
 
 Output:
 
 ```text
-Implementing: INF-TSK-FEAT-AUTH-001 "Configure OAuth2 provider integration"
+Implementing: INF-TSK-008-001 "Configure OAuth2 provider integration"
 Mode: FORMAL
 Branch: feat/oauth2-providers (verified safe)
 Active work: registered
@@ -476,13 +476,13 @@ Next: Proceed to review with /cf-review
 **Example 3: Dry Run Validation**
 
 ```bash
-/cf-develop "INF-TSK-FEAT-AUTH-001" --dry-run
+/cf-develop "INF-TSK-008-001" --dry-run
 ```
 
 Output:
 
 ```text
-DRY RUN: Validating prerequisites for INF-TSK-FEAT-AUTH-001
+DRY RUN: Validating prerequisites for INF-TSK-008-001
 
   [OK] Task exists in WorkGraph
   [OK] Branch: feat/oauth2-providers (not protected)

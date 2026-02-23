@@ -420,9 +420,9 @@ Worker Stop Hook Flow:
 name: Sprint 42 Tasks
 description: Authentication feature tasks
 tasks:
-  - FRT-TSK-FEAT-AUTH-001
-  - FRT-TSK-FEAT-AUTH-002
-  - FRT-TSK-FEAT-AUTH-003
+  - FRT-TSK-001-001
+  - FRT-TSK-001-002
+  - FRT-TSK-001-003
 target_branch: develop          # REQUIRED when auto_merge:true; must NOT be a protected branch
 auto_merge: false               # true: auto-merge worker PRs to target_branch; false: leave for human review
 max_session_workers: 3
@@ -546,9 +546,9 @@ Autorun Session Started
   Timeout:    1h per task
   Target:     develop
 
-  Worker 1: FRT-TSK-FEAT-AUTH-001  RUNNING
-  Worker 2: FRT-TSK-FEAT-AUTH-002  RUNNING
-  Worker 3: FRT-TSK-FEAT-AUTH-003  RUNNING
+  Worker 1: FRT-TSK-001-001  RUNNING
+  Worker 2: FRT-TSK-001-002  RUNNING
+  Worker 3: FRT-TSK-001-003  RUNNING
 
 Monitor: /cf-autorun status ses-20260215-001
 ```
@@ -565,9 +565,9 @@ Output:
 Autorun Session: ses-20260215-001
 Batch: Sprint 42 Tasks
 
-  Worker 1: FRT-TSK-FEAT-AUTH-001  COMPLETED  PR #12  (23m)
-  Worker 2: FRT-TSK-FEAT-AUTH-002  RUNNING            (31m)
-  Worker 3: FRT-TSK-FEAT-AUTH-003  COMPLETED  PR #13  (18m)
+  Worker 1: FRT-TSK-001-001  COMPLETED  PR #12  (23m)
+  Worker 2: FRT-TSK-001-002  RUNNING            (31m)
+  Worker 3: FRT-TSK-001-003  COMPLETED  PR #13  (18m)
 
 Progress: 2/3 complete, 1 running
 ```
@@ -599,7 +599,7 @@ Output:
 ```text
 Stopping session ses-20260215-001...
 
-  Worker 2: FRT-TSK-FEAT-AUTH-002  STOPPED (was running)
+  Worker 2: FRT-TSK-001-002  STOPPED (was running)
   Worktree preserved for debugging.
 
 Session stopped. 2 tasks completed, 1 stopped.
@@ -616,9 +616,9 @@ Output:
 ```text
 Cleanup Results
 
-  Removed worktree: FRT-TSK-FEAT-AUTH-001 (PR #12 merged)
-  Removed worktree: FRT-TSK-FEAT-AUTH-003 (PR #13 merged)
-  Preserved worktree: FRT-TSK-FEAT-AUTH-002 (PR not merged)
+  Removed worktree: FRT-TSK-001-001 (PR #12 merged)
+  Removed worktree: FRT-TSK-001-003 (PR #13 merged)
+  Preserved worktree: FRT-TSK-001-002 (PR not merged)
 
 Cleaned 2 worktrees.
 ```

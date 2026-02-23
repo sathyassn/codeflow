@@ -125,7 +125,7 @@ def db_conn(state_db: Path) -> Generator[sqlite3.Connection, None, None]:
 def sample_task(db_conn: sqlite3.Connection) -> Dict[str, Any]:
     """Insert a sample task and return its data."""
     task = {
-        "id": "FRT-TSK-FEAT-TEST-001",
+        "id": "FRT-TSK-001-001",
         "epic_id": "EPC-TEST-001",
         "title": "Test feature task",
         "status": "in_progress",

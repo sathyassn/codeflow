@@ -50,6 +50,7 @@ Routine infrastructure maintenance including file relocations, config restructur
 | INF-TSK-002-001 | Move pathflow-events.jsonl from ledger to logs | complete | normal |
 | INF-TSK-002-002 | Fix pre-PR memory update flow in PF6-COMPLETE | complete | normal |
 | INF-TSK-002-003 | Restructure pathflow-config with task_order objects | complete | normal |
+| INF-TSK-002-004 | Fix PF6-COMPLETE gaps: epic status rollup and PR event recording | complete | normal |
 
 ## Dependencies
 
