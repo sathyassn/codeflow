@@ -582,6 +582,636 @@ test_sentinel_env_file_cross_teammate() {
 }
 
 # ============================================================================
+# TESTS: CHECKPOINT OPERATIONS
+# ============================================================================
+
+setup_checkpoint_env() {
+    setup_pfs_env
+    # Clean checkpoint directory
+    rm -rf "$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID"
+}
+
+# --- checkpoint_read ---
+
+test_checkpoint_read_missing_file() {
+    test_section "checkpoint_read: returns {} when file missing"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_read_missing" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if [[ "$result" == "{}" ]]; then
+        test_pass "Returns {} for missing checkpoint"
+    else
+        test_fail "Expected {}, got: $result"
+    fi
+}
+
+test_checkpoint_read_valid_json() {
+    test_section "checkpoint_read: returns valid JSON content"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_read_valid" "jq not installed"
+        return
+    fi
+    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    echo '{"PF1":{"expected":["PF1-TSK-01"]}}' > "$ckpt_file"
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.expected[0]' >/dev/null 2>&1; then
+        test_pass "Returns stored JSON content"
+    else
+        test_fail "Failed to return stored JSON"
+    fi
+}
+
+test_checkpoint_read_corrupted() {
+    test_section "checkpoint_read: returns {} for corrupted JSON"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_read_corrupt" "jq not installed"
+        return
+    fi
+    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    echo 'not valid json {{{' > "$ckpt_file"
+    local result
+    result=$(
+        set +e  # checkpoint_read returns 1 for corrupted — don't exit
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read 2>/dev/null || true
+    )
+    if [[ "$result" == "{}" ]]; then
+        test_pass "Returns {} for corrupted checkpoint"
+    else
+        test_fail "Expected {} for corrupted, got: $result"
+    fi
+}
+
+# --- checkpoint_write ---
+
+test_checkpoint_write_creates_file() {
+    test_section "checkpoint_write: creates checkpoint file"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_write_create" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_write '{"PF1":{"expected":[]}}'
+    )
+    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    if [[ -f "$ckpt_file" ]]; then
+        test_pass "Checkpoint file created"
+    else
+        test_fail "Checkpoint file not created"
+    fi
+}
+
+test_checkpoint_write_valid_json() {
+    test_section "checkpoint_write: writes valid JSON"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_write_json" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_write '{"PF1":{"expected":["PF1-TSK-01"]}}'
+    )
+    local ckpt_file="$REPO_ROOT/.state/checkpoints/pathflow/$TEST_SESSION_ID/phase-tasks.json"
+    if jq -e '.' "$ckpt_file" >/dev/null 2>&1; then
+        test_pass "Written content is valid JSON"
+    else
+        test_fail "Written content is not valid JSON"
+    fi
+}
+
+test_checkpoint_write_rejects_empty() {
+    test_section "checkpoint_write: rejects empty content"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_write_empty" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_write "" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Rejects empty content"
+    else
+        test_fail "Should reject empty content"
+    fi
+}
+
+test_checkpoint_write_rejects_invalid_json() {
+    test_section "checkpoint_write: rejects invalid JSON"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_write_invalid" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_write "not json" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Rejects invalid JSON"
+    else
+        test_fail "Should reject invalid JSON"
+    fi
+}
+
+# --- checkpoint_init_phase ---
+
+test_checkpoint_init_phase_creates_entry() {
+    test_section "checkpoint_init_phase: creates phase entry from config"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_init_create" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.expected' >/dev/null 2>&1; then
+        test_pass "Phase PF1 entry created with expected array"
+    else
+        test_fail "Phase PF1 entry not created"
+    fi
+}
+
+test_checkpoint_init_phase_has_fields() {
+    test_section "checkpoint_init_phase: has all required fields"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_init_fields" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    for field in expected registered completed skipped sentinel_created; do
+        # Use 'has' instead of -e because sentinel_created is false (jq -e treats false as falsy)
+        if echo "$result" | jq -e ".PF1 | has(\"$field\")" >/dev/null 2>&1; then
+            test_pass "PF1 has field: $field"
+        else
+            test_fail "PF1 missing field: $field"
+        fi
+    done
+}
+
+test_checkpoint_init_phase_idempotent() {
+    test_section "checkpoint_init_phase: idempotent (no overwrite)"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_init_idem" "jq not installed"
+        return
+    fi
+    # Init, register a task, then init again — registered should survive
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_init_phase "PF1"  # Should not overwrite
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.registered["PF1-TSK-01"]' >/dev/null 2>&1; then
+        test_pass "Existing registrations preserved after re-init"
+    else
+        test_fail "Re-init should not overwrite existing data"
+    fi
+}
+
+test_checkpoint_init_phase_empty_id() {
+    test_section "checkpoint_init_phase: rejects empty phase_id"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_init_empty" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Rejects empty phase_id"
+    else
+        test_fail "Should reject empty phase_id"
+    fi
+}
+
+# --- checkpoint_register_task ---
+
+test_checkpoint_register_task_creates() {
+    test_section "checkpoint_register_task: registers task with timestamp"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_reg_create" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_register_task "PF1-TSK-01"
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.registered["PF1-TSK-01"]' >/dev/null 2>&1; then
+        test_pass "PF1-TSK-01 registered"
+    else
+        test_fail "PF1-TSK-01 should be registered"
+    fi
+}
+
+test_checkpoint_register_task_auto_inits_phase() {
+    test_section "checkpoint_register_task: auto-initializes phase"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_reg_autoinit" "jq not installed"
+        return
+    fi
+    # Don't call checkpoint_init_phase first — register should auto-init
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_register_task "PF2-TSK-01"
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF2.expected' >/dev/null 2>&1; then
+        test_pass "Phase auto-initialized by register"
+    else
+        test_fail "Phase should be auto-initialized"
+    fi
+}
+
+test_checkpoint_register_task_idempotent() {
+    test_section "checkpoint_register_task: idempotent"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_reg_idem" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-01"  # duplicate
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    # Just verify it exists and is a string (timestamp) — not duplicated
+    local ts
+    ts=$(echo "$result" | jq -r '.PF1.registered["PF1-TSK-01"]' 2>/dev/null)
+    if [[ -n "$ts" ]] && [[ "$ts" != "null" ]]; then
+        test_pass "Idempotent registration preserved"
+    else
+        test_fail "Registration should be idempotent"
+    fi
+}
+
+test_checkpoint_register_task_invalid_format() {
+    test_section "checkpoint_register_task: rejects invalid task_id format"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_reg_invalid" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_register_task "INVALID-ID" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Rejects invalid task_id format"
+    else
+        test_fail "Should reject invalid task_id format"
+    fi
+}
+
+# --- checkpoint_complete_task ---
+
+test_checkpoint_complete_task_marks() {
+    test_section "checkpoint_complete_task: marks task completed"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_complete_mark" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_complete_task "PF1-TSK-01" >/dev/null
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF1.completed["PF1-TSK-01"]' >/dev/null 2>&1; then
+        test_pass "Task marked completed"
+    else
+        test_fail "Task should be marked completed"
+    fi
+}
+
+test_checkpoint_complete_task_returns_phase_complete() {
+    test_section "checkpoint_complete_task: returns phase_complete when all done"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_complete_phase" "jq not installed"
+        return
+    fi
+    # PF1 has 2 tasks — complete both, check phase_complete signal
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-02"
+        checkpoint_complete_task "PF1-TSK-01"
+        checkpoint_complete_task "PF1-TSK-02"
+    )
+    if [[ "$result" == *"phase_complete"* ]]; then
+        test_pass "Returns phase_complete when all tasks done"
+    else
+        test_fail "Should return phase_complete (got: $result)"
+    fi
+}
+
+test_checkpoint_complete_task_not_complete_partial() {
+    test_section "checkpoint_complete_task: no phase_complete when partial"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_complete_partial" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-02"
+        checkpoint_complete_task "PF1-TSK-01"
+    )
+    if [[ "$result" != *"phase_complete"* ]]; then
+        test_pass "No phase_complete when tasks remain"
+    else
+        test_fail "Should not return phase_complete when tasks remain"
+    fi
+}
+
+test_checkpoint_complete_task_uninit_phase() {
+    test_section "checkpoint_complete_task: fails for uninitialized phase"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_complete_uninit" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_complete_task "PF1-TSK-01" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Fails for uninitialized phase"
+    else
+        test_fail "Should fail for uninitialized phase"
+    fi
+}
+
+# --- checkpoint_skip_task ---
+
+test_checkpoint_skip_task() {
+    test_section "checkpoint_skip_task: marks task as skipped"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_skip" "jq not installed"
+        return
+    fi
+    (
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF3"
+        checkpoint_skip_task "PF3-TSK-04"
+    )
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_read
+    )
+    if echo "$result" | jq -e '.PF3.skipped["PF3-TSK-04"]' >/dev/null 2>&1; then
+        test_pass "Task marked as skipped"
+    else
+        test_fail "Task should be marked as skipped"
+    fi
+}
+
+test_checkpoint_skip_counts_as_done() {
+    test_section "checkpoint_skip_task: skipped tasks count as done for phase completion"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_skip_done" "jq not installed"
+        return
+    fi
+    # PF1: complete TSK-01, skip TSK-02 — should be phase_complete
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-02"
+        checkpoint_skip_task "PF1-TSK-02"
+        checkpoint_complete_task "PF1-TSK-01"
+    )
+    if [[ "$result" == *"phase_complete"* ]]; then
+        test_pass "Skipped + completed = phase_complete"
+    else
+        test_fail "Skipped tasks should count as done for phase completion"
+    fi
+}
+
+test_checkpoint_skip_invalid_format() {
+    test_section "checkpoint_skip_task: rejects invalid format"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_skip_invalid" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_skip_task "BAD-FORMAT" 2>&1 && echo "OK" || echo "FAIL"
+    )
+    if [[ "$result" == *"FAIL"* ]]; then
+        test_pass "Rejects invalid task_id format"
+    else
+        test_fail "Should reject invalid format"
+    fi
+}
+
+# --- checkpoint_is_phase_complete ---
+
+test_checkpoint_is_phase_complete_true() {
+    test_section "checkpoint_is_phase_complete: true when all done"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_iscomp_true" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-02"
+        checkpoint_complete_task "PF1-TSK-01" >/dev/null
+        checkpoint_complete_task "PF1-TSK-02" >/dev/null
+        checkpoint_is_phase_complete "PF1" && echo "COMPLETE" || echo "INCOMPLETE"
+    )
+    if [[ "$result" == *"COMPLETE"* ]]; then
+        test_pass "Phase complete when all tasks done"
+    else
+        test_fail "Phase should be complete"
+    fi
+}
+
+test_checkpoint_is_phase_complete_false() {
+    test_section "checkpoint_is_phase_complete: false when tasks remain"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_iscomp_false" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_init_phase "PF1"
+        checkpoint_register_task "PF1-TSK-01"
+        checkpoint_register_task "PF1-TSK-02"
+        checkpoint_complete_task "PF1-TSK-01" >/dev/null
+        checkpoint_is_phase_complete "PF1" && echo "COMPLETE" || echo "INCOMPLETE"
+    )
+    if [[ "$result" == *"INCOMPLETE"* ]]; then
+        test_pass "Phase incomplete when tasks remain"
+    else
+        test_fail "Phase should be incomplete"
+    fi
+}
+
+test_checkpoint_is_phase_complete_uninit() {
+    test_section "checkpoint_is_phase_complete: false for uninitialized phase"
+    setup_checkpoint_env
+    if ! command -v jq &>/dev/null; then
+        test_skip "ckpt_iscomp_uninit" "jq not installed"
+        return
+    fi
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        checkpoint_is_phase_complete "PF99" && echo "COMPLETE" || echo "INCOMPLETE"
+    )
+    if [[ "$result" == *"INCOMPLETE"* ]]; then
+        test_pass "Uninitialized phase returns incomplete"
+    else
+        test_fail "Uninitialized phase should return incomplete"
+    fi
+}
+
+test_checkpoint_functions_available() {
+    test_section "All checkpoint functions available"
+    setup_checkpoint_env
+    local result
+    result=$(
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
+        source "$LIBRARY_UNDER_TEST"
+        for fn in checkpoint_read checkpoint_write checkpoint_init_phase checkpoint_register_task checkpoint_complete_task checkpoint_skip_task checkpoint_is_phase_complete; do
+            if type "$fn" >/dev/null 2>&1; then
+                echo "OK:$fn"
+            else
+                echo "MISSING:$fn"
+            fi
+        done
+    )
+    for fn in checkpoint_read checkpoint_write checkpoint_init_phase checkpoint_register_task checkpoint_complete_task checkpoint_skip_task checkpoint_is_phase_complete; do
+        if echo "$result" | grep -q "OK:$fn"; then
+            test_pass "Function: $fn"
+        else
+            test_fail "Missing: $fn"
+        fi
+    done
+}
+
+# ============================================================================
 # TESTS: Integration
 # ============================================================================
 
@@ -697,6 +1327,34 @@ main() {
     test_pfs_has_todo_go_cli
     test_sentinel_uses_env_file_id
     test_sentinel_env_file_cross_teammate
+
+    # Checkpoint operations
+    test_checkpoint_functions_available
+    test_checkpoint_read_missing_file
+    test_checkpoint_read_valid_json
+    test_checkpoint_read_corrupted
+    test_checkpoint_write_creates_file
+    test_checkpoint_write_valid_json
+    test_checkpoint_write_rejects_empty
+    test_checkpoint_write_rejects_invalid_json
+    test_checkpoint_init_phase_creates_entry
+    test_checkpoint_init_phase_has_fields
+    test_checkpoint_init_phase_idempotent
+    test_checkpoint_init_phase_empty_id
+    test_checkpoint_register_task_creates
+    test_checkpoint_register_task_auto_inits_phase
+    test_checkpoint_register_task_idempotent
+    test_checkpoint_register_task_invalid_format
+    test_checkpoint_complete_task_marks
+    test_checkpoint_complete_task_returns_phase_complete
+    test_checkpoint_complete_task_not_complete_partial
+    test_checkpoint_complete_task_uninit_phase
+    test_checkpoint_skip_task
+    test_checkpoint_skip_counts_as_done
+    test_checkpoint_skip_invalid_format
+    test_checkpoint_is_phase_complete_true
+    test_checkpoint_is_phase_complete_false
+    test_checkpoint_is_phase_complete_uninit
 
     # Integration
     test_flag_and_sentinels_lifecycle

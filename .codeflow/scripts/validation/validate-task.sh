@@ -18,7 +18,7 @@ readonly SCRIPT_DIR
 readonly VERSION="1.0.0"
 
 readonly REQUIRED_FIELDS="id format_id epic_id title status area_type work_type"
-readonly VALID_STATUSES="todo blocked in_progress awaiting_review complete"
+readonly VALID_STATUSES="todo blocked in_progress awaiting_review complete cancelled"
 readonly VALID_WORK_TYPES="FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN"
 readonly CODE_WORK_TYPES="FEAT FIX RFCT HTFX CHOR CICD TEST"
 readonly FORMAT_ID_PATTERN='^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$'

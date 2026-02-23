@@ -30,6 +30,10 @@
           "assigned_to": "team-lead",
           "operation": "Task(subagent_type=cf-security)"
         }
+      ],
+      "required_tasks": [
+        "PF1-TSK-01",
+        "PF1-TSK-02"
       ]
     },
     "PF2-CONTEXT": {
@@ -74,6 +78,12 @@
           "assigned_to": "team-lead",
           "operation": "Tracking decision (tracked/untracked/ask)"
         }
+      ],
+      "required_tasks": [
+        "PF2-TSK-01",
+        "PF2-TSK-02",
+        "PF2-TSK-03",
+        "PF2-TSK-04"
       ]
     },
     "PF3-CLASSIFY": {
@@ -126,6 +136,13 @@
           "assigned_to": "cf-knowledge-layer",
           "operation": "begin-work"
         }
+      ],
+      "required_tasks": [
+        "PF3-TSK-01",
+        "PF3-TSK-02",
+        "PF3-TSK-03",
+        "PF3-TSK-04",
+        "PF3-TSK-05"
       ]
     },
     "PF4-EXECUTE": {
@@ -179,6 +196,13 @@
           "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
           "condition": "if_pipeline_includes_qa"
         }
+      ],
+      "required_tasks": [
+        "PF4-TSK-01",
+        "PF4-TSK-02",
+        "PF4-TSK-03",
+        "PF4-TSK-04",
+        "PF4-TSK-05"
       ]
     },
     "PF5-VERIFY": {
@@ -209,6 +233,10 @@
           "assigned_to": "team-lead",
           "operation": "Check acceptance criteria against task record"
         }
+      ],
+      "required_tasks": [
+        "PF5-TSK-01",
+        "PF5-TSK-02"
       ]
     },
     "PF6-COMPLETE": {
@@ -288,6 +316,17 @@
           "assigned_to": "cf-git-operations",
           "operation": "sync-local"
         }
+      ],
+      "required_tasks": [
+        "PF6-TSK-01",
+        "PF6-TSK-02",
+        "PF6-TSK-03",
+        "PF6-TSK-04",
+        "PF6-TSK-05",
+        "PF6-TSK-06",
+        "PF6-TSK-07",
+        "PF6-TSK-08",
+        "PF6-TSK-09"
       ]
     },
     "PF7-END": {
@@ -326,6 +365,11 @@
           "assigned_to": "team-lead",
           "operation": "TeamDelete (after pathflow-active flag removed by SessionEnd hook)"
         }
+      ],
+      "required_tasks": [
+        "PF7-TSK-01",
+        "PF7-TSK-02",
+        "PF7-TSK-03"
       ]
     }
   },
@@ -394,16 +438,53 @@
     }
   },
   "pipelines": {
-    "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
-    "FIX": ["WS-DEV", "WS-REV", "WS-QA"],
-    "HTFX": ["WS-DEV", "WS-REV", "WS-QA"],
-    "RFCT": ["WS-DEV", "WS-REV", "WS-QA"],
-    "DOCS": ["WS-DOCS", "WS-REV"],
-    "TEST": ["WS-TEST", "WS-REV", "WS-QA"],
-    "CHOR": ["WS-DEV", "WS-REV", "WS-QA"],
-    "CICD": ["WS-DEV", "WS-REV", "WS-QA"],
-    "SPKE": ["WS-PLAN", "WS-REV"],
-    "PLAN": ["WS-PLAN", "WS-REV"]
+    "FEAT": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "FIX": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "HTFX": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "RFCT": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "DOCS": [
+      "WS-DOCS",
+      "WS-REV"
+    ],
+    "TEST": [
+      "WS-TEST",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "CHOR": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "CICD": [
+      "WS-DEV",
+      "WS-REV",
+      "WS-QA"
+    ],
+    "SPKE": [
+      "WS-PLAN",
+      "WS-REV"
+    ],
+    "PLAN": [
+      "WS-PLAN",
+      "WS-REV"
+    ]
   },
   "teammates": {
     "persistent": {
@@ -441,7 +522,10 @@
         "definition": ".claude/agents/cf-review.md"
       },
       "cf-quality-assurance": {
-        "stage": ["WS-QA", "WS-TEST"],
+        "stage": [
+          "WS-QA",
+          "WS-TEST"
+        ],
         "definition": ".claude/agents/cf-quality-assurance.md"
       }
     }

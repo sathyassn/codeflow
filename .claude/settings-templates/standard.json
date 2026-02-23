@@ -385,6 +385,16 @@
         ]
       },
       {
+        "matcher": "TaskCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-phase-checkpoint.sh",
+            "timeout": 2
+          }
+        ]
+      },
+      {
         "matcher": ".*",
         "hooks": [
           {
@@ -417,6 +427,17 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-pathflow-gate.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/task-completed/cf-task-completed-phase-checkpoint.sh",
             "timeout": 3
           }
         ]

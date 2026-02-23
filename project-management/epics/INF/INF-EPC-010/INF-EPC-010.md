@@ -3,7 +3,7 @@ id: "INF-EPC-010"
 format_id: "INF-EPC-010"
 title: "Phase Checkpoint Enforcement"
 summary: "Replace tool-pattern-based phase sentinel creation with task-completion-driven checkpoint system using PostToolUse and TaskCompleted hooks"
-status: planning
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "ENFC"

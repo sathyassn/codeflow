@@ -390,7 +390,7 @@ assert_fails "bash '$VALIDATE_SCRIPT' --quiet /tmp/claude/nonexistent-task-file.
 # --------------------------------------------------------------------------
 test_subsection "All valid statuses"
 
-for valid_status in todo blocked in_progress awaiting_review complete; do
+for valid_status in todo blocked in_progress awaiting_review complete cancelled; do
     setup
     filepath="$TEST_DIR/status-$valid_status.md"
     cat > "$filepath" <<TASKEOF
