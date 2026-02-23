@@ -73,6 +73,7 @@ cleanup_test() {
     local session_id="$1"
     rm -rf "$REPO_ROOT/.state/session/$session_id/pathflow" 2>/dev/null || true
     rm -rf "$REPO_ROOT/.state/session/$session_id" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$session_id" 2>/dev/null || true
     remove_test_env_file
 }
 
@@ -177,14 +178,12 @@ else
     fail "Should have PF task pattern regex"
 fi
 
-# Test 13: Always exits 0 (PostToolUse hooks must not block)
+# Test 13: Has exit 2 for cross-phase blocking
 TESTS_RUN=$((TESTS_RUN + 1))
-# Check that all exit statements are exit 0
-non_zero_exits=$(grep -c 'exit [1-9]' "$HOOK" 2>/dev/null) || non_zero_exits=0
-if [[ "$non_zero_exits" -eq 0 ]]; then
-    pass "All exit codes are 0 (never blocks)"
+if grep -q 'exit 2' "$HOOK"; then
+    pass "Has exit 2 for cross-phase blocking"
 else
-    fail "PostToolUse hook should never exit non-zero (found $non_zero_exits non-zero exits)"
+    fail "Should have exit 2 for cross-phase registration blocking"
 fi
 
 # Test 14: References env file (codeflow-env.sh)
@@ -276,11 +275,13 @@ else
 fi
 cleanup_test "$reg_session"
 
-# Test 20: Registers PF3-TSK-04 (multi-digit phase)
+# Test 20: Registers PF3-TSK-04 (multi-digit phase, with required sentinel)
 TESTS_RUN=$((TESTS_RUN + 1))
 reg_session="ses-register-20"
 create_test_flag "$reg_session"
 create_test_env_file "$reg_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$reg_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$reg_session/pathflow-pf-2"
 stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF3-TSK-04: Register task in WorkGraph"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 ckpt=$(read_checkpoint "$reg_session")
@@ -291,11 +292,13 @@ else
 fi
 cleanup_test "$reg_session"
 
-# Test 21: PF pattern embedded in longer subject text
+# Test 21: PF pattern embedded in longer subject text (with required sentinel)
 TESTS_RUN=$((TESTS_RUN + 1))
 reg_session="ses-embedded-21"
 create_test_flag "$reg_session"
 create_test_env_file "$reg_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$reg_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$reg_session/pathflow-pf-1"
 stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"Complete PF2-TSK-03 context loading step"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 ckpt=$(read_checkpoint "$reg_session")
@@ -360,6 +363,92 @@ else
     fail "Should fall back to stdin session_id when env file missing"
 fi
 cleanup_test "$fb_session"
+
+echo ""
+echo "--- Execution Tests: Cross-Phase Registration Blocking ---"
+
+# Test 25: PF1 tasks always register (no previous phase check)
+TESTS_RUN=$((TESTS_RUN + 1))
+cpb_session="ses-pf1noreg-25"
+create_test_flag "$cpb_session"
+create_test_env_file "$cpb_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session"
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF1-TSK-01: Init PathFlow"},"session_id":"ignored"}'
+exit_code=0
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "PF1 tasks register without previous phase check"
+else
+    fail "PF1 tasks should always register (no previous phase, got exit $exit_code)"
+fi
+cleanup_test "$cpb_session"
+
+# Test 26: PF2 tasks register when pf-1 sentinel exists
+TESTS_RUN=$((TESTS_RUN + 1))
+cpb_session="ses-pf2allow-26"
+create_test_flag "$cpb_session"
+create_test_env_file "$cpb_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session/pathflow-pf-1"
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF2-TSK-01: Load context"},"session_id":"ignored"}'
+exit_code=0
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "PF2 tasks register when pf-1 sentinel exists"
+else
+    fail "PF2 tasks should register when pf-1 exists (got exit $exit_code)"
+fi
+cleanup_test "$cpb_session"
+
+# Test 27: PF2 tasks BLOCKED (exit 2) when pf-1 sentinel missing
+TESTS_RUN=$((TESTS_RUN + 1))
+cpb_session="ses-pf2block-27"
+create_test_flag "$cpb_session"
+create_test_env_file "$cpb_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session"
+# NO pf-1 sentinel
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF2-TSK-01: Load context"},"session_id":"ignored"}'
+exit_code=0
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || exit_code=$?
+if [[ $exit_code -eq 2 ]]; then
+    pass "PF2 task registration BLOCKED when pf-1 sentinel missing (exit 2)"
+else
+    fail "Should exit 2 when pf-1 sentinel missing (got exit $exit_code)"
+fi
+cleanup_test "$cpb_session"
+
+# Test 28: PF3 tasks BLOCKED when pf-2 sentinel missing
+TESTS_RUN=$((TESTS_RUN + 1))
+cpb_session="ses-pf3block-28"
+create_test_flag "$cpb_session"
+create_test_env_file "$cpb_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$cpb_session/pathflow-pf-1"
+# pf-1 exists but NOT pf-2
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF3-TSK-01: Classify work"},"session_id":"ignored"}'
+exit_code=0
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || exit_code=$?
+if [[ $exit_code -eq 2 ]]; then
+    pass "PF3 task registration BLOCKED when pf-2 sentinel missing (exit 2)"
+else
+    fail "Should exit 2 when pf-2 sentinel missing (got exit $exit_code)"
+fi
+cleanup_test "$cpb_session"
+
+# Test 29: Non-PF tasks pass through unblocked
+TESTS_RUN=$((TESTS_RUN + 1))
+cpb_session="ses-nonpf-29"
+create_test_flag "$cpb_session"
+create_test_env_file "$cpb_session"
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"Fix the authentication bug"},"session_id":"ignored"}'
+exit_code=0
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "Non-PF tasks pass through unblocked"
+else
+    fail "Non-PF tasks should pass through (got exit $exit_code)"
+fi
+cleanup_test "$cpb_session"
 
 echo ""
 echo "=== Test Summary ==="

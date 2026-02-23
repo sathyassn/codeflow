@@ -8,6 +8,7 @@
 # This hook:
 #   - Fires after TaskCreate executes (inside agentic loop)
 #   - Parses tool_input.subject for PF{N}-TSK-{NN} pattern
+#   - Blocks cross-phase registration if previous phase sentinel missing
 #   - Registers matching tasks in session-scoped checkpoint file
 #   - Ignores non-PathFlow TaskCreate calls silently
 #
@@ -15,7 +16,8 @@
 #   .state/session/{SID}/pathflow/pathflow-phase-tasks.json
 #
 # Exit codes:
-#   0 - Always succeeds (PostToolUse hooks should not block)
+#   0 - Success (task registered or ignored)
+#   2 - BLOCKED: cross-phase dependency violated (previous phase sentinel missing)
 #
 # Compatibility: bash 3.2+ (macOS compatible)
 
@@ -141,6 +143,28 @@ fi
 if ! source "$_PFS_LIB"; then
     echo "PostToolUse[checkpoint]: failed to source pathflow-state lib" >&2
     exit 0
+fi
+
+# =============================================================================
+# CROSS-PHASE DEPENDENCY CHECK — block if previous phase incomplete
+# =============================================================================
+
+# Extract phase number from task_id (PF3-TSK-01 -> 3)
+_phase_num=""
+if [[ "$_task_id" =~ ^PF([0-9]+)-TSK-[0-9]+$ ]]; then
+    _phase_num="${BASH_REMATCH[1]}"
+fi
+
+if [[ -n "${_phase_num:-}" ]] && [[ "$_phase_num" -gt 1 ]]; then
+    _prev_phase_num=$((_phase_num - 1))
+
+    if ! has_sentinel "pf-${_prev_phase_num}" 2>/dev/null; then
+        echo "CHECKPOINT BLOCK: Cannot register task '${_task_id}' for phase PF${_phase_num}." >&2
+        echo "Phase PF${_prev_phase_num} is not yet complete — its sentinel (pathflow-pf-${_prev_phase_num}) does not exist." >&2
+        echo "All PF${_prev_phase_num} tasks must be registered and completed before PF${_phase_num} tasks can be created." >&2
+        echo "Action: Complete all PF${_prev_phase_num} tasks first, then retry." >&2
+        exit 2
+    fi
 fi
 
 # =============================================================================

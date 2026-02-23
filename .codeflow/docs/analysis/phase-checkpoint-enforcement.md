@@ -104,10 +104,10 @@ Task files are persisted by Claude Code at `~/.claude/tasks/{session-id}/{taskId
 
 The checkpoint enforcement system uses three layers, each with a distinct trust level and purpose:
 
-### Layer 1: PostToolUse on TaskCreate (registration tracking)
+### Layer 1: PostToolUse on TaskCreate (registration tracking + cross-phase blocking)
 
 ```text
-Purpose:     Track that the lead actually created the required phase tasks
+Purpose:     Track that the lead created required phase tasks; block cross-phase registration
 Fires:       Inside the agentic loop, immediately after TaskCreate executes
 Trust level: Medium (LLM-initiated, but observable)
 Hook:        cf-post-tool-use-phase-checkpoint.sh (NEW)
@@ -118,10 +118,13 @@ Matches:     tool_name == "TaskCreate"
 
 1. PostToolUse fires after TaskCreate executes
 2. Parse `tool_input.subject` for the `PF{N}-TSK-{NN}` pattern
-3. If pattern matches, write registration to the session-scoped checkpoint file
-4. If no match, exit (not a PathFlow task)
+3. If pattern matches, extract phase number N
+4. If N > 1, check if previous phase sentinel (`pathflow-pf-{N-1}`) exists
+5. If sentinel missing → exit 2 (BLOCKED: cross-phase dependency violated)
+6. If sentinel present (or N == 1), write registration to the session-scoped checkpoint file
+7. If no match, exit (not a PathFlow task)
 
-**What this catches:** The lead skipping TaskCreate for a required phase task. Without registration, the task never appears in the checkpoint, and the phase sentinel is never created.
+**What this catches:** The lead skipping TaskCreate for a required phase task. Without registration, the task never appears in the checkpoint, and the phase sentinel is never created. Also catches the lead attempting to register tasks for the next phase before completing the current phase.
 
 ### Layer 2: TaskCompleted hook (completion tracking + sentinel creation)
 
@@ -221,6 +224,12 @@ Parse subject for             Parse subject for             Check sentinel
 PF{N}-TSK-{NN}               PF{N}-TSK-{NN}               existence
     |                               |                            |
     v                               v                            |
+Check prev phase              Check prev phase                   |
+sentinel exists?              sentinel exists?                   |
+    |                               |                            |
+ NO |---> BLOCK (exit 2)        NO |---> BLOCK (exit 2)         |
+    |                               |                            |
+YES v                          YES  v                            |
 Write to checkpoint  ------>  Read checkpoint                    |
 (register task)               Mark completed                     |
                               Check all done?                    |
@@ -232,9 +241,9 @@ Write to checkpoint  ------>  Read checkpoint                    |
 
 ## Ordering enforcement
 
-### Registration order (within agentic loop)
+### Registration order (within and across phases)
 
-PF1-TSK-02 cannot be registered until PF1-TSK-01 is registered. This is naturally enforced because TaskCreate calls happen sequentially within the lead's agentic loop. The PostToolUse checkpoint hook processes registrations in the order they arrive.
+Within a phase, registration order is naturally sequential because TaskCreate calls happen in order within the lead's agentic loop. Across phases, registration order is HOOK-ENFORCED: Layer 1 checks that the previous phase sentinel exists before allowing registration. For example, PF3-TSK-01 cannot be registered until PF2's sentinel (`pathflow-pf-2`) exists, meaning all PF2 tasks must be registered and completed first.
 
 ### Completion order (dependency-based)
 
@@ -415,6 +424,7 @@ After limits are exhausted, the task is marked `blocked` with a `reason` field, 
 | Lead skips TaskCreate for a phase task | Task never registered in checkpoint. Sentinel never created. Next phase blocked. |
 | Lead skips TaskUpdate(completed) | Task stays `pending` in checkpoint. Sentinel blocked. |
 | Lead advances without completing all tasks | PreToolUse gate blocks (no sentinel). |
+| Lead tries to register next phase tasks before current phase done | BLOCKED (exit 2, Layer 1). Previous phase sentinel must exist before tasks can be registered. |
 | New task added to pathflow-config.json | Checkpoint hook reads config dynamically. New task included automatically. |
 | Conditional task does not apply | Marked `skipped`, excluded from completion check. |
 | Checkpoint file missing | Sentinel not created. Operations blocked. System fails closed. |

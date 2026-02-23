@@ -191,7 +191,10 @@ if [[ -n "${_phase_num:-}" ]] && [[ "$_phase_num" -gt 1 ]]; then
     _prev_sentinel="pf-${_prev_phase_num}"
 
     if ! has_sentinel "$_prev_sentinel" 2>/dev/null; then
-        echo "TaskCompleted[checkpoint]: BLOCKED — completing $_pf_task_id requires sentinel $_prev_sentinel (PF${_prev_phase_num} must complete first)" >&2
+        echo "CHECKPOINT BLOCK: Cannot complete task '${_pf_task_id}' for phase PF${_phase_num}." >&2
+        echo "Phase PF${_prev_phase_num} is not yet complete — its sentinel (pathflow-pf-${_prev_phase_num}) does not exist." >&2
+        echo "All PF${_prev_phase_num} tasks must be registered and completed before PF${_phase_num} tasks can finish." >&2
+        echo "Action: Complete all PF${_prev_phase_num} tasks first, then retry." >&2
         exit 2
     fi
 fi

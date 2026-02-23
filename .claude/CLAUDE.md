@@ -882,7 +882,7 @@ PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped
 
 | Layer | Hook | Event | Purpose |
 |-------|------|-------|---------|
-| 1. Registration | `cf-post-tool-use-phase-checkpoint.sh` | PostToolUse (on TaskCreate) | Registers PF{N}-TSK-{NN} tasks in the checkpoint file |
+| 1. Registration | `cf-post-tool-use-phase-checkpoint.sh` | PostToolUse (on TaskCreate) | Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing |
 | 2. Completion | `cf-task-completed-phase-checkpoint.sh` | TaskCompleted | Marks tasks complete; creates phase sentinel when all tasks in a phase are done/skipped |
 | 3. Gate | `cf-pre-tool-use-pathflow-gate.sh` | PreToolUse | Blocks Edit/Write until `pf-3` sentinel exists |
 
@@ -1092,7 +1092,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 
 - **pathflow-gate**: Blocks Edit/Write before PF3-CLASSIFY. Enforces PathFlow sentinel checks.
 - **pathflow-sentinel**: PostToolUse hook that creates stage sentinels (ws-dev, ws-rev, etc.) via pattern-matching on stage completion messages.
-- **phase-checkpoint** (PostToolUse): Registers PF{N}-TSK-{NN} tasks in the checkpoint file when TaskCreate fires for PathFlow tasks.
+- **phase-checkpoint** (PostToolUse): Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing.
 - **phase-checkpoint** (TaskCompleted): Marks tasks complete in the checkpoint; creates phase sentinels (pf-1, pf-2, etc.) when all phase tasks are done/skipped.
 - **team-guard**: Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
 - **edit-write**: Scope enforcement for file operations.
