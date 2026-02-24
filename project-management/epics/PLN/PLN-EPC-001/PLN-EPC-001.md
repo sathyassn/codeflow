@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-18T23:00:00Z"
-updated_at: "2026-02-18T23:00:00Z"
+updated_at: "2026-02-24T03:25:00Z"
 ---
 
 # PLN-EPC-001: Ongoing Planning
@@ -48,6 +48,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 |----|-------|--------|----------|
 | PLN-TSK-001-001 | Plan PM Standardization | complete | normal |
 | PLN-TSK-001-002 | Plan INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening | complete | high |
+| PLN-TSK-001-003 | Plan Go CLI Epic (INF-EPC-015) | complete | normal |
 
 ## Dependencies
 
@@ -67,3 +68,4 @@ This is an ongoing epic with no planned completion date. New planning tasks are 
 
 - INF-EPC-005: Project Management Standardization (produced by PLN-TSK-001-001)
 - INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening (produced by PLN-TSK-001-002)
+- INF-EPC-015: Go CLI (codeflow binary) (produced by PLN-TSK-001-003)
