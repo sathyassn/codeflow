@@ -1,9 +1,9 @@
 ---
-id: "epic-PLACEHOLDER"
+id: "epic-01KJ6YG0QA7MWQQFWCZMSP7HB6"
 format_id: "INF-EPC-015"
 title: "CodeFlow Go CLI - Phase 6 V4 Implementation"
 summary: "Build the production CodeFlow CLI binary in Go — sole SQLite authority, welcome screen, doctor, autorun, cross-platform"
-status: draft
+status: planning
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
