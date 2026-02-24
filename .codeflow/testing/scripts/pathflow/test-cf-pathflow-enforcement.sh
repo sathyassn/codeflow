@@ -522,6 +522,7 @@ test_gate_allows_push_with_wsrev() {
     setup_env
     create_flag
     create_test_sentinel "pf-3"
+    create_test_sentinel "pf-4"
     create_test_sentinel "ws-rev"
     if [[ ! -f "$GATE_HOOK" ]]; then
         test_skip "gate_push_allow" "Hook not yet installed"
@@ -541,6 +542,7 @@ test_gate_allows_pr_with_wsrev() {
     setup_env
     create_flag
     create_test_sentinel "pf-3"
+    create_test_sentinel "pf-4"
     create_test_sentinel "ws-rev"
     if [[ ! -f "$GATE_HOOK" ]]; then
         test_skip "gate_pr_allow" "Hook not yet installed"
@@ -693,7 +695,10 @@ test_full_lifecycle() {
         test_fail "Lifecycle 6: ws-rev not created"
     fi
 
-    # Step 7: Push now allowed
+    # Step 6b: pf-4 sentinel (created by checkpoint system when PF4 tasks complete)
+    create_test_sentinel "pf-4"
+
+    # Step 7: Push now allowed (requires both pf-4 and ws-rev)
     code=$(run_gate '{"tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}')
     if [[ "$code" -eq 0 ]]; then
         test_pass "Lifecycle 7: Push allowed (ws-rev exists)"
