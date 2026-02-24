@@ -1324,6 +1324,99 @@ else
     pass "Orphan sentinel sweep: no env file to check (skipped)"
 fi
 
+# =============================================================================
+# SECTION 10: COMPACT RECOVERY DETECTION TESTS
+# =============================================================================
+# Tests for the compact recovery advisory that fires when source=compact/resume/clear
+# and team config files or pathflow-active flags exist.
+
+echo ""
+echo "--- Compact Recovery Detection (Section 10) ---"
+
+# Test 1: source=compact + team config + pathflow flag → advisory output
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_cr1_sid="ses-1000000000401aaa0de000401"
+_cr1_team="compact-recovery-test-01"
+create_stale_session "$_cr1_sid" "$_cr1_team" "$$"
+# Run with source=compact — lead PID is alive ($$) so PID cleanup won't fire
+_cr1_output=$(echo '{"source":"compact"}' | CODEFLOW_SESSION_ID="$_cr1_sid" bash "$HOOK" 2>/dev/null || true)
+if echo "$_cr1_output" | grep -q "COMPACT RECOVERY" && \
+   echo "$_cr1_output" | grep -q "MANDATORY" && \
+   echo "$_cr1_output" | grep -q "Verify teammate liveness"; then
+    pass "Compact recovery: source=compact + team config + flag → advisory output"
+else
+    fail "Compact recovery: source=compact + team config + flag should show advisory (got: $_cr1_output)"
+fi
+cleanup_team_dirs "$_cr1_team"
+rm -rf "$REPO_ROOT/.state/session/$_cr1_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr1_sid" 2>/dev/null || true
+
+# Test 2: source=unknown + team config exists → no advisory (unknown is not compact/resume/clear)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_cr2_sid="ses-1000000000402aaa0de000402"
+_cr2_team="compact-recovery-test-02"
+create_stale_session "$_cr2_sid" "$_cr2_team" "$$"
+_cr2_output=$(echo '{"source":"unknown"}' | CODEFLOW_SESSION_ID="$_cr2_sid" bash "$HOOK" 2>/dev/null || true)
+if echo "$_cr2_output" | grep -q "COMPACT RECOVERY"; then
+    fail "Compact recovery: source=unknown should NOT show advisory"
+else
+    pass "Compact recovery: source=unknown + team config → no advisory (not a continuation)"
+fi
+cleanup_team_dirs "$_cr2_team"
+rm -rf "$REPO_ROOT/.state/session/$_cr2_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr2_sid" 2>/dev/null || true
+
+# Test 3: source=resume + team config → advisory output
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_cr3_sid="ses-1000000000403aaa0de000403"
+_cr3_team="compact-recovery-test-03"
+create_stale_session "$_cr3_sid" "$_cr3_team" "$$"
+_cr3_output=$(echo '{"source":"resume"}' | CODEFLOW_SESSION_ID="$_cr3_sid" bash "$HOOK" 2>/dev/null || true)
+if echo "$_cr3_output" | grep -q "COMPACT RECOVERY"; then
+    pass "Compact recovery: source=resume + team config → advisory output"
+else
+    fail "Compact recovery: source=resume + team config should show advisory (got: $_cr3_output)"
+fi
+cleanup_team_dirs "$_cr3_team"
+rm -rf "$REPO_ROOT/.state/session/$_cr3_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr3_sid" 2>/dev/null || true
+
+# Test 4: source=clear + team config → advisory output
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_cr4_sid="ses-1000000000404aaa0de000404"
+_cr4_team="compact-recovery-test-04"
+create_stale_session "$_cr4_sid" "$_cr4_team" "$$"
+_cr4_output=$(echo '{"source":"clear"}' | CODEFLOW_SESSION_ID="$_cr4_sid" bash "$HOOK" 2>/dev/null || true)
+if echo "$_cr4_output" | grep -q "COMPACT RECOVERY"; then
+    pass "Compact recovery: source=clear + team config → advisory output"
+else
+    fail "Compact recovery: source=clear + team config should show advisory (got: $_cr4_output)"
+fi
+cleanup_team_dirs "$_cr4_team"
+rm -rf "$REPO_ROOT/.state/session/$_cr4_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr4_sid" 2>/dev/null || true
+
+# Test 5: source=startup + team config → no advisory (startup is NOT compact recovery)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_cr5_sid="ses-1000000000405aaa0de000405"
+_cr5_team="compact-recovery-test-05"
+# Use dead PID so startup cleanup fires (won't reach Section 10 with team config intact)
+create_stale_session "$_cr5_sid" "$_cr5_team" 99999
+_cr5_output=$(echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true)
+if echo "$_cr5_output" | grep -q "COMPACT RECOVERY"; then
+    fail "Compact recovery: source=startup should NOT show advisory"
+else
+    pass "Compact recovery: source=startup → no advisory (not a continuation)"
+fi
+cleanup_team_dirs "$_cr5_team"
+rm -rf "$REPO_ROOT/.state/session/$_cr5_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr5_sid" 2>/dev/null || true
+
 fi  # End CI guard for PID tests
 
 echo ""
