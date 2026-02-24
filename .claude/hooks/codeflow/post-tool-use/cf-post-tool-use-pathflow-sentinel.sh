@@ -9,6 +9,7 @@
 # This hook:
 #   - Detects stage-completion events from SendMessage tool calls
 #   - Creates stage sentinel files to track PathFlow work stage progression
+#   - Validates stage ordering and logs warnings for out-of-order completions
 #   - Enables pathflow-gate enforcement without requiring JSONL writes
 #   - Creates pathflow-team.json on TeamCreate (records lead PID for teammate detection)
 #   - Updates pathflow-team.json on Task (records teammate spawns)
@@ -18,6 +19,10 @@
 #
 # Sentinel detection:
 #   tool_name=SendMessage, STAGE-COMPLETE: WS-* -> pathflow-ws-{stage}
+#
+# Stage ordering validation (warnings, not hard gates):
+#   ws-rev requires prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)
+#   ws-qa requires prior ws-dev
 #
 # Idempotent: touch on existing file is a no-op.
 # Early exit: If is_pathflow_active() returns false, exit 0.
@@ -130,6 +135,30 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
                 else
                     echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
                 fi
+
+                # Stage ordering validation (warnings, not hard gates)
+                # Defense-in-depth: sentinel is always created, but warn on anomalies
+                case "$_stage_lower" in
+                    rev)
+                        # WS-REV should follow a primary stage (ws-dev, ws-plan, ws-docs, ws-test)
+                        _has_primary=""
+                        for _ps in dev plan docs test; do
+                            if has_sentinel "ws-${_ps}"; then
+                                _has_primary="true"
+                                break
+                            fi
+                        done
+                        if [[ -z "$_has_primary" ]]; then
+                            echo "PostToolUse[sentinel]: WARNING: ws-rev created without prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)" >&2
+                        fi
+                        ;;
+                    qa)
+                        # WS-QA should follow WS-DEV (qa only runs in dev-routed pipelines)
+                        if ! has_sentinel "ws-dev"; then
+                            echo "PostToolUse[sentinel]: WARNING: ws-qa created without prior ws-dev sentinel" >&2
+                        fi
+                        ;;
+                esac
             fi
         fi
     fi

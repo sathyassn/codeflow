@@ -7,7 +7,7 @@
 # This hook:
 #   - Blocks Edit/Write when PathFlow is active but PF3-CLASSIFY not reached
 #   - Blocks Bash(git commit) when PF3-CLASSIFY not reached
-#   - Blocks Bash(git push/gh pr) when WS-REV not completed
+#   - Blocks Bash(git push/gh pr) when PF4-EXECUTE not complete AND WS-REV not completed
 #   - Blocks Task(role teammate spawn) when PF3-CLASSIFY not reached
 #   - Uses file sentinels (primary) for fast, reliable enforcement
 #   - Graceful degradation: critical gates BLOCK, non-critical gates ALLOW
@@ -15,7 +15,7 @@
 #
 # Sentinel check (primary enforcement):
 #   Edit/Write, git commit → has_sentinel("pf-3")? Allow/Block
-#   git push, gh pr        → has_sentinel("ws-rev")? Allow/Block
+#   git push, gh pr        → has_sentinel("pf-4") AND has_sentinel("ws-rev")? Allow/Block
 #   Task(role teammate)    → has_sentinel("pf-3")? Allow/Block
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -171,7 +171,7 @@ fi
 # Determine what type of gated operation this is:
 #   edit_write  - Edit/Write tool (requires pf-3 sentinel)
 #   git_commit  - Bash with git commit (requires pf-3 sentinel)
-#   git_push_pr - Bash with git push or gh pr (requires ws-rev sentinel)
+#   git_push_pr - Bash with git push or gh pr (requires pf-4 AND ws-rev sentinels)
 #   role_teammate_spawn - Task tool spawning role teammate (requires pf-3 sentinel)
 #   ungated     - Bash with other commands (always allowed)
 
@@ -248,44 +248,26 @@ if [[ -f "$_PFS_LIB" ]]; then
     source "$_PFS_LIB"
 fi
 
-# Determine required sentinel based on gate type
-REQUIRED_SENTINEL=""
-REQUIRED_DESC=""
+# Helper: block with diagnostic message and exit 2
+_pathflow_block() {
+    local sentinel="$1"
+    local desc="$2"
 
-case "$GATE_TYPE" in
-    edit_write|git_commit|role_teammate_spawn)
-        REQUIRED_SENTINEL="pf-3"
-        REQUIRED_DESC="PF3-CLASSIFY (branch creation)"
-        ;;
-    git_push_pr)
-        REQUIRED_SENTINEL="ws-rev"
-        REQUIRED_DESC="WS-REV (review completed)"
-        ;;
-esac
-
-# Check sentinel
-if [[ -n "$REQUIRED_SENTINEL" ]] && declare -f has_sentinel &>/dev/null; then
-    if has_sentinel "$REQUIRED_SENTINEL"; then
-        # Sentinel exists — prerequisite met, allow
-        exit 0
-    fi
-
-    # Sentinel missing — prerequisite not met, block
     # Collect current sentinels for diagnostic message
-    CURRENT_SENTINELS=""
+    local current_sentinels=""
     if declare -f list_sentinels &>/dev/null; then
-        CURRENT_SENTINELS=$(list_sentinels | tr '\n' ', ' | sed 's/,$//')
+        current_sentinels=$(list_sentinels | tr '\n' ', ' | sed 's/,$//')
     fi
 
     # Log the block event
     if declare -f log_security_event &>/dev/null; then
-        log_security_event "blocked" "pathflow_gate_sentinel" "$TOOL_NAME" "${COMMAND:-$TOOL_NAME}" "Missing sentinel: pathflow-$REQUIRED_SENTINEL"
+        log_security_event "blocked" "pathflow_gate_sentinel" "$TOOL_NAME" "${COMMAND:-$TOOL_NAME}" "Missing sentinel: pathflow-$sentinel"
     fi
 
     # Customize block message for role teammate spawns
-    _block_reason="$GATE_TYPE requires $REQUIRED_DESC. No pathflow-$REQUIRED_SENTINEL sentinel found."
+    local _block_reason="$GATE_TYPE requires $desc. No pathflow-$sentinel sentinel found."
     if [[ "$GATE_TYPE" == "role_teammate_spawn" ]]; then
-        _block_reason="Cannot spawn role teammates before PF3-CLASSIFY. No pathflow-$REQUIRED_SENTINEL sentinel found.
+        _block_reason="Cannot spawn role teammates before PF3-CLASSIFY. No pathflow-$sentinel sentinel found.
 ⛔ Do NOT bypass by creating pf-3 sentinel directly. Delegate to cf-git-operations to create a feature branch, which properly advances to PF3."
     fi
 
@@ -296,12 +278,50 @@ Tool: $TOOL_NAME
 Gate: $GATE_TYPE
 
 Complete earlier phases before this operation.
-Current sentinels: ${CURRENT_SENTINELS:-none}
+Current sentinels: ${current_sentinels:-none}
 
 ⛔ Do NOT bypass PathFlow by creating sentinels directly, using workarounds, or skipping phases.
 Progress through phases sequentially by delegating to the appropriate teammate.
 EOF
     exit 2
+}
+
+# Determine required sentinel(s) based on gate type
+REQUIRED_SENTINEL=""
+REQUIRED_DESC=""
+REQUIRED_SENTINEL_2=""
+REQUIRED_DESC_2=""
+
+case "$GATE_TYPE" in
+    edit_write|git_commit|role_teammate_spawn)
+        REQUIRED_SENTINEL="pf-3"
+        REQUIRED_DESC="PF3-CLASSIFY (branch creation)"
+        ;;
+    git_push_pr)
+        # Dual gate: both phase completion AND review stage must be verified
+        REQUIRED_SENTINEL="pf-4"
+        REQUIRED_DESC="PF4-EXECUTE (phase complete)"
+        REQUIRED_SENTINEL_2="ws-rev"
+        REQUIRED_DESC_2="WS-REV (review completed)"
+        ;;
+esac
+
+# Check sentinel(s)
+if [[ -n "$REQUIRED_SENTINEL" ]] && declare -f has_sentinel &>/dev/null; then
+    # Check first required sentinel
+    if ! has_sentinel "$REQUIRED_SENTINEL"; then
+        _pathflow_block "$REQUIRED_SENTINEL" "$REQUIRED_DESC"
+    fi
+
+    # Check second required sentinel (dual gate for git_push_pr)
+    if [[ -n "${REQUIRED_SENTINEL_2:-}" ]]; then
+        if ! has_sentinel "$REQUIRED_SENTINEL_2"; then
+            _pathflow_block "$REQUIRED_SENTINEL_2" "$REQUIRED_DESC_2"
+        fi
+    fi
+
+    # All required sentinels exist — allow
+    exit 0
 fi
 
 # =============================================================================

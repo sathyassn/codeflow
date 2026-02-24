@@ -381,16 +381,17 @@ fi
 echo ""
 echo "--- Execution Tests: Sentinel Gating - git push / gh pr ---"
 
-# Test 34: BLOCKS git push when no ws-rev sentinel
+# Test 34: BLOCKS git push when neither pf-4 nor ws-rev sentinel exist
+# With dual-sentinel gate, pf-4 is checked first, so block message references pf-4
 TESTS_RUN=$((TESTS_RUN + 1))
 flag_file="$TEST_TMPDIR/pf-active-34"
 touch "$flag_file"
 create_test_sentinel "sess-34" "pf-3"
 output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-34" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push -u origin feat/test"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
-if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]] && [[ "$output" == *"ws-rev"* ]]; then
-    pass "Blocks git push without ws-rev sentinel"
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]] && [[ "$output" == *"pf-4"* ]]; then
+    pass "Blocks git push without pf-4 and ws-rev sentinels"
 else
-    fail "Should block git push without ws-rev sentinel (got exit=$exit_code)"
+    fail "Should block git push without pf-4 sentinel (got exit=$exit_code)"
 fi
 
 # Test 35: BLOCKS gh pr create when no ws-rev sentinel
@@ -405,30 +406,32 @@ else
     fail "Should block gh pr without ws-rev sentinel (got exit=$exit_code)"
 fi
 
-# Test 36: ALLOWS git push when ws-rev sentinel exists
+# Test 36: ALLOWS git push when both pf-4 and ws-rev sentinels exist
 TESTS_RUN=$((TESTS_RUN + 1))
 flag_file="$TEST_TMPDIR/pf-active-36"
 touch "$flag_file"
 create_test_sentinel "sess-36" "pf-3"
+create_test_sentinel "sess-36" "pf-4"
 create_test_sentinel "sess-36" "ws-rev"
 result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-36" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push -u origin feat/test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Allows git push with ws-rev sentinel"
+    pass "Allows git push with pf-4 and ws-rev sentinels"
 else
-    fail "Should allow git push with ws-rev sentinel"
+    fail "Should allow git push with pf-4 and ws-rev sentinels"
 fi
 
-# Test 37: ALLOWS gh pr create when ws-rev sentinel exists
+# Test 37: ALLOWS gh pr create when both pf-4 and ws-rev sentinels exist
 TESTS_RUN=$((TESTS_RUN + 1))
 flag_file="$TEST_TMPDIR/pf-active-37"
 touch "$flag_file"
 create_test_sentinel "sess-37" "pf-3"
+create_test_sentinel "sess-37" "pf-4"
 create_test_sentinel "sess-37" "ws-rev"
 result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-37" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]]; then
-    pass "Allows gh pr with ws-rev sentinel"
+    pass "Allows gh pr with pf-4 and ws-rev sentinels"
 else
-    fail "Should allow gh pr with ws-rev sentinel"
+    fail "Should allow gh pr with pf-4 and ws-rev sentinels"
 fi
 
 echo ""
@@ -740,6 +743,77 @@ if [[ "$result" == *"EXIT:0"* ]]; then
     pass "Compound add+commit (no push) classifies as git_commit"
 else
     fail "Should allow compound add+commit without push (got: $result)"
+fi
+
+echo ""
+echo "--- Execution Tests: Dual-Sentinel Gate (pf-4 + ws-rev) ---"
+
+# Test 62: git_push_pr BLOCKED when pf-4 missing but ws-rev exists
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-62"
+touch "$flag_file"
+create_test_sentinel "sess-62" "pf-3"
+create_test_sentinel "sess-62" "ws-rev"
+# Note: pf-4 is intentionally NOT created
+output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-62" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push -u origin feat/test"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]] && [[ "$output" == *"pf-4"* ]]; then
+    pass "Blocks git push when pf-4 missing but ws-rev exists"
+else
+    fail "Should block git push when pf-4 missing (got exit=$exit_code, output: $output)"
+fi
+
+# Test 63: git_push_pr BLOCKED when ws-rev missing but pf-4 exists
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-63"
+touch "$flag_file"
+create_test_sentinel "sess-63" "pf-3"
+create_test_sentinel "sess-63" "pf-4"
+# Note: ws-rev is intentionally NOT created
+output=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-63" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test\""}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]] && [[ "$output" == *"ws-rev"* ]]; then
+    pass "Blocks gh pr when ws-rev missing but pf-4 exists"
+else
+    fail "Should block gh pr when ws-rev missing (got exit=$exit_code, output: $output)"
+fi
+
+# Test 64: git_push_pr ALLOWED when both pf-4 AND ws-rev exist
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-64"
+touch "$flag_file"
+create_test_sentinel "sess-64" "pf-3"
+create_test_sentinel "sess-64" "pf-4"
+create_test_sentinel "sess-64" "ws-rev"
+result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-64" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push -u origin feat/test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows git push when both pf-4 AND ws-rev exist"
+else
+    fail "Should allow git push when both pf-4 and ws-rev exist (got: $result)"
+fi
+
+# Test 65: gh pr create ALLOWED when both pf-4 AND ws-rev exist
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-65"
+touch "$flag_file"
+create_test_sentinel "sess-65" "pf-3"
+create_test_sentinel "sess-65" "pf-4"
+create_test_sentinel "sess-65" "ws-rev"
+result=$(PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-65" TOOL_NAME="Bash" TOOL_INPUT='{"command":"gh pr create --title \"test\""}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Allows gh pr when both pf-4 AND ws-rev exist"
+else
+    fail "Should allow gh pr when both pf-4 and ws-rev exist (got: $result)"
+fi
+
+# Test 66: git_push_pr degraded mode (no session dir) warns and allows
+TESTS_RUN=$((TESTS_RUN + 1))
+flag_file="$TEST_TMPDIR/pf-active-66"
+touch "$flag_file"
+degraded_root=$(create_degraded_root)
+output=$(REPO_ROOT="$degraded_root" PATHFLOW_FLAG_FILE="$flag_file" CODEFLOW_SESSION_ID="sess-66" TOOL_NAME="Bash" TOOL_INPUT='{"command":"git push origin feat/test"}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"* ]]; then
+    pass "git_push_pr in degraded mode BLOCKS (critical gate)"
+else
+    fail "Should block git push in degraded mode (critical gate, got exit=$exit_code)"
 fi
 
 echo ""

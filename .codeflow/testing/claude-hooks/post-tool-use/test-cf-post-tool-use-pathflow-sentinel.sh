@@ -562,6 +562,72 @@ else
 fi
 
 echo ""
+echo "--- Execution Tests: Stage Ordering Validation ---"
+
+# Test 44: ws-rev sentinel created with warning when no primary stage exists
+TESTS_RUN=$((TESTS_RUN + 1))
+rev_no_primary_session="ses-revnoprim-44"
+create_test_flag "$rev_no_primary_session"
+create_test_env_file "$rev_no_primary_session"
+# Do NOT create any primary stage sentinel (ws-dev, ws-plan, ws-docs, ws-test)
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved","type":"message"},"session_id":"ignored"}'
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
+# Sentinel should still be created (defense-in-depth, not a hard gate)
+if has_test_sentinel "$rev_no_primary_session" "ws-rev"; then
+    pass "ws-rev sentinel created even without primary stage"
+else
+    fail "ws-rev sentinel should be created even without primary stage"
+fi
+# But warning should be logged
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$output" == *"without prior primary stage"* ]]; then
+    pass "ws-rev creation logs warning when no primary stage exists"
+else
+    fail "Should log warning when ws-rev created without primary stage (output: $output)"
+fi
+remove_test_env_file
+
+# Test 46: ws-rev sentinel created WITHOUT warning when ws-plan exists
+TESTS_RUN=$((TESTS_RUN + 1))
+rev_with_plan_session="ses-revplan-46"
+create_test_flag "$rev_with_plan_session"
+create_test_env_file "$rev_with_plan_session"
+# Create ws-plan sentinel first (the primary stage)
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$rev_with_plan_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$rev_with_plan_session/pathflow-ws-plan"
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved","type":"message"},"session_id":"ignored"}'
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
+if has_test_sentinel "$rev_with_plan_session" "ws-rev" && [[ "$output" != *"without prior primary stage"* ]]; then
+    pass "ws-rev created without warning when ws-plan exists"
+else
+    fail "Should create ws-rev without warning when ws-plan exists (output: $output)"
+fi
+remove_test_env_file
+
+# Test 47: ws-qa sentinel created with warning when ws-dev missing
+TESTS_RUN=$((TESTS_RUN + 1))
+qa_no_dev_session="ses-qanodev-47"
+create_test_flag "$qa_no_dev_session"
+create_test_env_file "$qa_no_dev_session"
+# Create ws-rev but NOT ws-dev
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session/pathflow-ws-rev"
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests passed","type":"message"},"session_id":"ignored"}'
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
+if has_test_sentinel "$qa_no_dev_session" "ws-qa"; then
+    pass "ws-qa sentinel created even without ws-dev"
+else
+    fail "ws-qa sentinel should be created even without ws-dev"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$output" == *"without prior ws-dev"* ]]; then
+    pass "ws-qa creation logs warning when ws-dev missing"
+else
+    fail "Should log warning when ws-qa created without ws-dev (output: $output)"
+fi
+remove_test_env_file
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"
