@@ -404,6 +404,61 @@ assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
     "Null work_type passes (field is optional for epics)"
 teardown
 
+# --------------------------------------------------------------------------
+# Test 15: Placeholder ID rejected
+# --------------------------------------------------------------------------
+test_subsection "Placeholder ID rejected"
+
+setup
+filepath="$TEST_DIR/placeholder-id.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "PLACEHOLDER-epic-id"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Placeholder ID causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "placeholder" \
+    "Error message mentions placeholder"
+teardown
+
+# Case-insensitive placeholder detection
+setup
+filepath="$TEST_DIR/placeholder-id-lowercase.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "some-placeholder-value"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Lowercase placeholder ID causes failure"
+teardown
+
+setup
+filepath="$TEST_DIR/placeholder-id-mixed.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "PlAcEhOlDeR_epic"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Mixed-case placeholder ID causes failure"
+teardown
+
 # ============================================================================
 # SUMMARY
 # ============================================================================

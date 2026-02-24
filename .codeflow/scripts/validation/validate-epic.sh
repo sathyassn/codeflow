@@ -185,6 +185,18 @@ $line"
         fi
     done
 
+    # Validate id field does not contain placeholder value
+    local id_value
+    id_value=$(get_field "id" "$frontmatter")
+    if [[ -n "$id_value" ]]; then
+        local id_upper
+        id_upper=$(echo "$id_value" | tr '[:lower:]' '[:upper:]')
+        if [[ "$id_upper" == *"PLACEHOLDER"* ]]; then
+            error "id field contains placeholder value — assign a real epic ID"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
     # Validate format_id pattern
     local format_id
     format_id=$(get_field "format_id" "$frontmatter")
