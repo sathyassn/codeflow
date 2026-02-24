@@ -47,7 +47,7 @@ while IFS= read -r file; do
     # Extract event and filename from path
     # e.g., .claude/hooks/codeflow/session-start/cf-session-start-init.sh
     #   -> event=session-start, name=cf-session-start-init.sh
-    relative="${file#${HOOKS_DIR}/}"
+    relative="${file#"${HOOKS_DIR}"/}"
     event="${relative%%/*}"
     name="${relative#*/}"
 
