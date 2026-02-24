@@ -669,9 +669,70 @@ else
 fi
 
 echo ""
+echo "--- Compact Recovery Section ---"
+
+# Test 69: Has compact recovery section
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "compact recovery" "$HOOK"; then
+    pass "Has compact recovery section"
+else
+    fail "Missing compact recovery section"
+fi
+
+# Test 70: Compact recovery checks for pathflow active (appears in Section 3 + Section 4)
+TESTS_RUN=$((TESTS_RUN + 1))
+COUNT=$(grep -c "_is_pathflow_active" "$HOOK" 2>/dev/null || echo "0")
+if [[ "$COUNT" -ge 2 ]]; then
+    pass "Compact recovery re-uses _is_pathflow_active function (count: $COUNT)"
+else
+    fail "Expected _is_pathflow_active in both Section 3 and Section 4 (count: $COUNT)"
+fi
+
+# Test 71: Compact recovery checks for phase sentinels
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "pathflow-pf-\*" "$HOOK"; then
+    pass "Compact recovery checks for phase sentinel files"
+else
+    fail "Missing pathflow-pf-* glob check in compact recovery"
+fi
+
+# Test 72: Compact recovery outputs MANDATORY instructions
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "MANDATORY.*task tracker registration" "$HOOK"; then
+    pass "Compact recovery outputs MANDATORY task tracker instructions"
+else
+    fail "Missing MANDATORY task tracker registration instruction"
+fi
+
+# Test 73: Compact recovery outputs FORBIDDEN instructions
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "FORBIDDEN.*task tracker registration" "$HOOK"; then
+    pass "Compact recovery outputs FORBIDDEN instructions"
+else
+    fail "Missing FORBIDDEN instruction for task tracker skip"
+fi
+
+# Test 74: Compact recovery mentions all 5 steps
+TESTS_RUN=$((TESTS_RUN + 1))
+STEP_COUNT=$(grep -c "Step [1-5]:" "$HOOK" 2>/dev/null || echo "0")
+if [[ "$STEP_COUNT" -ge 5 ]]; then
+    pass "Compact recovery has all 5 mandatory steps (found: $STEP_COUNT)"
+else
+    fail "Expected 5 steps in compact recovery, found: $STEP_COUNT"
+fi
+
+# Test 75: Compact recovery mentions checkpoint state file
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "pathflow-phase-tasks.json" "$HOOK"; then
+    pass "Compact recovery references pathflow-phase-tasks.json"
+else
+    fail "Missing pathflow-phase-tasks.json reference"
+fi
+
+echo ""
 echo "--- Version Check ---"
 
-# Test 69: Version is 3.0.0 or higher (significant changes)
+# Test 76: Version is 3.0.0 or higher (significant changes)
 TESTS_RUN=$((TESTS_RUN + 1))
 VERSION_LINE=$(grep 'readonly VERSION=' "$HOOK" 2>/dev/null || grep 'VERSION=' "$HOOK" 2>/dev/null | head -1)
 if echo "$VERSION_LINE" | grep -qE '"[3-9]\.[0-9]+\.[0-9]+"'; then

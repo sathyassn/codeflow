@@ -48,7 +48,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.3.0"
+readonly VERSION="2.4.0"
 
 # =============================================================================
 # SETUP
@@ -248,10 +248,10 @@ fi
 # Clean up env file (session ID shared state)
 rm -f "${REPO_ROOT}/.state/runtime/codeflow-env.sh" 2>/dev/null || true
 
-# Clean up session-specific temp files
-TEMP_DIR="/tmp/claude/sessions/$SESSION_ID"
-if [[ -d "$TEMP_DIR" ]]; then
-    rm -rf "$TEMP_DIR" 2>/dev/null || true
+# Clean up project temp directory (staging area, test artifacts, etc.)
+PROJECT_TEMP_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}"
+if [[ -d "$PROJECT_TEMP_DIR" ]]; then
+    rm -rf "$PROJECT_TEMP_DIR" 2>/dev/null || true
 fi
 
 # =============================================================================

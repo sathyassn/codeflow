@@ -1318,4 +1318,27 @@ FORBIDDEN:
 
 6. **Continue from current phase** -- Map sentinel state to phase and resume. Do not restart PF1-INIT -- the team, sentinels, and session state are intact.
 
+7. **Resume task tracker registration** -- 🔒 **L1 ENFORCED: Task tracker registration MUST resume after context overflow.**
+
+   The checkpoint system creates phase sentinels ONLY when ALL expected tasks for a phase are registered and completed in the task tracker. Missing registrations block sentinel creation and downstream phase gates. Skipping task tracker registration after context overflow is a **PROTOCOL VIOLATION** equivalent to skipping PF3-CLASSIFY.
+
+   **Mandatory post-overflow task tracker checklist:**
+
+   | Step | Action | Tool | Verify |
+   |------|--------|------|--------|
+   | 1 | Read checkpoint state | Read `.state/session/{SID}/pathflow/pathflow-phase-tasks.json` | Shows registered/completed/missing per phase |
+   | 2 | Identify current phase | Check sentinel files at `.state/sentinels/pathflow/{SID}/` | Latest `pf-N` sentinel = last completed phase |
+   | 3 | Backfill completed phases | For each completed task NOT in task tracker: `TaskCreate` then immediately `TaskUpdate` to `completed` | Checkpoint JSON shows all prior tasks as registered+completed |
+   | 4 | Register current phase tasks | `TaskCreate` for EVERY `PF{N}-TSK-{NN}` in the current phase | All tasks appear in `TaskList` output |
+   | 5 | Verify sentinel pipeline | After backfill, confirm checkpoint system resumes creating sentinels | New sentinel files appear for completed phases |
+
+   ⛔ **FORBIDDEN after context overflow:**
+   - Skipping task tracker registration because "previous tasks were already done"
+   - Registering only the current task while ignoring earlier unregistered tasks
+   - Clubbing multiple `PF{N}-TSK-{NN}` entries into a single TaskCreate
+   - Proceeding past a phase gate without verifying its sentinel exists
+   - Assuming the checkpoint system will "catch up" without explicit backfill
+
+   Continue following the mandatory task tracker mirroring rules (Section 7: Task Tracker Mirroring) for all remaining phases.
+
 **Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately read `.state/runtime/current-session-id` and check sentinels before sending any teammate messages. Do NOT assume all teammates are dead.

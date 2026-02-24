@@ -30,7 +30,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.6.0"
+readonly VERSION="1.7.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -617,6 +617,18 @@ if [[ "$_SESSION_SOURCE" == "compact" ]] || [[ "$_SESSION_SOURCE" == "resume" ]]
         echo "   Step 3: Only respawn confirmed-dead teammates (verify tmux if no response)"
         echo "FORBIDDEN: Respawning without verification. Teammates are likely still alive."
     fi
+fi
+
+# =============================================================================
+# SECTION 11: PROJECT TEMP DIRECTORY
+# =============================================================================
+# Create fresh project temp directory for staging, test artifacts, etc.
+# Cleaned up by session-end hook.
+
+if [[ "$_TEAMMATE_MODE" != "true" ]]; then
+    PROJECT_TEMP_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}"
+    rm -rf "$PROJECT_TEMP_DIR" 2>/dev/null || true
+    mkdir -p "$PROJECT_TEMP_DIR"
 fi
 
 # =============================================================================

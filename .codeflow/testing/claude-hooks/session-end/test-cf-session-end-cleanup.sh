@@ -31,7 +31,7 @@ fail() { echo "FAIL: $1${2:+ ($2)}"; TESTS_FAILED=$((TESTS_FAILED + 1)); TESTS_R
 setup_test_dirs() {
     mkdir -p "$REPO_ROOT/.state/sentinels/skill" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/session" 2>/dev/null || true
-    mkdir -p /tmp/claude/sessions/test-session 2>/dev/null || true
+    mkdir -p /tmp/claude/codeflow 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/sentinels" 2>/dev/null || true
 }
 
@@ -43,7 +43,7 @@ cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
     rm -rf "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID:-test-session}/pathflow" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-* 2>/dev/null || true
-    rm -rf /tmp/claude/sessions/test-session 2>/dev/null || true
+    rm -rf /tmp/claude/codeflow 2>/dev/null || true
 }
 
 # Helper: create a sentinel JSON with specific expiry
@@ -249,11 +249,11 @@ else
     fail "Should cleanup temp files"
 fi
 
-# Test 24: References session temp directory
-if grep -q "/tmp/claude/sessions" "$HOOK"; then
-    pass "References session temp directory"
+# Test 24: References project temp directory
+if grep -q "/tmp/claude/" "$HOOK"; then
+    pass "References project temp directory"
 else
-    fail "Should reference session temp directory"
+    fail "Should reference project temp directory"
 fi
 
 # Test 25: Uses rm -rf for temp cleanup
@@ -391,15 +391,16 @@ else
     fail "Should preserve valid (non-expired) sentinel"
 fi
 
-# Test 41: Actually cleans session temp directory
+# Test 41: Actually cleans project temp directory
 setup_test_dirs
-touch /tmp/claude/sessions/test-session/test-file.txt 2>/dev/null || true
-CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
-if [[ ! -d /tmp/claude/sessions/test-session ]]; then
-    pass "Actually cleans session temp directory"
+mkdir -p /tmp/claude/codeflow/test-artifact 2>/dev/null || true
+touch /tmp/claude/codeflow/test-artifact/test-file.txt 2>/dev/null || true
+CF_PROJECT_ROOT="codeflow" CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d /tmp/claude/codeflow ]]; then
+    pass "Actually cleans project temp directory"
 else
-    fail "Should actually clean session temp directory"
-    rm -rf /tmp/claude/sessions/test-session
+    fail "Should actually clean project temp directory"
+    rm -rf /tmp/claude/codeflow
 fi
 
 # Test 42: Actually cleans session state directory
@@ -1038,6 +1039,66 @@ fi
 rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 
 fi  # End CI guard
+
+# =============================================================================
+# PROJECT TEMP DIRECTORY CLEANUP
+# =============================================================================
+
+echo ""
+echo "--- Project Temp Directory Cleanup ---"
+
+# Test: Hook defines PROJECT_TEMP_DIR variable
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'PROJECT_TEMP_DIR=' "$HOOK"; then
+    pass "Hook defines PROJECT_TEMP_DIR variable"
+else
+    fail "Missing PROJECT_TEMP_DIR variable definition"
+fi
+
+# Test: Project temp dir uses CF_PROJECT_ROOT with fallback
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'CF_PROJECT_ROOT:-codeflow' "$HOOK"; then
+    pass "Project temp dir uses CF_PROJECT_ROOT with codeflow fallback"
+else
+    fail "Missing CF_PROJECT_ROOT fallback in project temp dir path"
+fi
+
+# Test: Project temp cleanup uses /tmp/claude/ base path
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '/tmp/claude/' "$HOOK" | head -1 && grep 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q '/tmp/claude/'; then
+    pass "Project temp cleanup uses /tmp/claude/ base path"
+else
+    # Alternative check
+    if grep -q 'PROJECT_TEMP_DIR="/tmp/claude/' "$HOOK"; then
+        pass "Project temp cleanup uses /tmp/claude/ base path"
+    else
+        fail "Wrong or missing /tmp/claude/ base path for project temp"
+    fi
+fi
+
+# Test: Project temp cleanup uses rm -rf with error suppression
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -A2 'PROJECT_TEMP_DIR' "$HOOK" | grep -q 'rm -rf.*2>/dev/null'; then
+    pass "Project temp cleanup uses rm -rf with error suppression"
+else
+    fail "Missing rm -rf or error suppression for project temp"
+fi
+
+# Test: Project temp cleanup checks directory existence before removal
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -B1 'rm -rf.*PROJECT_TEMP_DIR' "$HOOK" | grep -q '\-d.*PROJECT_TEMP_DIR'; then
+    pass "Project temp cleanup checks directory existence"
+else
+    fail "Missing directory existence check for project temp"
+fi
+
+# Test: Dead /tmp/claude/sessions/ code was removed
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '/tmp/claude/sessions/' "$HOOK"; then
+    fail "Dead /tmp/claude/sessions/ code should be removed"
+else
+    pass "Dead /tmp/claude/sessions/ code removed"
+fi
 
 cleanup_test_artifacts
 

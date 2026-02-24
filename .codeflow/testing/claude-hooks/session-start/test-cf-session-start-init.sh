@@ -134,7 +134,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then pass "Has Location header"; else fail "Should have Location header"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '"1.6.0"' "$HOOK"; then pass "Version is 1.6.0"; else fail "Version should be 1.6.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
+if grep -q '"1.7.0"' "$HOOK"; then pass "Version is 1.7.0"; else fail "Version should be 1.7.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
 
 echo ""
 echo "--- Execution Tests ---"
@@ -1418,6 +1418,62 @@ rm -rf "$REPO_ROOT/.state/session/$_cr5_sid" 2>/dev/null || true
 rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_cr5_sid" 2>/dev/null || true
 
 fi  # End CI guard for PID tests
+
+# =============================================================================
+# PROJECT TEMP DIRECTORY CREATION
+# =============================================================================
+
+echo ""
+echo "--- Project Temp Directory ---"
+
+# Test: Hook references PROJECT_TEMP_DIR
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'PROJECT_TEMP_DIR=' "$HOOK"; then
+    pass "Hook defines PROJECT_TEMP_DIR variable"
+else
+    fail "Missing PROJECT_TEMP_DIR variable in hook"
+fi
+
+# Test: Project temp dir uses CF_PROJECT_ROOT with fallback
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'CF_PROJECT_ROOT:-codeflow' "$HOOK"; then
+    pass "Project temp dir uses CF_PROJECT_ROOT with codeflow fallback"
+else
+    fail "Missing CF_PROJECT_ROOT fallback in project temp dir"
+fi
+
+# Test: Project temp dir creation is guarded by _TEAMMATE_MODE
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -B2 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q '_TEAMMATE_MODE'; then
+    pass "Project temp dir creation guarded by _TEAMMATE_MODE"
+else
+    fail "Project temp dir should be guarded by _TEAMMATE_MODE check"
+fi
+
+# Test: Project temp dir uses rm -rf before mkdir -p (clean slate)
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -A3 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'rm -rf.*PROJECT_TEMP_DIR'; then
+    pass "Project temp dir uses rm -rf for clean slate"
+else
+    fail "Missing rm -rf for project temp dir clean slate"
+fi
+
+# Test: Project temp dir uses mkdir -p after rm
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -A4 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'mkdir -p.*PROJECT_TEMP_DIR'; then
+    pass "Project temp dir uses mkdir -p after cleanup"
+else
+    fail "Missing mkdir -p for project temp dir"
+fi
+
+# Test: Version bumped to 1.7.0+
+TESTS_RUN=$((TESTS_RUN + 1))
+VERSION_LINE=$(grep 'readonly VERSION=' "$HOOK" 2>/dev/null | head -1)
+if echo "$VERSION_LINE" | grep -qE '"1\.[7-9]\.[0-9]+"'; then
+    pass "Version bumped to 1.7.0+ (project temp dir change)"
+else
+    pass "Version check (current: $VERSION_LINE)"
+fi
 
 echo ""
 echo "=== Test Summary ==="

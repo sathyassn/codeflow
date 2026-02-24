@@ -166,6 +166,25 @@ if _is_pathflow_active; then
     echo "Mode: pathflow"
     echo "PCV: bypassed (WS-REV provides quality assurance)"
     echo ""
+
+    # Task tracker recovery check for compact recovery (context overflow)
+    _sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
+    if [[ -d "$_sentinel_dir" ]] && ls "$_sentinel_dir"/pathflow-pf-* &>/dev/null; then
+        echo "COMPACT RECOVERY: Task tracker registration check required."
+        echo "Phase sentinels exist from prior context. Task tracker may be out of sync."
+        echo ""
+        echo "MANDATORY: Resume task tracker registration after context overflow."
+        echo "  Step 1: Read checkpoint state at .state/session/{SID}/pathflow/pathflow-phase-tasks.json"
+        echo "  Step 2: Identify current phase from sentinel files at .state/sentinels/pathflow/{SID}/"
+        echo "  Step 3: Backfill completed phases: TaskCreate then TaskUpdate to completed for each missing task"
+        echo "  Step 4: Register current phase tasks: TaskCreate for EVERY PF{N}-TSK-{NN}"
+        echo "  Step 5: Verify sentinel pipeline resumes creating sentinels"
+        echo ""
+        echo "FORBIDDEN: Skipping task tracker registration after context overflow."
+        echo "FORBIDDEN: Clubbing multiple PF{N}-TSK-{NN} entries into a single TaskCreate."
+        echo "FORBIDDEN: Proceeding past a phase gate without verifying its sentinel exists."
+        echo ""
+    fi
 fi
 
 exit 0
