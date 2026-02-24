@@ -4,11 +4,11 @@
 # Hook Type: SessionEnd
 # Usage:     Called by Claude Code at session end
 # Platform:  macOS/Linux
-# Version:   2.2.0
+# Version:   2.3.0
 #
 # This hook:
 #   - Guards against premature cleanup using pathflow-active flag
-#     (if flag exists, this is a teammate shutdown — skip cleanup)
+#     (if flag exists AND lead PID is alive, this is a teammate shutdown — skip cleanup)
 #   - Removes all PathFlow sentinels (session-scoped)
 #   - Cleans up EXPIRED skill sentinels (preserves valid ones)
 #   - Cleans up memory-progress state files
@@ -48,7 +48,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.2.0"
+readonly VERSION="2.3.0"
 
 # =============================================================================
 # SETUP
@@ -116,14 +116,38 @@ fi
 # =============================================================================
 # PATHFLOW GUARD
 # =============================================================================
-# If pathflow-active flag exists, this SessionEnd is from a teammate shutdown
-# (not the lead's final session end). Skip cleanup to preserve shared state.
+# If pathflow-active flag exists, check if the lead is still alive.
+# If lead PID is alive, this SessionEnd is from a teammate shutdown — skip cleanup.
+# If lead PID is dead (or no team file exists), the session is orphaned — proceed with cleanup.
 # The flag is removed by team-guard hook during PF7-END (before TeamDelete),
-# so when the lead's session actually ends, this check passes and cleanup runs.
+# so when the lead's session actually ends, _PATHFLOW_ACTIVE is already false.
 
 if [[ "$_PATHFLOW_ACTIVE" == "true" ]]; then
-    echo "SessionEnd: PathFlow active, skipping cleanup (teammate shutdown)" >&2
-    exit 0
+    # Fix 4: Check lead PID liveness before skipping cleanup
+    _pf_team_file_guard="$SESSION_STATE_DIR/pathflow/pathflow-team.json"
+    _skip_cleanup="true"
+
+    if [[ -f "$_pf_team_file_guard" ]] && command -v jq &>/dev/null; then
+        _guard_lead_pid=$(jq -r '.lead_pid // 0' "$_pf_team_file_guard" 2>/dev/null) || _guard_lead_pid=0
+        if [[ "$_guard_lead_pid" -gt 0 ]] && kill -0 "$_guard_lead_pid" 2>/dev/null; then
+            # Lead is alive — this is a teammate shutdown, skip cleanup
+            echo "SessionEnd: PathFlow active, lead PID $_guard_lead_pid alive — skipping cleanup (teammate shutdown)" >&2
+            exit 0
+        else
+            # Lead is dead — orphaned session, proceed with cleanup
+            echo "SessionEnd: PathFlow active but lead PID $_guard_lead_pid dead — proceeding with cleanup (orphaned session)" >&2
+            _skip_cleanup="false"
+        fi
+    else
+        # No team file — cannot verify lead, proceed with cleanup
+        echo "SessionEnd: PathFlow active but no team file — proceeding with cleanup (no lead to protect)" >&2
+        _skip_cleanup="false"
+    fi
+
+    if [[ "$_skip_cleanup" == "true" ]]; then
+        echo "SessionEnd: PathFlow active, skipping cleanup (teammate shutdown)" >&2
+        exit 0
+    fi
 fi
 
 # Track cleanup stats for output

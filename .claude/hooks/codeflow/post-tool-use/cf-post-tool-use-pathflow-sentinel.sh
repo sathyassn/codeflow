@@ -9,7 +9,7 @@
 # This hook:
 #   - Detects stage-completion events from SendMessage tool calls
 #   - Creates stage sentinel files to track PathFlow work stage progression
-#   - Validates stage ordering and logs warnings for out-of-order completions
+#   - Validates stage ordering and blocks out-of-order completions (exit 2)
 #   - Enables pathflow-gate enforcement without requiring JSONL writes
 #   - Creates pathflow-team.json on TeamCreate (records lead PID for teammate detection)
 #   - Updates pathflow-team.json on Task (records teammate spawns)
@@ -20,7 +20,7 @@
 # Sentinel detection:
 #   tool_name=SendMessage, STAGE-COMPLETE: WS-* -> pathflow-ws-{stage}
 #
-# Stage ordering validation (warnings, not hard gates):
+# Stage ordering validation (hard gates — blocks out-of-order, exit 2):
 #   ws-rev requires prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)
 #   ws-qa requires prior ws-dev or ws-test
 #
@@ -30,7 +30,8 @@
 # Compatibility: bash 3.2+ (macOS compatible)
 #
 # Exit codes:
-#   0 - Always succeeds (PostToolUse hooks should not block)
+#   0 - Operation allowed (sentinel created or non-sentinel tool call)
+#   2 - Stage ordering violation (sentinel NOT created, out-of-order blocked)
 
 set -euo pipefail
 
@@ -132,17 +133,12 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
                 _stage="${BASH_REMATCH[1]}"
                 # Convert to lowercase for sentinel name
                 _stage_lower=$(echo "$_stage" | tr '[:upper:]' '[:lower:]')
-                if create_sentinel "ws-${_stage_lower}"; then
-                    echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
-                else
-                    echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
-                fi
 
-                # Stage ordering validation (warnings, not hard gates)
-                # Defense-in-depth: sentinel is always created, but warn on anomalies
+                # Stage ordering validation (hard blocks — checked BEFORE sentinel creation)
+                # Prevents out-of-order sentinels that would allow downstream gates to pass prematurely
                 case "$_stage_lower" in
                     rev)
-                        # WS-REV should follow a primary stage (ws-dev, ws-plan, ws-docs, ws-test)
+                        # WS-REV requires a prior primary stage (ws-dev, ws-plan, ws-docs, ws-test)
                         _has_primary=""
                         for _ps in dev plan docs test; do
                             if has_sentinel "ws-${_ps}"; then
@@ -151,16 +147,24 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
                             fi
                         done
                         if [[ -z "$_has_primary" ]]; then
-                            echo "PostToolUse[sentinel]: WARNING: ws-rev created without prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)" >&2
+                            echo "PostToolUse[sentinel]: BLOCKED: ws-rev requires prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)" >&2
+                            exit 2
                         fi
                         ;;
                     qa)
-                        # WS-QA should follow WS-DEV or WS-TEST
+                        # WS-QA requires prior WS-DEV or WS-TEST
                         if ! has_sentinel "ws-dev" && ! has_sentinel "ws-test"; then
-                            echo "PostToolUse[sentinel]: WARNING: ws-qa created without prior ws-dev or ws-test sentinel" >&2
+                            echo "PostToolUse[sentinel]: BLOCKED: ws-qa requires prior ws-dev or ws-test sentinel" >&2
+                            exit 2
                         fi
                         ;;
                 esac
+
+                if create_sentinel "ws-${_stage_lower}"; then
+                    echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
+                else
+                    echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
+                fi
             fi
         fi
     fi

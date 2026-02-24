@@ -7,7 +7,7 @@
 # This hook:
 #   - Blocks Edit/Write when PathFlow is active but PF3-CLASSIFY not reached
 #   - Blocks Bash(git commit) when PF3-CLASSIFY not reached
-#   - Blocks Bash(git push/gh pr) when PF4-EXECUTE not complete AND WS-REV not completed
+#   - Blocks Bash(git push/gh pr) when PF5-VERIFY not complete AND WS-REV not completed
 #   - Blocks Task(role teammate spawn) when PF3-CLASSIFY not reached
 #   - Uses file sentinels (primary) for fast, reliable enforcement
 #   - Graceful degradation: critical gates BLOCK, non-critical gates ALLOW
@@ -15,7 +15,7 @@
 #
 # Sentinel check (primary enforcement):
 #   Edit/Write, git commit → has_sentinel("pf-3")? Allow/Block
-#   git push, gh pr        → has_sentinel("pf-4") AND has_sentinel("ws-rev")? Allow/Block
+#   git push, gh pr        → has_sentinel("pf-5") AND has_sentinel("ws-rev")? Allow/Block
 #   Task(role teammate)    → has_sentinel("pf-3")? Allow/Block
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="4.1.0"
+VERSION="4.2.0"
 
 
 # =============================================================================
@@ -298,9 +298,9 @@ case "$GATE_TYPE" in
         REQUIRED_DESC="PF3-CLASSIFY (branch creation)"
         ;;
     git_push_pr)
-        # Dual gate: both phase completion AND review stage must be verified
-        REQUIRED_SENTINEL="pf-4"
-        REQUIRED_DESC="PF4-EXECUTE (phase complete)"
+        # Dual gate: both acceptance verification AND review stage must be verified
+        REQUIRED_SENTINEL="pf-5"
+        REQUIRED_DESC="PF5-VERIFY (acceptance criteria verified)"
         REQUIRED_SENTINEL_2="ws-rev"
         REQUIRED_DESC_2="WS-REV (review completed)"
         ;;

@@ -4,7 +4,7 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.5.0
+# Version:   1.6.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
@@ -14,6 +14,7 @@
 #   Section 3: Directory creation
 #   Section 4: Stale session detection (warning-only)
 #   Section 5: Sentinel cleanup (expires-based)
+#   Section 5b: Orphan sentinel sweep (sentinels without session dirs)
 #   Section 6: Active task context expiry
 #   Section 7: PathFlow flag creation (with guard)
 #   Section 7b: Sentinel recovery (context overflow)
@@ -29,7 +30,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.5.0"
+readonly VERSION="1.6.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -72,6 +73,15 @@ if [[ -f "$_env_file_pre" ]]; then
     # shellcheck source=/dev/null
     source "$_env_file_pre" 2>/dev/null || true
     _old_sid="${CODEFLOW_SESSION_ID:-}"
+
+    # Fix 2: Validate session ID format before using it
+    # Expected format: ses-{13-digit-timestamp}{12-hex-chars} (28 chars total)
+    if [[ -n "$_old_sid" ]] && [[ ! "$_old_sid" =~ ^ses-[0-9]{13}[a-f0-9]{12}$ ]]; then
+        echo "SessionStart: Invalid session ID format '$_old_sid' — discarding env file" >&2
+        rm -f "$_env_file_pre" 2>/dev/null || true
+        unset CODEFLOW_SESSION_ID
+        _old_sid=""
+    fi
 
     if [[ -n "$_old_sid" ]]; then
         _old_team_file="${REPO_ROOT}/.state/session/${_old_sid}/pathflow/pathflow-team.json"
@@ -166,8 +176,33 @@ if [[ -f "$_env_file_pre" ]]; then
                 rm -f "$_env_file_pre" 2>/dev/null || true
                 unset CODEFLOW_SESSION_ID
                 echo "SessionStart: Cleaned orphan env file (no pathflow-team.json, no flag)" >&2
+            else
+                # Fix 1: Flag exists but no team file — pre-TeamCreate crash
+                # Apply source guard: startup/unknown -> full cleanup, compact/resume/clear -> preserve
+                if [[ "$_SESSION_SOURCE" == "startup" ]] || [[ "$_SESSION_SOURCE" == "unknown" ]]; then
+                    echo "SessionStart: Pre-TeamCreate crash detected (flag exists, no team file, source=$_SESSION_SOURCE)" >&2
+
+                    # Clean session directory (includes flag, checkpoint)
+                    if [[ -d "${REPO_ROOT}/.state/session/${_old_sid}" ]]; then
+                        rm -rf "${REPO_ROOT}/.state/session/${_old_sid}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale session dir: ${_old_sid}" >&2
+                    fi
+
+                    # Clean sentinels
+                    if [[ -d "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" ]]; then
+                        rm -rf "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale sentinels: ${_old_sid}" >&2
+                    fi
+
+                    # Clean env file
+                    rm -f "$_env_file_pre" 2>/dev/null || true
+                    unset CODEFLOW_SESSION_ID
+                    echo "SessionStart: Pre-TeamCreate stale cleanup complete" >&2
+                else
+                    # Compact/resume/clear — lead's own session pre-TeamCreate, proceed normally
+                    echo "SessionStart: Flag exists, no team file, source=$_SESSION_SOURCE — proceeding (pre-TeamCreate continuation)" >&2
+                fi
             fi
-            # If flag exists but no team file: lead's own session pre-TeamCreate, proceed normally
         fi
     fi
 fi
@@ -350,6 +385,32 @@ else
             fi
         done
     fi
+fi
+
+# =============================================================================
+# SECTION 5b: ORPHAN SENTINEL SWEEP
+# =============================================================================
+# After normal cleanup and session ID generation, scan for orphan sentinel directories.
+# An orphan is a sentinel dir under .state/sentinels/pathflow/{SID}/ that has no
+# corresponding .state/session/{SID}/ directory. This catches sentinels left behind
+# when session dirs were cleaned but sentinels were missed (e.g., partial cleanup).
+# Skip the current session's sentinel directory (just created in Section 3).
+
+_pf_sentinels_base="$REPO_ROOT/.state/sentinels/pathflow"
+if [[ -d "$_pf_sentinels_base" ]]; then
+    for _sentinel_dir in "$_pf_sentinels_base"/ses-*; do
+        [[ -d "$_sentinel_dir" ]] || continue
+        _sentinel_sid=$(basename "$_sentinel_dir")
+
+        # Skip current session
+        [[ "$_sentinel_sid" == "$CODEFLOW_SESSION_ID" ]] && continue
+
+        # Check if corresponding session directory exists
+        if [[ ! -d "${REPO_ROOT}/.state/session/${_sentinel_sid}" ]]; then
+            rm -rf "$_sentinel_dir" 2>/dev/null || true
+            echo "SessionStart: Removed orphan sentinel dir: ${_sentinel_sid}" >&2
+        fi
+    done
 fi
 
 # =============================================================================

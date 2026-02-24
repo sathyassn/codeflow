@@ -289,11 +289,14 @@ else
     fail "Should exit 0 when pathflow not active"
 fi
 
-# Test 24: SendMessage STAGE-COMPLETE: WS-REV triggers ws-rev sentinel
+# Test 24: SendMessage STAGE-COMPLETE: WS-REV triggers ws-rev sentinel (with primary stage)
 TESTS_RUN=$((TESTS_RUN + 1))
 rev_session="ses-wsrev-24"
 create_test_flag "$rev_session"
 create_test_env_file "$rev_session"
+# Create a primary stage sentinel first (required by stage ordering validation)
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$rev_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$rev_session/pathflow-ws-dev"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved","type":"message"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 if has_test_sentinel "$rev_session" "ws-rev"; then
@@ -564,30 +567,30 @@ fi
 echo ""
 echo "--- Execution Tests: Stage Ordering Validation ---"
 
-# Test 44: ws-rev sentinel created with warning when no primary stage exists
+# Test 44: ws-rev BLOCKED when no primary stage exists (hard gate)
 TESTS_RUN=$((TESTS_RUN + 1))
 rev_no_primary_session="ses-revnoprim-44"
 create_test_flag "$rev_no_primary_session"
 create_test_env_file "$rev_no_primary_session"
 # Do NOT create any primary stage sentinel (ws-dev, ws-plan, ws-docs, ws-test)
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved","type":"message"},"session_id":"ignored"}'
-output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
-# Sentinel should still be created (defense-in-depth, not a hard gate)
-if has_test_sentinel "$rev_no_primary_session" "ws-rev"; then
-    pass "ws-rev sentinel created even without primary stage"
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) && exit_code=0 || exit_code=$?
+# Sentinel should NOT be created (hard gate blocks before creation)
+if ! has_test_sentinel "$rev_no_primary_session" "ws-rev"; then
+    pass "ws-rev sentinel NOT created when no primary stage (hard block)"
 else
-    fail "ws-rev sentinel should be created even without primary stage"
+    fail "ws-rev sentinel should NOT be created without primary stage (hard block)"
 fi
-# But warning should be logged
+# BLOCKED message should be logged and exit 2
 TESTS_RUN=$((TESTS_RUN + 1))
-if [[ "$output" == *"without prior primary stage"* ]]; then
-    pass "ws-rev creation logs warning when no primary stage exists"
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"*"ws-rev requires prior primary stage"* ]]; then
+    pass "ws-rev blocked with exit 2 when no primary stage exists"
 else
-    fail "Should log warning when ws-rev created without primary stage (output: $output)"
+    fail "Should block ws-rev with exit 2 when no primary stage (exit=$exit_code, output: $output)"
 fi
 remove_test_env_file
 
-# Test 46: ws-rev sentinel created WITHOUT warning when ws-plan exists
+# Test 46: ws-rev sentinel ALLOWED when ws-plan exists (ordering satisfied)
 TESTS_RUN=$((TESTS_RUN + 1))
 rev_with_plan_session="ses-revplan-46"
 create_test_flag "$rev_with_plan_session"
@@ -596,15 +599,15 @@ create_test_env_file "$rev_with_plan_session"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$rev_with_plan_session"
 touch "$REPO_ROOT/.state/sentinels/pathflow/$rev_with_plan_session/pathflow-ws-plan"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved","type":"message"},"session_id":"ignored"}'
-output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
-if has_test_sentinel "$rev_with_plan_session" "ws-rev" && [[ "$output" != *"without prior primary stage"* ]]; then
-    pass "ws-rev created without warning when ws-plan exists"
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) && exit_code=0 || exit_code=$?
+if has_test_sentinel "$rev_with_plan_session" "ws-rev" && [[ $exit_code -eq 0 ]] && [[ "$output" != *"BLOCKED"* ]]; then
+    pass "ws-rev created when ws-plan exists (ordering satisfied)"
 else
-    fail "Should create ws-rev without warning when ws-plan exists (output: $output)"
+    fail "Should create ws-rev when ws-plan exists (exit=$exit_code, output: $output)"
 fi
 remove_test_env_file
 
-# Test 47: ws-qa sentinel created with warning when BOTH ws-dev AND ws-test missing
+# Test 47: ws-qa BLOCKED when BOTH ws-dev AND ws-test missing (hard gate)
 TESTS_RUN=$((TESTS_RUN + 1))
 qa_no_dev_session="ses-qanodev-47"
 create_test_flag "$qa_no_dev_session"
@@ -613,17 +616,34 @@ create_test_env_file "$qa_no_dev_session"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session"
 touch "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session/pathflow-ws-rev"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests passed","type":"message"},"session_id":"ignored"}'
-output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
-if has_test_sentinel "$qa_no_dev_session" "ws-qa"; then
-    pass "ws-qa sentinel created even without ws-dev or ws-test"
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) && exit_code=0 || exit_code=$?
+# Sentinel should NOT be created (hard gate blocks before creation)
+if ! has_test_sentinel "$qa_no_dev_session" "ws-qa"; then
+    pass "ws-qa sentinel NOT created when ws-dev and ws-test missing (hard block)"
 else
-    fail "ws-qa sentinel should be created even without ws-dev or ws-test"
+    fail "ws-qa sentinel should NOT be created without ws-dev or ws-test (hard block)"
 fi
+# BLOCKED message should be logged and exit 2
 TESTS_RUN=$((TESTS_RUN + 1))
-if [[ "$output" == *"without prior ws-dev"* ]]; then
-    pass "ws-qa creation logs warning when ws-dev and ws-test missing"
+if [[ $exit_code -eq 2 ]] && [[ "$output" == *"BLOCKED"*"ws-qa requires prior ws-dev or ws-test"* ]]; then
+    pass "ws-qa blocked with exit 2 when ws-dev and ws-test missing"
 else
-    fail "Should log warning when ws-qa created without ws-dev or ws-test (output: $output)"
+    fail "Should block ws-qa with exit 2 when ws-dev and ws-test missing (exit=$exit_code, output: $output)"
+fi
+remove_test_env_file
+
+# Test 55: ws-dev sentinel created with no ordering check (primary stages are unchecked)
+TESTS_RUN=$((TESTS_RUN + 1))
+dev_no_prereq_session="ses-devnoprereq-55"
+create_test_flag "$dev_no_prereq_session"
+create_test_env_file "$dev_no_prereq_session"
+# No prior sentinels — ws-dev should still be created (no ordering requirement)
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV -- implementation done","type":"message"},"session_id":"ignored"}'
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) && exit_code=0 || exit_code=$?
+if has_test_sentinel "$dev_no_prereq_session" "ws-dev" && [[ $exit_code -eq 0 ]] && [[ "$output" != *"BLOCKED"* ]]; then
+    pass "ws-dev created with no ordering check (primary stages unchecked)"
+else
+    fail "ws-dev should always be created (no ordering requirement, exit=$exit_code, output: $output)"
 fi
 remove_test_env_file
 
@@ -676,7 +696,7 @@ fi
 echo ""
 echo "--- WS-QA Ordering with WS-TEST ---"
 
-# Test 52: ws-qa created WITHOUT warning when ws-test exists (TEST pipeline)
+# Test 52: ws-qa ALLOWED when ws-test exists (TEST pipeline, ordering satisfied)
 TESTS_RUN=$((TESTS_RUN + 1))
 qa_test_session="ses-qatest-52"
 create_test_flag "$qa_test_session"
@@ -685,11 +705,11 @@ create_test_env_file "$qa_test_session"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$qa_test_session"
 touch "$REPO_ROOT/.state/sentinels/pathflow/$qa_test_session/pathflow-ws-test"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests passed","type":"message"},"session_id":"ignored"}'
-output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
-if has_test_sentinel "$qa_test_session" "ws-qa" && [[ "$output" != *"WARNING"*"ws-qa"*"without"* ]]; then
-    pass "ws-qa created without warning when ws-test exists (TEST pipeline)"
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) && exit_code=0 || exit_code=$?
+if has_test_sentinel "$qa_test_session" "ws-qa" && [[ $exit_code -eq 0 ]] && [[ "$output" != *"BLOCKED"* ]]; then
+    pass "ws-qa created when ws-test exists (TEST pipeline, ordering satisfied)"
 else
-    fail "ws-qa should be created without warning when ws-test exists"
+    fail "ws-qa should be created when ws-test exists (exit=$exit_code, output: $output)"
 fi
 remove_test_env_file
 
@@ -710,11 +730,14 @@ else
 fi
 remove_test_env_file
 
-# Test 54: Mixed case stage-complete message creates sentinel
+# Test 54: Mixed case stage-complete message creates sentinel (with primary stage)
 TESTS_RUN=$((TESTS_RUN + 1))
 mixed_session="ses-mixed-54"
 create_test_flag "$mixed_session"
 create_test_env_file "$mixed_session"
+# Create a primary stage sentinel first (required by stage ordering validation for ws-rev)
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$mixed_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$mixed_session/pathflow-ws-dev"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"Stage-Complete: WS-Rev -- approved","type":"message"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 if has_test_sentinel "$mixed_session" "ws-rev"; then

@@ -231,9 +231,8 @@ Event types:
    - Pipeline results: stage verdicts (pass/fail/approved)
    - Key decisions: any Tier 2/3 decisions made during session
    - Open items: anything deferred or blocked
-5. Write summary to `.claude/memory/{domain}/current-work.md` (overwrite previous)
-6. Append `session_summary` event to memory-events.jsonl with summary content
-7. Report: `"KNOWLEDGE: record-session-summary — session summary written to memory/{domain}/current-work.md"`
+5. Append `session_summary` event to memory-events.jsonl with summary content
+6. Report: `"KNOWLEDGE: record-session-summary — session summary recorded"`
 
 #### Step 7: Record PR Outcome (PF6-TSK-08)
 

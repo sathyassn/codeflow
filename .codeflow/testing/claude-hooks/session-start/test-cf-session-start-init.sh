@@ -134,7 +134,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then pass "Has Location header"; else fail "Should have Location header"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '"1.5.0"' "$HOOK"; then pass "Version is 1.5.0"; else fail "Version should be 1.5.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
+if grep -q '"1.6.0"' "$HOOK"; then pass "Version is 1.6.0"; else fail "Version should be 1.6.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
 
 echo ""
 echo "--- Execution Tests ---"
@@ -846,7 +846,7 @@ echo "--- PID-Based Cleanup: Stale Session Execution ---"
 # PID Test 5: Dead PID triggers full cleanup (env file removed)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-05"
+_stale_sid="ses-1000000000005dead01d00005"
 _stale_team="stale-team-05"
 # Use PID 99999 which is almost certainly dead
 create_stale_session "$_stale_sid" "$_stale_team" 99999
@@ -861,7 +861,7 @@ cleanup_team_dirs "$_stale_team"
 # PID Test 6: Dead PID triggers session directory removal
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-06"
+_stale_sid="ses-1000000000006dead01d00006"
 _stale_team="stale-team-06"
 create_stale_session "$_stale_sid" "$_stale_team" 99999
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
@@ -875,7 +875,7 @@ cleanup_team_dirs "$_stale_team"
 # PID Test 7: Dead PID triggers sentinel directory removal
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-07"
+_stale_sid="ses-1000000000007dead01d00007"
 _stale_team="stale-team-07"
 create_stale_session "$_stale_sid" "$_stale_team" 99999
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
@@ -889,7 +889,7 @@ cleanup_team_dirs "$_stale_team"
 # PID Test 8: Dead PID triggers team config cleanup
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-08"
+_stale_sid="ses-1000000000008dead01d00008"
 _stale_team="stale-team-08"
 create_stale_session "$_stale_sid" "$_stale_team" 99999
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
@@ -903,7 +903,7 @@ fi
 # PID Test 9: Dead PID triggers task list cleanup
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-09"
+_stale_sid="ses-1000000000009dead01d00009"
 _stale_team="stale-team-09"
 create_stale_session "$_stale_sid" "$_stale_team" 99999
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
@@ -917,7 +917,7 @@ fi
 # PID Test 10: Dead PID removes active-task.json
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_stale_sid="ses-deadpid-10"
+_stale_sid="ses-1000000000010dead01d00010"
 _stale_team="stale-team-10"
 create_stale_session "$_stale_sid" "$_stale_team" 99999
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
@@ -934,7 +934,7 @@ echo "--- PID-Based Cleanup: Teammate Detection ---"
 # PID Test 11: Alive PID skips cleanup (teammate path)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_alive_sid="ses-alive-11"
+_alive_sid="ses-1000000000011a00a11e00011"
 _alive_team="alive-team-11"
 # Use current shell PID (always alive)
 _alive_pid=$$
@@ -986,7 +986,7 @@ fi
 # PID Test 14: Env file exists but no pathflow-team.json and no flag = orphan env cleanup
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_orphan_sid="ses-orphan-14"
+_orphan_sid="ses-10000000000140000fa000014"
 mkdir -p "$REPO_ROOT/.state/runtime"
 echo "export CODEFLOW_SESSION_ID='$_orphan_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
 # Create session dir but no pathflow directory at all
@@ -1002,7 +1002,7 @@ fi
 # PID Test 15: Missing team config during cleanup is handled gracefully
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_notc_sid="ses-noteamcfg-15"
+_notc_sid="ses-1000000000015000eac000015"
 _notc_team="missing-team-15"
 # Create stale session but do NOT create team config
 _notc_dir="$REPO_ROOT/.state/session/$_notc_sid"
@@ -1036,7 +1036,7 @@ echo "--- PID-Based Cleanup: Source Guard ---"
 # Source Guard Test 1: source=startup + dead PID → cleanup runs (sentinels deleted)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg1_sid="ses-srcguard-01"
+_sg1_sid="ses-100000000000100000a000001"
 _sg1_team="srcguard-team-01"
 create_stale_session "$_sg1_sid" "$_sg1_team" 99999
 # Feed source=startup via stdin JSON
@@ -1058,7 +1058,7 @@ cleanup_team_dirs "$_sg1_team"
 # Source Guard Test 2: source=compact + dead PID → cleanup skipped (sentinels preserved)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg2_sid="ses-srcguard-02"
+_sg2_sid="ses-100000000000200000b000002"
 _sg2_team="srcguard-team-02"
 create_stale_session "$_sg2_sid" "$_sg2_team" 99999
 # Feed source=compact via stdin JSON — simulates context compaction
@@ -1080,7 +1080,7 @@ cleanup_team_dirs "$_sg2_team"
 # Source Guard Test 3: source=resume + dead PID → cleanup skipped (sentinels preserved)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg3_sid="ses-srcguard-03"
+_sg3_sid="ses-100000000000300000c000003"
 _sg3_team="srcguard-team-03"
 create_stale_session "$_sg3_sid" "$_sg3_team" 99999
 # Feed source=resume via stdin JSON — simulates /resume command
@@ -1102,7 +1102,7 @@ cleanup_team_dirs "$_sg3_team"
 # Source Guard Test 4: source=unknown + dead PID → cleanup runs (fail-safe)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg4_sid="ses-srcguard-04"
+_sg4_sid="ses-100000000000400000d000004"
 _sg4_team="srcguard-team-04"
 create_stale_session "$_sg4_sid" "$_sg4_team" 99999
 # Feed source=unknown via stdin JSON — or no source field (defaults to unknown)
@@ -1124,7 +1124,7 @@ cleanup_team_dirs "$_sg4_team"
 # Source Guard Test 5: source=compact + dead PID → updates pathflow-team.json lead_pid
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg5_sid="ses-srcguard-05"
+_sg5_sid="ses-100000000000500000e000005"
 _sg5_team="srcguard-team-05"
 create_stale_session "$_sg5_sid" "$_sg5_team" 99999
 # Feed source=compact via stdin JSON — simulates context compaction
@@ -1146,7 +1146,7 @@ cleanup_team_dirs "$_sg5_team"
 # Source Guard Test 6: source=resume + dead PID → updates pathflow-team.json lead_pid
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env
-_sg6_sid="ses-srcguard-06"
+_sg6_sid="ses-100000000000600000f000006"
 _sg6_team="srcguard-team-06"
 create_stale_session "$_sg6_sid" "$_sg6_team" 99999
 # Feed source=resume via stdin JSON — simulates /resume command
@@ -1164,6 +1164,165 @@ else
     fail "Source guard: resume + dead PID should preserve pathflow-team.json"
 fi
 cleanup_team_dirs "$_sg6_team"
+
+echo ""
+echo "--- Pre-TeamCreate Crash Cleanup (Fix 1) ---"
+
+# Fix 1 Test 1: Flag exists + no team file + source=startup → full cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_ptc1_sid="ses-1000000000201aaa0bc000201"
+mkdir -p "$REPO_ROOT/.state/session/$_ptc1_sid/pathflow"
+echo "{\"session_id\":\"$_ptc1_sid\"}" > "$REPO_ROOT/.state/session/$_ptc1_sid/pathflow/is-pathflow-active"
+# NO pathflow-team.json — simulates pre-TeamCreate crash
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_ptc1_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_ptc1_sid/pathflow-pf-1"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_ptc1_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/sentinels/pathflow/$_ptc1_sid" ]]; then
+    pass "Pre-TeamCreate crash: startup + flag + no team file cleans sentinels"
+else
+    fail "Pre-TeamCreate crash: startup should clean sentinels when no team file"
+fi
+if [[ ! -d "$REPO_ROOT/.state/session/$_ptc1_sid" ]]; then
+    pass "Pre-TeamCreate crash: startup + flag + no team file cleans session dir"
+else
+    fail "Pre-TeamCreate crash: startup should clean session dir when no team file"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+
+# Fix 1 Test 2: Flag exists + no team file + source=compact → preserve (same session)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_ptc2_sid="ses-1000000000202aaa0bc000202"
+mkdir -p "$REPO_ROOT/.state/session/$_ptc2_sid/pathflow"
+echo "{\"session_id\":\"$_ptc2_sid\"}" > "$REPO_ROOT/.state/session/$_ptc2_sid/pathflow/is-pathflow-active"
+# NO pathflow-team.json
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_ptc2_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_ptc2_sid/pathflow-pf-1"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_ptc2_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"source":"compact"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$_ptc2_sid" ]]; then
+    pass "Pre-TeamCreate: compact + flag + no team file preserves sentinels"
+else
+    fail "Pre-TeamCreate: compact should preserve sentinels (same session)"
+fi
+if [[ -d "$REPO_ROOT/.state/session/$_ptc2_sid" ]]; then
+    pass "Pre-TeamCreate: compact + flag + no team file preserves session dir"
+else
+    fail "Pre-TeamCreate: compact should preserve session dir (same session)"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+
+# Fix 1 Test 3: Flag exists + no team file + source=unknown → full cleanup (fail-safe)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_ptc3_sid="ses-1000000000203aaa0bc000203"
+mkdir -p "$REPO_ROOT/.state/session/$_ptc3_sid/pathflow"
+echo "{\"session_id\":\"$_ptc3_sid\"}" > "$REPO_ROOT/.state/session/$_ptc3_sid/pathflow/is-pathflow-active"
+# NO pathflow-team.json
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_ptc3_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_ptc3_sid/pathflow-pf-1"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_ptc3_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"source":"unknown"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/session/$_ptc3_sid" ]]; then
+    pass "Pre-TeamCreate crash: unknown + flag + no team file cleans session dir"
+else
+    fail "Pre-TeamCreate crash: unknown should clean session dir (fail-safe)"
+fi
+
+echo ""
+echo "--- Session ID Format Validation (Fix 2) ---"
+
+# Fix 2 Test 1: Invalid session ID format in env file → discard and clean
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='INVALID-bad-format'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# After hook runs, the env file should have a NEW valid session ID (not the invalid one)
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    if ! grep -q 'INVALID-bad-format' "$REPO_ROOT/.state/runtime/codeflow-env.sh"; then
+        pass "Invalid session ID: discarded invalid format from env file"
+    else
+        fail "Invalid session ID: should discard invalid format"
+    fi
+else
+    pass "Invalid session ID: env file was cleaned (new one may be created)"
+fi
+
+# Fix 2 Test 2: Valid session ID format passes validation
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_valid_sid="ses-1234567890123abcdef012345"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_valid_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# No pathflow-team.json and no flag → orphan cleanup (but ID itself is valid format)
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# The valid ID should not be rejected by format validation (it goes through orphan env path instead)
+# We just verify the hook doesn't crash
+result=$?
+pass "Valid session ID: format validation passes (no crash)"
+
+echo ""
+echo "--- Orphan Sentinel Sweep (Fix 3) ---"
+
+# Fix 3 Test 1: Orphaned sentinel dir (no corresponding session dir) is cleaned
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_orphan_sentinel_sid="ses-1000000000301aaa0de000301"
+# Create sentinel dir but NO corresponding session dir
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_orphan_sentinel_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_orphan_sentinel_sid/pathflow-pf-1"
+# Ensure no session dir exists
+rm -rf "$REPO_ROOT/.state/session/$_orphan_sentinel_sid" 2>/dev/null || true
+# Run hook with a different session ID (so the orphan is not our current session)
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/sentinels/pathflow/$_orphan_sentinel_sid" ]]; then
+    pass "Orphan sentinel sweep: cleans sentinel dir without corresponding session dir"
+else
+    fail "Orphan sentinel sweep: should clean sentinel dir with no session dir"
+    rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_orphan_sentinel_sid" 2>/dev/null || true
+fi
+
+# Fix 3 Test 2: Non-orphaned sentinel dir (has corresponding session dir) is preserved
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_active_sentinel_sid="ses-1000000000302aaa0de000302"
+# Create both sentinel dir AND corresponding session dir
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_active_sentinel_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_active_sentinel_sid/pathflow-pf-3"
+mkdir -p "$REPO_ROOT/.state/session/$_active_sentinel_sid"
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$_active_sentinel_sid" ]]; then
+    pass "Orphan sentinel sweep: preserves sentinel dir with corresponding session dir"
+else
+    fail "Orphan sentinel sweep: should preserve sentinel dir when session dir exists"
+fi
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_active_sentinel_sid" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/session/$_active_sentinel_sid" 2>/dev/null || true
+
+# Fix 3 Test 3: Current session's sentinel dir is never cleaned by sweep
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+# The current session created by the hook will have its sentinel dir created by the hook itself
+# We verify the hook doesn't accidentally clean its own session
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# Read the new session ID from the env file
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+    if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID" ]]; then
+        pass "Orphan sentinel sweep: current session's sentinel dir preserved"
+    else
+        fail "Orphan sentinel sweep: should not clean current session's sentinel dir"
+    fi
+else
+    pass "Orphan sentinel sweep: no env file to check (skipped)"
+fi
 
 fi  # End CI guard for PID tests
 

@@ -863,8 +863,9 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 |------|-------------------|--------|------|
 | Edit/Write before PF3 | `pf-3` | Edit, Write tools | `cf-pre-tool-use-pathflow-gate.sh` |
 | git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
-| git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
+| git push/PR before PF5-VERIFY + WS-REV | `pf-5` + `ws-rev` (dual gate, both required; `pf-5` transitively requires `pf-4`) | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
+| Stage ordering within PF4 | Primary stage sentinel (`ws-dev`/`ws-docs`/`ws-plan`/`ws-test`) must exist before WS-REV can complete and `ws-rev` before WS-QA can ship | `Bash(git push)`, `Bash(gh pr)` (via dual gate requiring `pf-5` + `ws-rev`) | `cf-pre-tool-use-pathflow-gate.sh` |
 | TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `cf-pre-tool-use-team-guard.sh` |
 
 **Instruction-enforced gates (not currently hook-enforced):**
@@ -873,13 +874,11 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 |------|-------------|----------------------|
 | pf-1 before spawning cf-knowledge-layer | "Verify pf-1 sentinel exists before PF2-CONTEXT" | Low risk -- phases run sequentially. The pf-3 gate checks a hardcoded ROLE_TEAMMATES name list (5 role teammates); function teammates are not in that list and pass through ungated. Adding per-phase gates would add complexity for negligible benefit. |
 | pf-2 before spawning cf-git-operations | "Verify pf-2 sentinel exists before PF3-CLASSIFY" | Same rationale -- function teammates are not in the ROLE_TEAMMATES gate list. PF3 naturally follows PF2 in the sequential lifecycle. |
-| Primary stage sentinel before WS-REV | "Verify primary stage complete before spawning cf-review" | The pf-3 gate blocks cf-review (it IS in the ROLE_TEAMMATES list) but does not check inter-stage ordering. Self-correcting -- review finds no work to review and reports back. |
 
 **Not enforced (acceptable risk):**
 
 | Skipped Phase | Why Acceptable |
 |---------------|---------------|
-| Skipping PF5-VERIFY, going directly to PF6 | PF5 is a lightweight lead-only verification step with no destructive actions. The `ws-rev` sentinel gate on `gh pr create` already ensures review completion before PR creation. |
 | Skipping PF6-COMPLETE, going directly to PF7 | TeamDelete (the critical PF7 action) IS gated on `pf-6` sentinel by team-guard hook. Other PF7 cleanup actions (teammate shutdown) are safe regardless. |
 
 ### Sentinel System
@@ -1217,7 +1216,6 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/runtime/current-session-id` | Current session ID reference |
 | `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/pathflow/is-pathflow-active` | Flag file: PathFlow session is active |
-| `.claude/memory/{domain}/current-work.md` | Domain-specific work context (Tier 2) |
 
 ---
 
@@ -1262,22 +1260,40 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 
 ### Context Overflow Recovery
 
-When Claude Code's context window overflows mid-session, the conversation continues from a new context. Teammates may be dead but team config retains stale entries.
+When Claude Code's context window overflows mid-session, the conversation continues from a new context. **Teammates are NOT affected** -- they run as independent processes in separate tmux panes and continue executing their current work. Only the lead's context is lost.
+
+**Key distinction: context overflow vs teammate death**
+
+Context overflow means the lead lost its conversation history -- NOT that teammates are dead. Teammates may be:
+
+- **Alive and idle** -- waiting for the next message (most common after graceful compaction)
+- **Alive and working** -- still executing their current task
+- **Dead** -- only if the session was also forcefully terminated (a separate event from compaction)
+
+Do NOT assume teammates are dead after context overflow. Verify before respawning.
 
 **Detection signals:**
 
 - "This session is being continued from a previous conversation" preamble from Claude Code
-- Team config exists at `~/.claude/teams/{team-name}/config.json` with members whose tmux panes are dead
-- Numbered suffix spawn attempts (e.g., cf-git-operations-2) because old entries still exist
-- Teammates unresponsive to SendMessage (messages silently accepted but never delivered)
+- Lead has no memory of what work was in progress or what phase was reached
+- Teammates may be alive (graceful compaction) or dead (session forcefully killed)
 
 **Recovery procedure:**
 
-1. **Detect stale team** -- Read team config at `~/.claude/teams/{team-name}/config.json`
-2. **Check pane health** -- For each member, verify tmux pane is alive: `tmux list-panes -a | grep {paneId}`
-3. **Clean stale entries** -- Remove members with dead panes from team config (or delete the config and re-create the team)
-4. **Respawn persistent teammates** -- Respawn cf-security, cf-knowledge-layer, and cf-git-operations with the SAME names and agent types. Include re-orientation context in spawn prompts.
-5. **Re-read pathflow state** -- Check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase
-6. **Determine current phase** -- Map sentinel state to phase (e.g., pf-3 exists but no ws-dev-done means PF4-EXECUTE in progress) and continue from that phase
+1. **Check pathflow state first** -- Read `.state/runtime/current-session-id` for the SID, then check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase.
 
-**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately check for stale team state before proceeding with any work. The SessionStart hook will output a warning if stale team configs are detected.
+2. **Message teammates before assuming dead** -- Send a status message to each expected teammate:
+   `SendMessage(type="message", recipient="cf-{role}", content="Context overflow recovery. What is your current state and what were you last working on?")`
+   Wait for responses. If a teammate responds, it is alive -- no respawn needed.
+
+   ⚠️ **Warning:** `SendMessage` does NOT verify liveness. A message to a dead teammate is silently accepted but never delivered. Lack of response does NOT prove death -- the teammate may be busy. Confirm via tmux before concluding a teammate is dead.
+
+3. **Verify tmux only if unresponsive** -- If a teammate does not respond within ~30 seconds, check pane status: `tmux list-panes -a -F '#{pane_id} #{pane_dead}'`. Cross-reference pane IDs from `~/.claude/teams/{team-name}/config.json`.
+
+4. **Respawn only confirmed-dead teammates** -- Respawn with the SAME name and agent type (see Name Preservation above). Include re-orientation context: current phase, task description, what work was in progress before overflow.
+
+5. **Orient all teammates** -- Regardless of alive/dead status, send an orientation message to all active teammates summarizing the current phase and next action. Alive teammates that were waiting may need to be re-directed.
+
+6. **Continue from current phase** -- Map sentinel state to phase and resume. Do not restart PF1-INIT -- the team, sentinels, and session state are intact.
+
+**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately read `.state/runtime/current-session-id` and check sentinels before sending any teammate messages. Do NOT assume all teammates are dead.
