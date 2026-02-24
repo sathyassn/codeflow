@@ -3,7 +3,7 @@ id: "epic-01KJ6YG0QA7MWQQFWCZMSP7HB6"
 format_id: "INF-EPC-015"
 title: "CodeFlow Go CLI - Phase 6 V4 Implementation"
 summary: "Build the production CodeFlow CLI binary in Go — sole SQLite authority, welcome screen, doctor, autorun, cross-platform"
-status: planning
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-23T00:00:00Z"
-updated_at: "2026-02-23T00:00:00Z"
+updated_at: "2026-02-24T00:00:00Z"
 ---
 
 # INF-EPC-015: CodeFlow Go CLI - Phase 6 V4 Implementation
@@ -74,7 +74,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-015-001 | Go project initialization and build infrastructure | todo | high |
+| INF-TSK-015-001 | Go project initialization and build infrastructure | complete | high |
 | INF-TSK-015-002 | Core CLI entry point and simple commands | todo | high |
 | INF-TSK-015-003 | Fix DB schema drift (migration 005) | todo | high |
 | INF-TSK-015-004 | Database core package | todo | high |
@@ -102,6 +102,16 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 ### Blocks
 
 - Phase 7: NX Monorepo + Claude Code wrapping
+
+## Go Standards
+
+All Go code in this epic MUST follow [cf-go-standards](/.claude/skills/cf-go-standards/SKILL.md). Key requirements:
+
+- Error handling: Wrap with context (`fmt.Errorf`), use sentinel errors
+- Testing: Table-driven, t.Run(), t.Helper(), t.TempDir(), 85% coverage
+- Concurrency: context.Context, errgroup, go test -race
+- Lint: golangci-lint, go vet, go fmt before commit
+- Go 1.26 features: errors.AsType, filepath.WalkDir, slog, b.Loop()
 
 ## Technical Notes
 

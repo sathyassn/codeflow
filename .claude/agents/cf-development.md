@@ -107,6 +107,17 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 - Naming: Files `snake_case.py` | Variables `snake_case` | Constants `SCREAMING_SNAKE` | Classes `PascalCase`
 - Full reference: [cf-python-standards](../skills/cf-python-standards/SKILL.md)
 
+**Go packages (`.go`):**
+
+- New packages: Apply Go package template -- `doc.go` with package comment, exported types/functions with godoc comments, `_test.go` with table-driven tests
+- CLI commands: Use `main() -> run() -> os.Exit` pattern, structured logging with `slog`
+- All files: Run `golangci-lint run` and `go vet` after editing. Fix all issues before commit.
+- Error handling: Wrap all errors with context (`fmt.Errorf("context: %w", err)`), use sentinel errors (`var ErrNotFound = errors.New(...)`)
+- Concurrency: Always use `context.Context`, `errgroup.Group` for managed goroutines, run `go test -race ./...`
+- Testing: Table-driven with `t.Run()`, `t.Helper()` on helpers, `t.TempDir()`, `t.Context()` (Go 1.24+), 85% coverage threshold
+- Naming: Packages `lowercase` | Exported `PascalCase` | Unexported `camelCase` | Errors `ErrPrefix`
+- Full reference: [cf-go-standards](../skills/cf-go-standards/SKILL.md)
+
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
 **Modularization check:** If scripts exceed thresholds (lines > 200, functions > 10, nesting > 4 levels), extract to shared libraries. Document intentional exceptions.
@@ -392,6 +403,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
 | Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Shell script template, ShellCheck rules |
 | Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Python template, ruff/flake8 rules |
+| Go Standards | `.claude/skills/cf-go-standards/SKILL.md` | Go package structure, golangci-lint rules |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |

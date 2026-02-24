@@ -578,6 +578,48 @@ if [[ -d "$_TEAMS_DIR" ]] && command -v jq &>/dev/null; then
 fi
 
 # =============================================================================
+# SECTION 10: COMPACT RECOVERY DETECTION
+# =============================================================================
+# If this is a compact/resume continuation AND team config or pathflow-active
+# flags exist, emit a mandatory liveness-verification reminder.
+# Non-blocking (exit 0). Advisory output only.
+
+if [[ "$_SESSION_SOURCE" == "compact" ]] || [[ "$_SESSION_SOURCE" == "resume" ]] || [[ "$_SESSION_SOURCE" == "clear" ]]; then
+    _has_team_config="false"
+    _has_pathflow_flag="false"
+
+    # Check for existing team configs
+    if [[ -d "${HOME}/.claude/teams" ]]; then
+        for _tc in "${HOME}/.claude/teams"/*/config.json; do
+            if [[ -f "$_tc" ]]; then
+                _has_team_config="true"
+                break
+            fi
+        done
+    fi
+
+    # Check for pathflow-active flags
+    if [[ -d "$SHARED_STATE_DIR" ]]; then
+        for _sd in "$SHARED_STATE_DIR"/ses-*/pathflow/is-pathflow-active; do
+            if [[ -f "$_sd" ]]; then
+                _has_pathflow_flag="true"
+                break
+            fi
+        done
+    fi
+
+    if [[ "$_has_team_config" == "true" ]] || [[ "$_has_pathflow_flag" == "true" ]]; then
+        echo ""
+        echo "COMPACT RECOVERY: Session continued after context overflow."
+        echo "MANDATORY: Verify teammate liveness BEFORE any respawn."
+        echo "   Step 1: SendMessage to each teammate -- ask \"What is your current state?\""
+        echo "   Step 2: Wait 30 seconds for responses"
+        echo "   Step 3: Only respawn confirmed-dead teammates (verify tmux if no response)"
+        echo "FORBIDDEN: Respawning without verification. Teammates are likely still alive."
+    fi
+fi
+
+# =============================================================================
 # SUCCESS
 # =============================================================================
 

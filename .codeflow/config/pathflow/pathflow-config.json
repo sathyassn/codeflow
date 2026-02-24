@@ -5,6 +5,8 @@
     "PF1-INIT": {
       "name": "Session Start",
       "phase_order": 1,
+      "execution_order": "sequential",
+      "execution_order_note": "Tasks must execute in order: TeamCreate first, then spawn cf-security. No parallelism.",
       "subject": "PF1-INIT: Initialize session",
       "description": "Register session record, spawn cf-security. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Initializing PathFlow session",
@@ -27,6 +29,7 @@
         {
           "id": "PF1-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF1-TSK-01"],
           "description": "Spawn cf-security teammate",
           "assigned_to": "team-lead",
           "operation": "Task(subagent_type=cf-security)",
@@ -41,6 +44,8 @@
     "PF2-CONTEXT": {
       "name": "Context Awareness",
       "phase_order": 2,
+      "execution_order": "sequential",
+      "execution_order_note": "Tasks must execute in order: spawn cf-knowledge-layer, query active work, load context, tracking decision. No parallelism.",
       "subject": "PF2-CONTEXT: Load context",
       "description": "Spawn cf-knowledge-layer, query active work, load memory. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Loading session context",
@@ -63,6 +68,7 @@
         {
           "id": "PF2-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF2-TSK-01"],
           "description": "Query active work and session state",
           "assigned_to": "cf-knowledge-layer",
           "operation": "detect-active-work",
@@ -71,6 +77,7 @@
         {
           "id": "PF2-TSK-03",
           "task_order": 3,
+          "blocked_by": ["PF2-TSK-02"],
           "description": "Load memory context for current work",
           "assigned_to": "cf-knowledge-layer",
           "operation": "load-work-context",
@@ -79,6 +86,7 @@
         {
           "id": "PF2-TSK-04",
           "task_order": 4,
+          "blocked_by": ["PF2-TSK-03"],
           "description": "Determine tracked vs untracked decision",
           "assigned_to": "team-lead",
           "operation": "Tracking decision (tracked/untracked/ask)",
@@ -95,6 +103,8 @@
     "PF3-CLASSIFY": {
       "name": "Work Classification",
       "phase_order": 3,
+      "execution_order": "sequential",
+      "execution_order_note": "Tasks must execute in order: classify work type, spawn cf-git-operations, create branch, register task (conditional), begin work. No parallelism.",
       "subject": "PF3-CLASSIFY: Classify and register work",
       "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Classifying work and creating branch",
@@ -117,6 +127,7 @@
         {
           "id": "PF3-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF3-TSK-01"],
           "description": "Spawn cf-git-operations teammate",
           "assigned_to": "team-lead",
           "operation": "Task(subagent_type=cf-git-operations)",
@@ -125,6 +136,7 @@
         {
           "id": "PF3-TSK-03",
           "task_order": 3,
+          "blocked_by": ["PF3-TSK-02"],
           "description": "Create feature branch (triggers pf-3 sentinel, unlocks Edit/Write)",
           "assigned_to": "cf-git-operations",
           "operation": "create-feature-branch",
@@ -133,6 +145,7 @@
         {
           "id": "PF3-TSK-04",
           "task_order": 4,
+          "blocked_by": ["PF3-TSK-03"],
           "description": "Register task in WorkGraph (runs after pf-3 sentinel, for adhoc/non-planned tasks only; skipped when origin=planned)",
           "assigned_to": "cf-knowledge-layer",
           "operation": "ensure-work-registered",
@@ -142,6 +155,7 @@
         {
           "id": "PF3-TSK-05",
           "task_order": 5,
+          "blocked_by": ["PF3-TSK-04"],
           "description": "Begin work session by writing begin_work event to ledger",
           "assigned_to": "cf-knowledge-layer",
           "operation": "begin-work",
@@ -159,6 +173,8 @@
     "PF4-EXECUTE": {
       "name": "Work Execution",
       "phase_order": 4,
+      "execution_order": "parallel_stages_allowed",
+      "execution_order_note": "Within a stage, parallel batch execution is allowed per max_parallel/batch_size. Stages themselves follow pipeline order (e.g., WS-DEV before WS-REV before WS-QA). Tasks PF4-TSK-01 and PF4-TSK-02 are sequential prerequisites before stage execution begins.",
       "subject": "PF4-EXECUTE: Run work pipeline",
       "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Executing work pipeline",
@@ -182,6 +198,7 @@
         {
           "id": "PF4-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF4-TSK-01"],
           "description": "Validate task and epic fields before work starts",
           "assigned_to": "cf-knowledge-layer",
           "operation": "validate-task-fields",
@@ -190,6 +207,7 @@
         {
           "id": "PF4-TSK-03",
           "task_order": 3,
+          "blocked_by": ["PF4-TSK-02"],
           "description": "Assess parallel batch need, then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST). If scope involves multiple independent items exceeding batch_size, spawn parallel instances per max_parallel. Default to parallel when in doubt.",
           "assigned_to": "team-lead",
           "operation": "Spawn stage teammate per pipeline",
@@ -198,6 +216,7 @@
         {
           "id": "PF4-TSK-04",
           "task_order": 4,
+          "blocked_by": ["PF4-TSK-03"],
           "description": "Execute WS-REV stage (universal review)",
           "assigned_to": "team-lead",
           "operation": "Spawn cf-review with mode per work type",
@@ -206,6 +225,7 @@
         {
           "id": "PF4-TSK-05",
           "task_order": 5,
+          "blocked_by": ["PF4-TSK-04"],
           "description": "Execute WS-QA stage (if pipeline includes it)",
           "assigned_to": "team-lead",
           "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
@@ -224,6 +244,8 @@
     "PF5-VERIFY": {
       "name": "Work Verification",
       "phase_order": 5,
+      "execution_order": "sequential",
+      "execution_order_note": "Tasks must execute in order: verify all stages passed, then verify acceptance criteria. No parallelism.",
       "subject": "PF5-VERIFY: Verify acceptance criteria",
       "description": "Verify all pipeline stages passed and acceptance criteria met. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Verifying acceptance criteria",
@@ -246,6 +268,7 @@
         {
           "id": "PF5-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF5-TSK-01"],
           "description": "Check acceptance criteria met",
           "assigned_to": "team-lead",
           "operation": "Check acceptance criteria against task record",
@@ -260,6 +283,8 @@
     "PF6-COMPLETE": {
       "name": "Work Completion",
       "phase_order": 6,
+      "execution_order": "strictly_sequential",
+      "execution_order_note": "Tasks MUST execute in strict order: complete-work (TSK-01) and record-summary (TSK-02) before any git operations. Then commit (TSK-03), squash (TSK-04), create PR (TSK-05), verify CI (TSK-06), await merge (TSK-07), record outcome (TSK-08), sync local (TSK-09). No parallelism. Each task depends on the previous.",
       "subject": "PF6-COMPLETE: Finalize and create PR",
       "description": "Update task status, record session memory, commit state files, squash branch, create PR. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Finalizing work and creating PR",
@@ -282,6 +307,7 @@
         {
           "id": "PF6-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF6-TSK-01"],
           "description": "Update project memory via cf-knowledge-layer",
           "assigned_to": "cf-knowledge-layer",
           "operation": "record-session-summary",
@@ -290,6 +316,7 @@
         {
           "id": "PF6-TSK-03",
           "task_order": 3,
+          "blocked_by": ["PF6-TSK-02"],
           "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state) via cf-git-operations",
           "assigned_to": "cf-git-operations",
           "operation": "commit-outstanding-changes",
@@ -298,6 +325,7 @@
         {
           "id": "PF6-TSK-04",
           "task_order": 4,
+          "blocked_by": ["PF6-TSK-03"],
           "description": "Squash all branch commits into a single commit with a synthesized conventional-commit message before PR creation",
           "assigned_to": "cf-git-operations",
           "operation": "squash-branch",
@@ -306,6 +334,7 @@
         {
           "id": "PF6-TSK-05",
           "task_order": 5,
+          "blocked_by": ["PF6-TSK-04"],
           "description": "Create PR via cf-git-operations (create-pr). Records pr_created event to ledger and notifies cf-knowledge-layer with PR number.",
           "assigned_to": "cf-git-operations",
           "operation": "create-pr",
@@ -314,6 +343,7 @@
         {
           "id": "PF6-TSK-06",
           "task_order": 6,
+          "blocked_by": ["PF6-TSK-05"],
           "description": "Verify PR CI checks via cf-git-operations (verify-pr-ci). Polls CI status with gh pr checks --watch --fail-fast. On CI failure, escalate to team lead.",
           "assigned_to": "cf-git-operations",
           "operation": "verify-pr-ci",
@@ -322,6 +352,7 @@
         {
           "id": "PF6-TSK-07",
           "task_order": 7,
+          "blocked_by": ["PF6-TSK-06"],
           "description": "Await PR merge disposition via cf-git-operations (await-pr-merge). Interactive: notify user to merge via GitHub UI, wait for confirmation. Autorun+auto_merge: execute gh pr merge --delete-branch. Autorun+no_auto_merge: task is already complete from PF6-TSK-01, just proceed to PF7.",
           "assigned_to": "cf-git-operations",
           "operation": "await-pr-merge",
@@ -330,6 +361,7 @@
         {
           "id": "PF6-TSK-08",
           "task_order": 8,
+          "blocked_by": ["PF6-TSK-07"],
           "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_merged or pr_created event. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "record-pr-outcome",
@@ -338,6 +370,7 @@
         {
           "id": "PF6-TSK-09",
           "task_order": 9,
+          "blocked_by": ["PF6-TSK-08"],
           "description": "Sync local repository via cf-git-operations (sync-local). Interactive+merged: git pull origin main. Autorun+auto_merge: git pull origin {target_branch}. Autorun+no_merge: no pull needed.",
           "assigned_to": "cf-git-operations",
           "operation": "sync-local",
@@ -359,6 +392,8 @@
     "PF7-END": {
       "name": "Session End",
       "phase_order": 7,
+      "execution_order": "sequential",
+      "execution_order_note": "Shutdown on-demand teammates first (can be parallel within group), then persistent teammates (can be parallel within group), then TeamDelete. Two groups sequential, within-group parallel is acceptable.",
       "subject": "PF7-END: Shutdown and cleanup",
       "description": "Shutdown teammates, dissolve team. SessionEnd hook handles state cleanup. Phase: {phase_id}, Session: {session_id}.",
       "activeForm": "Shutting down session",
@@ -382,6 +417,7 @@
         {
           "id": "PF7-TSK-02",
           "task_order": 2,
+          "blocked_by": ["PF7-TSK-01"],
           "description": "Shutdown persistent function teammates",
           "assigned_to": "team-lead",
           "operation": "SendMessage(type=shutdown_request) to persistent teammates",
@@ -390,6 +426,7 @@
         {
           "id": "PF7-TSK-03",
           "task_order": 3,
+          "blocked_by": ["PF7-TSK-02"],
           "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)",
           "assigned_to": "team-lead",
           "operation": "TeamDelete (PostToolUse hook removes pathflow-active flag after success; SessionEnd handles remaining cleanup)",

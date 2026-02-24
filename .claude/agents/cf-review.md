@@ -103,6 +103,7 @@ Before applying review criteria, load the relevant standards skill for each file
 File under review:
 ├── *.sh              → Load cf-shell-standards skill, apply ShellCheck rules
 ├── *.py              → Load cf-python-standards skill, apply ruff/flake8 rules
+├── *.go              → Load cf-go-standards skill, apply golangci-lint + go vet rules
 ├── *.md              → Load cf-markdown-standards skill, apply doc structure rules
 ├── *.json            → Validate schema structure, check for hardcoded values
 ├── Agent defs (.claude/agents/cf-*.md) → Apply agent 5-section format check + cf-markdown-standards
@@ -132,6 +133,7 @@ Execute the checklist for the assigned review mode.
 - [ ] **Acceptance criteria** -- PASS/FAIL per criterion from task spec
 - [ ] **Correctness** -- Logic paths produce expected results
 - [ ] **Style** -- ShellCheck for `.sh` ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md)), ruff/flake8 for `.py` ([cf-python-standards](../skills/cf-python-standards/SKILL.md))
+- [ ] **Go quality** -- golangci-lint for `.go` ([cf-go-standards](../skills/cf-go-standards/SKILL.md)), race detection (`go test -race`), error wrapping, context propagation
 - [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)
 - [ ] **Performance** -- No obvious inefficiencies
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
@@ -555,6 +557,7 @@ Beyond code correctness, verify the structural integrity of the changeset:
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
 | Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | ShellCheck rules for CODE_REVIEW |
 | Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | ruff/flake8 rules for CODE_REVIEW |
+| Go Standards | `.claude/skills/cf-go-standards/SKILL.md` | golangci-lint rules, Go patterns for CODE_REVIEW |
 | Markdown Standards | `.claude/skills/cf-markdown-standards/SKILL.md` | Doc structure for DOCUMENTATION_REVIEW |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, rework limits |
 | Test Runner | `.codeflow/testing/run-all-tests.sh` | Test execution for verification |

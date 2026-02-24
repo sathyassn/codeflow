@@ -1277,6 +1277,28 @@ Do NOT assume teammates are dead after context overflow. Verify before respawnin
 - "This session is being continued from a previous conversation" preamble from Claude Code
 - Lead has no memory of what work was in progress or what phase was reached
 - Teammates may be alive (graceful compaction) or dead (session forcefully killed)
+- Teammates are LIKELY still alive -- do NOT assume dead without verification
+
+**L1 ENFORCED: NEVER respawn teammates after context overflow without verifying liveness.**
+
+This is NOT advisory. Respawning without verification is a PROTOCOL VIOLATION equivalent to skipping PF3.
+
+After context overflow, teammates run as independent processes and are ALMOST ALWAYS still alive. The lead's context was compacted -- teammates were NOT affected.
+
+Mandatory verification sequence (NO EXCEPTIONS):
+
+1. SendMessage to EVERY expected teammate: "Context overflow recovery. What is your current state?"
+2. Wait 30 seconds for responses
+3. ANY teammate that responds is ALIVE -- do NOT respawn
+4. ONLY if a teammate does not respond after 30s, verify via tmux: `tmux list-panes -a`
+5. ONLY respawn teammates confirmed dead via tmux (pane_dead=1 or pane not found)
+
+FORBIDDEN:
+
+- Assuming teammates are dead without messaging them first
+- Respawning based on "no tmux panes" alone (in-process backend teammates don't use tmux)
+- Creating duplicate -2 suffix teammates while originals are alive
+- Skipping the 30-second wait period
 
 **Recovery procedure:**
 
