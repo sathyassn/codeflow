@@ -9,6 +9,7 @@
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
 #   Section 1b: PID-based stale session cleanup (auto-cleanup crashed leads)
+#              On compact/resume/clear: skips cleanup, updates lead PID in pathflow-team.json
 #   Section 2: Setup (REPO_ROOT, libraries)
 #   Section 3: Directory creation
 #   Section 4: Stale session detection (warning-only)
@@ -55,7 +56,10 @@ fi
 # SECTION 1b: PID-BASED STALE SESSION CLEANUP
 # =============================================================================
 # Check if the existing env file references a dead session (crashed lead).
-# If the lead's PID is dead, auto-cleanup all stale artifacts.
+# If the lead's PID is dead AND source is "startup" or "unknown", auto-cleanup all stale artifacts.
+# If the lead's PID is dead but source is "compact/resume/clear", skip cleanup
+#   (this is a continuation of the same session, not a crash) and update lead_pid
+#   in pathflow-team.json so teammates don't see a dead PID and wipe the session.
 # If the lead's PID is alive, this is a teammate starting — skip cleanup.
 # Must run BEFORE env file sourcing to prevent stale session ID contamination.
 
@@ -86,49 +90,73 @@ if [[ -f "$_env_file_pre" ]]; then
                 echo "Checkpoint and pathflow flag creation skipped (lead handles those)."
                 _TEAMMATE_MODE="true"
             else
-                # Lead PID is DEAD — stale session, full cleanup
-                echo "SessionStart: Lead PID $_old_lead_pid dead — cleaning stale session $_old_sid" >&2
+                # Lead PID is DEAD — check source before cleanup
+                if [[ "$_SESSION_SOURCE" == "startup" ]] || [[ "$_SESSION_SOURCE" == "unknown" ]]; then
+                    # Fresh startup with dead PID — stale session, full cleanup
+                    echo "SessionStart: Lead PID $_old_lead_pid dead — cleaning stale session $_old_sid" >&2
 
-                # a. Remove stale team config
-                if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/teams/${_old_team_name}" ]]; then
-                    rm -rf "${HOME}/.claude/teams/${_old_team_name}" 2>/dev/null || true
-                    echo "SessionStart: Removed stale team config: ${_old_team_name}" >&2
+                    # a. Remove stale team config
+                    if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/teams/${_old_team_name}" ]]; then
+                        rm -rf "${HOME}/.claude/teams/${_old_team_name}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale team config: ${_old_team_name}" >&2
+                    fi
+
+                    # b. Remove stale task list
+                    if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/tasks/${_old_team_name}" ]]; then
+                        rm -rf "${HOME}/.claude/tasks/${_old_team_name}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale task list: ${_old_team_name}" >&2
+                    fi
+
+                    # c. Remove stale session directory (includes pathflow flag, checkpoint, team file)
+                    if [[ -d "${REPO_ROOT}/.state/session/${_old_sid}" ]]; then
+                        rm -rf "${REPO_ROOT}/.state/session/${_old_sid}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale session dir: ${_old_sid}" >&2
+                    fi
+
+                    # d. Remove stale sentinels
+                    if [[ -d "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" ]]; then
+                        rm -rf "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" 2>/dev/null || true
+                        echo "SessionStart: Removed stale sentinels: ${_old_sid}" >&2
+                    fi
+
+                    # e. Remove stale env file
+                    rm -f "$_env_file_pre" 2>/dev/null || true
+
+                    # f. Remove stale active task
+                    rm -f "${REPO_ROOT}/.state/runtime/active-task.json" 2>/dev/null || true
+
+                    # g. Remove stale session ID reference
+                    rm -f "${REPO_ROOT}/.state/runtime/current-session-id" 2>/dev/null || true
+
+                    # h. Unset session ID so a fresh one is generated
+                    unset CODEFLOW_SESSION_ID
+                    echo "SessionStart: Stale session cleanup complete" >&2
+                    echo ""
+                    echo "STALE SESSION CLEANED: Previous session ${_old_sid} was crashed/orphaned."
+                    echo "All stale artifacts removed (team config, task list, session state, sentinels)."
+                    echo "This is a fresh session start. Do NOT attempt /cf-resume."
+                else
+                    # Compact/resume/clear with dead PID — same session continuing
+                    # The old PID is dead because Claude Code killed it during compaction.
+                    # Do NOT clean up — sentinels, checkpoints, and session state are still valid.
+                    echo "SessionStart: Lead PID $_old_lead_pid dead but source=$_SESSION_SOURCE — skipping stale cleanup (continuation)" >&2
+
+                    # Update pathflow-team.json with new lead PID for teammate detection.
+                    # After compaction, the lead's PID changes ($PPID is the new Claude Code process).
+                    # Without this update, a teammate's SessionStart reads the stale dead PID,
+                    # concludes the lead crashed, and wipes the entire session.
+                    if [[ -f "$_old_team_file" ]] && command -v jq &>/dev/null; then
+                        _tmp_pf=$(mktemp "${_old_team_file}.XXXXXX" 2>/dev/null) || true
+                        if [[ -n "${_tmp_pf:-}" ]]; then
+                            if jq --argjson new_pid "$PPID" '.lead_pid = $new_pid' "$_old_team_file" > "$_tmp_pf" 2>/dev/null; then
+                                mv "$_tmp_pf" "$_old_team_file" 2>/dev/null || rm -f "$_tmp_pf" 2>/dev/null || true
+                                echo "SessionStart: Updated pathflow-team.json lead_pid=$PPID (was $_old_lead_pid)" >&2
+                            else
+                                rm -f "$_tmp_pf" 2>/dev/null || true
+                            fi
+                        fi
+                    fi
                 fi
-
-                # b. Remove stale task list
-                if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/tasks/${_old_team_name}" ]]; then
-                    rm -rf "${HOME}/.claude/tasks/${_old_team_name}" 2>/dev/null || true
-                    echo "SessionStart: Removed stale task list: ${_old_team_name}" >&2
-                fi
-
-                # c. Remove stale session directory (includes pathflow flag, checkpoint, team file)
-                if [[ -d "${REPO_ROOT}/.state/session/${_old_sid}" ]]; then
-                    rm -rf "${REPO_ROOT}/.state/session/${_old_sid}" 2>/dev/null || true
-                    echo "SessionStart: Removed stale session dir: ${_old_sid}" >&2
-                fi
-
-                # d. Remove stale sentinels
-                if [[ -d "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" ]]; then
-                    rm -rf "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" 2>/dev/null || true
-                    echo "SessionStart: Removed stale sentinels: ${_old_sid}" >&2
-                fi
-
-                # e. Remove stale env file
-                rm -f "$_env_file_pre" 2>/dev/null || true
-
-                # f. Remove stale active task
-                rm -f "${REPO_ROOT}/.state/runtime/active-task.json" 2>/dev/null || true
-
-                # g. Remove stale session ID reference
-                rm -f "${REPO_ROOT}/.state/runtime/current-session-id" 2>/dev/null || true
-
-                # h. Unset session ID so a fresh one is generated
-                unset CODEFLOW_SESSION_ID
-                echo "SessionStart: Stale session cleanup complete" >&2
-                echo ""
-                echo "STALE SESSION CLEANED: Previous session ${_old_sid} was crashed/orphaned."
-                echo "All stale artifacts removed (team config, task list, session state, sentinels)."
-                echo "This is a fresh session start. Do NOT attempt /cf-resume."
             fi
         else
             # No pathflow-team.json — check for pathflow-active flag

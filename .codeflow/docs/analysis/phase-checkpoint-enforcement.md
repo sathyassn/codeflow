@@ -329,21 +329,42 @@ Some tasks are conditional based on session context. For example, PF3-TSK-04 (re
 
 ### How conditional tasks are evaluated
 
-1. At session start, `checkpoint_init_all_phases()` (called from the SessionStart hook) pre-initializes all phases in the checkpoint file with their expected tasks and `condition` fields from `pathflow-config.json`
-2. When the tracking decision is made at PF2-CONTEXT, the session's `origin` value (`planned`, `informal`, `auto`) is written to the checkpoint file
-3. The TaskCompleted hook evaluates conditions when checking phase completion:
+1. At session start, `checkpoint_init_all_phases()` (called from the SessionStart hook) pre-initializes all phases in the checkpoint file with their expected tasks from `pathflow-config.json`
+2. `checkpoint_init_phase()` extracts `conditions` metadata from each phase's task definitions and stores it in the checkpoint entry (e.g., `{"PF3-TSK-04": "adhoc_only"}`)
+3. When the tracking decision is made at PF2-CONTEXT, the session's `origin` value (`planned`, `informal`, `auto`) is written to the checkpoint file via `checkpoint_set_context("origin", value)`
+4. `checkpoint_is_phase_complete()` auto-evaluates conditions against the stored context when checking phase completion:
 
-| Condition | Applies when | Skipped when |
-|-----------|-------------|-------------|
+| Condition | Applies when | Auto-skipped when |
+|-----------|-------------|-------------------|
 | `null` | Always required | Never skipped |
-| `adhoc_only` | `origin != "planned"` | `origin == "planned"` |
-| `if_pipeline_includes_qa` | Pipeline includes WS-QA stage | Pipeline does not include WS-QA |
+| `adhoc_only` | `origin != "planned"` (or context not set) | `origin == "planned"` |
+| `if_pipeline_includes_qa` | Pipeline includes WS-QA stage (or context not set) | `work_type` is `DOCS`, `PLAN`, or `SPKE` |
 
-1. Tasks whose condition evaluates to false are marked `skipped` and excluded from the completion check
+5. Tasks whose condition evaluates to "not applicable" given the current context are automatically treated as done during phase completion evaluation -- no explicit skip required
 
-### Marking tasks as skipped
+### Fail-safe behavior
 
-The lead explicitly marks conditional tasks as skipped via TaskUpdate when the condition does not apply. The checkpoint hook treats skipped tasks as non-blocking for phase sentinel creation.
+When a context key needed for condition evaluation is not yet set (e.g., `origin` not set when checking `adhoc_only`), the condition is NOT evaluable and the task remains required. This prevents premature phase completion before context is established.
+
+### Auto-evaluation vs explicit skip
+
+Two mechanisms exist for handling conditional tasks:
+
+| Mechanism | When used | How |
+|-----------|-----------|-----|
+| Auto-evaluation | During `checkpoint_is_phase_complete()` | Conditions evaluated against stored context; matching tasks treated as done |
+| Explicit skip | Via `checkpoint_skip_task()` | Lead or hook explicitly marks a task as skipped with timestamp |
+
+Both mechanisms work together. `checkpoint_skip_task()` also triggers a phase completion check after writing the skip, mirroring the logic in `checkpoint_complete_task()`.
+
+### Context storage
+
+Session context is stored under a top-level `context` key in the checkpoint JSON file via `checkpoint_set_context(key, value)`. Current context keys:
+
+| Key | Set during | Values | Used by |
+|-----|-----------|--------|---------|
+| `origin` | PF2-CONTEXT (tracking decision) | `planned`, `informal`, `auto` | `adhoc_only` condition |
+| `work_type` | PF3-CLASSIFY (work classification) | `FEAT`, `FIX`, `DOCS`, etc. | `if_pipeline_includes_qa` condition |
 
 ## What changes vs what stays
 

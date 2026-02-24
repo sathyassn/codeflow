@@ -19,6 +19,7 @@
 #   - checkpoint_skip_task: Mark a task as skipped (conditional tasks not applicable)
 #   - checkpoint_is_phase_complete: Check if all expected tasks are done/skipped
 #   - checkpoint_init_all_phases: Pre-initialize all phases from pathflow-config.json
+#   - checkpoint_set_context: Store session context (origin, work_type) in checkpoint
 #
 # Flag file:
 #   .state/session/{SESSION_ID}/pathflow/is-pathflow-active
@@ -285,6 +286,19 @@ checkpoint_init_phase() {
         return 1
     }
 
+    # Extract condition metadata for tasks in this phase
+    local conditions
+    conditions=$(jq -c --arg key "$config_key" '
+        .phases[$key].tasks // [] |
+        [.[] | select(.condition != null)] |
+        if length == 0 then {}
+        else reduce .[] as $t ({}; .[$t.id] = $t.condition)
+        end
+    ' "$_PFS_PATHFLOW_CONFIG" 2>/dev/null) || {
+        # Non-fatal: conditions metadata is optional for backward compatibility
+        conditions="{}"
+    }
+
     # Read current checkpoint
     local checkpoint
     checkpoint=$(checkpoint_read)
@@ -297,10 +311,10 @@ checkpoint_init_phase() {
         return 0
     fi
 
-    # Initialize phase entry
+    # Initialize phase entry with conditions metadata
     local updated
-    updated=$(echo "$checkpoint" | jq -c --arg pf "$phase_id" --argjson exp "$expected_tasks" \
-        '.[$pf] = {expected: $exp, registered: {}, completed: {}, skipped: {}, sentinel_created: false}' \
+    updated=$(echo "$checkpoint" | jq -c --arg pf "$phase_id" --argjson exp "$expected_tasks" --argjson cond "$conditions" \
+        '.[$pf] = {expected: $exp, conditions: $cond, registered: {}, completed: {}, skipped: {}, sentinel_created: false}' \
         2>/dev/null) || {
         echo "checkpoint_init_phase: failed to build phase entry" >&2
         return 1
@@ -496,7 +510,14 @@ checkpoint_skip_task() {
         return 1
     }
 
-    checkpoint_write "$updated"
+    checkpoint_write "$updated" || return 1
+
+    # Check if phase is now complete (mirror logic from checkpoint_complete_task)
+    if checkpoint_is_phase_complete "$phase_id"; then
+        echo "phase_complete"
+    fi
+
+    return 0
 }
 
 # Check if all expected tasks in a phase are completed or skipped.
@@ -532,16 +553,35 @@ checkpoint_is_phase_complete() {
         return 0
     fi
 
-    # Check each expected task is either completed or skipped
+    # Check each expected task is either completed, skipped, or auto-skipped via conditions
     local result
     result=$(echo "$checkpoint" | jq -r --arg pf "$phase_id" '
         .[$pf] as $phase |
+        (.context // {}) as $ctx |
+        ($phase.conditions // {}) as $conds |
         $phase.expected | length as $total |
         if $total == 0 then "incomplete"
         else
             [.[] | select(
                 . as $tid |
-                ($phase.completed[$tid] != null) or ($phase.skipped[$tid] != null)
+                # Explicitly completed or skipped
+                ($phase.completed[$tid] != null) or ($phase.skipped[$tid] != null) or
+                # Auto-skip: condition evaluates to false given current context
+                (($conds[$tid] // null) as $cond |
+                    if $cond == null then false
+                    elif $cond == "adhoc_only" then
+                        if ($ctx.origin // null) == null then false
+                        elif $ctx.origin == "planned" then true
+                        else false
+                        end
+                    elif $cond == "if_pipeline_includes_qa" then
+                        if ($ctx.work_type // null) == null then false
+                        elif ($ctx.work_type | IN("DOCS","PLAN","SPKE")) then true
+                        else false
+                        end
+                    else false
+                    end
+                )
             )] | length as $done |
             if $done >= $total then "complete"
             else "incomplete"
@@ -550,6 +590,40 @@ checkpoint_is_phase_complete() {
     ' 2>/dev/null)
 
     [[ "$result" == "complete" ]]
+}
+
+# Store session context (origin, work_type) in the checkpoint file.
+# Args: key (e.g., "origin"), value (e.g., "planned")
+# Context is stored under a top-level "context" key in the checkpoint JSON.
+# Used by checkpoint_is_phase_complete() for conditional task auto-evaluation.
+# Returns: 0 on success, 1 on error
+checkpoint_set_context() {
+    local key="$1"
+    local value="$2"
+
+    if [[ -z "$key" ]] || [[ -z "$value" ]]; then
+        echo "checkpoint_set_context: key and value required" >&2
+        return 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        echo "checkpoint_set_context: jq required" >&2
+        return 1
+    fi
+
+    # Read current checkpoint
+    local checkpoint
+    checkpoint=$(checkpoint_read)
+
+    # Set context key
+    local updated
+    updated=$(echo "$checkpoint" | jq -c --arg k "$key" --arg v "$value" \
+        '.context = ((.context // {}) + {($k): $v})' 2>/dev/null) || {
+        echo "checkpoint_set_context: failed to update checkpoint" >&2
+        return 1
+    }
+
+    checkpoint_write "$updated"
 }
 
 # Pre-initialize ALL phases from pathflow-config.json in the checkpoint file.

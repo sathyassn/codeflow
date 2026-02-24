@@ -865,7 +865,7 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
 | git push/PR before WS-REV | `ws-rev` | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
-| TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists, removing the flag) | `cf-pre-tool-use-team-guard.sh` |
+| TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `cf-pre-tool-use-team-guard.sh` |
 
 **Instruction-enforced gates (not currently hook-enforced):**
 

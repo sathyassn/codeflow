@@ -323,6 +323,89 @@ SQUASH_ASSIGNED=$(jq -r '.phases."PF6-COMPLETE".tasks[] | select(.operation == "
 assert_equals "cf-git-operations" "$SQUASH_ASSIGNED" "squash-branch assigned to cf-git-operations"
 
 # ============================================================================
+# TEST 12: enforcement_note on all tasks
+# ============================================================================
+
+test_section "Enforcement Note Validation"
+
+# Count total tasks across all phases
+TOTAL_TASKS=0
+TASKS_WITH_NOTE=0
+TASKS_UNCONDITIONAL=0
+TASKS_CONDITIONAL=0
+TASKS_MISSING_NOTE=0
+
+for phase in $EXPECTED_PHASES; do
+    TASK_COUNT=$(jq -r ".phases.\"$phase\".tasks | length" "$CONFIG_FILE" 2>/dev/null)
+    for i in $(seq 0 $((TASK_COUNT - 1))); do
+        ((TOTAL_TASKS++)) || true
+        # shellcheck disable=SC2034  # TASK_ID extracted for loop context; used implicitly in counting
+        TASK_ID=$(jq -r ".phases.\"$phase\".tasks[$i].id" "$CONFIG_FILE" 2>/dev/null)
+        NOTE=$(jq -r ".phases.\"$phase\".tasks[$i].enforcement_note // empty" "$CONFIG_FILE" 2>/dev/null)
+        CONDITION=$(jq -r ".phases.\"$phase\".tasks[$i].condition // empty" "$CONFIG_FILE" 2>/dev/null)
+
+        if [[ -n "$NOTE" ]]; then
+            ((TASKS_WITH_NOTE++)) || true
+            if [[ -n "$CONDITION" ]]; then
+                ((TASKS_CONDITIONAL++)) || true
+            else
+                ((TASKS_UNCONDITIONAL++)) || true
+            fi
+        else
+            ((TASKS_MISSING_NOTE++)) || true
+        fi
+    done
+done
+
+# All 30 tasks must have enforcement_note
+assert_equals "30" "$TOTAL_TASKS" "Exactly 30 tasks across all phases"
+assert_equals "30" "$TASKS_WITH_NOTE" "All 30 tasks have enforcement_note"
+assert_equals "0" "$TASKS_MISSING_NOTE" "No tasks missing enforcement_note"
+
+# 28 unconditional + 2 conditional
+assert_equals "28" "$TASKS_UNCONDITIONAL" "28 unconditional tasks"
+assert_equals "2" "$TASKS_CONDITIONAL" "2 conditional tasks"
+
+# Verify unconditional notes contain "MUST execute"
+test_section "Enforcement Note Content"
+
+MUST_EXECUTE_COUNT=0
+for phase in $EXPECTED_PHASES; do
+    TASK_COUNT=$(jq -r ".phases.\"$phase\".tasks | length" "$CONFIG_FILE" 2>/dev/null)
+    for i in $(seq 0 $((TASK_COUNT - 1))); do
+        CONDITION=$(jq -r ".phases.\"$phase\".tasks[$i].condition // empty" "$CONFIG_FILE" 2>/dev/null)
+        NOTE=$(jq -r ".phases.\"$phase\".tasks[$i].enforcement_note // empty" "$CONFIG_FILE" 2>/dev/null)
+        if [[ -z "$CONDITION" ]] && [[ "$NOTE" == *"MUST execute"* ]]; then
+            ((MUST_EXECUTE_COUNT++)) || true
+        fi
+    done
+done
+assert_equals "28" "$MUST_EXECUTE_COUNT" "All 28 unconditional notes contain 'MUST execute'"
+
+# Verify conditional notes contain "condition field"
+CONDITION_FIELD_COUNT=0
+for phase in $EXPECTED_PHASES; do
+    TASK_COUNT=$(jq -r ".phases.\"$phase\".tasks | length" "$CONFIG_FILE" 2>/dev/null)
+    for i in $(seq 0 $((TASK_COUNT - 1))); do
+        CONDITION=$(jq -r ".phases.\"$phase\".tasks[$i].condition // empty" "$CONFIG_FILE" 2>/dev/null)
+        NOTE=$(jq -r ".phases.\"$phase\".tasks[$i].enforcement_note // empty" "$CONFIG_FILE" 2>/dev/null)
+        if [[ -n "$CONDITION" ]] && [[ "$NOTE" == *"condition field"* ]]; then
+            ((CONDITION_FIELD_COUNT++)) || true
+        fi
+    done
+done
+assert_equals "2" "$CONDITION_FIELD_COUNT" "Both conditional notes contain 'condition field'"
+
+# Verify specific conditional tasks are PF3-TSK-04 and PF4-TSK-05
+COND_TASK_IDS=$(jq -r '.phases | to_entries[] | .value.tasks[] | select(.condition != null) | .id' "$CONFIG_FILE" 2>/dev/null | sort)
+EXPECTED_COND_IDS=$(echo -e "PF3-TSK-04\nPF4-TSK-05" | sort)
+if [[ "$COND_TASK_IDS" == "$EXPECTED_COND_IDS" ]]; then
+    test_pass "Conditional tasks are PF3-TSK-04 and PF4-TSK-05"
+else
+    test_fail "Conditional tasks should be PF3-TSK-04 and PF4-TSK-05 (got: $COND_TASK_IDS)"
+fi
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 

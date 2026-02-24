@@ -879,6 +879,72 @@ rm -rf "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
 cleanup_test_artifacts
 
 echo ""
+echo "--- V4: PF7 Diagnostic (Three-Layer Cleanup) ---"
+
+# Test 81: Logs 'Clean PF7 shutdown' when pf-7 sentinel exists
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-7"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"Clean PF7 shutdown"* ]]; then
+    pass "Logs 'Clean PF7 shutdown' when pf-7 exists"
+else
+    fail "Should log 'Clean PF7 shutdown' when pf-7 sentinel exists"
+fi
+
+# Test 82: Logs 'Incomplete PF7 shutdown' when pf-7 sentinel absent
+setup_test_dirs
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"Incomplete PF7 shutdown"* ]]; then
+    pass "Logs 'Incomplete PF7 shutdown' when pf-7 absent"
+else
+    fail "Should log 'Incomplete PF7 shutdown' when pf-7 sentinel absent"
+fi
+
+# Test 83: Cleanup proceeds when pathflow-active flag is absent
+# (simulates PostToolUse already removed it before SessionEnd)
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3"
+# No pathflow-active flag
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3" ]]; then
+    pass "Cleanup proceeds when flag absent (sentinels cleaned)"
+else
+    fail "Cleanup should proceed when flag absent"
+    rm -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3" 2>/dev/null || true
+fi
+
+# Test 84: Cleanup skipped when pathflow-active flag is present (teammate guard)
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3" ]]; then
+    pass "Cleanup skipped when flag present (sentinels preserved)"
+else
+    fail "Cleanup should be skipped when flag present"
+fi
+if [[ "$output" == *"PathFlow active"* ]]; then
+    pass "Logs 'PathFlow active' skip message"
+else
+    fail "Should log PathFlow active skip message"
+fi
+rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+
+# Test 85: Hook references PostToolUse for flag removal (not team-guard)
+if grep -q "PostToolUse on TeamDelete\|PostToolUse.*TeamDelete" "$HOOK"; then
+    pass "Hook comments reference PostToolUse for flag removal"
+else
+    fail "Hook should reference PostToolUse on TeamDelete for flag removal"
+fi
+
+cleanup_test_artifacts
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

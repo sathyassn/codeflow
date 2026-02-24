@@ -604,26 +604,123 @@ else
 fi
 remove_test_env_file
 
-# Test 47: ws-qa sentinel created with warning when ws-dev missing
+# Test 47: ws-qa sentinel created with warning when BOTH ws-dev AND ws-test missing
 TESTS_RUN=$((TESTS_RUN + 1))
 qa_no_dev_session="ses-qanodev-47"
 create_test_flag "$qa_no_dev_session"
 create_test_env_file "$qa_no_dev_session"
-# Create ws-rev but NOT ws-dev
+# Create ws-rev but NOT ws-dev or ws-test
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session"
 touch "$REPO_ROOT/.state/sentinels/pathflow/$qa_no_dev_session/pathflow-ws-rev"
 stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests passed","type":"message"},"session_id":"ignored"}'
 output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
 if has_test_sentinel "$qa_no_dev_session" "ws-qa"; then
-    pass "ws-qa sentinel created even without ws-dev"
+    pass "ws-qa sentinel created even without ws-dev or ws-test"
 else
-    fail "ws-qa sentinel should be created even without ws-dev"
+    fail "ws-qa sentinel should be created even without ws-dev or ws-test"
 fi
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$output" == *"without prior ws-dev"* ]]; then
-    pass "ws-qa creation logs warning when ws-dev missing"
+    pass "ws-qa creation logs warning when ws-dev and ws-test missing"
 else
-    fail "Should log warning when ws-qa created without ws-dev (output: $output)"
+    fail "Should log warning when ws-qa created without ws-dev or ws-test (output: $output)"
+fi
+remove_test_env_file
+
+echo ""
+echo "--- TeamDelete Flag Removal (Three-Layer Cleanup) ---"
+
+# Test 49: PostToolUse TeamDelete handler removes pathflow-active flag
+TESTS_RUN=$((TESTS_RUN + 1))
+td_session="ses-teamdelete-49"
+create_test_flag "$td_session"
+create_test_env_file "$td_session"
+flag_path="$REPO_ROOT/.state/session/$td_session/pathflow/is-pathflow-active"
+# Verify flag exists before
+if [[ ! -f "$flag_path" ]]; then
+    fail "Flag should exist before PostToolUse TeamDelete"
+else
+    stdin_json='{"tool_name":"TeamDelete","tool_input":{},"session_id":"ignored"}'
+    bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
+    if [[ ! -f "$flag_path" ]]; then
+        pass "PostToolUse TeamDelete removes pathflow-active flag"
+    else
+        fail "PostToolUse TeamDelete should remove pathflow-active flag"
+    fi
+fi
+remove_test_env_file
+
+# Test 50: PostToolUse TeamDelete graceful when flag already absent
+TESTS_RUN=$((TESTS_RUN + 1))
+td_absent_session="ses-tdabsent-50"
+create_test_flag "$td_absent_session"
+create_test_env_file "$td_absent_session"
+rm -f "$REPO_ROOT/.state/session/$td_absent_session/pathflow/is-pathflow-active" 2>/dev/null || true
+stdin_json='{"tool_name":"TeamDelete","tool_input":{},"session_id":"ignored"}'
+result=$(bash "$HOOK" <<< "$stdin_json" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "PostToolUse TeamDelete exits 0 when flag already absent"
+else
+    fail "PostToolUse TeamDelete should exit 0 when flag already absent"
+fi
+remove_test_env_file
+
+# Test 51: Hook has TeamDelete handler section
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'TOOL_NAME.*==.*"TeamDelete"' "$HOOK"; then
+    pass "Hook has TeamDelete handler"
+else
+    fail "Hook should have TeamDelete handler for flag removal"
+fi
+
+echo ""
+echo "--- WS-QA Ordering with WS-TEST ---"
+
+# Test 52: ws-qa created WITHOUT warning when ws-test exists (TEST pipeline)
+TESTS_RUN=$((TESTS_RUN + 1))
+qa_test_session="ses-qatest-52"
+create_test_flag "$qa_test_session"
+create_test_env_file "$qa_test_session"
+# Create ws-test sentinel (but NOT ws-dev) — simulates TEST pipeline
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$qa_test_session"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$qa_test_session/pathflow-ws-test"
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests passed","type":"message"},"session_id":"ignored"}'
+output=$(bash "$HOOK" <<< "$stdin_json" 2>&1) || true
+if has_test_sentinel "$qa_test_session" "ws-qa" && [[ "$output" != *"WARNING"*"ws-qa"*"without"* ]]; then
+    pass "ws-qa created without warning when ws-test exists (TEST pipeline)"
+else
+    fail "ws-qa should be created without warning when ws-test exists"
+fi
+remove_test_env_file
+
+echo ""
+echo "--- Stage Pattern Normalization ---"
+
+# Test 53: Lowercase stage-complete message creates sentinel via normalization
+TESTS_RUN=$((TESTS_RUN + 1))
+lower_session="ses-lower-53"
+create_test_flag "$lower_session"
+create_test_env_file "$lower_session"
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"stage-complete: ws-dev -- done","type":"message"},"session_id":"ignored"}'
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
+if has_test_sentinel "$lower_session" "ws-dev"; then
+    pass "Lowercase stage-complete creates sentinel via normalization"
+else
+    fail "Lowercase stage-complete should create sentinel via normalization"
+fi
+remove_test_env_file
+
+# Test 54: Mixed case stage-complete message creates sentinel
+TESTS_RUN=$((TESTS_RUN + 1))
+mixed_session="ses-mixed-54"
+create_test_flag "$mixed_session"
+create_test_env_file "$mixed_session"
+stdin_json='{"tool_name":"SendMessage","tool_input":{"content":"Stage-Complete: WS-Rev -- approved","type":"message"},"session_id":"ignored"}'
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
+if has_test_sentinel "$mixed_session" "ws-rev"; then
+    pass "Mixed case Stage-Complete creates sentinel"
+else
+    fail "Mixed case Stage-Complete should create sentinel"
 fi
 remove_test_env_file
 

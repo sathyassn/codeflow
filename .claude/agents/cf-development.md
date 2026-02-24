@@ -115,16 +115,20 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 🔒 **TEST REQUIREMENT: For EVERY `.sh` or `.py` file you create or modify, you MUST create/update the corresponding test file following the project naming convention (`test-{name}.sh` for bash, `test_{name}.py` for python). This is NOT optional — missing tests will be rejected at review.**
 
+🔒 **ONE-TO-ONE TEST FILE MAPPING: Tests MUST go in the test file that corresponds to the code file being modified. When modifying multiple code files, add tests to EACH corresponding test file — do NOT create a single monolithic test file for all changes. For example, if you modify 3 hook scripts (team-guard.sh, pathflow-sentinel.sh, session-end-cleanup.sh), you MUST add tests to 3 separate test files (test-cf-pre-tool-use-team-guard.sh, test-cf-post-tool-use-pathflow-sentinel.sh, test-cf-session-end-cleanup.sh). Clubbing tests for different code files into one test file is a PROTOCOL VIOLATION that will be rejected at review.**
+
 🔒 **TASK TESTS FIELD: You MUST update the task's `tests` field in the task markdown YAML frontmatter with the paths of test files you create/update (relative to `.codeflow/testing/`).**
 
 🔒 **TEST REGISTRATION: You MUST register new test files in `.codeflow/testing/test-config.json` under the appropriate priority category. Unregistered tests are invisible to the test runner and will be flagged at review.**
 
 Create or update unit tests for all new/changed logic.
 
-| Framework | File Pattern | Location | Notes |
-|-----------|-------------|----------|-------|
-| Shell (custom asserts) | `test-{feature}.sh` | `.codeflow/testing/scripts/` | Must be executable (`chmod +x`) |
-| Python (pytest) | `test_{module}.py` | Appropriate test directory | Use fixtures, `parametrize` |
+| Code File Type | Test File Pattern | Test Location | Discovery |
+|---------------|------------------|---------------|-----------|
+| `.codeflow/scripts/{area}/*.sh` | `test-{name}.sh` | `.codeflow/testing/scripts/{area}/` | `Glob(".codeflow/testing/scripts/{area}/test-*.sh")` |
+| `.claude/hooks/codeflow/{event}/*.sh` | `test-cf-{event}-{name}.sh` | `.codeflow/testing/claude-hooks/{event}/` | `Glob(".codeflow/testing/claude-hooks/{event}/test-*.sh")` |
+| `.codeflow/config/**/*.json` | `test-{feature}.sh` | `.codeflow/testing/consistency/` | `Glob(".codeflow/testing/consistency/test-*.sh")` |
+| `codeflow_py_lib/*.py` | `test_{module}.py` | `.codeflow/testing/scripts/codeflow_py_lib/` | `Glob(".codeflow/testing/scripts/codeflow_py_lib/test_*.py")` |
 
 Each test file: minimum one positive case, one negative/error case, one edge case.
 
@@ -229,6 +233,7 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 - I'm creating a new directory that doesn't exist yet without confirming this is the intended location.
 - A shell command silently succeeds with no output — it may have done nothing.
 - I'm writing a test that mocks everything and never exercises real code paths.
+- I'm adding tests for multiple different code files into a single test file instead of their respective per-file test files.
 
 **Before claiming done:**
 

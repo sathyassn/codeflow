@@ -15,7 +15,7 @@ This field is critical for distinguishing session lifecycle events. Previously i
 
 ## The Stale Session Problem
 
-**Catch-22:** SessionEnd hooks skip cleanup when `pathflow-active` flag exists (to preserve state for `/resume`). But if a session dies unexpectedly (context overflow, user kills terminal, crash), the flag persists indefinitely. Over time, stale session directories accumulate in `.state/session/`.
+**Catch-22:** SessionEnd hooks skip cleanup when `pathflow-active` flag exists (to preserve state for `/resume`). The flag is removed by PostToolUse on TeamDelete (after TeamDelete succeeds). But if a session dies unexpectedly (context overflow, user kills terminal, crash), the flag persists indefinitely. Over time, stale session directories accumulate in `.state/session/`.
 
 **Previous approach (v1.3.0):** 24-hour timer-based cleanup. `find -mmin +1440` identified stale directories and deleted them, preserving those with active pathflow flags.
 

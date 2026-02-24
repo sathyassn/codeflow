@@ -8,7 +8,7 @@
 #   - Blocks Teammate tool cleanup operation while PathFlow is active
 #   - Blocks TeamDelete tool while PathFlow is active
 #   - PF7-END gate: When TeamDelete requested AND pf-6 sentinel exists,
-#     removes pathflow-active flag and allows TeamDelete (exit 0)
+#     allows TeamDelete (exit 0). Flag removal deferred to PostToolUse sentinel hook.
 #   - If not Teammate/TeamDelete tool, allows through
 #   - If Teammate but not cleanup operation, allows through
 #   - If cleanup/TeamDelete but PathFlow not active, allows cleanup
@@ -117,16 +117,16 @@ fi
 # PF7-END GATE: Allow TeamDelete when PF6-COMPLETE is done
 # =============================================================================
 # If pf-6 sentinel exists, we're legitimately at PF7-END.
-# Remove the pathflow-active flag and allow TeamDelete to proceed.
-# SessionEnd hook will then run full cleanup (flag gone = proceed).
+# Gate only — no cleanup side effects.
+# PostToolUse on TeamDelete handles flag removal; SessionEnd handles remaining cleanup.
 
 if [[ "$IS_TEAM_DELETE" == "true" ]]; then
     _sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
     if [[ -f "$_sentinel_dir/pathflow-pf-6" ]]; then
-        # PF7-END: remove flag so SessionEnd cleanup will proceed
-        rm -f "$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
+        # PF7-END: pf-6 found, allow TeamDelete through
+        # Flag removal handled by PostToolUse on TeamDelete (not here)
         if declare -f log_security_event &>/dev/null; then
-            log_security_event "allowed" "team_guard_pf7_gate" "$TOOL_NAME" "TeamDelete" "PF7-END: pf-6 sentinel found, flag removed, TeamDelete allowed"
+            log_security_event "allowed" "team_guard_pf7_gate" "$TOOL_NAME" "TeamDelete" "PF7-END: pf-6 sentinel found, TeamDelete allowed (flag removal deferred to PostToolUse)"
         fi
         exit 0
     fi

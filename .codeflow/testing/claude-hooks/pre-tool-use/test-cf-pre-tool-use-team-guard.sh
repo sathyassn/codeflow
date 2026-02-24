@@ -369,19 +369,18 @@ touch "$TEMP_DIR/.state/sentinels/pathflow/pf7-test-session/pathflow-pf-6"
 mkdir -p "$TEMP_DIR/.state/session/pf7-test-session/pathflow"
 echo "active" > "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active"
 output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$TEMP_DIR/state/pathflow-active" CODEFLOW_SESSION_ID="pf7-test-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
-# Should exit 0 (allowed) and remove the flag
+# Should exit 0 (allowed) — gate-only, no side effects
 if [[ $exit_code -eq 0 ]]; then
     pass "TeamDelete allowed when pf-6 sentinel exists (PF7-END gate)"
 else
     fail "TeamDelete should be allowed when pf-6 sentinel exists (got exit=$exit_code)"
 fi
-# Verify flag was removed
-if [[ ! -f "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active" ]]; then
-    TESTS_RUN=$((TESTS_RUN + 1))
-    pass "PF7-END gate removes pathflow-active flag"
+# Test 34: Verify flag is NOT removed by team-guard (gate-only; PostToolUse removes it)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$TEMP_DIR/.state/session/pf7-test-session/pathflow/is-pathflow-active" ]]; then
+    pass "PF7-END gate does NOT remove flag (gate-only, deferred to PostToolUse)"
 else
-    TESTS_RUN=$((TESTS_RUN + 1))
-    fail "PF7-END gate should remove pathflow-active flag"
+    fail "PF7-END gate should NOT remove flag (gate-only)"
 fi
 rm -rf "$TEMP_DIR"
 
@@ -416,6 +415,35 @@ else
     fail "TeamDelete should be allowed when flag already gone (got exit=$exit_code)"
 fi
 rm -rf "$TEMP_DIR"
+
+echo ""
+echo "--- Gate-Only Enforcement (Three-Layer Cleanup) ---"
+
+# Test 37: Team-guard is gate-only: pf-6 gate allows TeamDelete but does NOT remove flag
+# The flag removal is handled by PostToolUse sentinel hook AFTER TeamDelete succeeds.
+TESTS_RUN=$((TESTS_RUN + 1))
+TEMP_DIR=$(mktemp -d)
+mkdir -p "$TEMP_DIR/.state/sentinels/pathflow/gate-only-session"
+touch "$TEMP_DIR/.state/sentinels/pathflow/gate-only-session/pathflow-pf-6"
+mkdir -p "$TEMP_DIR/.state/session/gate-only-session/pathflow"
+echo "active" > "$TEMP_DIR/.state/session/gate-only-session/pathflow/is-pathflow-active"
+flag_path="$TEMP_DIR/.state/session/gate-only-session/pathflow/is-pathflow-active"
+output=$(REPO_ROOT="$TEMP_DIR" PATHFLOW_FLAG_FILE="$flag_path" CODEFLOW_SESSION_ID="gate-only-session" TOOL_NAME="TeamDelete" TOOL_INPUT='{}' bash "$HOOK" </dev/null 2>&1) && exit_code=0 || exit_code=$?
+if [[ $exit_code -eq 0 ]] && [[ -f "$flag_path" ]]; then
+    pass "Gate-only: TeamDelete exits 0 AND flag preserved for PostToolUse"
+else
+    fail "Gate-only: expected exit 0 + flag preserved (got exit=$exit_code, flag=$([ -f "${flag_path}" ] && echo 'exists' || echo 'missing'))"
+fi
+rm -rf "$TEMP_DIR"
+
+# Test 38: Hook does NOT contain rm -f for pathflow-active flag in PF7-END section
+TESTS_RUN=$((TESTS_RUN + 1))
+pf7_section=$(sed -n '/PF7-END GATE/,/^# ====/p' "$HOOK" 2>/dev/null) || true
+if echo "$pf7_section" | grep -q 'rm -f.*is-pathflow-active'; then
+    fail "PF7-END section should NOT contain rm -f for is-pathflow-active (gate-only)"
+else
+    pass "PF7-END section has no flag removal (gate-only, deferred to PostToolUse)"
+fi
 
 echo ""
 echo "=== Test Summary ==="

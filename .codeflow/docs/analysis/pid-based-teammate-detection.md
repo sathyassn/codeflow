@@ -157,6 +157,33 @@ Does env file exist?
 
 ## Cleanup scope
 
+The three-layer cleanup model ensures artifacts are removed at the right time:
+
+| Layer | Trigger | Responsibility |
+|-------|---------|---------------|
+| PreToolUse team-guard | Before TeamDelete | Gate only -- checks pf-6 sentinel, allows/blocks. No side effects. |
+| PostToolUse on TeamDelete | After TeamDelete succeeds | Removes `pathflow-active` flag only |
+| SessionEnd | Session termination | Comprehensive cleanup of all session-scoped state |
+
+### SessionEnd cleanup (comprehensive)
+
+When the `pathflow-active` flag is absent (removed by PostToolUse on TeamDelete), SessionEnd performs full cleanup:
+
+| Artifact | Path | Cleanup action | Why |
+|----------|------|----------------|-----|
+| PathFlow sentinels | `.state/sentinels/pathflow/{SID}/` | `rm -rf` | Session-scoped gate state |
+| Skill sentinels | `.state/sentinels/skill/{SID}/` | `rm -rf` | Session-scoped skill state |
+| Session directory | `.state/session/{SID}/` | `rm -rf` | Contains flag, checkpoint, team file |
+| Env file | `.state/runtime/codeflow-env.sh` | `rm -f` | Contains session ID |
+| Active task | `.state/runtime/active-task.json` | Conditional preserve | Keep if `in_progress` |
+| Temp files | `/tmp/claude/sessions/{SID}/` | `rm -rf` | Session-specific temp |
+| Team config (backstop) | `~/.claude/teams/{team_name}/` | `rm -rf` | Backstop if still exists |
+| Task list (backstop) | `~/.claude/tasks/{team_name}/` | `rm -rf` | Backstop if still exists |
+
+### Stale session cleanup (PID-based, at SessionStart)
+
+When the lead PID is dead, the following artifacts are removed:
+
 | Artifact | Path | Cleanup action | Why |
 |----------|------|----------------|-----|
 | Team config | `~/.claude/teams/{team_name}/` | `rm -rf` | Stale member entries with dead panes |

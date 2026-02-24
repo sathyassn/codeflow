@@ -21,7 +21,7 @@
 # Cleanup order (per V4 spec):
 #   1. Remove all PathFlow sentinels
 #   2. Remove expired skill sentinels
-#   3. Flag already removed by team-guard (idempotent no-op)
+#   3. Flag removed by PostToolUse on TeamDelete; SessionEnd removes implicitly via session dir cleanup (backstop)
 #   4. Clean memory progress files
 #   5. Preserve active task context if in_progress
 #   6. Read pathflow-team.json, clean team config/task list, remove session dir
@@ -131,6 +131,17 @@ _sentinels_cleaned=0
 _task_preserved="false"
 
 # =============================================================================
+# PF7 DIAGNOSTIC — Check for clean shutdown signal
+# =============================================================================
+
+_pf_sentinel_dir="$REPO_ROOT/.state/sentinels/pathflow/$SESSION_ID"
+if [[ -f "$_pf_sentinel_dir/pathflow-pf-7" ]]; then
+    echo "SessionEnd: Clean PF7 shutdown (all phases completed)" >&2
+else
+    echo "SessionEnd: Incomplete PF7 shutdown (pf-7 sentinel absent — possible crash or skip)" >&2
+fi
+
+# =============================================================================
 # 1. PATHFLOW SENTINEL CLEANUP
 # =============================================================================
 
@@ -191,6 +202,8 @@ if [[ -f "$_pf_team_file" ]] && command -v jq &>/dev/null; then
     _pf_team_name=$(jq -r '.team_name // empty' "$_pf_team_file" 2>/dev/null) || true
 fi
 
+# Backstop: Clean team config/task list if PostToolUse on TeamDelete missed it
+# Normal path: TeamDelete removes these; this catches crash/skip scenarios
 # Clean up team config and task list if team_name is known
 if [[ -n "$_pf_team_name" ]]; then
     if [[ -d "${HOME}/.claude/teams/${_pf_team_name}" ]]; then

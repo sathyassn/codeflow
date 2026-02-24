@@ -21,14 +21,16 @@
           "task_order": 1,
           "description": "Initialize PathFlow session record",
           "assigned_to": "team-lead",
-          "operation": "TeamCreate (pathflow-active flag is auto-created by SessionStart hook)"
+          "operation": "TeamCreate (pathflow-active flag is auto-created by SessionStart hook)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF1-TSK-02",
           "task_order": 2,
           "description": "Spawn cf-security teammate",
           "assigned_to": "team-lead",
-          "operation": "Task(subagent_type=cf-security)"
+          "operation": "Task(subagent_type=cf-security)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -55,28 +57,32 @@
           "task_order": 1,
           "description": "Spawn cf-knowledge-layer teammate",
           "assigned_to": "team-lead",
-          "operation": "Task(subagent_type=cf-knowledge-layer)"
+          "operation": "Task(subagent_type=cf-knowledge-layer)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF2-TSK-02",
           "task_order": 2,
           "description": "Query active work and session state",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "detect-active-work"
+          "operation": "detect-active-work",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF2-TSK-03",
           "task_order": 3,
           "description": "Load memory context for current work",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "load-work-context"
+          "operation": "load-work-context",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF2-TSK-04",
           "task_order": 4,
           "description": "Determine tracked vs untracked decision",
           "assigned_to": "team-lead",
-          "operation": "Tracking decision (tracked/untracked/ask)"
+          "operation": "Tracking decision (tracked/untracked/ask)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -105,21 +111,24 @@
           "task_order": 1,
           "description": "Classify work type and area",
           "assigned_to": "team-lead",
-          "operation": "Work type classification from CLAUDE.md Section 6"
+          "operation": "Work type classification from CLAUDE.md Section 6",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF3-TSK-02",
           "task_order": 2,
           "description": "Spawn cf-git-operations teammate",
           "assigned_to": "team-lead",
-          "operation": "Task(subagent_type=cf-git-operations)"
+          "operation": "Task(subagent_type=cf-git-operations)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF3-TSK-03",
           "task_order": 3,
           "description": "Create feature branch (triggers pf-3 sentinel, unlocks Edit/Write)",
           "assigned_to": "cf-git-operations",
-          "operation": "create-feature-branch"
+          "operation": "create-feature-branch",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF3-TSK-04",
@@ -127,14 +136,16 @@
           "description": "Register task in WorkGraph (runs after pf-3 sentinel, for adhoc/non-planned tasks only; skipped when origin=planned)",
           "assigned_to": "cf-knowledge-layer",
           "operation": "ensure-work-registered",
-          "condition": "adhoc_only"
+          "condition": "adhoc_only",
+          "enforcement_note": "Evaluate the condition field first. If condition applies: MUST execute, mark completed after success. If condition does not apply: mark skipped. Skipping without evaluating the condition is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF3-TSK-05",
           "task_order": 5,
           "description": "Begin work session by writing begin_work event to ledger",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "begin-work"
+          "operation": "begin-work",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -165,28 +176,32 @@
           "task_order": 1,
           "description": "Lookup the work stage pipeline for the classified work_type from the work_type_stages table in this config (e.g., FEAT → WS-DEV, WS-REV, WS-QA). This determines which teammates to spawn and in what order during PF4-EXECUTE.",
           "assigned_to": "team-lead",
-          "operation": "Lookup pipeline from work_type_stages in this config"
+          "operation": "Lookup pipeline from work_type_stages in this config",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF4-TSK-02",
           "task_order": 2,
           "description": "Validate task and epic fields before work starts",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "validate-task-fields"
+          "operation": "validate-task-fields",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF4-TSK-03",
           "task_order": 3,
           "description": "Assess parallel batch need, then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST). If scope involves multiple independent items exceeding batch_size, spawn parallel instances per max_parallel. Default to parallel when in doubt.",
           "assigned_to": "team-lead",
-          "operation": "Spawn stage teammate per pipeline"
+          "operation": "Spawn stage teammate per pipeline",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF4-TSK-04",
           "task_order": 4,
           "description": "Execute WS-REV stage (universal review)",
           "assigned_to": "team-lead",
-          "operation": "Spawn cf-review with mode per work type"
+          "operation": "Spawn cf-review with mode per work type",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF4-TSK-05",
@@ -194,7 +209,8 @@
           "description": "Execute WS-QA stage (if pipeline includes it)",
           "assigned_to": "team-lead",
           "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
-          "condition": "if_pipeline_includes_qa"
+          "condition": "if_pipeline_includes_qa",
+          "enforcement_note": "Evaluate the condition field first. If condition applies: MUST execute, mark completed after success. If condition does not apply: mark skipped. Skipping without evaluating the condition is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -224,14 +240,16 @@
           "task_order": 1,
           "description": "Verify all pipeline stages completed with pass verdict",
           "assigned_to": "team-lead",
-          "operation": "Verify all stage sentinels exist"
+          "operation": "Verify all stage sentinels exist",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF5-TSK-02",
           "task_order": 2,
           "description": "Check acceptance criteria met",
           "assigned_to": "team-lead",
-          "operation": "Check acceptance criteria against task record"
+          "operation": "Check acceptance criteria against task record",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -258,63 +276,72 @@
           "task_order": 1,
           "description": "Complete work in WorkGraph via cf-knowledge-layer (complete-work). Includes task status update, epic status rollup if all sibling tasks complete, and Tier 2 markdown sync.",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "complete-work"
+          "operation": "complete-work",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-02",
           "task_order": 2,
           "description": "Update project memory via cf-knowledge-layer",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "record-session-summary"
+          "operation": "record-session-summary",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-03",
           "task_order": 3,
           "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state) via cf-git-operations",
           "assigned_to": "cf-git-operations",
-          "operation": "commit-outstanding-changes"
+          "operation": "commit-outstanding-changes",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-04",
           "task_order": 4,
           "description": "Squash all branch commits into a single commit with a synthesized conventional-commit message before PR creation",
           "assigned_to": "cf-git-operations",
-          "operation": "squash-branch"
+          "operation": "squash-branch",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-05",
           "task_order": 5,
           "description": "Create PR via cf-git-operations (create-pr). Records pr_created event to ledger and notifies cf-knowledge-layer with PR number.",
           "assigned_to": "cf-git-operations",
-          "operation": "create-pr"
+          "operation": "create-pr",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-06",
           "task_order": 6,
           "description": "Verify PR CI checks via cf-git-operations (verify-pr-ci). Polls CI status with gh pr checks --watch --fail-fast. On CI failure, escalate to team lead.",
           "assigned_to": "cf-git-operations",
-          "operation": "verify-pr-ci"
+          "operation": "verify-pr-ci",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-07",
           "task_order": 7,
           "description": "Await PR merge disposition via cf-git-operations (await-pr-merge). Interactive: notify user to merge via GitHub UI, wait for confirmation. Autorun+auto_merge: execute gh pr merge --delete-branch. Autorun+no_auto_merge: task is already complete from PF6-TSK-01, just proceed to PF7.",
           "assigned_to": "cf-git-operations",
-          "operation": "await-pr-merge"
+          "operation": "await-pr-merge",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-08",
           "task_order": 8,
           "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_merged or pr_created event. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "record-pr-outcome"
+          "operation": "record-pr-outcome",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF6-TSK-09",
           "task_order": 9,
           "description": "Sync local repository via cf-git-operations (sync-local). Interactive+merged: git pull origin main. Autorun+auto_merge: git pull origin {target_branch}. Autorun+no_merge: no pull needed.",
           "assigned_to": "cf-git-operations",
-          "operation": "sync-local"
+          "operation": "sync-local",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [
@@ -342,28 +369,31 @@
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
         "on_phase_complete": "TaskUpdate status=completed for the phase entry"
       },
-      "cleanup_note": "The pathflow-active flag (.state/session/{SID}/pathflow/is-pathflow-active) is removed automatically by the SessionEnd hook — the lead does NOT need to delete it manually. TeamDelete is the lead's final action after all teammates confirm shutdown.",
+      "cleanup_note": "Flag removed by PostToolUse on TeamDelete; SessionEnd cleanup removes remaining session-scoped state (sentinels, session dir, env file, temp files)",
       "tasks": [
         {
           "id": "PF7-TSK-01",
           "task_order": 1,
           "description": "Shutdown on-demand role teammates",
           "assigned_to": "team-lead",
-          "operation": "SendMessage(type=shutdown_request) to on-demand teammates"
+          "operation": "SendMessage(type=shutdown_request) to on-demand teammates",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF7-TSK-02",
           "task_order": 2,
           "description": "Shutdown persistent function teammates",
           "assigned_to": "team-lead",
-          "operation": "SendMessage(type=shutdown_request) to persistent teammates"
+          "operation": "SendMessage(type=shutdown_request) to persistent teammates",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {
           "id": "PF7-TSK-03",
           "task_order": 3,
           "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)",
           "assigned_to": "team-lead",
-          "operation": "TeamDelete (after pathflow-active flag removed by SessionEnd hook)"
+          "operation": "TeamDelete (PostToolUse hook removes pathflow-active flag after success; SessionEnd handles remaining cleanup)",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         }
       ],
       "required_tasks": [

@@ -1030,6 +1030,141 @@ else
     fail "Hook should always exit 0 (PID cleanup path)"
 fi
 
+echo ""
+echo "--- PID-Based Cleanup: Source Guard ---"
+
+# Source Guard Test 1: source=startup + dead PID → cleanup runs (sentinels deleted)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg1_sid="ses-srcguard-01"
+_sg1_team="srcguard-team-01"
+create_stale_session "$_sg1_sid" "$_sg1_team" 99999
+# Feed source=startup via stdin JSON
+echo '{"source":"startup"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/sentinels/pathflow/$_sg1_sid" ]]; then
+    pass "Source guard: startup + dead PID cleans sentinels"
+else
+    fail "Source guard: startup + dead PID should clean sentinels"
+fi
+# Also verify session dir cleaned
+if [[ ! -d "$REPO_ROOT/.state/session/$_sg1_sid" ]]; then
+    pass "Source guard: startup + dead PID cleans session dir"
+else
+    fail "Source guard: startup + dead PID should clean session dir"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+cleanup_team_dirs "$_sg1_team"
+
+# Source Guard Test 2: source=compact + dead PID → cleanup skipped (sentinels preserved)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg2_sid="ses-srcguard-02"
+_sg2_team="srcguard-team-02"
+create_stale_session "$_sg2_sid" "$_sg2_team" 99999
+# Feed source=compact via stdin JSON — simulates context compaction
+echo '{"source":"compact"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$_sg2_sid" ]]; then
+    pass "Source guard: compact + dead PID preserves sentinels"
+else
+    fail "Source guard: compact + dead PID should preserve sentinels"
+fi
+# Also verify session dir preserved
+if [[ -d "$REPO_ROOT/.state/session/$_sg2_sid" ]]; then
+    pass "Source guard: compact + dead PID preserves session dir"
+else
+    fail "Source guard: compact + dead PID should preserve session dir"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+cleanup_team_dirs "$_sg2_team"
+
+# Source Guard Test 3: source=resume + dead PID → cleanup skipped (sentinels preserved)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg3_sid="ses-srcguard-03"
+_sg3_team="srcguard-team-03"
+create_stale_session "$_sg3_sid" "$_sg3_team" 99999
+# Feed source=resume via stdin JSON — simulates /resume command
+echo '{"source":"resume"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$_sg3_sid" ]]; then
+    pass "Source guard: resume + dead PID preserves sentinels"
+else
+    fail "Source guard: resume + dead PID should preserve sentinels"
+fi
+# Also verify session dir preserved
+if [[ -d "$REPO_ROOT/.state/session/$_sg3_sid" ]]; then
+    pass "Source guard: resume + dead PID preserves session dir"
+else
+    fail "Source guard: resume + dead PID should preserve session dir"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+cleanup_team_dirs "$_sg3_team"
+
+# Source Guard Test 4: source=unknown + dead PID → cleanup runs (fail-safe)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg4_sid="ses-srcguard-04"
+_sg4_team="srcguard-team-04"
+create_stale_session "$_sg4_sid" "$_sg4_team" 99999
+# Feed source=unknown via stdin JSON — or no source field (defaults to unknown)
+echo '{"source":"unknown"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/sentinels/pathflow/$_sg4_sid" ]]; then
+    pass "Source guard: unknown + dead PID cleans sentinels (fail-safe)"
+else
+    fail "Source guard: unknown + dead PID should clean sentinels (fail-safe)"
+fi
+# Also verify session dir cleaned
+if [[ ! -d "$REPO_ROOT/.state/session/$_sg4_sid" ]]; then
+    pass "Source guard: unknown + dead PID cleans session dir (fail-safe)"
+else
+    fail "Source guard: unknown + dead PID should clean session dir (fail-safe)"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+cleanup_team_dirs "$_sg4_team"
+
+# Source Guard Test 5: source=compact + dead PID → updates pathflow-team.json lead_pid
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg5_sid="ses-srcguard-05"
+_sg5_team="srcguard-team-05"
+create_stale_session "$_sg5_sid" "$_sg5_team" 99999
+# Feed source=compact via stdin JSON — simulates context compaction
+echo '{"source":"compact"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# Verify pathflow-team.json still exists (cleanup was skipped)
+_sg5_team_file="$REPO_ROOT/.state/session/$_sg5_sid/pathflow/pathflow-team.json"
+if [[ -f "$_sg5_team_file" ]]; then
+    _sg5_new_pid=$(jq -r '.lead_pid // 0' "$_sg5_team_file" 2>/dev/null) || _sg5_new_pid=0
+    if [[ "$_sg5_new_pid" -ne 99999 ]] && [[ "$_sg5_new_pid" -gt 0 ]]; then
+        pass "Source guard: compact + dead PID updates lead_pid in pathflow-team.json (was 99999, now $_sg5_new_pid)"
+    else
+        fail "Source guard: compact + dead PID should update lead_pid (got $_sg5_new_pid, expected != 99999)"
+    fi
+else
+    fail "Source guard: compact + dead PID should preserve pathflow-team.json"
+fi
+cleanup_team_dirs "$_sg5_team"
+
+# Source Guard Test 6: source=resume + dead PID → updates pathflow-team.json lead_pid
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg6_sid="ses-srcguard-06"
+_sg6_team="srcguard-team-06"
+create_stale_session "$_sg6_sid" "$_sg6_team" 99999
+# Feed source=resume via stdin JSON — simulates /resume command
+echo '{"source":"resume"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# Verify pathflow-team.json still exists (cleanup was skipped)
+_sg6_team_file="$REPO_ROOT/.state/session/$_sg6_sid/pathflow/pathflow-team.json"
+if [[ -f "$_sg6_team_file" ]]; then
+    _sg6_new_pid=$(jq -r '.lead_pid // 0' "$_sg6_team_file" 2>/dev/null) || _sg6_new_pid=0
+    if [[ "$_sg6_new_pid" -ne 99999 ]] && [[ "$_sg6_new_pid" -gt 0 ]]; then
+        pass "Source guard: resume + dead PID updates lead_pid in pathflow-team.json (was 99999, now $_sg6_new_pid)"
+    else
+        fail "Source guard: resume + dead PID should update lead_pid (got $_sg6_new_pid, expected != 99999)"
+    fi
+else
+    fail "Source guard: resume + dead PID should preserve pathflow-team.json"
+fi
+cleanup_team_dirs "$_sg6_team"
+
 fi  # End CI guard for PID tests
 
 echo ""

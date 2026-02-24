@@ -2,10 +2,11 @@
 # test-cf-pathflow-enforcement.sh - Tests for PathFlow enforcement hooks
 # Location: .codeflow/testing/scripts/pathflow/test-cf-pathflow-enforcement.sh
 #
-# Tests 3 hooks:
+# Tests 3 hooks + checkpoint system:
 #   - cf-session-start-init.sh (flag creation)
 #   - cf-post-tool-use-pathflow-sentinel.sh (sentinel detection)
 #   - cf-pre-tool-use-pathflow-gate.sh (gate enforcement)
+#   - cf-pathflow-state.sh (checkpoint conditional task auto-evaluation)
 #
 # Usage:
 #   ./test-cf-pathflow-enforcement.sh       Run all tests
@@ -707,6 +708,240 @@ test_full_lifecycle() {
     fi
 }
 
+
+# ============================================================================
+# TESTS: Checkpoint conditional task auto-evaluation (Change 5)
+# ============================================================================
+
+# Source pathflow state lib for checkpoint functions
+_PFS_LIB_TEST="$REAL_REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
+
+test_checkpoint_conditional_auto_skip() {
+    test_section "Checkpoint: auto-skip adhoc_only task when origin=planned"
+    setup_env
+    if [[ ! -f "$_PFS_LIB_TEST" ]]; then
+        test_skip "ckpt_cond" "Pathflow state lib not found"
+        return
+    fi
+    # Source the lib in a subshell to avoid polluting this shell
+    local _sub_exit=0
+    # shellcheck disable=SC2030,SC2031  # Intentional subshell isolation for test
+    (
+        export REPO_ROOT
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        # Need to unset the source guard to allow re-sourcing
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED
+        # shellcheck source=/dev/null
+        source "$_PFS_LIB_TEST"
+
+        # Initialize PF3 phase (which has PF3-TSK-04 with condition: adhoc_only)
+        checkpoint_init_phase "PF3" || exit 1
+
+        # Set context: origin=planned
+        checkpoint_set_context "origin" "planned" || exit 1
+
+        # Complete all tasks except PF3-TSK-04
+        checkpoint_register_task "PF3-TSK-01" || exit 1
+        checkpoint_register_task "PF3-TSK-02" || exit 1
+        checkpoint_register_task "PF3-TSK-03" || exit 1
+        checkpoint_register_task "PF3-TSK-05" || exit 1
+        checkpoint_complete_task "PF3-TSK-01" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-02" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-03" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-05" >/dev/null || exit 1
+
+        # PF3-TSK-04 is NOT completed or skipped, but condition=adhoc_only + origin=planned
+        # checkpoint_is_phase_complete should auto-treat it as skipped
+        if checkpoint_is_phase_complete "PF3"; then
+            exit 0
+        else
+            exit 1
+        fi
+    ) || _sub_exit=$?
+    # shellcheck disable=SC2031  # Intentional: CODEFLOW_SESSION_ID set in subshell for isolation
+    if [[ $_sub_exit -eq 0 ]]; then
+        test_pass "PF3 complete: adhoc_only task auto-skipped when origin=planned"
+    else
+        test_fail "PF3 should be complete when adhoc_only task auto-skipped"
+    fi
+}
+
+test_checkpoint_context_not_set_failsafe() {
+    test_section "Checkpoint: conditional task remains required when context not set"
+    setup_env
+    if [[ ! -f "$_PFS_LIB_TEST" ]]; then
+        test_skip "ckpt_nosafe" "Pathflow state lib not found"
+        return
+    fi
+    local _sub_exit=0
+    # shellcheck disable=SC2030,SC2031  # Intentional subshell isolation for test
+    (
+        export REPO_ROOT
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        # Remove stale checkpoint from previous tests (PF3 may have sentinel_created=true)
+        rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/pathflow-phase-tasks.json" 2>/dev/null || true
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED
+        # shellcheck source=/dev/null
+        source "$_PFS_LIB_TEST"
+
+        # Initialize PF3 but do NOT set context
+        checkpoint_init_phase "PF3" || exit 1
+
+        # Complete all tasks except PF3-TSK-04
+        checkpoint_register_task "PF3-TSK-01" || exit 1
+        checkpoint_register_task "PF3-TSK-02" || exit 1
+        checkpoint_register_task "PF3-TSK-03" || exit 1
+        checkpoint_register_task "PF3-TSK-05" || exit 1
+        checkpoint_complete_task "PF3-TSK-01" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-02" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-03" >/dev/null || exit 1
+        checkpoint_complete_task "PF3-TSK-05" >/dev/null || exit 1
+
+        # PF3-TSK-04 has condition=adhoc_only but context NOT set
+        # Phase should NOT be complete (fail-safe: condition not evaluable)
+        if checkpoint_is_phase_complete "PF3"; then
+            exit 1  # Should NOT be complete
+        else
+            exit 0  # Correct: not complete
+        fi
+    ) || _sub_exit=$?
+    # shellcheck disable=SC2031  # Intentional: CODEFLOW_SESSION_ID set in subshell for isolation
+    if [[ $_sub_exit -eq 0 ]]; then
+        test_pass "Phase incomplete when context not set (fail-safe)"
+    else
+        test_fail "Phase should be incomplete when context not set"
+    fi
+}
+
+test_checkpoint_skip_triggers_completion() {
+    test_section "Checkpoint: skip_task triggers phase completion"
+    setup_env
+    if [[ ! -f "$_PFS_LIB_TEST" ]]; then
+        test_skip "ckpt_skip_comp" "Pathflow state lib not found"
+        return
+    fi
+    local _sub_exit=0
+    # shellcheck disable=SC2030,SC2031  # Intentional subshell isolation for test
+    (
+        export REPO_ROOT
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED
+        # shellcheck source=/dev/null
+        source "$_PFS_LIB_TEST"
+
+        # Initialize PF1 (2 tasks: PF1-TSK-01, PF1-TSK-02)
+        checkpoint_init_phase "PF1" || exit 1
+
+        # Complete first task
+        checkpoint_register_task "PF1-TSK-01" || exit 1
+        checkpoint_complete_task "PF1-TSK-01" >/dev/null || exit 1
+
+        # Register second task
+        checkpoint_register_task "PF1-TSK-02" || exit 1
+
+        # Skip second task — this should trigger phase completion
+        local result
+        result=$(checkpoint_skip_task "PF1-TSK-02")
+
+        if [[ "$result" == *"phase_complete"* ]]; then
+            exit 0
+        else
+            exit 1
+        fi
+    ) || _sub_exit=$?
+    # shellcheck disable=SC2031  # Intentional: CODEFLOW_SESSION_ID set in subshell for isolation
+    if [[ $_sub_exit -eq 0 ]]; then
+        test_pass "checkpoint_skip_task triggers phase completion"
+    else
+        test_fail "checkpoint_skip_task should trigger phase completion"
+    fi
+}
+
+test_checkpoint_set_context() {
+    test_section "Checkpoint: set_context stores key-value in checkpoint"
+    setup_env
+    if [[ ! -f "$_PFS_LIB_TEST" ]]; then
+        test_skip "ckpt_ctx" "Pathflow state lib not found"
+        return
+    fi
+    local _sub_exit=0
+    # shellcheck disable=SC2030,SC2031  # Intentional subshell isolation for test
+    (
+        export REPO_ROOT
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED
+        # shellcheck source=/dev/null
+        source "$_PFS_LIB_TEST"
+
+        # Initialize a phase to create the checkpoint file
+        checkpoint_init_phase "PF1" || exit 1
+
+        # Set context values
+        checkpoint_set_context "origin" "planned" || exit 1
+        checkpoint_set_context "work_type" "DOCS" || exit 1
+
+        # Read and verify
+        local checkpoint
+        checkpoint=$(checkpoint_read)
+        local origin work_type
+        origin=$(echo "$checkpoint" | jq -r '.context.origin // empty')
+        work_type=$(echo "$checkpoint" | jq -r '.context.work_type // empty')
+
+        if [[ "$origin" == "planned" ]] && [[ "$work_type" == "DOCS" ]]; then
+            exit 0
+        else
+            echo "Expected origin=planned, work_type=DOCS, got origin=$origin, work_type=$work_type" >&2
+            exit 1
+        fi
+    ) || _sub_exit=$?
+    # shellcheck disable=SC2031  # Intentional: CODEFLOW_SESSION_ID set in subshell for isolation
+    if [[ $_sub_exit -eq 0 ]]; then
+        test_pass "checkpoint_set_context stores values correctly"
+    else
+        test_fail "checkpoint_set_context should store key-value pairs"
+    fi
+}
+
+test_checkpoint_conditions_stored() {
+    test_section "Checkpoint: init_phase stores condition metadata"
+    setup_env
+    if [[ ! -f "$_PFS_LIB_TEST" ]]; then
+        test_skip "ckpt_cond_meta" "Pathflow state lib not found"
+        return
+    fi
+    local _sub_exit=0
+    # shellcheck disable=SC2030,SC2031  # Intentional subshell isolation for test
+    (
+        export REPO_ROOT
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        unset _CF_PATHFLOW_STATE_LIB_SOURCED
+        # shellcheck source=/dev/null
+        source "$_PFS_LIB_TEST"
+
+        # Initialize PF3 which has PF3-TSK-04 with condition: adhoc_only
+        checkpoint_init_phase "PF3" || exit 1
+
+        # Read and verify conditions are stored
+        local checkpoint
+        checkpoint=$(checkpoint_read)
+        local cond
+        cond=$(echo "$checkpoint" | jq -r '.PF3.conditions["PF3-TSK-04"] // empty')
+
+        if [[ "$cond" == "adhoc_only" ]]; then
+            exit 0
+        else
+            echo "Expected condition=adhoc_only, got: $cond" >&2
+            exit 1
+        fi
+    ) || _sub_exit=$?
+    # shellcheck disable=SC2031  # Intentional: CODEFLOW_SESSION_ID set in subshell for isolation
+    if [[ $_sub_exit -eq 0 ]]; then
+        test_pass "checkpoint_init_phase stores condition metadata"
+    else
+        test_fail "checkpoint_init_phase should store conditions map"
+    fi
+}
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -764,6 +999,13 @@ main() {
 
     # Integration
     test_full_lifecycle
+
+    # Checkpoint conditional task auto-evaluation (Change 5)
+    test_checkpoint_conditions_stored
+    test_checkpoint_set_context
+    test_checkpoint_conditional_auto_skip
+    test_checkpoint_context_not_set_failsafe
+    test_checkpoint_skip_triggers_completion
 
     print_test_summary
     [[ $TEST_FAIL_COUNT -eq 0 ]]

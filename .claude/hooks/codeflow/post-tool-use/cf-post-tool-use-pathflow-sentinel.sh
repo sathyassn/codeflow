@@ -22,7 +22,7 @@
 #
 # Stage ordering validation (warnings, not hard gates):
 #   ws-rev requires prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)
-#   ws-qa requires prior ws-dev
+#   ws-qa requires prior ws-dev or ws-test
 #
 # Idempotent: touch on existing file is a no-op.
 # Early exit: If is_pathflow_active() returns false, exit 0.
@@ -125,8 +125,10 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
     if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
         _content=$(echo "$TOOL_INPUT" | jq -r '.content // empty' 2>/dev/null) || true
         if [[ -n "${_content:-}" ]]; then
+            # Normalize for case-insensitive matching
+            _content_normalized=$(echo "$_content" | tr '[:lower:]' '[:upper:]' | tr -s '[:space:]' ' ')
             # Match STAGE-COMPLETE: WS-{STAGE} pattern
-            if [[ "$_content" =~ STAGE-COMPLETE:\ WS-(DEV|REV|QA|TEST|PLAN|DOCS) ]]; then
+            if [[ "$_content_normalized" =~ STAGE-COMPLETE:\ WS-(DEV|REV|QA|TEST|PLAN|DOCS) ]]; then
                 _stage="${BASH_REMATCH[1]}"
                 # Convert to lowercase for sentinel name
                 _stage_lower=$(echo "$_stage" | tr '[:upper:]' '[:lower:]')
@@ -153,9 +155,9 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
                         fi
                         ;;
                     qa)
-                        # WS-QA should follow WS-DEV (qa only runs in dev-routed pipelines)
-                        if ! has_sentinel "ws-dev"; then
-                            echo "PostToolUse[sentinel]: WARNING: ws-qa created without prior ws-dev sentinel" >&2
+                        # WS-QA should follow WS-DEV or WS-TEST
+                        if ! has_sentinel "ws-dev" && ! has_sentinel "ws-test"; then
+                            echo "PostToolUse[sentinel]: WARNING: ws-qa created without prior ws-dev or ws-test sentinel" >&2
                         fi
                         ;;
                 esac
@@ -204,6 +206,22 @@ if [[ "$TOOL_NAME" == "TeamCreate" ]]; then
                 fi
             fi
         fi
+    fi
+fi
+
+# =============================================================================
+# TEAMDELETE HANDLER — Remove pathflow-active flag after successful TeamDelete
+# =============================================================================
+# PostToolUse fires AFTER TeamDelete succeeds. Safe to remove the flag now.
+# SessionEnd hook will then proceed with full cleanup (flag absent → cleanup runs).
+
+if [[ "$TOOL_NAME" == "TeamDelete" ]]; then
+    _flag_file="$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow/is-pathflow-active"
+    if [[ -f "$_flag_file" ]]; then
+        rm -f "$_flag_file" 2>/dev/null || true
+        echo "PostToolUse[sentinel]: TeamDelete succeeded — pathflow-active flag removed" >&2
+    else
+        echo "PostToolUse[sentinel]: TeamDelete — flag already absent (no-op)" >&2
     fi
 fi
 
