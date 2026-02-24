@@ -117,7 +117,7 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 🔒 **TASK TESTS FIELD: You MUST update the task's `tests` field in the task markdown YAML frontmatter with the paths of test files you create/update (relative to `.codeflow/testing/`).**
 
-🔒 **TEST REGISTRATION: You MUST register new test files in `.codeflow/config/test-config.json` under the appropriate priority category. Unregistered tests are invisible to the test runner and will be flagged at review.**
+🔒 **TEST REGISTRATION: You MUST register new test files in `.codeflow/testing/test-config.json` under the appropriate priority category. Unregistered tests are invisible to the test runner and will be flagged at review.**
 
 Create or update unit tests for all new/changed logic.
 
@@ -128,7 +128,7 @@ Create or update unit tests for all new/changed logic.
 
 Each test file: minimum one positive case, one negative/error case, one edge case.
 
-Register new tests in `.codeflow/config/test-config.json`: `{ "{script_path}": { "test_file": "{test_path}", "type": "shell|python", "critical": true|false } }`
+Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": { "test_file": "{test_path}", "type": "shell|python", "critical": true|false } }`
 
 ### Step 5: Self-Test
 
@@ -207,17 +207,178 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 
 ## Quality Checklist
 
-Before marking any task complete, verify:
+🔒 **BLOCKING:** Every item below is a hard gate. If ANY item fails, the work is NOT done. Do not report STAGE-COMPLETE until every item passes. Do not rationalize skipping items — fix the underlying issue.
 
-- [ ] Implementation matches task requirements and acceptance criteria
-- [ ] Unit tests written and passing (no regressions)
-- [ ] Shell scripts pass ShellCheck (zero SC1xxx errors)
-- [ ] Python scripts pass ruff/flake8 (zero errors)
-- [ ] No hardcoded secrets, credentials, or absolute paths to local machines
-- [ ] Uses shared libraries where applicable (not duplicating existing utilities)
-- [ ] Changes committed via cf-git-operations with proper conventional commit format
-- [ ] Modularization thresholds respected (or documented exception)
-- [ ] Changes are within scope of the assigned task
+### 5.1 Self-Challenge Protocol
+
+**Before starting work:**
+
+1. Have I read the FULL task assignment, including ALL numbered acceptance criteria?
+2. Do I understand the scope boundaries — what files am I allowed to touch, and what is off-limits?
+3. Have I identified every assumption I'm making about file names, paths, schemas, or behaviors?
+4. Am I certain the directories I plan to write to exist? (Verify with Glob, not memory.)
+5. Have I searched the codebase for existing utilities that do what I'm about to build? (`Grep` for function names, `Glob` for similar files.)
+
+**Red flags during work (STOP and reassess):**
+
+- I'm creating a file and guessing at the name or path instead of checking existing patterns.
+- I'm writing code that duplicates a function I vaguely remember existing somewhere.
+- I'm modifying a file outside my assigned scope.
+- I haven't verified that my test file name follows the project convention for this specific directory.
+- I'm about to commit without running the tests.
+- I'm creating a new directory that doesn't exist yet without confirming this is the intended location.
+- A shell command silently succeeds with no output — it may have done nothing.
+- I'm writing a test that mocks everything and never exercises real code paths.
+
+**Before claiming done:**
+
+1. Re-read the original task assignment. Compare each acceptance criterion against the actual file/output on disk — not my memory of what I did.
+2. Run the test suite. Confirm zero regressions with actual output, not assumed pass.
+3. Verify every new file I created is in the correct directory by checking sibling files with `Glob`.
+4. Verify every new test file is registered in `.codeflow/testing/test-config.json`.
+
+### 5.2 Project Convention Compliance
+
+🔒 **NEVER invent file names or paths from memory. ALWAYS discover them from the codebase.**
+
+**File naming conventions:**
+
+| File Type | Convention | Discovery Method |
+|-----------|-----------|-----------------|
+| Shell scripts | `kebab-case.sh` | `Glob(".codeflow/scripts/{area}/*.sh")` to see siblings |
+| Shell tests | `test-{name}.sh` | `Glob(".codeflow/testing/scripts/{area}/test-*.sh")` to see siblings |
+| Claude hook scripts | `cf-{event}-{name}.sh` | `Glob(".claude/hooks/codeflow/{event}/*.sh")` to see siblings |
+| Claude hook tests | `test-cf-{event}-{name}.sh` | `Glob(".codeflow/testing/claude-hooks/{event}/test-*.sh")` to see siblings |
+| Python scripts | `snake_case.py` with `cf_` or `cf-` prefix | `Glob(".codeflow/scripts/{area}/*.py")` to see siblings |
+| Python tests | `test_{name}.py` | `Glob(".codeflow/testing/scripts/{area}/test_*.py")` to see siblings |
+| Python lib tests | `test_{module}.py` | `Glob(".codeflow/testing/scripts/codeflow_py_lib/test_*.py")` to see siblings |
+
+**Directory placement rules:**
+
+| Artifact | Correct Location | WRONG Locations (common mistakes) |
+|----------|-----------------|-----------------------------------|
+| Shell scripts (source) | `.codeflow/scripts/{area}/` | `.codeflow/testing/` (that's for tests) |
+| Shell tests | `.codeflow/testing/scripts/{area}/` | `.codeflow/scripts/` (that's for source) |
+| Claude hook scripts | `.claude/hooks/codeflow/{event}/` | `.codeflow/scripts/` |
+| Claude hook tests | `.codeflow/testing/claude-hooks/{event}/` | `.codeflow/testing/scripts/` (wrong parent) |
+| Python shared lib | `codeflow_py_lib/` | `.codeflow/scripts/codeflow_py_lib/` |
+| Python shared lib tests | `.codeflow/testing/scripts/codeflow_py_lib/` | `codeflow_py_lib/tests/` |
+| Security scripts | `.codeflow/scripts/security/{subarea}/` | `.codeflow/scripts/{subarea}/` |
+| Security tests | `.codeflow/testing/scripts/security/{subarea}/` | `.codeflow/testing/scripts/{subarea}/` |
+
+**Mandatory discovery before creating files:**
+
+1. Before creating ANY new file, run `Glob` on the target directory to see existing files.
+2. Match the naming pattern of siblings exactly — do not invent a new convention.
+3. If no siblings exist (new directory), escalate to the team lead for path confirmation.
+
+**Registration requirements:**
+
+| New Artifact | Must Register In | Registration Format |
+|-------------|-----------------|-------------------|
+| New test file (shell or python) | `.codeflow/testing/test-config.json` | Add path (relative to `.codeflow/testing/`) under appropriate priority in `priorities.{LEVEL}.files` |
+| New hook script | `.claude/settings.json` | Add hook entry under appropriate event matcher with `command` path and `timeout` |
+| New CLI command | `.claude/commands/` | Create command markdown file |
+
+### 5.3 Assumption Identification & Verification
+
+🔒 **Every assumption MUST be stated explicitly and verified against evidence from the codebase. "I think" or "I believe" = unverified assumption = potential defect.**
+
+**Types of assumptions to catch and verify:**
+
+| Assumption Type | Example of Failure | Verification Method |
+|----------------|-------------------|-------------------|
+| File existence | "The test helper is at `lib/test-helpers.sh`" | `Glob("**/test-helpers.sh")` — verify actual path |
+| Directory existence | "Tests go in `scripts/hooks/`" | `Glob(".codeflow/testing/scripts/hooks/")` — does it exist? |
+| Naming convention | "Hook tests are named `test-hook-*.sh`" | `Glob(".codeflow/testing/claude-hooks/**/test-*.sh")` — check actual pattern |
+| Function signature | "assert_equals takes 2 args" | `Read` the function definition in test-helpers.sh |
+| Config schema | "test-config.json has a `tests` array" | `Read` the actual config file — it uses `priorities.{LEVEL}.files` |
+| Source path in test | "`source ../../lib/test-helpers.sh`" | Count directory levels from test file to lib — verify with `ls` |
+| Variable name | "The variable is called `SESSION_ID`" | `Grep` for the actual variable name in the source file |
+| Import path | "`from codeflow_py_lib import utils`" | `Glob("codeflow_py_lib/utils.py")` — does the module exist? |
+
+**Verification rule:** For every file path, function name, variable name, config key, or directory structure you reference in code, verify it exists using Glob, Grep, or Read. Never write code that references something you haven't confirmed exists.
+
+### 5.4 Infrastructure Wiring Checks
+
+**Before requesting commit, verify ALL wiring is complete:**
+
+1. **test-config.json registration:** For every new test file created, verify an entry exists in `.codeflow/testing/test-config.json` under the correct priority category. The path must be relative to `.codeflow/testing/` (e.g., `scripts/state/test-new-feature.sh`, NOT `.codeflow/testing/scripts/state/test-new-feature.sh`).
+
+2. **settings.json hook registration:** If you created a new hook script, verify it has an entry in `.claude/settings.json` under the correct event type with the correct matcher pattern. Cross-check: the `matcher` regex must match the tool names the hook should fire on.
+
+3. **Source path resolution in tests:** For every `source` statement in a shell test, verify the relative path resolves correctly:
+   - Count the `../` segments from the test file's actual location.
+   - Common pattern: test files at `.codeflow/testing/scripts/{area}/test-*.sh` source helpers with `source "$TEST_DIR/../../lib/test-helpers.sh"`.
+   - Hook test files at `.codeflow/testing/claude-hooks/{event}/test-*.sh` source helpers with `source "$TEST_DIR/../../lib/test-helpers.sh"`.
+   - Verify by checking: does `test-helpers.sh` actually exist at that resolved path?
+
+4. **Import resolution in Python:** For every `import` or `from` statement, verify the module path resolves. Run `python -c "import {module}"` or check the directory structure.
+
+5. **Cross-reference test names with source scripts:** If you created `test-cf-new-feature.sh`, verify the source script `cf-new-feature.sh` exists at the expected path. Conversely, if you created `cf-new-feature.sh`, verify the test `test-cf-new-feature.sh` exists.
+
+6. **Executable permissions:** Every new shell test file must be executable (`chmod +x`). Verify with `ls -la` after creation.
+
+### 5.5 Technical Feasibility Pre-Check
+
+Before implementing, verify:
+
+1. **Dependencies exist:** Every library, function, or module your implementation will use actually exists at the expected path.
+2. **Interfaces match:** If calling an existing function, read its signature and confirm your arguments match.
+3. **Config schemas match:** If reading/writing config files, read the actual file first to confirm the schema.
+4. **Test framework compatibility:** If writing tests, read an existing test in the same directory to confirm the test framework pattern, helper sourcing, and assertion functions available.
+
+### 5.6 Functional Testing Requirement
+
+🔒 **Tests MUST verify functional behavior when integrated, not just isolated unit mocking. A test that passes on paper but fails functionally is unacceptable.**
+
+**Functional testing rules:**
+
+1. **Exercise real code paths:** Tests must call the actual function/script under test, not a mock of it. Mocks are permitted only for external dependencies (network, filesystem state), never for the code being tested.
+2. **Verify observable outcomes:** Assert on the actual output, side effects, or state changes produced by running the real code — not on intermediate mock return values.
+3. **Test integration points:** When a script sources a library or calls a helper, test that the integration works end-to-end, not just that the caller invokes the helper.
+4. **Avoid tautological assertions:** Never write `assert_equals "$x" "$x"` or assertions that check a hardcoded value against itself. Every assertion must compare expected behavior against computed behavior.
+5. **Validate error paths functionally:** Error handling tests must trigger the actual error condition and verify the script/function responds correctly — not just mock the error and check a flag.
+
+**Red flags in tests (automatic rework if found in review):**
+
+- Test creates a mock that returns a constant, then asserts the constant was returned.
+- Test skips sourcing the actual script under test.
+- Test asserts on internal implementation details (variable names) rather than observable behavior.
+- Test passes regardless of whether the code under test is correct (vacuous test).
+
+### 5.7 Self-Review Step
+
+Before requesting commit, do a "would I accept this in review?" pass:
+
+1. Read every file you created or modified, in full.
+2. For each file, ask: "If cf-review examined this file, what would they flag?"
+3. Check specifically for:
+   - Hardcoded paths that should be relative or variable-based
+   - Missing `set -euo pipefail` in shell scripts
+   - Missing error handling for commands that can fail
+   - Unquoted variables in shell scripts
+   - Missing test cases (positive, negative, edge)
+   - Scope creep (changes to files not in scope)
+   - Tests that mock the code under test instead of exercising it
+
+### 5.8 Completion Checklist
+
+- [ ] **Acceptance criteria:** Each numbered criterion from the task is met — verified by re-reading actual files/output
+- [ ] **Tests written:** Every new/modified `.sh` or `.py` file has a corresponding test file
+- [ ] **Tests functional:** Tests exercise real code paths, not mocks of the code under test — assertions verify observable behavior
+- [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
+- [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
+- [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
+- [ ] **Tests pass:** `bash .codeflow/testing/run-all-tests.sh essential` passes with zero failures (actual output captured)
+- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; ruff/flake8 zero errors on all `.py` files
+- [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
+- [ ] **Shared lib usage:** Used existing utilities from `.codeflow/scripts/shell-lib/` or `codeflow_py_lib/` where applicable
+- [ ] **Source paths verified:** Every `source` or `import` statement resolves to an existing file
+- [ ] **Executable permissions:** All new shell scripts and test files are executable
+- [ ] **Scope compliance:** No files modified outside the assigned scope
+- [ ] **Commit format:** Conventional commit message requested via cf-git-operations
+- [ ] **Modularization:** Scripts under thresholds (200 lines, 10 functions, 4 nesting levels) or exception documented
 
 ## References
 
@@ -231,6 +392,6 @@ Before marking any task complete, verify:
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |
 | Test Runner | `.codeflow/testing/run-all-tests.sh` | Test execution (`essential`, `standard`, `full` modes) |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell test assertion library (40+ `assert_*` functions) |
-| Test Config | `.codeflow/config/test-config.json` | Test registration |
+| Test Config | `.codeflow/testing/test-config.json` | Test registration |
 | Shared Shell Lib | `.codeflow/scripts/shell-lib/` | Reusable shell functions |
 | Python Lib | `codeflow_py_lib/` | Reusable Python modules |

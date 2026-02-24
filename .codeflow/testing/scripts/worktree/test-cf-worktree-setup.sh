@@ -125,19 +125,34 @@ assert_contains "$OUTPUT" "developer" "Output shows agent type"
 assert_contains "$OUTPUT" "Basic test" "Output shows purpose"
 assert_contains "$OUTPUT" "Worktree setup complete" "Output shows completion message"
 
-test_subsection "State symlink creation"
+test_subsection "State directory setup (selective symlink)"
 
+# With selective symlinks, .state is a directory (not a full symlink)
+# Shared subdirs (db, ledger, etc.) are symlinked; local subdirs (runtime, session, sentinels) are real dirs
 ((TEST_TOTAL_COUNT++)) || true
-if [[ -L "$WT_PATH/.state" ]]; then
+if [[ -d "$WT_PATH/.state" ]]; then
     ((TEST_PASS_COUNT++)) || true
-    echo -e "  ${GREEN}✓${NC} .state symlink created in worktree"
+    echo -e "  ${GREEN}✓${NC} .state directory exists in worktree"
 else
     ((TEST_FAIL_COUNT++)) || true
-    echo -e "  ${RED}✗${NC} .state symlink NOT created in worktree"
+    echo -e "  ${RED}✗${NC} .state directory NOT created in worktree"
 fi
 
-LINK_TARGET=$(readlink "$WT_PATH/.state" 2>/dev/null || echo "")
-assert_contains "$LINK_TARGET" ".state" "Symlink points to main repo .state"
+# .state should be a real directory (not a symlink) under selective symlink mode
+((TEST_TOTAL_COUNT++)) || true
+if [[ -d "$WT_PATH/.state" ]] && [[ ! -L "$WT_PATH/.state" ]]; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} .state is a real directory (selective symlink mode)"
+else
+    # Legacy behavior: .state is a full symlink — acceptable for older worktree setups
+    if [[ -L "$WT_PATH/.state" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} .state is a full symlink (legacy mode)"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} .state should be a directory or symlink"
+    fi
+fi
 
 test_subsection "Worktrees.yaml registration"
 
@@ -217,12 +232,222 @@ test_section "Symlink Idempotency"
 
 WT_PATH4=$(create_test_worktree "wt-symlink" "feat/symlink-test")
 
-# Pre-create .state symlink
+# Pre-create .state symlink (old full symlink behavior)
 ln -s "$TEST_REPO/.state" "$WT_PATH4/.state" 2>/dev/null || true
 
 cd "$TEST_REPO"
 SYMLINK_OUTPUT=$(REPO_ROOT="$TEST_REPO" "$SCRIPT_UNDER_TEST" "$WT_PATH4" "feat/symlink-test" 2>&1)
-assert_contains "$SYMLINK_OUTPUT" "symlink already exists" "Detects existing .state symlink"
+# Script should either detect existing symlink or migrate from old full symlink
+((TEST_TOTAL_COUNT++)) || true
+if echo "$SYMLINK_OUTPUT" | grep -qi 'symlink already exists\|Migrating.*old.*symlink\|removing.*full.*symlink\|Symlinked:'; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Handles pre-existing .state symlink (detects or migrates)"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Should detect or migrate pre-existing .state symlink"
+fi
+
+# =============================================================================
+# TESTS: SELECTIVE SYMLINK SETUP
+# =============================================================================
+
+# Helper for selective symlink tests - extends basic setup with .state directories
+setup_symlink_worktree_test() {
+    TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp/claude}/cf-wt-symlink-test-XXXXXX")
+    TEST_REPO="$TEST_TMPDIR/repo"
+    mkdir -p "$TEST_REPO"
+    cd "$TEST_REPO"
+    git init --quiet
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    echo "test" > file.txt
+    git add file.txt
+    git commit -m "Initial commit" --quiet
+
+    # Create .state directories in main repo
+    mkdir -p "$TEST_REPO/.state/db"
+    mkdir -p "$TEST_REPO/.state/ledger"
+    mkdir -p "$TEST_REPO/.state/registry"
+    mkdir -p "$TEST_REPO/.state/backups"
+    mkdir -p "$TEST_REPO/.state/coordination"
+    mkdir -p "$TEST_REPO/.state/logs"
+    mkdir -p "$TEST_REPO/.state/runtime"
+    mkdir -p "$TEST_REPO/.state/session"
+    mkdir -p "$TEST_REPO/.state/sentinels"
+}
+
+test_section "Selective Symlink Setup"
+
+test_subsection "Shared directories are symlinked"
+
+# Test: Run worktree setup and check shared dirs
+setup_symlink_worktree_test
+WT_PATH=$(create_test_worktree "wt-symlink-test" "feat/symlink-test")
+REPO_ROOT="$TEST_REPO" bash "$SCRIPT_UNDER_TEST" "$WT_PATH" "feat/symlink-test" "developer" "Test symlinks" >/dev/null 2>&1 || true
+
+# Shared directories should be symlinks
+for shared_dir in db ledger registry backups coordination logs; do
+    ((TEST_TOTAL_COUNT++)) || true
+    if [[ -L "$WT_PATH/.state/$shared_dir" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} .state/$shared_dir is a symlink"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} .state/$shared_dir should be a symlink"
+    fi
+done
+
+test_subsection "Shared directories point to main repo"
+
+for shared_dir in db ledger registry backups coordination logs; do
+    ((TEST_TOTAL_COUNT++)) || true
+    _target=$(readlink "$WT_PATH/.state/$shared_dir" 2>/dev/null) || true
+    if [[ "$_target" == "$TEST_REPO/.state/$shared_dir" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} .state/$shared_dir -> $TEST_REPO/.state/$shared_dir"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} .state/$shared_dir target should be $TEST_REPO/.state/$shared_dir, got $_target"
+    fi
+done
+
+test_subsection "Local directories are real directories (not symlinks)"
+
+for local_dir in runtime session sentinels; do
+    ((TEST_TOTAL_COUNT++)) || true
+    if [[ -d "$WT_PATH/.state/$local_dir" ]] && [[ ! -L "$WT_PATH/.state/$local_dir" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} .state/$local_dir is a real directory"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        if [[ -L "$WT_PATH/.state/$local_dir" ]]; then
+            echo -e "  ${RED}✗${NC} .state/$local_dir should NOT be a symlink"
+        else
+            echo -e "  ${RED}✗${NC} .state/$local_dir should exist as a directory"
+        fi
+    fi
+done
+
+test_subsection ".state itself is a directory, not a symlink"
+
+((TEST_TOTAL_COUNT++)) || true
+if [[ -d "$WT_PATH/.state" ]] && [[ ! -L "$WT_PATH/.state" ]]; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} .state is a real directory (not a full symlink)"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} .state should be a real directory, not a symlink"
+fi
+
+cleanup_worktree_test
+
+# =============================================================================
+# TESTS: MIGRATION FROM FULL SYMLINK
+# =============================================================================
+
+test_section "Migration from Full Symlink"
+
+test_subsection "Old full .state symlink is replaced"
+
+setup_symlink_worktree_test
+WT_PATH=$(create_test_worktree "wt-migrate-test" "feat/migrate-test")
+
+# Pre-create a full .state symlink (old behavior)
+ln -s "$TEST_REPO/.state" "$WT_PATH/.state"
+
+# Verify it's a symlink before migration
+((TEST_TOTAL_COUNT++)) || true
+if [[ -L "$WT_PATH/.state" ]]; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Pre-condition: .state is a full symlink"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Pre-condition failed: .state should be a symlink"
+fi
+
+# Run setup — should migrate
+REPO_ROOT="$TEST_REPO" bash "$SCRIPT_UNDER_TEST" "$WT_PATH" "feat/migrate-test" "developer" "Test migration" >/dev/null 2>&1 || true
+
+# After migration, .state should be a directory
+((TEST_TOTAL_COUNT++)) || true
+if [[ -d "$WT_PATH/.state" ]] && [[ ! -L "$WT_PATH/.state" ]]; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} After migration: .state is a real directory"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} After migration: .state should be a real directory"
+fi
+
+# After migration, shared dirs should be symlinks
+for shared_dir in db ledger registry backups coordination logs; do
+    ((TEST_TOTAL_COUNT++)) || true
+    if [[ -L "$WT_PATH/.state/$shared_dir" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} After migration: .state/$shared_dir is a symlink"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} After migration: .state/$shared_dir should be a symlink"
+    fi
+done
+
+# After migration, local dirs should be real
+for local_dir in runtime session sentinels; do
+    ((TEST_TOTAL_COUNT++)) || true
+    if [[ -d "$WT_PATH/.state/$local_dir" ]] && [[ ! -L "$WT_PATH/.state/$local_dir" ]]; then
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} After migration: .state/$local_dir is a real directory"
+    else
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} After migration: .state/$local_dir should be a real directory"
+    fi
+done
+
+cleanup_worktree_test
+
+# =============================================================================
+# TESTS: SELECTIVE SYMLINK STATIC ANALYSIS
+# =============================================================================
+
+test_section "Selective Symlink Static Analysis"
+
+test_subsection "Script has selective symlink logic"
+
+((TEST_TOTAL_COUNT++)) || true
+if grep -q 'Symlinked:.*\.state/' "$SCRIPT_UNDER_TEST"; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Script has selective symlink output messages"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Script should have selective symlink output"
+fi
+
+((TEST_TOTAL_COUNT++)) || true
+if grep -q 'Created local:.*\.state/' "$SCRIPT_UNDER_TEST"; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Script has local directory creation messages"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Script should have local directory creation messages"
+fi
+
+((TEST_TOTAL_COUNT++)) || true
+if grep -q 'runtime.*session.*sentinels' "$SCRIPT_UNDER_TEST" || \
+   (grep -q 'runtime' "$SCRIPT_UNDER_TEST" && grep -q 'session' "$SCRIPT_UNDER_TEST" && grep -q 'sentinels' "$SCRIPT_UNDER_TEST"); then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Script creates runtime, session, sentinels as local"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Script should create runtime, session, sentinels locally"
+fi
+
+((TEST_TOTAL_COUNT++)) || true
+if grep -q 'Migrating.*old.*symlink\|removing.*full.*symlink' "$SCRIPT_UNDER_TEST"; then
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Script handles migration from old full symlink"
+else
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Script should handle migration from old full .state symlink"
+fi
 
 # =============================================================================
 # SUMMARY

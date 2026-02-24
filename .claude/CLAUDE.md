@@ -434,7 +434,15 @@ Format: 5-section (Identity, Constraints, SOPs, Communication, Quality Checklist
 
 - Opus: cf-development, cf-review, cf-planning (complex reasoning)
 - Sonnet: cf-documentation, cf-quality-assurance, cf-security, cf-knowledge-layer, cf-git-operations (structured work)
-- Haiku: (none currently)
+🔒 **No Haiku.** Haiku does not produce reliable quality for CodeFlow tasks. Model selection rules:
+
+| Context | Model Rule |
+|---------|------------|
+| Predefined teammates | Use the `model` field from the agent definition YAML frontmatter (Opus or Sonnet as specified) |
+| Ad-hoc agents requiring reasoning (development, planning, review, analysis, investigation) | Opus |
+| Ad-hoc agents for operational/mechanistic work (file operations, bulk edits, search, formatting) | Sonnet |
+| Explore sub-agents | Sonnet |
+| Any agent definition specifying Haiku | Override to Sonnet |
 
 **Spawn pattern:**
 

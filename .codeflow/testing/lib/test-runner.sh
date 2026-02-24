@@ -61,16 +61,52 @@ run_single_test() {
         output=$("$test_file" </dev/null 2>&1) || exit_code=$?
     fi
 
+    # Parse shell test internal counts from output (Passed: N, Failed: N)
+    local shell_passed=0 shell_failed=0 shell_parsed=false
+    if ! is_python_test "$test_file"; then
+        shell_passed=$(_parse_shell_test_count "$output" "Passed")
+        shell_failed=$(_parse_shell_test_count "$output" "Failed")
+        [[ $shell_passed -gt 0 || $shell_failed -gt 0 ]] && shell_parsed=true
+    fi
+
     if [[ $exit_code -eq 0 ]]; then
-        PASSED_TESTS+=("$test_file")
+        if [[ "$shell_parsed" == "true" && $shell_passed -gt 0 ]]; then
+            for ((i=0; i<shell_passed; i++)); do
+                PASSED_TESTS+=("${test_file}#${i}")
+            done
+        else
+            PASSED_TESTS+=("$test_file")
+        fi
         if [[ "$RUNNER_VERBOSE" == "true" ]]; then
             echo "$output"
         fi
-        echo -e "${GREEN}✓${NC} $test_name"
+        if [[ "$shell_parsed" == "true" ]]; then
+            echo -e "${GREEN}✓${NC} $test_name (${shell_passed} passed)"
+        else
+            echo -e "${GREEN}✓${NC} $test_name"
+        fi
         return 0
     else
-        FAILED_TESTS+=("$test_file")
-        echo -e "${RED}✗${NC} $test_name"
+        if [[ "$shell_parsed" == "true" ]]; then
+            # Count both passed and failed assertions from the test output
+            for ((i=0; i<shell_passed; i++)); do
+                PASSED_TESTS+=("${test_file}#pass-${i}")
+            done
+            if [[ $shell_failed -gt 0 ]]; then
+                for ((i=0; i<shell_failed; i++)); do
+                    FAILED_TESTS+=("${test_file}#fail-${i}")
+                done
+            else
+                FAILED_TESTS+=("$test_file")
+            fi
+        else
+            FAILED_TESTS+=("$test_file")
+        fi
+        if [[ "$shell_parsed" == "true" ]]; then
+            echo -e "${RED}✗${NC} $test_name (${shell_passed} passed, ${shell_failed} failed)"
+        else
+            echo -e "${RED}✗${NC} $test_name"
+        fi
         if [[ "$RUNNER_VERBOSE" == "true" || "$RUNNER_STOP_ON_FAIL" == "true" ]]; then
             echo "$output"
         fi
@@ -81,6 +117,17 @@ run_single_test() {
         fi
         return 1
     fi
+}
+
+# Parse shell test output for standard summary format: "Passed: N" or "Failed: N"
+# Usage: _parse_shell_test_count "output" "Passed|Failed|Ran"
+# Returns: The count (integer), or 0 if pattern not found
+_parse_shell_test_count() {
+    local output="$1"
+    local field="$2"
+    local count
+    count=$(echo "$output" | grep -oE "${field}:[[:space:]]*[0-9]+" | tail -1 | grep -oE '[0-9]+') || true
+    echo "${count:-0}"
 }
 
 # ============================================================================
@@ -133,13 +180,10 @@ run_category_tests() {
             local relative_path="${test_file#"$testing_root"/}"
             if should_run_test "$relative_path" "$mode"; then
                 python_tests+=("$test_file")
-            else
-                SKIPPED_TESTS+=("$test_file")
-                if [[ "$RUNNER_VERBOSE" == "true" ]]; then
-                    local priority
-                    priority=$(get_test_priority "$relative_path")
-                    log_info "Skipping (priority $priority): $(basename "$test_file")"
-                fi
+            elif [[ "$RUNNER_VERBOSE" == "true" ]]; then
+                local priority
+                priority=$(get_test_priority "$relative_path")
+                log_info "Excluded (priority $priority not in $mode): $(basename "$test_file")"
             fi
         done
 
@@ -192,11 +236,8 @@ run_category_tests() {
                 run_single_test "$test_file" || {
                     [[ "$RUNNER_STOP_ON_FAIL" == "true" ]] && return 1
                 }
-            else
-                SKIPPED_TESTS+=("$test_file")
-                if [[ "$RUNNER_VERBOSE" == "true" ]]; then
-                    log_info "Skipping (priority $priority): $(basename "$test_file")"
-                fi
+            elif [[ "$RUNNER_VERBOSE" == "true" ]]; then
+                log_info "Excluded (priority $priority not in $mode): $(basename "$test_file")"
             fi
         done
     fi

@@ -32,6 +32,7 @@ source "$SCRIPT_DIR/lib/test-coverage.sh"
 RUNNER_CATEGORY=""
 GENERATE_REPORT="false"
 VALIDATE_COVERAGE_FIRST="false"
+STRUCTURAL_CHECK="auto"
 MAX_JOBS=""
 SEQUENTIAL="false"
 
@@ -74,6 +75,14 @@ while [[ $# -gt 0 ]]; do
             VALIDATE_COVERAGE_FIRST="true"
             shift
             ;;
+        --structural)
+            STRUCTURAL_CHECK="always"
+            shift
+            ;;
+        --skip-structural)
+            STRUCTURAL_CHECK="never"
+            shift
+            ;;
         --jobs)
             if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
                 log_error "--jobs requires a positive integer (got: '${2:-}')"
@@ -102,6 +111,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --coverage            Run with coverage enforcement (fail if below $(get_coverage_threshold fail_under)%)"
             echo "  --report              Generate JSON/text reports"
             echo "  --validate-coverage   Validate test coverage before running"
+            echo "  --structural          Force bidirectional structural integrity check"
+            echo "  --skip-structural     Skip structural integrity check"
             echo "  --help, -h            Show this help"
             echo ""
             echo "Modes:"
@@ -142,8 +153,25 @@ main() {
         jobs=1
     fi
 
-    # Validate coverage first if requested
-    if [[ "$VALIDATE_COVERAGE_FIRST" == "true" ]]; then
+    # Structural integrity check (bidirectional test-to-source mapping)
+    # Runs in standard and full modes by default, or when explicitly requested
+    local run_structural=false
+    if [[ "$STRUCTURAL_CHECK" == "always" ]]; then
+        run_structural=true
+    elif [[ "$STRUCTURAL_CHECK" == "auto" ]] && [[ "$mode" == "standard" || "$mode" == "full" ]]; then
+        run_structural=true
+    fi
+
+    if [[ "$run_structural" == "true" ]]; then
+        if ! validate_structural_integrity; then
+            log_error "Structural integrity check failed — fix issues before running tests"
+            exit 1
+        fi
+        echo ""
+    fi
+
+    # Validate coverage first if requested (legacy flag, source→test only)
+    if [[ "$VALIDATE_COVERAGE_FIRST" == "true" ]] && [[ "$run_structural" != "true" ]]; then
         validate_coverage "warn" || true
         echo ""
     fi
@@ -163,8 +191,8 @@ main() {
         run_all_tests "$mode" || exit_code=$?
     fi
 
-    # Auto-validate coverage in full mode (skip if already validated via --validate-coverage)
-    if [[ "$mode" == "full" ]] && [[ "$VALIDATE_COVERAGE_FIRST" != "true" ]]; then
+    # Auto-validate coverage in full mode (skip if already validated via structural or --validate-coverage)
+    if [[ "$mode" == "full" ]] && [[ "$VALIDATE_COVERAGE_FIRST" != "true" ]] && [[ "$run_structural" != "true" ]]; then
         echo ""
         if ! validate_coverage; then
             # Coverage validation failed (only when validation_mode=fail in config)

@@ -10,6 +10,8 @@
 #   - Detects stage-completion events from SendMessage tool calls
 #   - Creates stage sentinel files to track PathFlow work stage progression
 #   - Enables pathflow-gate enforcement without requiring JSONL writes
+#   - Creates pathflow-team.json on TeamCreate (records lead PID for teammate detection)
+#   - Updates pathflow-team.json on Task (records teammate spawns)
 #
 # Note: Phase sentinels (pf-1, pf-2, pf-3, pf-6) are created by the
 #       phase checkpoint hooks (session-start, post-tool-use checkpoint hooks).
@@ -127,6 +129,80 @@ if [[ "$TOOL_NAME" == "SendMessage" ]]; then
                     echo "PostToolUse[sentinel]: created sentinel ws-${_stage_lower}" >&2
                 else
                     echo "PostToolUse[sentinel]: FAILED to create sentinel ws-${_stage_lower}" >&2
+                fi
+            fi
+        fi
+    fi
+fi
+
+# =============================================================================
+# PATHFLOW-TEAM.JSON — TeamCreate handler (records lead PID)
+# =============================================================================
+
+if [[ "$TOOL_NAME" == "TeamCreate" ]]; then
+    if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
+        _team_name=$(echo "$TOOL_INPUT" | jq -r '.team_name // empty' 2>/dev/null) || true
+        if [[ -n "${_team_name:-}" ]]; then
+            # Read lead's Claude UUID from team config
+            _team_cfg="${HOME}/.claude/teams/${_team_name}/config.json"
+            _lead_uuid=""
+            if [[ -f "$_team_cfg" ]]; then
+                _lead_uuid=$(jq -r '.leadSessionId // empty' "$_team_cfg" 2>/dev/null) || true
+            fi
+
+            # Get lead PID ($PPID = Claude Code process that spawned this hook)
+            _lead_pid="${PPID:-0}"
+
+            # Write pathflow-team.json atomically (tmp + mv)
+            _pf_dir="$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow"
+            if [[ -d "$_pf_dir" ]]; then
+                _team_file="$_pf_dir/pathflow-team.json"
+                _tmp_team=$(mktemp "${_team_file}.XXXXXX" 2>/dev/null) || true
+                if [[ -n "${_tmp_team:-}" ]]; then
+                    jq -nc \
+                        --arg team_name "$_team_name" \
+                        --arg lead_claude_uuid "${_lead_uuid:-unknown}" \
+                        --argjson lead_pid "$_lead_pid" \
+                        --arg codeflow_session_id "$CODEFLOW_SESSION_ID" \
+                        --argjson teammate_spawned false \
+                        --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                        '{team_name: $team_name, lead_claude_uuid: $lead_claude_uuid, lead_pid: $lead_pid, codeflow_session_id: $codeflow_session_id, teammate_spawned: $teammate_spawned, created_at: $created_at, last_spawn_name: null}' \
+                        > "$_tmp_team" 2>/dev/null || true
+                    if ! mv "$_tmp_team" "$_team_file" 2>/dev/null; then
+                        rm -f "$_tmp_team" 2>/dev/null || true
+                    fi
+                    echo "PostToolUse[sentinel]: created pathflow-team.json for team=$_team_name, pid=$_lead_pid" >&2
+                fi
+            fi
+        fi
+    fi
+fi
+
+# =============================================================================
+# PATHFLOW-TEAM.JSON — Task handler (records teammate spawn)
+# =============================================================================
+
+if [[ "$TOOL_NAME" == "Task" ]]; then
+    if [[ -n "$TOOL_INPUT" ]] && command -v jq &>/dev/null; then
+        _task_team=$(echo "$TOOL_INPUT" | jq -r '.team_name // empty' 2>/dev/null) || true
+        if [[ -n "${_task_team:-}" ]]; then
+            # This is a teammate spawn (has team_name in tool_input)
+            _spawn_name=$(echo "$TOOL_INPUT" | jq -r '.name // empty' 2>/dev/null) || true
+
+            _pf_dir="$REPO_ROOT/.state/session/$CODEFLOW_SESSION_ID/pathflow"
+            _team_file="$_pf_dir/pathflow-team.json"
+            if [[ -f "$_team_file" ]]; then
+                _tmp_team=$(mktemp "${_team_file}.XXXXXX" 2>/dev/null) || true
+                if [[ -n "${_tmp_team:-}" ]]; then
+                    jq \
+                        --argjson teammate_spawned true \
+                        --arg last_spawn_name "${_spawn_name:-unknown}" \
+                        '.teammate_spawned = $teammate_spawned | .last_spawn_name = $last_spawn_name' \
+                        "$_team_file" > "$_tmp_team" 2>/dev/null || true
+                    if ! mv "$_tmp_team" "$_team_file" 2>/dev/null; then
+                        rm -f "$_tmp_team" 2>/dev/null || true
+                    fi
+                    echo "PostToolUse[sentinel]: updated pathflow-team.json teammate_spawned=true, name=${_spawn_name:-unknown}" >&2
                 fi
             fi
         fi

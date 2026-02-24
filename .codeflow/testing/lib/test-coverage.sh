@@ -26,13 +26,16 @@ if ! declare -f log_info > /dev/null 2>&1; then
     log_warn()    { echo "[WARN] $*" >&2; }
     log_error()   { echo "[ERROR] $*" >&2; }
     log_success() { echo "[OK] $*"; }
-    log_verbose() { [[ "${VERBOSE:-false}" == "true" ]] && echo "[VERBOSE] $*"; }
     log_section() { echo ""; echo "=== $* ==="; }
     # Fallback colors
     BOLD="${BOLD:-}"
     RED="${RED:-}"
     YELLOW="${YELLOW:-}"
     NC="${NC:-}"
+fi
+# log_verbose not in test-common.sh — always provide fallback
+if ! declare -f log_verbose > /dev/null 2>&1; then
+    log_verbose() { [[ "${VERBOSE:-false}" == "true" ]] && echo "[VERBOSE] $*" || true; }
 fi
 
 # Config file location (may already be set as readonly by test-config.sh)
@@ -316,6 +319,31 @@ _pattern_matches() {
     return 1
 }
 
+# Check if script is in no_test_required exceptions only
+# (Does NOT check integration_tested — those scripts have tests)
+# Usage: _is_no_test_required "script_path"
+# Returns: 0 if no test required, 1 otherwise
+_is_no_test_required() {
+    local script="$1"
+
+    if [[ ! -f "$TEST_CONFIG_FILE" ]] || ! command -v jq &>/dev/null; then
+        return 1
+    fi
+
+    local no_test_patterns
+    no_test_patterns=$(jq -r '.coverage_enforcement.exceptions.no_test_required[]?.pattern // empty' "$TEST_CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$no_test_patterns" ]]; then
+        while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            if _pattern_matches "$script" "$pattern"; then
+                return 0
+            fi
+        done <<< "$no_test_patterns"
+    fi
+
+    return 1
+}
+
 # Get exception reason for a script
 # Usage: get_exception_reason "script_path"
 get_exception_reason() {
@@ -349,6 +377,18 @@ get_exception_reason() {
     echo "Exception not found in config"
 }
 
+# Get structural coverage threshold from config
+# Returns: integer percentage (default: 85)
+get_structural_threshold() {
+    if [[ -f "$TEST_CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        local threshold
+        threshold=$(jq -r '.coverage_enforcement.thresholds.fail_under // 85' "$TEST_CONFIG_FILE" 2>/dev/null)
+        echo "${threshold:-85}"
+    else
+        echo "85"
+    fi
+}
+
 # ============================================================================
 # COVERAGE VALIDATION
 # ============================================================================
@@ -356,7 +396,7 @@ get_exception_reason() {
 # Validate test coverage for all discovered scripts
 # Usage: validate_coverage [mode]
 # Modes: fail, warn, audit (default: from config or warn)
-# Returns: 0 if all covered, 1 if gaps found (when mode=fail)
+# Returns: 0 if all covered, 1 if gaps found (when mode=fail and below threshold)
 validate_coverage() {
     local mode="${1:-}"
     local repo_root
@@ -480,6 +520,15 @@ validate_coverage() {
     done < <(discover_lib_modules)
 
     # Generate report
+    # Calculate coverage percentage (covered + excepted count as "covered" for threshold)
+    local effective_covered=$((covered + excepted))
+    local coverage_pct=0
+    if [[ $total -gt 0 ]]; then
+        coverage_pct=$(( (effective_covered * 100) / total ))
+    fi
+    local threshold
+    threshold=$(get_structural_threshold)
+
     echo ""
     echo -e "${BOLD}TEST COVERAGE REPORT${NC}"
     echo ""
@@ -489,6 +538,7 @@ validate_coverage() {
     echo "  Tests misplaced:    $misplaced"
     echo "  Tests unregistered: $unregistered"
     echo "  Coverage gaps:      $missing"
+    echo "  Coverage:           ${coverage_pct}% (threshold: ${threshold}%)"
     echo ""
 
     # Show misplaced tests
@@ -560,42 +610,52 @@ validate_coverage() {
 
         case "$mode" in
             audit)
-                log_info "Coverage issues detected ($issue_details) [audit mode]"
+                log_info "Coverage: ${coverage_pct}% ($issue_details) [audit mode]"
                 return 0
                 ;;
             warn)
-                log_warn "Coverage issues detected ($issue_details)"
+                log_warn "Coverage: ${coverage_pct}% ($issue_details)"
                 return 0
                 ;;
             fail)
-                echo "" >&2
-                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
-                echo -e "${RED}❌ COVERAGE VALIDATION FAILED${NC}" >&2
-                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
-                echo "" >&2
-                echo "Issues found: $issue_details" >&2
-                echo "" >&2
-                if [[ $misplaced -gt 0 ]]; then
-                    echo "MISPLACED: Test file(s) in wrong location. Move to expected path." >&2
+                # Misplaced and unregistered are always failures (structural issues)
+                if [[ $misplaced -gt 0 ]] || [[ $unregistered -gt 0 ]]; then
+                    echo "" >&2
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+                    echo -e "${RED}❌ COVERAGE VALIDATION FAILED${NC}" >&2
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+                    echo "" >&2
+                    [[ $misplaced -gt 0 ]] && echo "MISPLACED: Test file(s) in wrong location. Move to expected path." >&2
+                    [[ $unregistered -gt 0 ]] && echo "UNREGISTERED: Test file(s) not in test-config.json. Add to priorities." >&2
+                    echo "" >&2
+                    log_error "Coverage validation failed: $issue_details"
+                    return 1
                 fi
-                if [[ $unregistered -gt 0 ]]; then
-                    echo "UNREGISTERED: Test file(s) not in test-config.json. Add to priorities." >&2
+                # For missing tests only, check against threshold
+                if [[ $coverage_pct -lt $threshold ]]; then
+                    echo "" >&2
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+                    echo -e "${RED}❌ COVERAGE BELOW THRESHOLD${NC}" >&2
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+                    echo "" >&2
+                    echo "Coverage: ${coverage_pct}% (minimum: ${threshold}%)" >&2
+                    echo "MISSING: $missing script(s) without tests. Create test or add exception." >&2
+                    echo "" >&2
+                    log_error "Coverage ${coverage_pct}% below ${threshold}% threshold ($issue_details)"
+                    return 1
                 fi
-                if [[ $missing -gt 0 ]]; then
-                    echo "MISSING: Script(s) without tests. Create test or add exception." >&2
-                fi
-                echo "" >&2
-                log_error "Coverage validation failed: $issue_details"
-                return 1
+                # Above threshold — warn about gaps but pass
+                log_warn "Coverage: ${coverage_pct}% >= ${threshold}% threshold ($issue_details — non-blocking)"
+                return 0
                 ;;
             *)
-                log_warn "Coverage issues detected ($issue_details)"
+                log_warn "Coverage: ${coverage_pct}% ($issue_details)"
                 return 0
                 ;;
         esac
     fi
 
-    log_success "All scripts have tests, correctly placed and registered"
+    log_success "All scripts have tests, correctly placed and registered (${coverage_pct}%)"
     return 0
 }
 
@@ -742,6 +802,32 @@ validate_staged_coverage() {
 }
 
 # ============================================================================
+# ORPHAN EXCEPTION CHECKING
+# ============================================================================
+
+# Check if a test file is excepted from orphan detection
+# Usage: is_orphan_excepted "test_relative_path"
+# test_relative_path is relative to .codeflow/testing/ (e.g., "lib/test-common.sh")
+# Returns: 0 if excepted, 1 if not
+is_orphan_excepted() {
+    local test_path="$1"
+
+    if [[ ! -f "$TEST_CONFIG_FILE" ]] || ! command -v jq &>/dev/null; then
+        return 1
+    fi
+
+    local pattern
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" ]] && continue
+        if _pattern_matches "$test_path" "$pattern"; then
+            return 0
+        fi
+    done < <(jq -r '.coverage_enforcement.orphan_exceptions[]?.pattern // empty' "$TEST_CONFIG_FILE" 2>/dev/null)
+
+    return 1
+}
+
+# ============================================================================
 # ORPHANED TEST DETECTION
 # ============================================================================
 
@@ -751,6 +837,7 @@ find_orphaned_tests() {
     local repo_root
     repo_root=$(get_repo_root)
     local orphaned=()
+    local excepted_count=0
 
     log_section "Orphaned Test Detection"
 
@@ -759,7 +846,14 @@ find_orphaned_tests() {
         [[ -z "$test_file" ]] && continue
 
         local relative="${test_file#"$repo_root"/}"
+        local config_relative="${relative#.codeflow/testing/}"
         local test_name script_found=false
+
+        # Check orphan exceptions first
+        if is_orphan_excepted "$config_relative"; then
+            ((excepted_count++)) || true
+            continue
+        fi
 
         # Extract test name (test-{name}.sh → {name})
         test_name=$(basename "$test_file" .sh)
@@ -770,18 +864,30 @@ find_orphaned_tests() {
             # Extract category from path
             local category
             category=$(dirname "$relative" | sed 's|.codeflow/testing/claude-hooks/||')
-            # Convert to PascalCase for hook directory lookup
-            local pascal_category
-            pascal_category=$(echo "$category" | sed -r 's/(^|-)(\w)/\U\2/g')
-            if [[ -f "$repo_root/.claude/hooks/codeflow/$pascal_category/${test_name}.sh" ]] || \
-               [[ -f "$repo_root/.claude/hooks/codeflow/$category/${test_name}.sh" ]]; then
+            if [[ -f "$repo_root/.claude/hooks/codeflow/$category/${test_name}.sh" ]]; then
                 script_found=true
             fi
         elif [[ "$relative" == .codeflow/testing/scripts/* ]]; then
             # Extract domain from path
             local domain
             domain=$(echo "$relative" | sed -E 's|.codeflow/testing/scripts/([^/]+)/.*|\1|')
-            if find "$repo_root/.codeflow/scripts/$domain" -name "${test_name}.sh" -o -name "${test_name//_/-}.sh" -type f 2>/dev/null | grep -q .; then
+
+            # Try multiple name variants for source scripts
+            local found_file=""
+            found_file=$(find "$repo_root/.codeflow/scripts/$domain" \( \
+                -name "${test_name}.sh" -o \
+                -name "${test_name//_/-}.sh" -o \
+                -name "cf-${test_name}.sh" -o \
+                -name "cf-${test_name//_/-}.sh" -o \
+                -name "${test_name}.py" -o \
+                -name "${test_name//_/-}.py" -o \
+                -name "cf-${test_name}.py" -o \
+                -name "cf-${test_name//_/-}.py" -o \
+                -name "${test_name}" -o \
+                -name "${test_name//_/-}" \
+                \) -type f 2>/dev/null | head -1) || true
+
+            if [[ -n "$found_file" ]]; then
                 script_found=true
             fi
         fi
@@ -796,7 +902,14 @@ find_orphaned_tests() {
         [[ -z "$test_file" ]] && continue
 
         local relative="${test_file#"$repo_root"/}"
+        local config_relative="${relative#.codeflow/testing/}"
         local test_name script_found=false
+
+        # Check orphan exceptions first
+        if is_orphan_excepted "$config_relative"; then
+            ((excepted_count++)) || true
+            continue
+        fi
 
         # Extract test name (test_{name}.py → {name})
         test_name=$(basename "$test_file" .py)
@@ -805,7 +918,20 @@ find_orphaned_tests() {
         if [[ "$relative" == .codeflow/testing/scripts/* ]]; then
             local domain
             domain=$(echo "$relative" | sed -E 's|.codeflow/testing/scripts/([^/]+)/.*|\1|')
-            if find "$repo_root/.codeflow/scripts/$domain" -name "${test_name}.py" -o -name "${test_name//_/-}.py" -type f 2>/dev/null | grep -q .; then
+
+            local found_file=""
+            found_file=$(find "$repo_root/.codeflow/scripts/$domain" \( \
+                -name "${test_name}.py" -o \
+                -name "${test_name//_/-}.py" -o \
+                -name "cf-${test_name}.py" -o \
+                -name "cf-${test_name//_/-}.py" -o \
+                -name "${test_name}.sh" -o \
+                -name "${test_name//_/-}.sh" -o \
+                -name "cf-${test_name}.sh" -o \
+                -name "cf-${test_name//_/-}.sh" \
+                \) -type f 2>/dev/null | head -1) || true
+
+            if [[ -n "$found_file" ]]; then
                 script_found=true
             fi
         fi
@@ -815,20 +941,171 @@ find_orphaned_tests() {
         fi
     done < <(find "$repo_root/.codeflow/testing" -name "test_*.py" -type f ! -path "*/.venv/*" ! -path "*/__pycache__/*" 2>/dev/null)
 
-    # Report orphaned tests
+    # Report results
+    if [[ $excepted_count -gt 0 ]]; then
+        log_verbose "$excepted_count test file(s) skipped (orphan exceptions)"
+    fi
+
     if [[ ${#orphaned[@]} -gt 0 ]]; then
         echo ""
-        echo -e "${YELLOW}ORPHANED TESTS (no matching script):${NC}"
+        echo -e "${RED}ORPHANED TESTS (no matching script):${NC}"
         for test in "${orphaned[@]}"; do
             echo "  $test"
-            echo "     Action: Remove test file or verify script location"
+            echo "     Action: Remove test file, fix name to match source, or add orphan exception"
         done
         echo ""
+        log_error "Found ${#orphaned[@]} orphaned test file(s)"
         return 1
     else
         log_success "No orphaned tests found"
         return 0
     fi
+}
+
+# ============================================================================
+# CHANGE COVERAGE (GIT-AWARE)
+# ============================================================================
+
+# Validate that modified source scripts have corresponding test file updates
+# Usage: validate_change_coverage
+# Returns: 0 if all modified source scripts have test updates, 1 if gaps found
+validate_change_coverage() {
+    local repo_root
+    repo_root=$(get_repo_root)
+
+    # Get files changed on this branch compared to main
+    local changed_files
+    changed_files=$(git -C "$repo_root" diff --name-only main...HEAD 2>/dev/null) || {
+        log_info "Cannot diff against main branch. Skipping change coverage check."
+        return 0
+    }
+
+    if [[ -z "$changed_files" ]]; then
+        log_info "No files changed vs main. Skipping change coverage check."
+        return 0
+    fi
+
+    # Filter for source scripts (hooks + scripts, exclude shell-lib and __init__.py)
+    local source_scripts
+    source_scripts=$(echo "$changed_files" | grep -E '^(\.claude/hooks/codeflow/.*\.sh|\.codeflow/scripts/.*\.(sh|py))$' | grep -vE '/shell-lib/|/__pycache__/|/__init__\.py$' || true)
+
+    if [[ -z "$source_scripts" ]]; then
+        log_info "No source scripts in diff"
+        return 0
+    fi
+
+    local total=0 covered=0 uncovered=0 excepted=0
+    local uncovered_list=()
+
+    while IFS= read -r script; do
+        [[ -z "$script" ]] && continue
+
+        # Only skip scripts that truly have no test file (no_test_required).
+        # Do NOT skip integration_tested scripts — they have tests, and those
+        # tests must be updated when the source changes.
+        if _is_no_test_required "$script"; then
+            ((excepted++)) || true
+            continue
+        fi
+
+        # Derive expected test path
+        local test_path
+        test_path=$(derive_test_path "$script")
+
+        if [[ -z "$test_path" ]]; then
+            continue
+        fi
+
+        # Only check if the test file actually exists on disk
+        # (missing test files are caught by Direction 1)
+        if [[ ! -f "$repo_root/$test_path" ]]; then
+            continue
+        fi
+
+        ((total++)) || true
+
+        # Check if test file is also in the diff (exact line match)
+        if echo "$changed_files" | grep -qxF "$test_path"; then
+            ((covered++)) || true
+        else
+            ((uncovered++)) || true
+            uncovered_list+=("$script|$test_path")
+        fi
+    done <<< "$source_scripts"
+
+    # Report
+    echo ""
+    echo "  Source scripts modified: $total"
+    echo "  With test updates:      $covered"
+    echo "  Without test updates:   $uncovered"
+    [[ $excepted -gt 0 ]] && echo "  Excepted (no test req): $excepted"
+    echo ""
+
+    if [[ $uncovered -gt 0 ]]; then
+        echo -e "${RED}CHANGE COVERAGE GAPS (source changed, test not updated):${NC}"
+        for entry in "${uncovered_list[@]}"; do
+            IFS='|' read -r script_name test_path_val <<< "$entry"
+            echo "  $script_name"
+            echo "     Expected test update: $test_path_val"
+            echo "     Action: Update the test file to cover the source change"
+        done
+        echo ""
+        log_error "Change coverage: $uncovered source script(s) modified without corresponding test update"
+        return 1
+    fi
+
+    log_success "All modified source scripts have corresponding test updates"
+    return 0
+}
+
+# ============================================================================
+# STRUCTURAL INTEGRITY (BIDIRECTIONAL)
+# ============================================================================
+
+# Validate bidirectional test-to-source mapping
+# Direction 1: Every source script must have a test (validate_coverage)
+# Direction 2: Every test file must map to a source (find_orphaned_tests)
+# Usage: validate_structural_integrity
+# Returns: 0 if both pass, 1 if either fails
+validate_structural_integrity() {
+    local rc=0
+
+    log_section "Structural Integrity Check (Bidirectional)"
+    echo "  Direction 1: Every source script must have a test file"
+    echo "  Direction 2: Every test file must map to a source script"
+    echo "  Direction 3: Every modified source script must have its test also modified"
+    echo ""
+
+    # Direction 1: Source → Test (always fail mode)
+    if ! validate_coverage "fail"; then
+        rc=1
+    fi
+
+    # Direction 2: Test → Source
+    if ! find_orphaned_tests; then
+        rc=1
+    fi
+
+    # Direction 3: Changed source → Changed test (git-aware)
+    log_section "Change Coverage Check"
+    if ! validate_change_coverage; then
+        rc=1
+    fi
+
+    echo ""
+    if [[ $rc -eq 0 ]]; then
+        echo -e "${BOLD}STRUCTURAL INTEGRITY: PASS${NC}"
+    else
+        echo "" >&2
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+        echo -e "${RED}❌ STRUCTURAL INTEGRITY CHECK FAILED${NC}" >&2
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+        echo "" >&2
+        echo "Both directions must pass before running functional tests." >&2
+        echo "Fix all issues above, then re-run." >&2
+    fi
+
+    return $rc
 }
 
 # ============================================================================
@@ -852,16 +1129,24 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         --orphaned)
             find_orphaned_tests
             ;;
+        --change-coverage)
+            validate_change_coverage
+            ;;
+        --structural)
+            validate_structural_integrity
+            ;;
         --help|-h)
             echo "Usage: $(basename "$0") [option]"
             echo ""
             echo "Options:"
-            echo "  --staged    Validate only staged files (for pre-commit)"
-            echo "  --audit     Report issues without failing"
-            echo "  --warn      Report issues as warnings (default)"
-            echo "  --fail      Fail if any issues found"
-            echo "  --orphaned  Find test files without matching scripts"
-            echo "  --help      Show this help"
+            echo "  --staged           Validate only staged files (for pre-commit)"
+            echo "  --audit            Report issues without failing"
+            echo "  --warn             Report issues as warnings (default)"
+            echo "  --fail             Fail if any issues found"
+            echo "  --orphaned         Find test files without matching scripts"
+            echo "  --change-coverage  Check modified source scripts have test updates"
+            echo "  --structural       Run full bidirectional structural integrity check"
+            echo "  --help             Show this help"
             ;;
         *)
             validate_coverage

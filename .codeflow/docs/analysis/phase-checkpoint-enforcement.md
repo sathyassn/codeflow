@@ -267,6 +267,7 @@ All checkpoint state is session-scoped to prevent cross-session interference:
 .state/session/{session-id}/pathflow/
     is-pathflow-active           <-- PathFlow flag (moved from .state/session/{SID}/)
     pathflow-phase-tasks.json    <-- checkpoint state file
+    pathflow-team.json           <-- team lead PID and metadata (created by PostToolUse on TeamCreate)
 
 .state/sentinels/pathflow/{session-id}/
     pathflow-pf-1                <-- created by checkpoint hook
@@ -310,6 +311,8 @@ All checkpoint state is session-scoped to prevent cross-session interference:
 | All phase tasks done | Phase sentinel created, `sentinel_created` set to `true` |
 | Session ends | SessionEnd hook cleans up `.state/session/{SID}/pathflow/` |
 
+Note: `pathflow-team.json` is also stored in this directory (created by PostToolUse on TeamCreate, not by the checkpoint system). It records the team lead's OS PID for teammate detection at session start. When the session directory is cleaned up, all three files (`is-pathflow-active`, `pathflow-phase-tasks.json`, `pathflow-team.json`) are removed atomically. See `pid-based-teammate-detection.md` for details.
+
 **Root cause for pre-initialization:** The original design used lazy creation — the checkpoint file was created on the first `PF{N}-TSK-{NN}` task registration (PostToolUse on TaskCreate). This caused a critical gap: PF1 tasks were created *before* any PostToolUse checkpoint hook fired (because the hooks themselves needed the checkpoint file to exist). When PF2 tasks eventually triggered the lazy creation, PF1 was never retroactively added. Pre-initializing all phases at session start ensures every phase exists before any task registration hooks fire.
 
 ### Parallel sessions
@@ -336,7 +339,7 @@ Some tasks are conditional based on session context. For example, PF3-TSK-04 (re
 | `adhoc_only` | `origin != "planned"` | `origin == "planned"` |
 | `if_pipeline_includes_qa` | Pipeline includes WS-QA stage | Pipeline does not include WS-QA |
 
-4. Tasks whose condition evaluates to false are marked `skipped` and excluded from the completion check
+1. Tasks whose condition evaluates to false are marked `skipped` and excluded from the completion check
 
 ### Marking tasks as skipped
 

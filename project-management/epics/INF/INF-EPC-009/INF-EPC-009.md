@@ -3,7 +3,7 @@ id: "INF-EPC-009"
 format_id: "INF-EPC-009"
 title: "Test Enforcement Requirements and Deferred Shutdown"
 summary: "Add persistent test enforcement across validation scripts and agent definitions, plus document deferred teammate shutdown protocol"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "CHOR"
 domain: "QUAL"
@@ -17,7 +17,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-22"
-updated_at: "2026-02-22"
+updated_at: "2026-02-23"
 ---
 
 # INF-EPC-009: Test Enforcement Requirements and Deferred Shutdown

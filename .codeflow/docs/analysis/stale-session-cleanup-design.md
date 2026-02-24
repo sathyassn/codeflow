@@ -35,43 +35,65 @@ The `/resume` command triggers SessionStart with `source: "startup"` first (the 
 
 This is the fundamental catch-22: **cleanup and resume share the same entry point**.
 
-## Design Decision: Warning + Manual Cleanup
+## Design Decision: PID-Based Auto-Cleanup
 
-**Approach:** Emit warnings at startup, never auto-delete.
+**Approach:** Use the lead's OS process PID to distinguish teammates from stale sessions. Auto-cleanup when the lead PID is dead.
+
+The previous warning-only approach was insufficient because LLMs consistently ignore stderr warnings and proceed with stale state. PID-based detection replaces warnings with automatic cleanup for crash scenarios.
 
 ### Session Detection Logic (Section 4 replacement)
 
 ```text
-For each session dir in .state/session/ses-*:
-  1. Skip current session
-  2. Skip sessions without pathflow-active flag (already cleaned up)
-  3. Read team_name from flag file
-  4. Check tmux pane health for team members:
-     - If any pane is alive → session is active, skip
-     - If no panes alive (or no team config) → session is stale
-  5. Add to warning list
+At SessionStart, BEFORE sourcing the env file:
+  1. Check if env file exists → if not, fresh start, skip
+  2. Source env file temporarily to get old CODEFLOW_SESSION_ID
+  3. Check .state/session/{SID}/pathflow/pathflow-team.json:
+     - MISSING: Check pathflow-active flag
+       - FLAG MISSING: orphan env file → clean env file only
+       - FLAG EXISTS: lead's own session pre-TeamCreate → proceed normally
+     - EXISTS: Read lead_pid
+       - kill -0 $lead_pid → ALIVE: teammate → skip cleanup, minimal init
+       - kill -0 $lead_pid → DEAD: stale session → FULL CLEANUP
 ```
 
-### Output Format
+### Full Cleanup Scope
 
-```text
-WARNING: STALE SESSIONS DETECTED:
-  - ses-1234567890abc (pathflow-active flag set, no live tmux panes)
-  - ses-9876543210def (pathflow-active flag set, no live tmux panes)
-Run '/cf-cleanup --sessions' to clean up stale session state.
-```
+When the lead PID is dead, the following artifacts are removed:
+
+| Artifact | Path | Reason |
+|----------|------|--------|
+| Team config | `~/.claude/teams/{team_name}/` | Stale member entries |
+| Task list | `~/.claude/tasks/{team_name}/` | Stale task entries |
+| Session directory | `.state/session/{SID}/` | Pathflow flag, checkpoint, team file |
+| Sentinels | `.state/sentinels/pathflow/{SID}/` | Stale gate state |
+| Env file | `.state/runtime/codeflow-env.sh` | Stale session ID |
+| Active task | `.state/runtime/active-task.json` | Stale task context |
+| Session ID ref | `.state/runtime/current-session-id` | Stale session reference |
+
+After cleanup, `CODEFLOW_SESSION_ID` is unset so a fresh ID is generated.
 
 ### `source` Field Decision Matrix
 
-| Source | Has Stale Sessions? | Action |
-|--------|-------------------|--------|
-| `startup` | Yes | Warn (user may be about to `/resume`) |
-| `startup` | No | Silent |
-| `resume` | N/A | Skip stale check (state is being restored) |
-| `clear` | N/A | Skip stale check (clearing current context only) |
-| `compact` | N/A | Skip stale check (auto-compaction, no user interaction) |
+| Source | Has Stale Session (env file)? | Action |
+|--------|-------------------------------|--------|
+| `startup` | Yes, lead PID dead | Auto-cleanup, fresh start |
+| `startup` | Yes, lead PID alive | Teammate path, minimal init |
+| `startup` | No env file | Fresh start, normal init |
+| `resume` | N/A | Normal init (env file source proceeds) |
+| `clear` | N/A | Normal init (env file source proceeds) |
+| `compact` | N/A | Normal init (env file source proceeds) |
 
-Currently, all source values get the warning since we only warn and never delete. The `source` field is stored in `_SESSION_SOURCE` for future use.
+The `source` field is stored in `_SESSION_SOURCE` for future use. PID-based cleanup runs regardless of source value because it is safe: alive PIDs are never cleaned.
+
+### Stale Team Config Cleanup
+
+When a stale session is detected (lead PID dead), the cleanup includes team infrastructure at `~/.claude/`:
+
+1. Read `team_name` from `pathflow-team.json`
+2. Remove `~/.claude/teams/{team_name}/` (team config with stale member entries)
+3. Remove `~/.claude/tasks/{team_name}/` (task list with stale entries)
+
+This prevents the next session from detecting stale team configs and emitting redundant warnings (Section 9).
 
 ## Tmux Pane Health Check Approach
 
@@ -142,6 +164,6 @@ This is a strong signal of context overflow recovery situations.
 
 ## Future Work
 
-- `/cf-cleanup --sessions` command implementation to manually clean stale sessions
-- Consider `source` field for smarter behavior (e.g., skip warnings on `compact`)
+- `/cf-cleanup --sessions` command implementation to manually clean stale sessions (for edge cases not covered by auto-cleanup)
 - Go CLI integration: centralized session lifecycle management with proper cleanup
+- `.state/` directory reorganization: separate shared vs session-scoped state at the directory level (partially addressed by worktree selective symlink)

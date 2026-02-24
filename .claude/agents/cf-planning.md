@@ -252,19 +252,192 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-PLAN` in your fina
 
 ## Quality Checklist
 
-Before marking any task complete, verify:
+🔒 **BLOCKING:** Every item below is a hard gate. If ANY item fails, the deliverable is NOT ready. Do not report STAGE-COMPLETE until every item passes. Planning artifacts with unverified assumptions become implementation traps that waste entire sessions.
 
-- [ ] Plan is complete and internally consistent (no contradictions)
-- [ ] Correct document template applied (ADR, brief, epic, task, runbook)
-- [ ] All required sections populated with substantive content (no placeholders)
-- [ ] YAML frontmatter present with all required metadata fields
-- [ ] Tasks are independently implementable (no unnecessary blocking dependencies)
-- [ ] Dependencies clearly mapped (blocked-by and blocks relationships)
-- [ ] Acceptance criteria are objective and measurable (pass/fail, not subjective)
-- [ ] ADRs have all 4 required sections (Status, Context, Decision, Consequences)
-- [ ] Effort estimates include confidence level (high/medium/low)
-- [ ] Committed via cf-git-operations with conventional format (`plan: description`)
-- [ ] Changes are within scope of the assigned task
+### 5.1 Self-Challenge Protocol
+
+**Before starting design work:**
+
+1. Have I read the FULL assignment, including scope boundaries and expected deliverable type?
+2. Do I understand what already exists in this area? (Check existing epics, ADRs, docs — don't reinvent.)
+3. Have I identified my assumptions about the codebase architecture, file structure, and conventions?
+4. Am I proposing something that works with the ACTUAL project structure, or am I designing for an idealized project?
+
+**Red flags during design (STOP and investigate):**
+
+- I'm referencing a file path, directory, or config structure without having verified it exists.
+- I'm proposing new files or directories without checking what already exists at that location.
+- I'm designing a task that assumes a naming convention without checking the actual convention.
+- I'm estimating effort without understanding the full scope of files involved.
+- I'm leaving a section vague because I'm unsure — vague planning leads to vague implementation and review failures.
+- I'm proposing a pattern that contradicts existing patterns in the codebase.
+- I'm creating a new epic in PLN or DOC area without checking for ongoing epics first.
+
+**Before claiming done:**
+
+1. Every file path mentioned in the plan has been verified to exist (or explicitly marked as "to be created").
+2. Every convention I reference (naming, directory, config format) has been verified against the actual codebase.
+3. Every acceptance criterion I wrote is specific and measurable — someone can write a pass/fail test for it.
+4. All sections have substantive content — no placeholders, no vague statements.
+5. YAML frontmatter validates correctly via validate-task.sh / validate-epic.sh.
+
+### 5.2 Project Convention Compliance
+
+🔒 **Planning artifacts that propose incorrect file names, wrong directories, or non-existent config structures create implementation traps. Every proposed path, name, and structure MUST be verified against the actual codebase.**
+
+**Before proposing new files:**
+
+1. Run `Glob` on the target directory to see existing files — match their naming pattern exactly.
+2. Verify the target directory exists — if it doesn't, explicitly note it must be created.
+3. For test files, document: the correct test-config.json registration path, the correct priority level, and include registration as an explicit acceptance criterion in the task.
+4. For hook scripts, document: the correct settings.json event section, the matcher pattern, and include registration as an explicit acceptance criterion.
+
+**Convention evidence table — include in every task that creates files:**
+
+| Proposed File | Convention Source | Verified By |
+|--------------|-----------------|-------------|
+| `.codeflow/testing/claude-hooks/pre-tool-use/test-cf-pre-tool-use-new-gate.sh` | Sibling: `test-cf-pre-tool-use-pathflow-gate.sh` | Glob confirmed 8 siblings in directory |
+| `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-new-gate.sh` | Sibling: `cf-pre-tool-use-pathflow-gate.sh` | Glob confirmed 7 siblings in directory |
+
+### 5.3 Assumption Identification & Verification
+
+🔒 **Every plan MUST include an explicit "Assumptions" section listing all assumptions, their verification status, and the evidence. Unverified assumptions that the plan depends on MUST be flagged as risks.**
+
+**Types of assumptions that must be documented:**
+
+| Category | Example | Verification Method |
+|----------|---------|-------------------|
+| File existence | "The hook `cf-pre-tool-use-security.sh` exists" | `Glob(".claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh")` |
+| Directory structure | "Tests for hooks go in `.codeflow/testing/claude-hooks/`" | `Glob(".codeflow/testing/claude-hooks/*/")` to confirm structure |
+| Naming convention | "Hook tests are named `test-cf-{event}-{name}.sh`" | `Glob(".codeflow/testing/claude-hooks/*/test-*.sh")` to see actual patterns |
+| Config schema | "test-config.json has `priorities.MEDIUM.files` array" | `Read` the actual config file |
+| Task dependency | "Task B can start before Task A completes" | Trace data/state dependencies between the tasks |
+| Effort estimate | "This is a Small (S) task" | Count affected files, assess complexity of each change |
+| API/capability | "The test runner supports `--category` filtering" | `Grep` the test runner source for the flag |
+| Ongoing epic | "No ongoing epic exists for PLN area" | `Glob("project-management/epics/PLN/")` and query cf-knowledge-layer |
+
+**Format in deliverable:**
+
+```markdown
+### Assumptions
+
+| # | Assumption | Verified? | Evidence |
+|---|-----------|-----------|----------|
+| 1 | Test directory `.codeflow/testing/claude-hooks/pre-tool-use/` exists | YES | Glob found 8 test files |
+| 2 | Hook tests follow `test-cf-pre-tool-use-{name}.sh` naming | YES | Siblings: test-cf-pre-tool-use-edit-write.sh, test-cf-pre-tool-use-gh-pr.sh, etc. |
+| 3 | test-config.json uses paths relative to .codeflow/testing/ | YES | Read file: entry `scripts/state/test-ledger.sh` confirms format |
+| 4 | No ongoing PLN epic exists | YES | Glob found PLN-EPC-001 (ongoing) — will add task there instead |
+```
+
+### 5.4 Design Feasibility Assessment
+
+Before finalizing any design, verify feasibility across 5 dimensions:
+
+1. **Structural feasibility:** Can the proposed files be placed in the proposed directories given the current project structure? (Verified by Glob-ing actual directory contents.)
+2. **Convention feasibility:** Do the proposed names, schemas, and patterns match what actually exists? (Verified by checking siblings and existing configs.)
+3. **Dependency feasibility:** Are all proposed dependencies available? (Libraries exist, functions have expected signatures, configs have expected fields.)
+4. **Scope feasibility:** Can each proposed task be implemented within the constraints of its assigned work type and teammate capabilities? (Single PR, reasonable file count.)
+5. **Test feasibility:** For each proposed implementation task, is the test strategy concrete? (Not "add tests" but "add test file `test-{name}.sh` to `.codeflow/testing/scripts/{area}/` testing `{specific behaviors}`".)
+
+### 5.5 Functional Testing Requirements in Designs
+
+🔒 **Every task definition that produces code MUST include explicit functional testing requirements. Vague instructions like "add tests" are insufficient and will be rejected at review.**
+
+**Mandatory test specification in task definitions:**
+
+1. **Specify what behavior to test functionally:** Not "test the function" but "test that the function produces {specific output} when given {specific input}."
+2. **Require real code execution:** Tests must call the actual function/script — explicitly state that mocking the code under test is not acceptable.
+3. **Require observable behavior assertions:** Tests must assert on output, exit codes, or state changes — not internal variables or mock return values.
+4. **Specify error path testing:** Each task must identify at least one error condition and require a functional test that triggers it.
+5. **Include integration test requirements:** When code has integration points (sources a library, calls a helper), specify that at least one test exercises the real integration.
+
+**Task definition template for test section:**
+
+```markdown
+### Tests
+- **Test file:** `test-{name}.sh` at `.codeflow/testing/{area}/`
+- **Functional tests required:**
+  1. Positive: Call `{function}` with `{input}`, assert output equals `{expected}`
+  2. Negative: Call `{function}` with `{bad_input}`, assert exit code or error message
+  3. Edge: Call `{function}` with `{edge_input}`, assert handling
+  4. Integration: Source `{library}` and call through real integration path
+- **NOT acceptable:** Tests that mock the code under test, tautological assertions, or tests that pass with broken code
+```
+
+### 5.6 Infrastructure Wiring in Task Definitions
+
+🔒 **Every task that creates files MUST include an explicit "Infrastructure Wiring" section listing ALL registration and configuration requirements.**
+
+**Mandatory template for file-creating tasks:**
+
+```markdown
+### Infrastructure Wiring
+- [ ] Test file registered in `test-config.json`: `priorities.{LEVEL}.files` += `"{relative_path}"`
+- [ ] Hook registered in `settings.json`: `hooks.{Event}[].hooks` += `{ command: "{path}", timeout: {N} }`, matcher: `"{pattern}"`
+- [ ] Executable permission set: `chmod +x {file_path}`
+- [ ] Source paths verified: all `source`/`import` statements reference existing files
+```
+
+**Good task definition example:**
+
+```markdown
+### Task: Add stale session PID detection to session-start hook
+
+**Source:** `.claude/hooks/codeflow/session-start/cf-session-start-pid-cleanup.sh` (new)
+**Test:** `.codeflow/testing/claude-hooks/session-start/test-cf-session-start-pid-cleanup.sh` (new)
+**Convention source:** Siblings `cf-session-start-init.sh`, `test-cf-session-start-init.sh`
+
+**Acceptance:**
+1. Script detects PIDs that are no longer running via `kill -0`
+2. Script logs warnings to stderr for stale sessions
+3. Test file registered in test-config.json under `priorities.MEDIUM.files` as `claude-hooks/session-start/test-cf-session-start-pid-cleanup.sh`
+4. Hook registered in settings.json SessionStart array with `timeout: 15`
+5. Test covers: active PID (positive), dead PID (negative), no sessions (edge case)
+
+**Infrastructure Wiring:**
+- [ ] test-config.json: `priorities.MEDIUM.files` += `"claude-hooks/session-start/test-cf-session-start-pid-cleanup.sh"`
+- [ ] settings.json: `hooks.SessionStart[0].hooks` += `{ type: "command", command: "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-pid-cleanup.sh", timeout: 15 }`
+- [ ] `chmod +x` on both source and test files
+```
+
+**Bad task definition (DO NOT do this):**
+
+```markdown
+### Task: Add stale session detection
+Add a script to clean up stale sessions. Add tests.
+```
+
+### 5.7 Convention Research Requirement
+
+**Before proposing any new file or directory in a plan, complete this research:**
+
+1. `Glob` the target directory (or parent) to see what already exists.
+2. Read at least 2 existing files of the same type to understand naming, structure, and content patterns.
+3. Read test-config.json to understand how test files are organized and registered.
+4. Read settings.json to understand how hooks are organized and registered.
+5. Document the convention evidence in the plan (see Section 5.2 table).
+
+**This is not optional.** Plans that propose file names without convention evidence will be rejected at review.
+
+### 5.8 Completion Checklist
+
+- [ ] **Acceptance criteria met:** Each numbered criterion from the task verified against actual document content
+- [ ] **Correct template:** Document type template (ADR/brief/epic/task/runbook) properly applied
+- [ ] **All sections substantive:** No placeholder text, no TBD, no vague descriptions like "as needed" or "various"
+- [ ] **YAML frontmatter valid:** All required metadata fields present with valid values
+- [ ] **File paths verified:** Every path referenced verified to exist via Glob (or marked "to be created")
+- [ ] **Conventions verified:** Every proposed file name checked against sibling files with evidence documented
+- [ ] **Assumptions documented:** Explicit assumptions section with verification status and evidence for each
+- [ ] **Feasibility confirmed:** All 5 feasibility dimensions checked (structural, convention, dependency, scope, test)
+- [ ] **Functional test requirements explicit:** Every code-producing task includes specific functional test requirements, not vague "add tests"
+- [ ] **Registration requirements explicit:** Every file-creating task includes infrastructure wiring section
+- [ ] **Acceptance criteria testable:** Every criterion can be verified with a concrete PASS/FAIL check
+- [ ] **Dependencies mapped:** blocked-by and blocks relationships correctly identified
+- [ ] **Ongoing epic check done:** For PLN/DOC areas, verified whether an ongoing epic exists
+- [ ] **Effort estimates justified:** Confidence level stated with reasoning
+- [ ] **Validation scripts passed:** `validate-task.sh` / `validate-epic.sh` ran successfully on all created markdown
+- [ ] **Committed via cf-git-operations** with `plan: {description}` format
+- [ ] **Scope compliance:** Changes within scope of the assigned task
 
 ## References
 

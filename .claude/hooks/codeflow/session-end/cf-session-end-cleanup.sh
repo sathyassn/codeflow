@@ -4,7 +4,7 @@
 # Hook Type: SessionEnd
 # Usage:     Called by Claude Code at session end
 # Platform:  macOS/Linux
-# Version:   2.1.0
+# Version:   2.2.0
 #
 # This hook:
 #   - Guards against premature cleanup using pathflow-active flag
@@ -13,6 +13,7 @@
 #   - Cleans up EXPIRED skill sentinels (preserves valid ones)
 #   - Cleans up memory-progress state files
 #   - Preserves active task context if in_progress
+#   - Reads pathflow-team.json to clean up team config/task list
 #   - Removes env file (session ID shared state)
 #   - Removes session-specific temp files
 #   - Logs session end event (if configured)
@@ -23,7 +24,7 @@
 #   3. Flag already removed by team-guard (idempotent no-op)
 #   4. Clean memory progress files
 #   5. Preserve active task context if in_progress
-#   6. Remove env file (session ID shared state)
+#   6. Read pathflow-team.json, clean team config/task list, remove session dir
 #   7. Log session end event (optional)
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -47,7 +48,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.1.0"
+readonly VERSION="2.2.0"
 
 # =============================================================================
 # SETUP
@@ -182,6 +183,25 @@ fi
 # =============================================================================
 # 6. SESSION STATE & TEMP CLEANUP
 # =============================================================================
+
+# Read pathflow-team.json before removing session directory (need team_name for cleanup)
+_pf_team_name=""
+_pf_team_file="$SESSION_STATE_DIR/pathflow/pathflow-team.json"
+if [[ -f "$_pf_team_file" ]] && command -v jq &>/dev/null; then
+    _pf_team_name=$(jq -r '.team_name // empty' "$_pf_team_file" 2>/dev/null) || true
+fi
+
+# Clean up team config and task list if team_name is known
+if [[ -n "$_pf_team_name" ]]; then
+    if [[ -d "${HOME}/.claude/teams/${_pf_team_name}" ]]; then
+        rm -rf "${HOME}/.claude/teams/${_pf_team_name}" 2>/dev/null || true
+        echo "SessionEnd: Removed team config: ${_pf_team_name}" >&2
+    fi
+    if [[ -d "${HOME}/.claude/tasks/${_pf_team_name}" ]]; then
+        rm -rf "${HOME}/.claude/tasks/${_pf_team_name}" 2>/dev/null || true
+        echo "SessionEnd: Removed task list: ${_pf_team_name}" >&2
+    fi
+fi
 
 # Clean up session state directory
 if [[ -d "$SESSION_STATE_DIR" ]] && [[ "$SESSION_ID" != "unknown" ]]; then

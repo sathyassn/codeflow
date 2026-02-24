@@ -79,3 +79,4 @@ build/
 .codeflow/testing/results/
 .codeflow/testing/coverage/
 .codeflow/testing/coverage_reports/
+coverage/

@@ -1,7 +1,8 @@
 # Test Suite CI
 #
-# Runs the CodeFlow test suite with coverage enforcement on PRs and pushes to main.
-# Ensures all tests pass and coverage thresholds are met before merge.
+# Runs the CodeFlow test suite with structural integrity checks and coverage enforcement
+# on PRs and pushes to main.
+# Enforces: structural validation (test-to-source mapping), test pass, per-file coverage.
 
 name: Test Suite
 
@@ -33,6 +34,11 @@ jobs:
           .codeflow/testing/.venv/bin/pip install --upgrade pip
           .codeflow/testing/.venv/bin/pip install pytest pytest-cov ruff
 
+      - name: Run structural integrity check
+        run: |
+          source .codeflow/testing/lib/test-coverage.sh
+          validate_structural_integrity
+
       - name: Run test suite with coverage
         run: |
           chmod +x ./codeflow
@@ -40,7 +46,7 @@ jobs:
 
       - name: Tests passed
         if: success()
-        run: echo "All tests passed with coverage enforcement"
+        run: echo "All tests passed with structural integrity and coverage enforcement"
 
       - name: Tests failed
         if: failure()
@@ -48,5 +54,6 @@ jobs:
           echo "Test suite failed"
           echo ""
           echo "To reproduce locally:"
-          echo "  ./codeflow test --coverage"
+          echo "  bash .codeflow/testing/run-all-tests.sh --mode full  # Full suite + structural"
+          echo "  ./codeflow test --coverage                           # Per-file coverage"
           exit 1

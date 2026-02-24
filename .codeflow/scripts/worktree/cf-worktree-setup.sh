@@ -124,17 +124,30 @@ cp "$REPO_ROOT/.gitignore" .gitignore 2>/dev/null || echo "  .gitignore already 
 # STATE SYMLINK
 # =============================================================================
 
-echo "Creating .state symlink to main repo..."
-if [[ ! -e ".state" ]]; then
-    ln -s "$REPO_ROOT/.state" ".state"
-    echo "  Created: .state -> $REPO_ROOT/.state"
-else
-    if [[ -L ".state" ]]; then
-        echo "  .state symlink already exists"
-    else
-        echo "  Warning: .state exists but is not a symlink"
-    fi
+echo "Setting up .state with selective symlinks..."
+
+# Migration: if .state is a full symlink (old setup), remove it
+if [[ -L ".state" ]]; then
+    echo "  Migrating: removing old full .state symlink"
+    rm ".state"
 fi
+
+# Shared state directories (symlinked to main repo)
+mkdir -p ".state"
+for _shared_dir in db ledger registry backups coordination logs; do
+    if [[ ! -e ".state/$_shared_dir" ]] && [[ -d "$REPO_ROOT/.state/$_shared_dir" ]]; then
+        ln -s "$REPO_ROOT/.state/$_shared_dir" ".state/$_shared_dir"
+        echo "  Symlinked: .state/$_shared_dir -> $REPO_ROOT/.state/$_shared_dir"
+    elif [[ -e ".state/$_shared_dir" ]]; then
+        echo "  Exists: .state/$_shared_dir"
+    fi
+done
+
+# Local state directories (per-worktree, NOT symlinked)
+for _local_dir in runtime session sentinels; do
+    mkdir -p ".state/$_local_dir"
+    echo "  Created local: .state/$_local_dir"
+done
 
 # =============================================================================
 # WORKTREE SPECIFIC SETUP

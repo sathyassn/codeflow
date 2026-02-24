@@ -212,18 +212,161 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-DOCS` in your fina
 
 ## Quality Checklist
 
-Before marking any task complete, verify:
+🔒 **BLOCKING:** Every item below is a hard gate. If ANY item fails, the documentation is NOT ready. Documentation with incorrect paths, invented script names, or wrong config references is worse than no documentation — it actively misleads implementers and reviewers.
 
-- [ ] Document follows the correct type-specific template
-- [ ] All sections populated with substantive content (no placeholders)
-- [ ] Markdown lint passes with zero errors
-- [ ] All internal links valid and anchors resolve
-- [ ] Code examples use correct language tags and are tested where applicable
-- [ ] Table of contents present and accurate for documents with more than 3 sections
-- [ ] YAML frontmatter complete with required metadata fields
-- [ ] File ends with a single newline, no trailing whitespace or hard tabs
-- [ ] Changes committed via cf-git-operations with `docs({scope}): {description}` format
-- [ ] Changes are within scope of the assigned task
+### 5.1 Self-Challenge Protocol
+
+**Before starting documentation work:**
+
+1. Have I read the FULL task assignment, including scope and all acceptance criteria?
+2. Do I understand what currently exists? (Read existing docs in the target directory — don't overwrite or duplicate.)
+3. Am I writing about things I've verified, or things I assume to be true?
+4. Have I identified every technical claim I'll need to make (file paths, script names, config keys, behaviors)?
+
+**Red flags during writing (STOP and verify):**
+
+- I'm writing a file path without having confirmed it exists via Glob.
+- I'm describing a script's behavior without having read the script's source code.
+- I'm referencing a config key or schema without having read the config file.
+- I'm claiming "hook X blocks Y" without having read hook X's source code to confirm.
+- I'm using a count (e.g., "22 hooks", "1,555+ tests") without verifying the current number.
+- I'm describing a directory structure without listing the actual directory contents.
+- I'm copying information from another document without verifying it's still current and accurate.
+- I'm using placeholder-like language ("various", "as needed", "etc.") instead of specific facts.
+
+**Before claiming done:**
+
+1. Every file path in the document exists (verified via Glob — not memory, not "I saw it earlier").
+2. Every script name is correct and at the stated path (verified via Glob).
+3. Every behavioral claim is verified against source code (Read the actual code).
+4. Every config reference matches the actual config file structure (Read the config).
+5. Every code example is syntactically correct and uses verified function signatures.
+6. All internal links resolve to existing files and headings.
+
+### 5.2 Technical Accuracy Verification
+
+🔒 **Every technical claim in documentation MUST be verified against the codebase using tools. "I believe this is correct" is not verification. `Glob`, `Grep`, or `Read` IS verification.**
+
+**Verification matrix — for every technical claim, apply the correct check:**
+
+| Claim Type | Example | Verification Method |
+|-----------|---------|-------------------|
+| File path | "The hook is at `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh`" | `Glob` the exact path — does the file exist? |
+| Script name | "Run `run-all-tests.sh`" | `Glob("**/run-all-tests.sh")` — where exactly is it? |
+| Function name | "Use `assert_hook_blocks()` to test hooks" | `Grep("assert_hook_blocks", path=".codeflow/testing/lib/")` — does it exist? What's the signature? |
+| Config key/structure | "Set `coverage_enforcement.enabled` to true" | `Read` the config file — does this key exist at this nesting level? |
+| Behavioral claim | "The pathflow-gate hook blocks Edit before PF3" | `Read` the hook script — verify it checks for pf-3 sentinel and blocks Edit tool |
+| Count | "22 hook scripts" | `Glob(".claude/hooks/codeflow/**/*.sh")` — count the actual results |
+| Directory structure | "Tests are organized in `scripts/`, `claude-hooks/`, etc." | `Bash("ls .codeflow/testing/")` — verify actual directories match |
+| Command syntax | "`bash .codeflow/testing/run-all-tests.sh --mode full`" | `Read` the script — verify `--mode` flag is accepted |
+| Variable/constant name | "The `SESSION_ID` variable holds..." | `Grep("SESSION_ID", path="{file}")` — verify exact name |
+| Cross-reference | "As described in Section 5 of CLAUDE.md..." | `Read` CLAUDE.md — does Section 5 actually cover what you claim? |
+
+**Verification process — apply after writing each section:**
+
+1. List every technical claim in the section.
+2. For each claim, perform the appropriate verification from the matrix above.
+3. If verification fails, fix the documentation immediately — do not proceed with incorrect claims.
+4. If you cannot verify a claim (e.g., external behavior), explicitly mark it as unverified in the document.
+
+### 5.3 Cross-Reference Validation
+
+**Verify consistency between your documentation and the actual codebase:**
+
+| What to Verify | Against What | How |
+|---------------|-------------|-----|
+| File paths in docs | Actual filesystem | `Glob` every path |
+| Script/function names | Source code | `Grep` for definitions |
+| Config keys/values | Config files | `Read` the config |
+| Hook names and events | settings.json + hook directory | `Read` settings.json, `Glob` hook dirs |
+| Agent names and models | Agent definitions | `Glob` and `Read` `.claude/agents/cf-*.md` |
+| Command names | Command definitions | `Glob` `.claude/commands/cf-*.md` |
+| Sentinel names | Sentinel hook source code | `Read` the pathflow-sentinel hook |
+| Counts (hooks, tests, etc.) | Actual file counts | `Glob` and count |
+| Section references to other docs | Other document content | `Read` the referenced section |
+
+**Cross-document consistency rules:**
+
+When updating a document that references or is referenced by other documents:
+
+1. `Grep` for the document's name to find all referencing documents.
+2. For each shared fact (count, name, path, behavior), verify consistency across all documents.
+3. If you change a fact, check whether it needs updating in other documents too.
+4. If you cannot update other documents (outside scope), note the inconsistency as a finding for the team lead.
+
+### 5.4 Assumption Identification & Verification
+
+| Assumption Type | Example | Verification |
+|----------------|---------|-------------|
+| "This script exists at this path" | `Glob` or `Read` the path |
+| "This function takes these parameters" | `Read` the function definition, not docs |
+| "This directory contains these files" | `Glob` the directory |
+| "This config has this schema" | `Read` the config file |
+| "This hook fires on this event" | `Read` settings.json hook configuration |
+| "This information is current" | Check git log for recent changes to referenced files |
+| "This count is accurate" | `Glob` and count |
+
+### 5.5 Functional Testing Documentation Requirements
+
+🔒 **When documenting test expectations, patterns, or requirements, always specify functional testing standards — not just "add tests."**
+
+**When documenting test patterns:**
+
+1. **Specify functional requirements:** Document that tests must call the actual code under test, not mock it. Example: "Tests for hook scripts must source the actual hook and pass simulated stdin — mocking the hook is not acceptable."
+2. **Document observable behavior:** Describe what outputs, side effects, or state changes tests should verify. Example: "Test must verify that the hook writes a sentinel file at the expected path when invoked with valid input."
+3. **Include integration expectations:** When documenting components that interact with others, specify that integration tests must exercise the real interaction path.
+4. **Flag anti-patterns explicitly:** Document what tests must NOT do. Example: "Tests must not assert on hardcoded values that bypass the code under test."
+5. **Reference real examples:** When documenting test patterns, reference actual test files in the codebase as exemplars rather than inventing abstract patterns.
+
+**When writing runbooks or guides that reference testing:**
+
+- Always specify the test runner command with the appropriate mode (`--mode standard` for verification, `--mode full` for comprehensive).
+- Document that functional test failures must be investigated, not just re-run.
+- Include expected test output format so readers can verify actual behavior.
+
+### 5.6 Infrastructure Wiring Checks (for Documentation about Infrastructure)
+
+When documenting hooks, configs, tests, or other infrastructure:
+
+**Hook documentation:** For each hook described:
+
+- Verify the script file exists at the stated path (`Glob`)
+- Verify the settings.json entry exists with correct event, matcher, and command (`Read` settings.json)
+- Verify the described behavior matches the actual script logic (`Read` the script)
+
+**Config documentation:** For each config documented:
+
+- Verify the config file exists at the stated path (`Glob`)
+- Verify the schema matches the actual file structure (`Read` the config)
+- Verify example values match the format of actual values
+
+**Test documentation:** For each test pattern documented:
+
+- Verify test files exist at stated locations (`Glob`)
+- Verify test-config.json entries match (`Read` config)
+- Verify test runner commands work as documented
+
+### 5.7 Completion Checklist
+
+- [ ] **Acceptance criteria met:** Each numbered criterion verified against actual document content
+- [ ] **Correct template:** Document type template (ADR/brief/epic/task/runbook/guide) properly applied
+- [ ] **All sections substantive:** No placeholder text, no TBD, no "various", no empty sections
+- [ ] **YAML frontmatter complete:** All required metadata fields present with valid values
+- [ ] **Markdown lint clean:** Zero errors against project's 13 active rules (auto-fixes applied)
+- [ ] **Internal links valid:** Every `[text](path)` and `[text](#anchor)` resolves — verified by Glob/Read
+- [ ] **File paths verified:** EVERY file path in the document confirmed to exist via Glob (zero unverified paths)
+- [ ] **Script names verified:** Every script name referenced confirmed to exist at stated path via Glob
+- [ ] **Function names verified:** Every function name referenced confirmed to exist via Grep
+- [ ] **Config references verified:** Every config key/value/structure confirmed by Read-ing the actual config file
+- [ ] **Behavioral claims verified:** Every "X does Y" claim confirmed by Read-ing X's source code
+- [ ] **Counts verified:** Every number (hook count, test count, command count) matches actual Glob count
+- [ ] **Cross-references validated:** Every reference to another document verified against that document's actual content
+- [ ] **Code examples verified:** Code blocks that claim to be runnable use correct syntax and verified function signatures
+- [ ] **Functional testing documented:** Test expectations specify functional behavior verification, not just "add tests"
+- [ ] **TOC present and accurate:** Documents with 3+ sections have a table of contents with valid anchors
+- [ ] **No trailing whitespace or hard tabs:** File ends with single newline
+- [ ] **Committed via cf-git-operations** with `docs({scope}): {description}` format
+- [ ] **Scope compliance:** Changes within scope of the assigned task
 
 ## References
 

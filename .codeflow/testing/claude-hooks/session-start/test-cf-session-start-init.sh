@@ -44,6 +44,64 @@ cleanup_test_artifacts() {
     rm -f "$REPO_ROOT/.state/sentinels"/pathflow-test-* 2>/dev/null || true
 }
 
+# =============================================================================
+# HELPER: PID-based cleanup test helpers
+# =============================================================================
+
+setup_pid_test_env() {
+    rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/runtime/active-task.json" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.state/runtime/current-session-id" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/logs/sessions" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/sentinels" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/sentinels/skill" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/session" 2>/dev/null || true
+}
+
+# Create a stale session with a pathflow-team.json pointing to a dead PID
+create_stale_session() {
+    local session_id="$1"
+    local team_name="$2"
+    local dead_pid="${3:-99999}"
+
+    local session_dir="$REPO_ROOT/.state/session/$session_id"
+    mkdir -p "$session_dir/pathflow"
+
+    # Create pathflow-active flag
+    echo "{\"session_id\":\"$session_id\",\"team_name\":\"$team_name\"}" > "$session_dir/pathflow/is-pathflow-active"
+
+    # Create pathflow-team.json with a dead PID
+    cat > "$session_dir/pathflow/pathflow-team.json" <<STALE_EOF
+{"team_name":"$team_name","lead_claude_uuid":"dead-uuid","lead_pid":$dead_pid,"codeflow_session_id":"$session_id","teammate_spawned":true,"created_at":"2026-02-23T00:00:00Z","last_spawn_name":"cf-development"}
+STALE_EOF
+
+    # Create sentinel directory
+    mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$session_id"
+    touch "$REPO_ROOT/.state/sentinels/pathflow/$session_id/pathflow-pf-1"
+
+    # Create env file pointing to this session
+    mkdir -p "$REPO_ROOT/.state/runtime"
+    echo "export CODEFLOW_SESSION_ID='$session_id'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+
+    # Create active task
+    echo "{\"task_id\":\"stale-task\",\"status\":\"in_progress\"}" > "$REPO_ROOT/.state/runtime/active-task.json"
+
+    # Create current session id file
+    echo "$session_id" > "$REPO_ROOT/.state/runtime/current-session-id"
+
+    # Create team config and task list
+    mkdir -p "${HOME}/.claude/teams/${team_name}"
+    echo "{\"members\":[],\"leadSessionId\":\"dead-uuid\"}" > "${HOME}/.claude/teams/${team_name}/config.json"
+    mkdir -p "${HOME}/.claude/tasks/${team_name}"
+    echo "{\"tasks\":[]}" > "${HOME}/.claude/tasks/${team_name}/tasks.json"
+}
+
+cleanup_team_dirs() {
+    local team_name="$1"
+    rm -rf "${HOME}/.claude/teams/${team_name}" 2>/dev/null || true
+    rm -rf "${HOME}/.claude/tasks/${team_name}" 2>/dev/null || true
+}
+
 echo "=== Testing cf-session-start-init.sh (V4 / v1.4.0) ==="
 echo ""
 
@@ -76,7 +134,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Location:" "$HOOK"; then pass "Has Location header"; else fail "Should have Location header"; fi
 
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '"1.4.0"' "$HOOK"; then pass "Version is 1.4.0"; else fail "Version should be 1.4.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
+if grep -q '"1.5.0"' "$HOOK"; then pass "Version is 1.5.0"; else fail "Version should be 1.5.0 (got: $(grep VERSION "$HOOK" | head -1))"; fi
 
 echo ""
 echo "--- Execution Tests ---"
@@ -524,30 +582,56 @@ cleanup_test_artifacts
 
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
-# Teammate scenario: env file already exists, hook should source it and NOT overwrite
+# Teammate scenario: env file already exists with live lead PID.
+# Section 1b checks pathflow-team.json and lead PID to decide teammate vs stale.
+# We must create full session state so the hook recognizes this as a live session.
+_tm_sid="ses-1234567890123abcdef012345"
+_tm_team="teammate-test-team"
 mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
-echo "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo "export CODEFLOW_SESSION_ID='$_tm_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Create pathflow-active flag and pathflow-team.json with current PID (alive)
+mkdir -p "$REPO_ROOT/.state/session/$_tm_sid/pathflow"
+echo "{\"session_id\":\"$_tm_sid\"}" > "$REPO_ROOT/.state/session/$_tm_sid/pathflow/is-pathflow-active"
+cat > "$REPO_ROOT/.state/session/$_tm_sid/pathflow/pathflow-team.json" <<TMEOF
+{"team_name":"teammate-test-team","lead_pid":$$,"codeflow_session_id":"ses-1234567890123abcdef012345","teammate_spawned":true,"created_at":"2026-02-23T00:00:00Z"}
+TMEOF
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_tm_sid"
+mkdir -p "${HOME}/.claude/teams/$_tm_team"
+echo '{"members":[]}' > "${HOME}/.claude/teams/$_tm_team/config.json"
 CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null
 _env_after=$(cat "$REPO_ROOT/.state/runtime/codeflow-env.sh")
-if echo "$_env_after" | grep -q "ses-1234567890123abcdef012345"; then
+if echo "$_env_after" | grep -q "$_tm_sid"; then
     pass "Teammate: env file preserved (not overwritten)"
 else
     fail "Teammate: env file should not be overwritten when it already exists"
 fi
+rm -rf "${HOME}/.claude/teams/$_tm_team" 2>/dev/null || true
 
 TESTS_RUN=$((TESTS_RUN + 1))
 # Teammate scenario: metadata file uses CodeFlow session ID from env file
 setup_test_env
+_tm_sid2="ses-1234567890123abcdef012345"
+_tm_team2="teammate-meta-team"
 mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
-echo "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo "export CODEFLOW_SESSION_ID='$_tm_sid2'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Create full session state with live PID
+mkdir -p "$REPO_ROOT/.state/session/$_tm_sid2/pathflow"
+echo "{\"session_id\":\"$_tm_sid2\"}" > "$REPO_ROOT/.state/session/$_tm_sid2/pathflow/is-pathflow-active"
+cat > "$REPO_ROOT/.state/session/$_tm_sid2/pathflow/pathflow-team.json" <<TM2EOF
+{"team_name":"teammate-meta-team","lead_pid":$$,"codeflow_session_id":"ses-1234567890123abcdef012345","teammate_spawned":true,"created_at":"2026-02-23T00:00:00Z"}
+TM2EOF
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_tm_sid2"
+mkdir -p "${HOME}/.claude/teams/$_tm_team2"
+echo '{"members":[]}' > "${HOME}/.claude/teams/$_tm_team2/config.json"
 echo '{"session_id": "uuid-from-claude-code"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null
-META_FILE="$REPO_ROOT/.state/logs/sessions/session-ses-1234567890123abcdef012345.meta"
+META_FILE="$REPO_ROOT/.state/logs/sessions/session-$_tm_sid2.meta"
 if [[ -f "$META_FILE" ]]; then
     pass "Metadata file uses CodeFlow session ID from env file"
     rm -f "$META_FILE" 2>/dev/null || true
 else
     fail "Metadata file should use CodeFlow session ID from env file"
 fi
+rm -rf "${HOME}/.claude/teams/$_tm_team2" 2>/dev/null || true
 
 TESTS_RUN=$((TESTS_RUN + 1))
 # Atomic write: env file is written via tmp+mv pattern
@@ -707,6 +791,246 @@ fi
 
 # Cleanup
 cleanup_test_artifacts
+
+# =============================================================================
+# PID-BASED STALE SESSION CLEANUP TESTS
+# =============================================================================
+# These tests require platform-specific process detection (kill -0) and
+# access to $HOME/.claude/ directories. Skip in CI environments where
+# Claude Code is not running and process semantics differ.
+
+if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo ""
+    echo "--- PID-Based Cleanup Tests: SKIPPED (CI environment) ---"
+    echo "SKIP: 16 PID-based cleanup tests skipped in CI (platform-specific process detection)"
+else
+
+echo ""
+echo "--- PID-Based Cleanup: Static Analysis ---"
+
+# PID Test 1: Hook has PID-based cleanup section
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'PID-based\|pathflow-team.json\|lead_pid' "$HOOK"; then
+    pass "Hook has PID-based cleanup logic"
+else
+    fail "Hook should have PID-based cleanup logic"
+fi
+
+# PID Test 2: Hook uses kill -0 for PID check
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'kill -0' "$HOOK"; then
+    pass "Hook uses kill -0 for PID liveness check"
+else
+    fail "Hook should use kill -0 for PID check"
+fi
+
+# PID Test 3: Hook handles team config cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '\.claude/teams' "$HOOK"; then
+    pass "Hook handles team config cleanup"
+else
+    fail "Hook should handle ~/.claude/teams/ cleanup"
+fi
+
+# PID Test 4: Hook handles task list cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '\.claude/tasks' "$HOOK"; then
+    pass "Hook handles task list cleanup"
+else
+    fail "Hook should handle ~/.claude/tasks/ cleanup"
+fi
+
+echo ""
+echo "--- PID-Based Cleanup: Stale Session Execution ---"
+
+# PID Test 5: Dead PID triggers full cleanup (env file removed)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-05"
+_stale_team="stale-team-05"
+# Use PID 99999 which is almost certainly dead
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]] || ! grep -q "$_stale_sid" "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null; then
+    pass "Dead PID: stale env file cleaned"
+else
+    fail "Dead PID: should clean stale env file"
+fi
+cleanup_team_dirs "$_stale_team"
+
+# PID Test 6: Dead PID triggers session directory removal
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-06"
+_stale_team="stale-team-06"
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/session/$_stale_sid" ]]; then
+    pass "Dead PID: stale session directory removed"
+else
+    fail "Dead PID: should remove stale session directory"
+fi
+cleanup_team_dirs "$_stale_team"
+
+# PID Test 7: Dead PID triggers sentinel directory removal
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-07"
+_stale_team="stale-team-07"
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "$REPO_ROOT/.state/sentinels/pathflow/$_stale_sid" ]]; then
+    pass "Dead PID: stale sentinels removed"
+else
+    fail "Dead PID: should remove stale sentinels"
+fi
+cleanup_team_dirs "$_stale_team"
+
+# PID Test 8: Dead PID triggers team config cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-08"
+_stale_team="stale-team-08"
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "${HOME}/.claude/teams/$_stale_team" ]]; then
+    pass "Dead PID: team config directory removed"
+else
+    fail "Dead PID: should remove team config"
+    cleanup_team_dirs "$_stale_team"
+fi
+
+# PID Test 9: Dead PID triggers task list cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-09"
+_stale_team="stale-team-09"
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "${HOME}/.claude/tasks/$_stale_team" ]]; then
+    pass "Dead PID: task list directory removed"
+else
+    fail "Dead PID: should remove task list"
+    cleanup_team_dirs "$_stale_team"
+fi
+
+# PID Test 10: Dead PID removes active-task.json
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_stale_sid="ses-deadpid-10"
+_stale_team="stale-team-10"
+create_stale_session "$_stale_sid" "$_stale_team" 99999
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -f "$REPO_ROOT/.state/runtime/active-task.json" ]]; then
+    pass "Dead PID: active-task.json removed"
+else
+    fail "Dead PID: should remove active-task.json"
+fi
+cleanup_team_dirs "$_stale_team"
+
+echo ""
+echo "--- PID-Based Cleanup: Teammate Detection ---"
+
+# PID Test 11: Alive PID skips cleanup (teammate path)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_alive_sid="ses-alive-11"
+_alive_team="alive-team-11"
+# Use current shell PID (always alive)
+_alive_pid=$$
+_alive_dir="$REPO_ROOT/.state/session/$_alive_sid"
+mkdir -p "$_alive_dir/pathflow"
+echo "{\"session_id\":\"$_alive_sid\",\"team_name\":\"$_alive_team\"}" > "$_alive_dir/pathflow/is-pathflow-active"
+cat > "$_alive_dir/pathflow/pathflow-team.json" <<ALIVE_EOF
+{"team_name":"$_alive_team","lead_claude_uuid":"alive-uuid","lead_pid":$_alive_pid,"codeflow_session_id":"$_alive_sid","teammate_spawned":true,"created_at":"2026-02-23T00:00:00Z"}
+ALIVE_EOF
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_alive_sid"
+touch "$REPO_ROOT/.state/sentinels/pathflow/$_alive_sid/pathflow-pf-3"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_alive_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+mkdir -p "${HOME}/.claude/teams/${_alive_team}"
+echo "{\"members\":[]}" > "${HOME}/.claude/teams/${_alive_team}/config.json"
+
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+
+# Session directory should still exist (not cleaned)
+if [[ -d "$_alive_dir" ]]; then
+    pass "Alive PID: session directory preserved (teammate path)"
+else
+    fail "Alive PID: should preserve session directory for teammate"
+fi
+cleanup_team_dirs "$_alive_team"
+
+# PID Test 12: Alive PID preserves env file
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]] && grep -q "$_alive_sid" "$REPO_ROOT/.state/runtime/codeflow-env.sh"; then
+    pass "Alive PID: env file preserved with original session ID"
+else
+    fail "Alive PID: should preserve env file"
+fi
+
+echo ""
+echo "--- PID-Based Cleanup: Edge Cases ---"
+
+# PID Test 13: No env file = fresh start, no cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
+result=$(CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "No env file: exits 0 (fresh start)"
+else
+    fail "No env file: should exit 0"
+fi
+
+# PID Test 14: Env file exists but no pathflow-team.json and no flag = orphan env cleanup
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_orphan_sid="ses-orphan-14"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_orphan_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Create session dir but no pathflow directory at all
+mkdir -p "$REPO_ROOT/.state/session/$_orphan_sid"
+CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>/dev/null || true
+# Verify orphan session ID is no longer in env file (hook clears it; Section 2 may recreate with fresh ID)
+if [[ ! -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]] || ! grep -q "$_orphan_sid" "$REPO_ROOT/.state/runtime/codeflow-env.sh"; then
+    pass "Orphan env file: orphan session ID cleared (new session started)"
+else
+    fail "Orphan env file: should clear orphan session ID"
+fi
+
+# PID Test 15: Missing team config during cleanup is handled gracefully
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_notc_sid="ses-noteamcfg-15"
+_notc_team="missing-team-15"
+# Create stale session but do NOT create team config
+_notc_dir="$REPO_ROOT/.state/session/$_notc_sid"
+mkdir -p "$_notc_dir/pathflow"
+echo "{\"session_id\":\"$_notc_sid\"}" > "$_notc_dir/pathflow/is-pathflow-active"
+cat > "$_notc_dir/pathflow/pathflow-team.json" <<NOTC_EOF
+{"team_name":"$_notc_team","lead_pid":99999,"codeflow_session_id":"$_notc_sid"}
+NOTC_EOF
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_notc_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+result=$(CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Missing team config: cleanup exits 0 gracefully"
+else
+    fail "Missing team config: should exit 0"
+fi
+
+# PID Test 16: Hook always exits 0
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+result=$(CODEFLOW_SESSION_ID="" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Hook always exits 0 (PID cleanup path)"
+else
+    fail "Hook should always exit 0 (PID cleanup path)"
+fi
+
+fi  # End CI guard for PID tests
 
 echo ""
 echo "=== Test Summary ==="

@@ -62,6 +62,26 @@ has_test_sentinel() {
     [[ -f "$REPO_ROOT/.state/sentinels/pathflow/$session_id/pathflow-$sentinel_name" ]]
 }
 
+get_team_file() {
+    local session_id="$1"
+    echo "$REPO_ROOT/.state/session/$session_id/pathflow/pathflow-team.json"
+}
+
+# Create a mock team config at ~/.claude/teams/{name}/config.json
+create_mock_team_config() {
+    local team_name="$1"
+    local lead_uuid="${2:-test-lead-uuid}"
+    local team_dir="${HOME}/.claude/teams/${team_name}"
+    mkdir -p "$team_dir"
+    echo "{\"leadSessionId\":\"$lead_uuid\",\"members\":[]}" > "$team_dir/config.json"
+    echo "$team_dir"
+}
+
+cleanup_mock_team() {
+    local team_name="$1"
+    rm -rf "${HOME}/.claude/teams/${team_name}" 2>/dev/null || true
+}
+
 # =============================================================================
 # BASIC SETUP TESTS
 # =============================================================================
@@ -284,6 +304,262 @@ fi
 remove_test_env_file
 
 # Test 25: (removed — phase trigger pf-3 via git switch no longer exists)
+
+echo ""
+echo "--- Static Analysis: pathflow-team.json Handlers ---"
+
+# Test 26: Hook has TeamCreate handler
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'TOOL_NAME.*==.*"TeamCreate"' "$HOOK"; then
+    pass "Hook has TeamCreate handler"
+else
+    fail "Hook should have TeamCreate handler"
+fi
+
+# Test 27: Hook has Task handler
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'TOOL_NAME.*==.*"Task"' "$HOOK"; then
+    pass "Hook has Task handler"
+else
+    fail "Hook should have Task handler"
+fi
+
+# Test 28: TeamCreate handler writes pathflow-team.json
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'pathflow-team.json' "$HOOK"; then
+    pass "Hook references pathflow-team.json"
+else
+    fail "Hook should reference pathflow-team.json"
+fi
+
+# Test 29: Uses PPID for lead PID
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'PPID' "$HOOK"; then
+    pass "Hook uses PPID for lead PID"
+else
+    fail "Hook should use PPID for lead PID"
+fi
+
+# Test 30: Uses atomic write (mktemp + mv)
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'mktemp.*team_file' "$HOOK" && grep -q 'mv.*_tmp_team' "$HOOK"; then
+    pass "Uses atomic write (tmp + mv) for pathflow-team.json"
+else
+    fail "Should use atomic write for pathflow-team.json"
+fi
+
+# Test 31: Task handler checks for team_name in tool_input
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'team_name' "$HOOK"; then
+    pass "Task handler checks team_name in tool_input"
+else
+    fail "Task handler should check team_name"
+fi
+
+echo ""
+echo "--- Execution Tests: TeamCreate Handler ---"
+
+# Test 32: TeamCreate creates pathflow-team.json with correct schema
+TESTS_RUN=$((TESTS_RUN + 1))
+tc_session="ses-teamcreate-32"
+tc_team="test-team-32"
+create_test_flag "$tc_session"
+create_test_env_file "$tc_session"
+create_mock_team_config "$tc_team" "uuid-lead-32"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$tc_session"
+
+stdin_json="{\"tool_name\":\"TeamCreate\",\"tool_input\":{\"team_name\":\"$tc_team\"},\"session_id\":\"ignored\"}"
+bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
+
+team_file=$(get_team_file "$tc_session")
+if [[ -f "$team_file" ]]; then
+    pass "TeamCreate creates pathflow-team.json"
+else
+    fail "TeamCreate should create pathflow-team.json"
+fi
+cleanup_mock_team "$tc_team"
+remove_test_env_file
+
+# Test 33: pathflow-team.json has team_name field
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    _tn=$(jq -r '.team_name // empty' "$team_file" 2>/dev/null) || true
+    if [[ "$_tn" == "$tc_team" ]]; then
+        pass "pathflow-team.json has correct team_name"
+    else
+        fail "pathflow-team.json team_name should be '$tc_team', got '$_tn'"
+    fi
+else
+    fail "Cannot validate team_name (file missing or jq unavailable)"
+fi
+
+# Test 34: pathflow-team.json has lead_pid field (integer > 0)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    _pid=$(jq -r '.lead_pid // 0' "$team_file" 2>/dev/null) || true
+    if [[ "$_pid" -gt 0 ]]; then
+        pass "pathflow-team.json has valid lead_pid ($_pid)"
+    else
+        fail "pathflow-team.json lead_pid should be > 0, got '$_pid'"
+    fi
+else
+    fail "Cannot validate lead_pid"
+fi
+
+# Test 35: pathflow-team.json has codeflow_session_id field
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    _sid=$(jq -r '.codeflow_session_id // empty' "$team_file" 2>/dev/null) || true
+    if [[ "$_sid" == "$tc_session" ]]; then
+        pass "pathflow-team.json has correct codeflow_session_id"
+    else
+        fail "pathflow-team.json codeflow_session_id should be '$tc_session', got '$_sid'"
+    fi
+else
+    fail "Cannot validate codeflow_session_id"
+fi
+
+# Test 36: pathflow-team.json has teammate_spawned=false initially
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    _ts=$(jq -r '.teammate_spawned' "$team_file" 2>/dev/null) || true
+    if [[ "$_ts" == "false" ]]; then
+        pass "pathflow-team.json has teammate_spawned=false initially"
+    else
+        fail "pathflow-team.json teammate_spawned should be false, got '$_ts'"
+    fi
+else
+    fail "Cannot validate teammate_spawned"
+fi
+
+# Test 37: pathflow-team.json has created_at timestamp
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    _ca=$(jq -r '.created_at // empty' "$team_file" 2>/dev/null) || true
+    if [[ -n "$_ca" ]] && [[ "$_ca" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+        pass "pathflow-team.json has valid created_at timestamp"
+    else
+        fail "pathflow-team.json should have ISO 8601 created_at, got '$_ca'"
+    fi
+else
+    fail "Cannot validate created_at"
+fi
+
+# Test 38: pathflow-team.json is valid JSON
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$team_file" ]] && command -v jq &>/dev/null; then
+    if jq . "$team_file" &>/dev/null; then
+        pass "pathflow-team.json is valid JSON"
+    else
+        fail "pathflow-team.json should be valid JSON"
+    fi
+else
+    fail "Cannot validate JSON"
+fi
+
+echo ""
+echo "--- Execution Tests: Task Handler ---"
+
+# Test 39: Task with team_name sets teammate_spawned=true
+TESTS_RUN=$((TESTS_RUN + 1))
+task_session="ses-taskspawn-39"
+task_team="test-team-39"
+create_test_flag "$task_session"
+create_test_env_file "$task_session"
+create_mock_team_config "$task_team" "uuid-lead-39"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$task_session"
+
+# First create the team file via TeamCreate
+tc_json="{\"tool_name\":\"TeamCreate\",\"tool_input\":{\"team_name\":\"$task_team\"},\"session_id\":\"ignored\"}"
+bash "$HOOK" <<< "$tc_json" 2>/dev/null || true
+
+# Then trigger Task with team_name
+task_json="{\"tool_name\":\"Task\",\"tool_input\":{\"team_name\":\"$task_team\",\"name\":\"cf-development\",\"prompt\":\"test\"},\"session_id\":\"ignored\"}"
+bash "$HOOK" <<< "$task_json" 2>/dev/null || true
+
+task_team_file=$(get_team_file "$task_session")
+if [[ -f "$task_team_file" ]] && command -v jq &>/dev/null; then
+    _ts=$(jq -r '.teammate_spawned' "$task_team_file" 2>/dev/null) || true
+    if [[ "$_ts" == "true" ]]; then
+        pass "Task with team_name sets teammate_spawned=true"
+    else
+        fail "Task handler should set teammate_spawned=true, got '$_ts'"
+    fi
+else
+    fail "Cannot validate teammate_spawned after Task"
+fi
+
+# Test 40: Task with team_name records last_spawn_name
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -f "$task_team_file" ]] && command -v jq &>/dev/null; then
+    _name=$(jq -r '.last_spawn_name // empty' "$task_team_file" 2>/dev/null) || true
+    if [[ "$_name" == "cf-development" ]]; then
+        pass "Task handler records last_spawn_name=cf-development"
+    else
+        fail "Task handler should record last_spawn_name=cf-development, got '$_name'"
+    fi
+else
+    fail "Cannot validate last_spawn_name"
+fi
+cleanup_mock_team "$task_team"
+remove_test_env_file
+
+# Test 41: Task without team_name does NOT modify pathflow-team.json
+TESTS_RUN=$((TESTS_RUN + 1))
+notask_session="ses-notask-41"
+create_test_flag "$notask_session"
+create_test_env_file "$notask_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$notask_session"
+
+# No pathflow-team.json exists — Task without team_name should be a no-op
+task_json='{"tool_name":"Task","tool_input":{"prompt":"test","subagent_type":"Explore"},"session_id":"ignored"}'
+bash "$HOOK" <<< "$task_json" 2>/dev/null || true
+
+notask_file=$(get_team_file "$notask_session")
+if [[ ! -f "$notask_file" ]]; then
+    pass "Task without team_name does not create pathflow-team.json"
+else
+    fail "Task without team_name should not create pathflow-team.json"
+fi
+remove_test_env_file
+
+echo ""
+echo "--- Edge Cases: pathflow-team.json ---"
+
+# Test 42: TeamCreate with missing pathflow directory is a no-op
+TESTS_RUN=$((TESTS_RUN + 1))
+edge_session="ses-nodir-42"
+# Do NOT create pathflow directory
+create_test_env_file "$edge_session"
+# But still create sentinel dir for pathflow check
+mkdir -p "$REPO_ROOT/.state/session/$edge_session"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$edge_session"
+echo "{\"session_id\":\"$edge_session\"}" > "$REPO_ROOT/.state/session/$edge_session/pathflow-active-mock"
+# Actually create the flag so pathflow is active
+mkdir -p "$REPO_ROOT/.state/session/$edge_session/pathflow"
+echo "{\"session_id\":\"$edge_session\"}" > "$REPO_ROOT/.state/session/$edge_session/pathflow/is-pathflow-active"
+
+edge_team="test-team-42"
+create_mock_team_config "$edge_team"
+stdin_json="{\"tool_name\":\"TeamCreate\",\"tool_input\":{\"team_name\":\"$edge_team\"},\"session_id\":\"ignored\"}"
+result=$(bash "$HOOK" <<< "$stdin_json" 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "TeamCreate exits 0 even when setup is incomplete"
+else
+    fail "TeamCreate should exit 0 gracefully"
+fi
+cleanup_mock_team "$edge_team"
+remove_test_env_file
+
+# Test 43: Hook exits 0 when pathflow not active (no pathflow-team.json changes)
+TESTS_RUN=$((TESTS_RUN + 1))
+remove_test_env_file
+result=$(CODEFLOW_SESSION_ID="ses-inactive-43" TOOL_NAME="TeamCreate" TOOL_INPUT='{"team_name":"test"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Exits 0 when pathflow not active (team handler)"
+else
+    fail "Should exit 0 when pathflow not active (team handler)"
+fi
 
 echo ""
 echo "=== Test Summary ==="

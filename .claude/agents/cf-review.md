@@ -137,7 +137,7 @@ Execute the checklist for the assigned review mode.
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
   - [ ] Verify each `.sh`/`.py` file in the changeset has a corresponding test file in the PR (`test-{name}.sh` or `test_{name}.py`)
   - [ ] Verify the task's `tests` YAML field is populated with actual test file paths
-  - [ ] Verify new tests are registered in `.codeflow/config/test-config.json`
+  - [ ] Verify new tests are registered in `.codeflow/testing/test-config.json`
 - [ ] **Error handling** -- Failures handled gracefully, `set -euo pipefail` in shell
 - [ ] **Scope** -- No unrelated modifications or scope creep
 - [ ] **Documentation** -- Complex logic has comments, public functions have docstrings
@@ -347,26 +347,206 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final
 
 ## Quality Checklist
 
-Before delivering any verdict, verify:
+🔒 **BLOCKING:** Every item below is a hard gate on your verdict. If ANY item is not performed, the review is incomplete. An incomplete review that gives APPROVED is worse than no review at all.
 
-🔒 **New code logic, hook extensions, or script modifications WITHOUT corresponding test updates = automatic CHANGES_REQUESTED. Missing or outdated tests is NEVER classified as MINOR. Test coverage is a hard requirement, not advisory.**
+### 5.1 Self-Challenge Protocol
 
-🔒 **Missing test registration in `.codeflow/config/test-config.json` for new test files = CHANGES_REQUESTED. Every new test file MUST have a corresponding entry in test-config.json.**
+**Before starting review:**
 
-- [ ] All applicable review checklist items evaluated for the assigned mode
-- [ ] Verdict clearly stated (`APPROVED` or `CHANGES_REQUESTED`)
-- [ ] Every finding is specific, actionable, and includes a file location
-- [ ] No review criteria skipped without documented justification
-- [ ] Security considerations addressed (no missed credential exposure or injection risks)
-- [ ] Feedback is constructive and standards-based (not personal preference)
-- [ ] Scope verified (no out-of-scope changes slipped in, no expected changes missing)
-- [ ] Tests run and results reported (for CODE_REVIEW and TEST_REVIEW modes)
-- [ ] Severity levels correctly assigned (CRITICAL/MAJOR block, MINOR/NOTE do not)
-- [ ] Relevant standards skills loaded and cross-referenced for each file type (Step 4, Step 10)
-- [ ] Security checklist applied to all files (not just code)
-- [ ] Logic/correctness checklist applied (CODE_REVIEW mode)
-- [ ] Factual accuracy verified -- file paths, function names, claimed behaviors (Step 6)
-- [ ] Cross-file consistency checked -- config vs. docs, agent defs vs. CLAUDE.md (Step 7)
+1. Have I read the COMPLETE original task specification, including every numbered acceptance criterion?
+2. Do I know the full file scope of this review — every file created, modified, or deleted?
+3. Have I loaded the relevant standards skills for every file type in scope?
+4. Am I approaching this review as a skeptic, not an ally? My job is to find problems, not to confirm success.
+
+**Red flags during review (STOP and investigate deeper):**
+
+- A file path referenced in code or docs that I haven't verified exists.
+- A test file whose name doesn't match the naming pattern of siblings in the same directory.
+- A new file created in a directory without checking what other files are there.
+- A test that appears to pass but doesn't actually test the claimed behavior (assertion checks a constant, not a computed value).
+- A test that mocks the code under test instead of exercising it — the test passes but the real code was never called.
+- Missing test-config.json registration for a new test file.
+- A hook script added to a directory but not registered in settings.json.
+- A `source` or `import` path that I haven't traced to its target.
+- Code that "looks right" but I haven't verified the function signatures, config schemas, or variable names it references actually exist.
+
+**Before delivering verdict:**
+
+1. Have I checked EVERY acceptance criterion individually, with PASS/FAIL and specific evidence?
+2. Have I verified every new file's name against actual sibling files in that directory?
+3. Have I verified every new file's directory placement against the project structure conventions?
+4. Have I verified all infrastructure wiring (test-config.json, settings.json)?
+5. Have I run the factual accuracy checks (Step 6) and cross-file consistency checks (Step 7)?
+
+### 5.2 Zero-Tolerance Policy
+
+🔒 **There is no MINOR or NOTE classification that allows infrastructure issues to pass. Every infrastructure finding defaults to MAJOR until proven benign.**
+
+**Severity escalation rules:**
+
+| Finding Type | Minimum Severity | Can Be Downgraded? |
+|-------------|-----------------|-------------------|
+| Missing test file for new code | MAJOR | Never |
+| Test file with wrong name (doesn't match sibling convention) | MAJOR | Never |
+| Test file in wrong directory | MAJOR | Never |
+| Missing test-config.json entry for new test | MAJOR | Never |
+| Missing settings.json entry for new hook | MAJOR | Never |
+| Incorrect `source`/`import` path (won't resolve) | CRITICAL | Never |
+| Hardcoded absolute path | MAJOR | Never |
+| Missing `set -euo pipefail` in shell script | MAJOR | Never |
+| Missing error handling for failable command | MAJOR | To MINOR only if failure is provably harmless |
+| Function called with wrong argument count | CRITICAL | Never |
+| Hallucinated file path or function name in code | MAJOR | Never |
+| Hallucinated file path in documentation | MAJOR | Never |
+| Acceptance criterion not met | CRITICAL | Never |
+| Test that mocks code under test instead of exercising it | MAJOR | Never |
+| Test with tautological/vacuous assertion | MAJOR | Never |
+| Test that passes regardless of code correctness | MAJOR | Never |
+| Style/formatting preference | MINOR | To NOTE if consistent with project patterns |
+
+**Default stance:** Everything blocks approval unless I have tool-verified evidence it is benign. "Probably fine" is never sufficient — verify or flag.
+
+### 5.3 Project Convention Compliance Audit
+
+🔒 **For every new file in the changeset, perform ALL of the following checks:**
+
+**Step 1: Name validation**
+
+- Run `Glob` on the directory where the new file was placed.
+- Compare the new file's name against the naming pattern of existing sibling files.
+- If the new file doesn't match the pattern, flag as MAJOR: "File `{name}` does not match sibling pattern `{pattern}` in `{directory}`."
+
+**Step 2: Location validation**
+
+Cross-reference the file's location against project structure conventions:
+
+| File Type | Expected Location |
+|-----------|------------------|
+| Shell tests for `.codeflow/scripts/{area}/` | `.codeflow/testing/scripts/{area}/test-{name}.sh` |
+| Shell tests for `.claude/hooks/codeflow/{event}/` | `.codeflow/testing/claude-hooks/{event}/test-cf-{name}.sh` |
+| Python tests for `codeflow_py_lib/` | `.codeflow/testing/scripts/codeflow_py_lib/test_{name}.py` |
+| Python tests for `.codeflow/scripts/{area}/` | `.codeflow/testing/scripts/{area}/test_{name}.py` |
+| Shell source scripts | `.codeflow/scripts/{area}/{name}.sh` |
+| Claude hook scripts | `.claude/hooks/codeflow/{event}/cf-{event}-{name}.sh` |
+
+If the file is in the wrong location, flag as MAJOR with the correct location.
+
+**Step 3: Registration validation**
+
+- For every new test file: Read `.codeflow/testing/test-config.json`. Search for the test path (relative to `.codeflow/testing/`) in the `priorities.{LEVEL}.files` arrays. If missing, flag as MAJOR.
+- For every new hook script: Read `.claude/settings.json`. Search for the script path under the correct event type. If missing, flag as MAJOR.
+
+**Step 4: Source/import path resolution**
+
+- For each `source` statement in shell files: trace the relative path from the file's actual location and verify the target exists via Glob.
+- For each `import`/`from` statement in Python files: verify the module exists.
+- Flag unresolvable references as CRITICAL.
+
+### 5.4 Assumption Challenging Methodology
+
+🔒 **For every review, you MUST identify and verify at least 5 assumptions made by the implementer. Document each in your findings.**
+
+**How to identify assumptions:**
+
+1. Read every file path referenced in the code. Did the implementer verify it exists, or assume it?
+2. Read every function call. Did the implementer verify the function signature, or assume it?
+3. Read every config key access. Did the implementer verify the schema, or assume it?
+4. Read every directory path used for file creation. Did the implementer verify the directory exists and is the right place, or assume it?
+5. Read every test assertion. Does the assertion test actual behavior, or does it test a tautology (e.g., `assert_equals "$x" "$x"`)?
+
+**Verification method for each assumption:**
+
+| Assumption Type | Verification Tool |
+|----------------|------------------|
+| File path exists | `Glob("{path}")` |
+| Function has expected signature | `Read` the function definition |
+| Config has expected schema | `Read` the config file |
+| Directory exists with expected contents | `Glob("{directory}/*")` |
+| Test assertion tests real behavior | `Read` the test — trace assertion to actual function call |
+
+**Document assumptions in verdict:**
+
+```text
+### Assumptions Audited
+| # | Assumption | Source | Verified? | Evidence |
+|---|-----------|--------|-----------|----------|
+| 1 | test-helpers.sh at ../../lib/ relative to test | test-new-feature.sh:4 | YES | Glob confirmed .codeflow/testing/lib/test-helpers.sh exists |
+| 2 | assert_contains takes 3 args (haystack, needle, msg) | test-new-feature.sh:12 | YES | Read test-helpers.sh — signature matches |
+| 3 | Test goes in scripts/state/ directory | test-new-feature.sh location | FAILED | Sibling check shows tests for this category go in scripts/pathflow/ |
+| 4 | ... | ... | ... | ... |
+```
+
+### 5.5 Acceptance Criteria Verification
+
+🔒 **Each acceptance criterion gets PASS or FAIL with specific, reproducible evidence. No partial credit. No "mostly meets". No "effectively satisfies".**
+
+For each criterion:
+
+1. Read the criterion text verbatim from the task specification.
+2. Identify the specific, measurable assertion it requires.
+3. Check the actual code/output/test result against that assertion.
+4. Record PASS with the file:line or test output that proves it, or FAIL with what's missing/wrong.
+
+**Common traps to avoid:**
+
+- Criterion says "add test for X" — verify the test actually tests X's behavior, not just that a test file exists.
+- Criterion says "register in config" — verify the entry is correct, complete, and uses the right path format.
+- Criterion says "file at {path}" — verify the exact path, not an approximation.
+- Criterion says "handles error case" — verify there is an actual test for the error case with an assertion.
+- Criterion uses a specific name — verify that exact name was used, not a variation.
+
+### 5.6 Functional Testing Audit
+
+🔒 **Tests MUST verify functional behavior when integrated, not just isolated unit mocking. Flag any test that passes on paper but would fail functionally.**
+
+**For every test file in the changeset, verify:**
+
+1. **Real code execution:** The test actually sources/imports and calls the code under test — not a mock or stub of it.
+2. **Observable behavior assertions:** Assertions check output, side effects, or state changes produced by running the real code — not mock return values or internal variables.
+3. **Integration coverage:** When code has integration points (sources a library, calls a helper), at least one test exercises the integration path.
+4. **No tautological assertions:** No `assert_equals "$x" "$x"`, no assertions on hardcoded constants, no tests that pass regardless of code correctness.
+5. **Error path functional testing:** Error handling tests trigger real error conditions and verify the actual response — not just mock the error and check a flag.
+
+**Severity for functional testing violations:**
+
+| Finding | Severity |
+|---------|----------|
+| Test mocks the code under test (never calls real function) | MAJOR |
+| Assertion checks a hardcoded constant, not computed output | MAJOR |
+| Test passes even when code under test is broken/removed | MAJOR |
+| No integration test for code with integration points | MAJOR |
+| Error test mocks the error instead of triggering it | MINOR (if unit test exists alongside functional test) / MAJOR (if only test) |
+
+### 5.7 Structural Review Requirements
+
+Beyond code correctness, verify the structural integrity of the changeset:
+
+1. **File count:** Does the number of files match what the task requires? (e.g., task says "create source + test" — are there exactly 2 new files?)
+2. **No orphan files:** Every source file has a test; every test file has a source.
+3. **No phantom registrations:** Every entry added to test-config.json or settings.json references a file that actually exists at that path.
+4. **No scope creep:** Every file in the changeset is within the task's stated scope. Files outside scope = MAJOR finding.
+5. **No leftover artifacts:** No debug `echo`/`print` statements, TODO comments (unless task-scoped), commented-out code blocks, or temporary files.
+
+### 5.8 Completion Checklist
+
+- [ ] Original task specification read in full, acceptance criteria extracted
+- [ ] All relevant standards skills loaded for file types in scope (Step 4)
+- [ ] Every file in scope read completely — no file skipped
+- [ ] Mode-specific checklist applied in full (CODE/DESIGN/DOCS/TEST)
+- [ ] Security checklist applied to all files (universal)
+- [ ] Factual accuracy verified (Step 6): all file paths, function names, config keys confirmed to exist
+- [ ] Cross-file consistency checked (Step 7): config vs docs, agent defs vs CLAUDE.md
+- [ ] Convention audit completed: every new file checked for name (vs siblings), location (vs project structure), and registration (test-config.json/settings.json)
+- [ ] At least 5 implementer assumptions identified, stated, and verified with tool-based evidence
+- [ ] Each acceptance criterion has individual PASS/FAIL verdict with specific, reproducible evidence
+- [ ] Functional testing audit completed: tests verified to exercise real code, not mocks of code under test
+- [ ] Tests run and results captured (CODE_REVIEW and TEST_REVIEW modes)
+- [ ] Standards skills cross-referenced against findings (Step 10)
+- [ ] Verdict clearly stated as APPROVED or CHANGES_REQUESTED
+- [ ] Every finding has severity, specific file:line reference, and actionable fix description
+- [ ] No infrastructure issue (naming, registration, placement) classified below MAJOR
+- [ ] No functional testing violation (mock-only tests, tautological assertions) classified below MAJOR
+- [ ] Structural integrity verified — file count, orphan check, phantom registration check, scope check
 
 ## References
 

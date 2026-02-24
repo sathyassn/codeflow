@@ -729,6 +729,156 @@ fi
 cleanup_test_artifacts
 
 echo ""
+echo "--- V4: PathFlow Team Cleanup (v2.2.0) ---"
+
+# Test 69: Hook has pathflow-team.json reading logic
+if grep -q "pathflow-team.json" "$HOOK"; then
+    pass "Has pathflow-team.json reading logic"
+else
+    fail "Should read pathflow-team.json for team cleanup"
+fi
+
+# Test 70: Hook cleans team config directory
+if grep -q '\.claude/teams' "$HOOK"; then
+    pass "Has team config directory cleanup"
+else
+    fail "Should clean ~/.claude/teams/{team_name}"
+fi
+
+# Test 71: Hook cleans task list directory
+if grep -q '\.claude/tasks' "$HOOK"; then
+    pass "Has task list directory cleanup"
+else
+    fail "Should clean ~/.claude/tasks/{team_name}"
+fi
+
+# Test 72: Cleans up team config when pathflow-team.json has team_name
+setup_test_dirs
+_team_name="test-team-cleanup-72"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "{\"team_name\":\"$_team_name\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+mkdir -p "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+echo '{"members":[]}' > "${HOME}/.claude/teams/${_team_name}/config.json"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "${HOME}/.claude/teams/${_team_name}" ]]; then
+    pass "Cleans team config directory from pathflow-team.json"
+else
+    fail "Should clean team config directory"
+    rm -rf "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+fi
+
+# Test 73: Cleans up task list when pathflow-team.json has team_name
+setup_test_dirs
+_team_name="test-team-cleanup-73"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "{\"team_name\":\"$_team_name\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+mkdir -p "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+echo '{"tasks":[]}' > "${HOME}/.claude/tasks/${_team_name}/tasks.json"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+if [[ ! -d "${HOME}/.claude/tasks/${_team_name}" ]]; then
+    pass "Cleans task list directory from pathflow-team.json"
+else
+    fail "Should clean task list directory"
+    rm -rf "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+fi
+
+# Test 74: Cleans both team config and task list together
+setup_test_dirs
+_team_name="test-team-cleanup-74"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "{\"team_name\":\"$_team_name\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+mkdir -p "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+echo '{"members":[]}' > "${HOME}/.claude/teams/${_team_name}/config.json"
+mkdir -p "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+echo '{"tasks":[]}' > "${HOME}/.claude/tasks/${_team_name}/tasks.json"
+CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+_both_cleaned="true"
+[[ -d "${HOME}/.claude/teams/${_team_name}" ]] && _both_cleaned="false"
+[[ -d "${HOME}/.claude/tasks/${_team_name}" ]] && _both_cleaned="false"
+if [[ "$_both_cleaned" == "true" ]]; then
+    pass "Cleans both team config and task list together"
+else
+    fail "Should clean both team config and task list"
+    rm -rf "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+    rm -rf "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+fi
+
+# Test 75: Graceful when pathflow-team.json doesn't exist
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+# No pathflow directory or pathflow-team.json
+result=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Graceful when pathflow-team.json missing (exits 0)"
+else
+    fail "Should exit 0 when pathflow-team.json missing"
+fi
+
+# Test 76: Graceful when pathflow-team.json has no team_name field
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo '{"session_id":"test-session","lead_pid":12345}' > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+result=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Graceful when pathflow-team.json has no team_name (exits 0)"
+else
+    fail "Should exit 0 when team_name missing from JSON"
+fi
+
+# Test 77: Reports team config removal in output
+setup_test_dirs
+_team_name="test-team-cleanup-77"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "{\"team_name\":\"$_team_name\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+mkdir -p "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+echo '{"members":[]}' > "${HOME}/.claude/teams/${_team_name}/config.json"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"Removed team config"* ]]; then
+    pass "Reports team config removal in output"
+else
+    fail "Should report team config removal" "$output"
+fi
+rm -rf "${HOME}/.claude/teams/${_team_name}" 2>/dev/null || true
+
+# Test 78: No team cleanup messages when pathflow-team.json missing
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session" 2>/dev/null || true
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" != *"Removed team config"* ]] && [[ "$output" != *"Removed task list"* ]]; then
+    pass "No team cleanup messages when pathflow-team.json missing"
+else
+    fail "Should not report team cleanup when no pathflow-team.json"
+fi
+
+# Test 79: Handles empty team_name in pathflow-team.json
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo '{"team_name":"","lead_pid":12345}' > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+result=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+if [[ "$result" == *"EXIT:0"* ]]; then
+    pass "Handles empty team_name gracefully (exits 0)"
+else
+    fail "Should exit 0 with empty team_name"
+fi
+
+# Test 80: Reports task list removal in output
+setup_test_dirs
+_team_name="test-team-cleanup-80"
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "{\"team_name\":\"$_team_name\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+mkdir -p "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+echo '{"tasks":[]}' > "${HOME}/.claude/tasks/${_team_name}/tasks.json"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ "$output" == *"Removed task list"* ]]; then
+    pass "Reports task list removal in output"
+else
+    fail "Should report task list removal" "$output"
+fi
+rm -rf "${HOME}/.claude/tasks/${_team_name}" 2>/dev/null || true
+
+cleanup_test_artifacts
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

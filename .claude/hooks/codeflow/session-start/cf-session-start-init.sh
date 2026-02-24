@@ -4,10 +4,11 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   1.4.0
+# Version:   1.5.0
 #
 # This hook consolidates session setup into a single script:
 #   Section 1: Read stdin and generate session ID
+#   Section 1b: PID-based stale session cleanup (auto-cleanup crashed leads)
 #   Section 2: Setup (REPO_ROOT, libraries)
 #   Section 3: Directory creation
 #   Section 4: Stale session detection (warning-only)
@@ -27,7 +28,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="1.4.0"
+readonly VERSION="1.5.0"
 
 # =============================================================================
 # SECTION 1: STDIN READING AND SESSION ID
@@ -51,6 +52,102 @@ if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
 fi
 
 # =============================================================================
+# SECTION 1b: PID-BASED STALE SESSION CLEANUP
+# =============================================================================
+# Check if the existing env file references a dead session (crashed lead).
+# If the lead's PID is dead, auto-cleanup all stale artifacts.
+# If the lead's PID is alive, this is a teammate starting — skip cleanup.
+# Must run BEFORE env file sourcing to prevent stale session ID contamination.
+
+_env_file_pre="${REPO_ROOT:=$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}/.state/runtime/codeflow-env.sh"
+_TEAMMATE_MODE="false"
+
+if [[ -f "$_env_file_pre" ]]; then
+    # Temporarily source env file to get the old session ID
+    _old_sid=""
+    # shellcheck source=/dev/null
+    source "$_env_file_pre" 2>/dev/null || true
+    _old_sid="${CODEFLOW_SESSION_ID:-}"
+
+    if [[ -n "$_old_sid" ]]; then
+        _old_team_file="${REPO_ROOT}/.state/session/${_old_sid}/pathflow/pathflow-team.json"
+
+        if [[ -f "$_old_team_file" ]] && command -v jq &>/dev/null; then
+            # pathflow-team.json exists — read lead PID
+            _old_lead_pid=$(jq -r '.lead_pid // 0' "$_old_team_file" 2>/dev/null) || _old_lead_pid=0
+            _old_team_name=$(jq -r '.team_name // empty' "$_old_team_file" 2>/dev/null) || _old_team_name=""
+
+            if [[ "$_old_lead_pid" -gt 0 ]] && kill -0 "$_old_lead_pid" 2>/dev/null; then
+                # Lead PID is ALIVE — this is a teammate starting
+                echo "SessionStart: Lead PID $_old_lead_pid alive — teammate mode" >&2
+                echo ""
+                echo "TEAMMATE MODE: You are a teammate joining session ${_old_sid}."
+                echo "Lead PID ${_old_lead_pid} is alive. Minimal init applied."
+                echo "Checkpoint and pathflow flag creation skipped (lead handles those)."
+                _TEAMMATE_MODE="true"
+            else
+                # Lead PID is DEAD — stale session, full cleanup
+                echo "SessionStart: Lead PID $_old_lead_pid dead — cleaning stale session $_old_sid" >&2
+
+                # a. Remove stale team config
+                if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/teams/${_old_team_name}" ]]; then
+                    rm -rf "${HOME}/.claude/teams/${_old_team_name}" 2>/dev/null || true
+                    echo "SessionStart: Removed stale team config: ${_old_team_name}" >&2
+                fi
+
+                # b. Remove stale task list
+                if [[ -n "$_old_team_name" ]] && [[ -d "${HOME}/.claude/tasks/${_old_team_name}" ]]; then
+                    rm -rf "${HOME}/.claude/tasks/${_old_team_name}" 2>/dev/null || true
+                    echo "SessionStart: Removed stale task list: ${_old_team_name}" >&2
+                fi
+
+                # c. Remove stale session directory (includes pathflow flag, checkpoint, team file)
+                if [[ -d "${REPO_ROOT}/.state/session/${_old_sid}" ]]; then
+                    rm -rf "${REPO_ROOT}/.state/session/${_old_sid}" 2>/dev/null || true
+                    echo "SessionStart: Removed stale session dir: ${_old_sid}" >&2
+                fi
+
+                # d. Remove stale sentinels
+                if [[ -d "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" ]]; then
+                    rm -rf "${REPO_ROOT}/.state/sentinels/pathflow/${_old_sid}" 2>/dev/null || true
+                    echo "SessionStart: Removed stale sentinels: ${_old_sid}" >&2
+                fi
+
+                # e. Remove stale env file
+                rm -f "$_env_file_pre" 2>/dev/null || true
+
+                # f. Remove stale active task
+                rm -f "${REPO_ROOT}/.state/runtime/active-task.json" 2>/dev/null || true
+
+                # g. Remove stale session ID reference
+                rm -f "${REPO_ROOT}/.state/runtime/current-session-id" 2>/dev/null || true
+
+                # h. Unset session ID so a fresh one is generated
+                unset CODEFLOW_SESSION_ID
+                echo "SessionStart: Stale session cleanup complete" >&2
+                echo ""
+                echo "STALE SESSION CLEANED: Previous session ${_old_sid} was crashed/orphaned."
+                echo "All stale artifacts removed (team config, task list, session state, sentinels)."
+                echo "This is a fresh session start. Do NOT attempt /cf-resume."
+            fi
+        else
+            # No pathflow-team.json — check for pathflow-active flag
+            _old_flag="${REPO_ROOT}/.state/session/${_old_sid}/pathflow/is-pathflow-active"
+            if [[ ! -f "$_old_flag" ]]; then
+                # No flag either — orphan env file, clean it
+                rm -f "$_env_file_pre" 2>/dev/null || true
+                unset CODEFLOW_SESSION_ID
+                echo "SessionStart: Cleaned orphan env file (no pathflow-team.json, no flag)" >&2
+            fi
+            # If flag exists but no team file: lead's own session pre-TeamCreate, proceed normally
+        fi
+    fi
+fi
+# After this section, CODEFLOW_SESSION_ID is either:
+# - Preserved (teammate mode or lead's own pre-TeamCreate session)
+# - Unset (stale cleanup happened, fresh ID will be generated in Section 2)
+
+# =============================================================================
 # SECTION 2: SETUP
 # =============================================================================
 
@@ -72,7 +169,8 @@ if [[ -f "$_env_file" ]]; then
 fi
 
 # Generate session ID if not already set (via env file or environment)
-if [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
+# In teammate mode, CODEFLOW_SESSION_ID is already set from env file sourcing above.
+if [[ "$_TEAMMATE_MODE" != "true" ]] && [[ -z "${CODEFLOW_SESSION_ID:-}" ]]; then
     # Lead starting new session — generate CodeFlow-native ID
     TIMESTAMP=$(date +%s%N | cut -c1-13)
     RANDOM_PART=$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -259,8 +357,8 @@ if [[ -f "$_PFS_LIB" ]]; then
     if [[ -f "$SESSION_STATE_DIR/pathflow/is-pathflow-active" ]]; then
         echo "SessionStart: PathFlow flag already exists, preserving" >&2
         _IS_RECOVERY="true"
-    else
-        # Create flag with initial metadata
+    elif [[ "$_TEAMMATE_MODE" != "true" ]]; then
+        # Create flag with initial metadata (lead only, not teammates)
         # team_name is empty at init (updated when TeamCreate is called)
         # tracking_level starts as "pending" (updated at PF3-CLASSIFY)
         create_pathflow_flag "$CODEFLOW_SESSION_ID" ""
@@ -300,11 +398,14 @@ fi
 # file exists (because checkpoint_init_phase is called lazily on first register).
 # By calling checkpoint_init_all_phases here, all phases exist before any
 # TaskCreate hook fires.
+# Skip for teammates — only the lead initializes checkpoints.
 
-if type checkpoint_init_all_phases &>/dev/null; then
-    checkpoint_init_all_phases 2>/dev/null || {
-        echo "SessionStart: checkpoint_init_all_phases failed (non-fatal)" >&2
-    }
+if [[ "$_TEAMMATE_MODE" != "true" ]]; then
+    if type checkpoint_init_all_phases &>/dev/null; then
+        checkpoint_init_all_phases 2>/dev/null || {
+            echo "SessionStart: checkpoint_init_all_phases failed (non-fatal)" >&2
+        }
+    fi
 fi
 
 # =============================================================================

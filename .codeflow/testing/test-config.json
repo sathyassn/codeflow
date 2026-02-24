@@ -323,6 +323,10 @@
     "enabled": true,
     "validation_mode": "fail",
     "pre_commit_mode": "all",
+    "thresholds": {
+      "fail_under": 85,
+      "notes": "Minimum percentage of scripts that must have test coverage (structural check)"
+    },
     "python": {
       "enabled": true,
       "enforcement": "line_coverage",
@@ -413,7 +417,61 @@
           "reason": "Memory scripts have dedicated test group (currently skipped)"
         }
       ]
-    }
+    },
+    "orphan_exceptions": [
+      {
+        "pattern": "lib/*",
+        "reason": "Test framework library files (not tests for source scripts)"
+      },
+      {
+        "pattern": "consistency/*",
+        "reason": "Cross-file consistency checks (no 1:1 source mapping)"
+      },
+      {
+        "pattern": "scripts/commands/*",
+        "reason": "Command integration tests (test slash command infrastructure)"
+      },
+      {
+        "pattern": "scripts/pathflow/test-cf-pathflow-enforcement.sh",
+        "reason": "Integration test covering pathflow enforcement across multiple scripts"
+      },
+      {
+        "pattern": "scripts/pathflow/test-cf-pathflow-scripts.sh",
+        "reason": "Consolidated test covering multiple pathflow JSONL scripts"
+      },
+      {
+        "pattern": "scripts/security/test-main-branch-protection.sh",
+        "reason": "Integration test for branch protection across multiple modules"
+      },
+      {
+        "pattern": "scripts/security/lib/test-security-lib-functions.sh",
+        "reason": "Tests security-lib.sh functions (different name convention)"
+      },
+      {
+        "pattern": "scripts/security/lib/test-pathflow-mode.sh",
+        "reason": "Integration test for pathflow mode detection in security context"
+      },
+      {
+        "pattern": "scripts/db/test-schema-restructure.sh",
+        "reason": "Integration test for schema migration (tests migration scripts, not a single source)"
+      },
+      {
+        "pattern": "scripts/db/test_schema.py",
+        "reason": "Tests schema.sql definitions (source is SQL, not Python/Shell)"
+      },
+      {
+        "pattern": "scripts/coordination/test_crdt_io.py",
+        "reason": "Integration test for CRDT I/O operations (tests crdt.py library, not a single script)"
+      },
+      {
+        "pattern": "scripts/coordination/test_crdt_doc.py",
+        "reason": "Integration test for CRDT document operations (tests crdt.py library, not a single script)"
+      },
+      {
+        "pattern": "scripts/coordination/test_pattern_matching.py",
+        "reason": "Integration test for pattern matching across coordination modules"
+      }
+    ]
   },
   "pytest": {
     "config_file": "pytest.ini",
