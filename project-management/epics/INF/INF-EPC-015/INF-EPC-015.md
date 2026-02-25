@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-23T00:00:00Z"
-updated_at: "2026-02-24T21:50:00Z"
+updated_at: "2026-02-25T03:10:43Z"
 ---
 
 # INF-EPC-015: CodeFlow Go CLI - Phase 6 V4 Implementation
@@ -77,7 +77,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 | INF-TSK-015-001 | Go project initialization and build infrastructure | complete | high |
 | INF-TSK-015-002 | Core CLI entry point and simple commands | complete | high |
 | INF-TSK-015-003 | Fix DB schema drift (migration 005) | complete | high |
-| INF-TSK-015-004 | Database core package | todo | high |
+| INF-TSK-015-004 | Database core package | complete | high |
 | INF-TSK-015-005 | Database CLI commands (8 subcommands) | todo | high |
 | INF-TSK-015-006 | Session package and CLI commands | todo | high |
 | INF-TSK-015-007 | Welcome screen package (V3 base) | todo | normal |
