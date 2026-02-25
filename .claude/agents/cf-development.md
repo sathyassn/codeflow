@@ -164,7 +164,41 @@ SendMessage to cf-git-operations with conventional commit message:
 - Single scope: `"Please commit: {type}: {description}"`
 - Multiple files: `"Please commit files [{list}]: {type}: {description}"`
 
-### Step 7: Report Completion
+### Step 7: Update Task Markdown
+
+Before reporting STAGE-COMPLETE, read the task markdown path from your assignment and update it:
+
+1. **Update `### Criteria Status` table** — in the DEV column, mark each criterion as `DONE` (fully implemented), `PARTIAL` (partially addressed — add a note), or `N/A` (not applicable to this stage). Do not leave `--` in the DEV column.
+
+2. **Fill in `### DEV Report` section** — replace all placeholder text with actual data:
+
+```markdown
+### DEV Report
+
+> Populated by cf-development before STAGE-COMPLETE: WS-DEV
+
+**Implementation Summary:**
+{What was built/changed, key design decisions}
+
+**Files Changed:**
+
+| File | Action | Lines | Description |
+|------|--------|-------|-------------|
+| {path} | created/modified | {n} | {what changed} |
+
+**Test Results:**
+
+- Tests run: {command}
+- Result: {passed}/{total} passed, {failed} failed
+- Coverage: {n}% (threshold: {n}%)
+
+**Deviations from Approach:**
+{Any deviations from the planned approach and why, or "None"}
+```
+
+Include the task markdown file in the commit request to cf-git-operations (as part of the same commit or a follow-up commit before STAGE-COMPLETE).
+
+### Step 8: Report Completion
 
 SendMessage to team lead with summary. Include `STAGE-COMPLETE: WS-DEV` in your final message. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 

@@ -293,6 +293,8 @@ SESSION END
 - Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 2 retries)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
 - **Parallel batch assessment (MANDATORY for PF4-TSK-03):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
+- **Legacy task migration:** If the task markdown lacks `### Criteria Status` or `## Stage Reports` sections (legacy task created before stage reporting was added), have cf-knowledge-layer add them before spawning the primary stage teammate using the pipeline-appropriate template from `project-management/templates/task-template.md`.
+- **Stage reporting protocol:** Stage teammates update the task markdown as part of their stage completion protocol — they write their reports directly into the task document before signaling STAGE-COMPLETE. The task doc commit is included as part of the stage commit by cf-git-operations.
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
@@ -301,6 +303,7 @@ SESSION END
 - Verify all pipeline stages completed with pass verdict
 - Check acceptance criteria met against task definition
 - Query cf-knowledge-layer for stage completion records
+- Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 
 4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; TaskUpdate to completed when verification passes.
 
@@ -470,12 +473,12 @@ Task(
 
 | Stage | Teammate | Spawn Prompt |
 |-------|----------|-------------|
-| WS-DEV | cf-development | `"Read .claude/agents/cf-development.md for your instructions, then implement: {feature description}. Acceptance: {criteria}. Files: {scope}. When done, request commit via cf-git-operations."` |
-| WS-PLAN | cf-planning | `"Read .claude/agents/cf-planning.md for your instructions, then create a design document for: {topic}. Deliverable: {ADR/brief/epic}. Write to: {path}."` |
-| WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Update: {files}. Follow project doc standards."` |
-| WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}."` |
-| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Acceptance criteria: {criteria}. Run: bash .codeflow/testing/run-all-tests.sh --mode standard"` |
-| WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Target: {coverage}. Framework: {shell/pytest}."` |
+| WS-DEV | cf-development | `"Read .claude/agents/cf-development.md for your instructions, then implement: {feature description}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance: {criteria}. Files: {scope}. Before STAGE-COMPLETE, update Criteria Status and DEV Report in the task doc. When done, request commit via cf-git-operations."` |
+| WS-PLAN | cf-planning | `"Read .claude/agents/cf-planning.md for your instructions, then create a design document for: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Deliverable: {ADR/brief/epic}. Write to: {path}. Before STAGE-COMPLETE, update Criteria Status and PLAN Report in the task doc."` |
+| WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Update: {files}. Follow project doc standards. Before STAGE-COMPLETE, update Criteria Status and DOCS Report in the task doc."` |
+| WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}. Before STAGE-COMPLETE, update Criteria Status REV column and REV Report in the task doc."` |
+| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: bash .codeflow/testing/run-all-tests.sh --mode standard. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc."` |
+| WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Target: {coverage}. Framework: {shell/pytest}. Before STAGE-COMPLETE, update Criteria Status and TEST Report in the task doc."` |
 
 ### Task Specification Quality
 
@@ -522,6 +525,45 @@ Fix the session start hook to validate things better.
 3. Passes relevant context (branch, files changed, review scope) in the spawn prompt
 
 Note: The completed stage teammate remains active (not shut down). It is available for rework if later stages request changes. All PF4 on-demand teammates are shut down at PF7-END alongside persistent teammates (→ See Deferred Shutdown below).
+
+### Stage Reporting
+
+Each stage teammate writes its work record directly into the task markdown file before signaling STAGE-COMPLETE. This makes the task document the permanent, auditable record of the work.
+
+**Pipeline-to-column mapping:**
+
+| Pipeline | Primary Col | REV Col | QA Col |
+|----------|------------|---------|--------|
+| FEAT / FIX / RFCT / CICD / HTFX / CHOR | DEV | REV | QA |
+| DOCS | DOCS | REV | -- |
+| TEST | TEST | REV | QA |
+| PLAN / SPKE | PLAN | REV | -- |
+
+**What each stage writes:**
+
+| Stage | Criteria Status Update | Report Section |
+|-------|----------------------|----------------|
+| WS-DEV | Mark DEV column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DEV Report` — implementation summary, files changed, test results, deviations |
+| WS-PLAN | Mark PLAN column: `DONE` / `PARTIAL` / `N/A` per criterion | `### PLAN Report` — design decisions, deliverables, deviations |
+| WS-DOCS | Mark DOCS column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DOCS Report` — documentation summary, files updated, deviations |
+| WS-TEST | Mark TEST column: `DONE` / `PARTIAL` / `N/A` per criterion | `### TEST Report` — test implementation summary, coverage, deviations |
+| WS-REV | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment, findings log, rework history |
+| WS-QA | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, regressions |
+
+**Status legend:**
+
+| Status | Meaning | Used By |
+|--------|---------|---------|
+| `--` | Not yet evaluated | Default for all |
+| `DONE` | Implemented / addressed | Primary stage (DEV/DOCS/PLAN/TEST) |
+| `PASS` | Independently verified as meeting criterion | REV, QA |
+| `FAIL` | Verified as NOT meeting criterion | REV, QA |
+| `PARTIAL` | Partially met -- see notes | Any stage |
+| `N/A` | Not applicable to this stage | Any stage |
+
+**Commit inclusion:** The task doc updates are committed as part of the same stage commit. cf-git-operations includes the task doc file alongside the primary work artifacts when processing the commit request from the stage teammate.
+
+**Verification:** At PF5-VERIFY, the lead reads the task markdown criteria matrix. All criteria should show DONE/PASS across all pipeline stages with no `--` remaining in evaluated columns.
 
 ### Communication Patterns
 

@@ -168,10 +168,54 @@ Select and apply the correct document type template:
 | ADR | Architecture decision with alternatives | Status, Context, Decision, Consequences |
 | Brief | Analysis, investigation, spike findings | Summary, Scope, Requirements, Timeline |
 | Epic | Large work item with multiple tasks | Summary, Tasks, Acceptance Criteria |
-| Task | Individual work item | Description, Approach, Files, Dependencies, Verification |
+| Task | Individual work item | Description, Approach, Files, Dependencies, Verification, Stage Reports |
 | Runbook | Operational procedure | Prerequisites, Steps, Rollback |
 
 Templates via cf-markdown-standards skill (`.claude/skills/cf-markdown-standards/SKILL.md`).
+
+**For Task documents — pipeline-specific stage reporting sections:**
+
+When creating a new task file, include the `### Criteria Status` subsection under `## Acceptance Criteria` and the `## Stage Reports` section. Generate the correct pipeline-specific column mapping based on the task `work_type`:
+
+| Pipeline | work_type values | Criteria Status columns | Stage Report subsections |
+|----------|-----------------|------------------------|--------------------------|
+| FEAT/FIX/RFCT/CICD/HTFX/CHOR | FEAT, FIX, RFCT, CICD, HTFX, CHOR | # \| Criterion \| DEV \| REV \| QA \| Notes | ### DEV Report, ### REV Report, ### QA Report |
+| DOCS | DOCS | # \| Criterion \| DOCS \| REV \| Notes | ### DOCS Report, ### REV Report |
+| TEST | TEST | # \| Criterion \| TEST \| REV \| QA \| Notes | ### TEST Report, ### REV Report, ### QA Report |
+| PLAN/SPKE | PLAN, SPKE | # \| Criterion \| PLAN \| REV \| Notes | ### PLAN Report, ### REV Report |
+
+**`### Criteria Status` template (pre-populate with acceptance criteria from the task, all statuses set to `--`):**
+
+```markdown
+### Criteria Status
+
+> Legend: -- Not evaluated | DONE Implemented | PASS Verified passing | FAIL Verified failing | PARTIAL Partially met | N/A Not applicable
+> Pipeline: WS-{PRIMARY} -> WS-REV[ -> WS-QA]
+
+| # | Criterion | {PRIMARY} | REV | [QA |] Notes |
+|---|-----------|-----------|-----|[-----|]-------|
+| 1 | {criterion text from acceptance list} | -- | -- | [-- |] |
+```
+
+**`## Stage Reports` template (create empty subsections with placeholder; each agent fills in their section before STAGE-COMPLETE):**
+
+```markdown
+## Stage Reports
+
+### {PRIMARY} Report
+
+> Populated by cf-{role} before STAGE-COMPLETE: WS-{PRIMARY}
+
+### REV Report
+
+> Populated by cf-review before STAGE-COMPLETE: WS-REV
+
+### QA Report
+
+> Populated by cf-quality-assurance before STAGE-COMPLETE: WS-QA
+```
+
+Omit the QA Report subsection for DOCS and PLAN/SPKE pipelines (no WS-QA stage).
 
 Before requesting commit, validate:
 
@@ -194,7 +238,35 @@ Before requesting commit, run validation on all created epic and task markdown f
 
 SendMessage to cf-git-operations: `"Please commit: plan: {description}"`
 
-### Step 8: Report Completion
+### Step 8: Update Task Markdown
+
+Before reporting STAGE-COMPLETE, read the task markdown path from your assignment and update it:
+
+1. **Update `### Criteria Status` table** — in the PLAN column, mark each criterion as `DONE` (fully addressed in the plan), `PARTIAL` (partially addressed — add a note), or `N/A` (not applicable to this stage). Do not leave `--` in the PLAN column.
+
+2. **Fill in `### PLAN Report` section** — replace all placeholder text with actual data:
+
+```markdown
+### PLAN Report
+
+> Populated by cf-planning before STAGE-COMPLETE: WS-PLAN
+
+**Design Decisions:**
+{Key decisions made, alternatives considered, rationale}
+
+**Deliverables:**
+
+| File | Type | Description |
+|------|------|-------------|
+| {path} | ADR/brief/epic/task | {what was produced} |
+
+**Deviations from Approach:**
+{Any deviations from the planned approach and why, or "None"}
+```
+
+Include the task markdown file in a follow-up commit to cf-git-operations before reporting STAGE-COMPLETE.
+
+### Step 9: Report Completion
 
 SendMessage to team lead with summary. Include `STAGE-COMPLETE: WS-PLAN` in your final message. Before reporting, re-read acceptance criteria from the original task and verify each is met.
 
@@ -436,6 +508,7 @@ Add a script to clean up stale sessions. Add tests.
 - [ ] **Ongoing epic check done:** For PLN/DOC areas, verified whether an ongoing epic exists
 - [ ] **Effort estimates justified:** Confidence level stated with reasoning
 - [ ] **Validation scripts passed:** `validate-task.sh` / `validate-epic.sh` ran successfully on all created markdown
+- [ ] **Stage reporting sections present (task docs):** Every new task document includes `### Criteria Status` with correct pipeline columns and `## Stage Reports` with correct subsections for the pipeline
 - [ ] **Committed via cf-git-operations** with `plan: {description}` format
 - [ ] **Scope compliance:** Changes within scope of the assigned task
 

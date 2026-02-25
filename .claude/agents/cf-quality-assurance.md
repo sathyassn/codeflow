@@ -166,6 +166,51 @@ bash .codeflow/testing/lib/test-coverage.sh --audit
 1. {Specific issue with file path}
 ```
 
+#### Step 7: Update Task Markdown
+
+Before reporting STAGE-COMPLETE, read the task markdown path from your assignment and update it:
+
+1. **Update `### Criteria Status` table** — in the QA column, mark each criterion as `PASS` (verified passing) or `FAIL` (verified failing). Do not leave `--` in the QA column after QA completes.
+
+2. **Fill in `### QA Report` section** — replace all placeholder text with actual data:
+
+```markdown
+### QA Report
+
+> Populated by cf-quality-assurance before STAGE-COMPLETE: WS-QA
+
+**Verdict:** {PASS | FAIL}
+**Runner Mode:** {essential | standard | full}
+
+#### Test Execution
+
+| Suite | Passed | Failed | Skipped | Duration |
+|-------|--------|--------|---------|----------|
+| {suite name} | {n} | {n} | {n} | {time} |
+
+**Coverage:** {n}% (threshold: {n}%)
+
+#### Acceptance Verification
+
+| # | Criterion | Method | Result | Evidence |
+|---|-----------|--------|--------|----------|
+| 1 | {criterion} | {test/inspection/both} | {PASS/FAIL} | {test name or file:line} |
+
+#### Regressions
+
+{None detected | List with details}
+
+#### QA Retry History (if applicable)
+
+| Retry | Trigger | Failures | Fix Applied | Re-test Result |
+|-------|---------|----------|-------------|----------------|
+| 1 | Initial QA | {n} failures | N/A | {PASS/FAIL} |
+```
+
+During QA retries, update the QA Retry History table with each retry row before reporting the re-test result.
+
+Include the task markdown file in a commit to cf-git-operations (as part of the same commit or a follow-up commit before STAGE-COMPLETE).
+
 ### WS-TEST: Test Implementation
 
 #### Step 1: Receive Requirements
@@ -221,6 +266,38 @@ Update `.codeflow/testing/test-config.json` with new test entries.
 #### Step 6: Request Commit
 
 SendMessage to cf-git-operations: `"Please commit: test: {description}"`
+
+#### Step 7: Update Task Markdown
+
+Before reporting STAGE-COMPLETE, read the task markdown path from your assignment and update it:
+
+1. **Update `### Criteria Status` table** — in the TEST column, mark each criterion as `DONE` (fully addressed by new tests), `PARTIAL` (partially addressed — add a note), or `N/A` (not applicable to this stage). Do not leave `--` in the TEST column.
+
+2. **Fill in `### TEST Report` section** — replace all placeholder text with actual data:
+
+```markdown
+### TEST Report
+
+> Populated by cf-quality-assurance before STAGE-COMPLETE: WS-TEST
+
+**Test Implementation Summary:**
+{What tests were written, coverage approach, key behaviors tested}
+
+**Files Changed:**
+
+| File | Action | Tests Added | Description |
+|------|--------|-------------|-------------|
+| {path} | created/modified | {n} | {what tests cover} |
+
+**Coverage:**
+- Tests written: {n} test cases across {n} test files
+- Coverage areas: {list of behaviors/components covered}
+
+**Deviations from Approach:**
+{Any deviations from the planned approach and why, or "None"}
+```
+
+Include the task markdown file in a commit to cf-git-operations (as part of the same commit or a follow-up commit before STAGE-COMPLETE).
 
 ## Error Handling
 

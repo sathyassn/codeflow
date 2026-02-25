@@ -267,7 +267,95 @@ For each file reviewed, verify findings against the standards skill loaded in St
 - Flag any standards violations not already captured as MAJOR findings
 - If no relevant skill was loaded for a file type encountered during review, note the gap in findings
 
-### Step 11: Deliver Verdict
+### Step 11: Write Review Report to Task Markdown
+
+Before delivering your verdict, read the task markdown path from your assignment (provided in the spawn prompt as `Task doc: {path}`), then update it:
+
+**a. Update `### Criteria Status` table** — mark each acceptance criterion with PASS or FAIL in the REV column.
+
+**b. Fill in `### REV Report` section** using this template:
+
+```markdown
+### REV Report
+
+> Populated by cf-review before STAGE-COMPLETE: WS-REV
+
+**Review Mode:** {CODE_REVIEW | DESIGN_REVIEW | DOCUMENTATION_REVIEW | TEST_REVIEW}
+**Verdict:** {APPROVED | CHANGES_REQUESTED}
+**Reviewer iterations:** {n} (initial + {n-1} rework cycles)
+
+#### Dimensional Assessment
+
+<!-- Mark N/A for dimensions not applicable to the review mode. See applicability matrix.
+     Base dimensions (all modes): Functional Correctness, Security, Standards Compliance, PII Check, Scope Compliance
+     CODE adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, API Design
+     DESIGN adds: API Design, Problem Statement, Architecture Soundness, Trade-off Analysis
+     DOCS adds: Accuracy, Completeness, Examples Tested
+     TEST adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, Test Independence, Edge Cases -->
+
+| Dimension | Verdict | Key Evidence |
+|-----------|---------|-------------|
+| Functional Correctness | {PASS/FAIL} | {brief evidence or file:line} |
+| Security | {PASS/FAIL} | {brief evidence} |
+| Concurrency Safety | {PASS/FAIL/N/A} | {brief evidence} |
+| Error Handling | {PASS/FAIL/N/A} | {brief evidence} |
+| Resource Management | {PASS/FAIL/N/A} | {brief evidence} |
+| Test Quality | {PASS/FAIL/N/A} | {brief evidence} |
+| Standards Compliance | {PASS/FAIL} | {brief evidence} |
+| API Design | {PASS/FAIL/N/A} | {brief evidence} |
+| PII Check | {PASS/FAIL} | {brief evidence} |
+| Scope Compliance | {PASS/FAIL} | {brief evidence} |
+| Problem Statement | {PASS/FAIL/N/A} | {DESIGN only} |
+| Architecture Soundness | {PASS/FAIL/N/A} | {DESIGN only} |
+| Trade-off Analysis | {PASS/FAIL/N/A} | {DESIGN only} |
+| Accuracy | {PASS/FAIL/N/A} | {DOCS only} |
+| Completeness | {PASS/FAIL/N/A} | {DOCS only} |
+| Examples Tested | {PASS/FAIL/N/A} | {DOCS only} |
+| Test Independence | {PASS/FAIL/N/A} | {TEST only} |
+| Edge Cases | {PASS/FAIL/N/A} | {TEST only} |
+
+#### Findings Log
+
+| # | Severity | Finding | File:Line | Iteration | Resolution |
+|---|----------|---------|-----------|-----------|------------|
+| 1 | {CRITICAL/MAJOR/MINOR/NOTE} | {description} | {file:line} | {1/2/3} | {RESOLVED/OPEN} |
+
+#### Rework History
+
+| Iteration | Trigger | Changes Requested | Changes Made | Re-review Verdict |
+|-----------|---------|-------------------|-------------|-------------------|
+| 1 | Initial review | {n} findings | N/A | {APPROVED/CHANGES_REQUESTED} |
+| 2 | Rework | {description} | {description} | {APPROVED/CHANGES_REQUESTED} |
+```
+
+**Dimensional applicability matrix** — include ALL applicable dimensions for the assigned review mode. Use N/A for non-applicable dimensions (do NOT skip them; explicit N/A proves the dimension was considered):
+
+| Dimension | CODE | DESIGN | DOCS | TEST |
+|-----------|------|--------|------|------|
+| Functional Correctness | Yes | Yes | Yes | Yes |
+| Security (injection, traversal, credentials, PII) | Yes | Yes | Yes | Yes |
+| Concurrency Safety | Yes | N/A | N/A | Yes |
+| Error Handling | Yes | N/A | N/A | Yes |
+| Resource Management | Yes | N/A | N/A | Yes |
+| Test Quality | Yes | N/A | N/A | Yes |
+| Standards Compliance | Yes | Yes | Yes | Yes |
+| API Design | Yes | Yes | N/A | N/A |
+| PII Check | Yes | Yes | Yes | Yes |
+| Scope Compliance | Yes | Yes | Yes | Yes |
+| Problem Statement | N/A | Yes | N/A | N/A |
+| Architecture Soundness | N/A | Yes | N/A | N/A |
+| Trade-off Analysis | N/A | Yes | N/A | N/A |
+| Accuracy | N/A | N/A | Yes | N/A |
+| Completeness | N/A | N/A | Yes | N/A |
+| Examples Tested | N/A | N/A | Yes | N/A |
+| Test Independence | N/A | N/A | N/A | Yes |
+| Edge Cases | N/A | N/A | N/A | Yes |
+
+🔒 **Security, PII Check, and Scope Compliance are MANDATORY for ALL review modes — never use N/A for these three dimensions.**
+
+**During rework iterations:** Update the Findings Log (mark resolved findings as RESOLVED in the Resolution column) and add new rows to the Rework History table for each iteration.
+
+### Step 12: Deliver Verdict
 
 Format findings using the verdict template and send to the team lead. If `CHANGES_REQUESTED`, also send detailed findings directly to the originating teammate.
 
@@ -348,7 +436,7 @@ Do NOT skip Steps 6-7 (factual accuracy, consistency) on re-review.
 
 ### Stage Completion Protocol
 
-When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final message to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
+Before including `STAGE-COMPLETE: WS-REV` in your final message, complete Step 11 (write REV Report to the task markdown). Only after the task markdown is updated should you send `STAGE-COMPLETE: WS-REV` to the team lead. Sentinels are created automatically by PostToolUse hooks when stage markers complete. Do not create sentinels manually.
 
 ## Quality Checklist
 
@@ -547,6 +635,7 @@ Beyond code correctness, verify the structural integrity of the changeset:
 - [ ] Functional testing audit completed: tests verified to exercise real code, not mocks of code under test
 - [ ] Tests run and results captured (CODE_REVIEW and TEST_REVIEW modes)
 - [ ] Standards skills cross-referenced against findings (Step 10)
+- [ ] **Task markdown updated (Step 11):** Criteria Status REV column filled, REV Report section written with all applicable dimensions
 - [ ] Verdict clearly stated as APPROVED or CHANGES_REQUESTED
 - [ ] APPROVED only when zero findings exist — any finding of any severity = CHANGES_REQUESTED
 - [ ] Every finding has severity, specific file:line reference, and actionable fix description

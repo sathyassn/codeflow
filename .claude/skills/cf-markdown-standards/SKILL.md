@@ -28,6 +28,8 @@ description: Markdown documentation standards, templates, lint rules, and valida
 ```text
 Working with .md file:
 ├── New document? → 🔧 classify-document → 🔧 apply-template
+│     └── New task document? → 🔧 task-section-ordering (pipeline-specific columns)
+├── Editing existing task? → 🔧 task-section-ordering → 🔧 validate-structure
 ├── Editing existing? → 🔧 validate-structure
 └── Before commit? → 🔧 validate-structure → 🔧 fix-violations (if needed)
 ```
@@ -38,8 +40,9 @@ Working with .md file:
 |---|-----------|-------------|---------|
 | 1 | classify-document | ENF-L3 Advisory | Determine document type from path and purpose |
 | 2 | apply-template | ENF-L3 Advisory | Apply correct frontmatter and structure for type |
-| 3 | validate-structure | ENF-L3 Advisory | Check lint rules and style conventions |
-| 4 | fix-violations | ENF-L3 Advisory | Correct anti-patterns with proper approaches |
+| 3 | task-section-ordering | ENF-L3 Advisory | Apply correct section order and pipeline-specific columns for task documents |
+| 4 | validate-structure | ENF-L3 Advisory | Check lint rules and style conventions |
+| 5 | fix-violations | ENF-L3 Advisory | Correct anti-patterns with proper approaches |
 
 ## Operation Details
 
@@ -57,7 +60,7 @@ Document Types:
   | ADR | *-adr.md | Status, Context, Decision, Consequences | id, title, status, date, deciders |
   | Brief | *-brief.md | Summary, Scope, Requirements, Timeline | id, title, status, author, created |
   | Epic | project-management/epics/**/*-epic.md | Summary, Tasks, Acceptance Criteria | id, title, status, area_type, work_type |
-  | Task | project-management/epics/**/tasks/*.md | Description, Status, Blockers | id, epic_id, title, status, work_type |
+  | Task | project-management/epics/**/tasks/*.md | Description, Approach, Files, Acceptance Criteria, Criteria Status, Dependencies, Verification, Stage Reports, Notes | id, epic_id, title, status, work_type |
   | Runbook | *-runbook.md | Prerequisites, Steps, Rollback | id, title, status, author, last_tested |
   | Guide | *-guide.md | Overview, Sections, References | title, status |
   | Skill | .claude/skills/*/SKILL.md | Type, Purpose, Operations or Sections | name, description |
@@ -127,6 +130,81 @@ Procedure:
   4. Follow the template structure for required sections and ordering
 
 Output: Document with correct frontmatter and section structure per type
+```
+
+### 🔧 task-section-ordering
+
+```text
+When: Creating or validating a task document
+Purpose: Apply the correct section order and pipeline-specific Criteria Status columns
+Enforcement: ENF-L3 Advisory
+
+Required section order for Task documents:
+
+  ## Description
+  ## Approach
+  ## Files
+    ### To Modify
+    ### To Create
+  ## Acceptance Criteria
+    ### Criteria Status          <-- tracking matrix (pipeline-aware columns)
+  ## Dependencies
+    ### Blocked By
+    ### Blocks
+  ## Verification
+    ### Automated
+    ### Manual
+  ## Stage Reports               <-- populated by stage teammates at STAGE-COMPLETE
+    ### DEV Report               <-- populated by cf-development (or DOCS/PLAN/TEST Report for other pipelines)
+    ### REV Report               <-- populated by cf-review
+    ### QA Report                <-- populated by cf-quality-assurance (omit for DOCS and PLAN pipelines)
+  ## Notes
+
+Pipeline-specific Stage Reports subsections:
+
+  | Pipeline | Primary Report | REV Report | QA Report |
+  |----------|---------------|------------|-----------|
+  | FEAT/FIX/RFCT/CICD/HTFX/CHOR | DEV Report | REV Report | QA Report |
+  | DOCS | DOCS Report | REV Report | (omit) |
+  | TEST | TEST Report | REV Report | QA Report |
+  | PLAN/SPKE | PLAN Report | REV Report | (omit) |
+
+Criteria Status matrix — columns by pipeline:
+
+  | Pipeline | Primary Col | REV Col | QA Col |
+  |----------|------------|---------|--------|
+  | FEAT/FIX/RFCT/CICD/HTFX/CHOR | DEV | REV | QA |
+  | DOCS | DOCS | REV | (omit) |
+  | TEST | TEST | REV | QA |
+  | PLAN/SPKE | PLAN | REV | (omit) |
+
+Status legend:
+
+  | Status | Meaning | Used By |
+  |--------|---------|---------|
+  | -- | Not yet evaluated | Default for all criteria |
+  | DONE | Implemented/addressed by developer | DEV, DOCS, PLAN, TEST stage |
+  | PASS | Independently verified as meeting criterion | REV, QA stage |
+  | FAIL | Verified as NOT meeting criterion | REV, QA stage |
+  | PARTIAL | Partially met -- see notes | Any stage |
+  | N/A | Not applicable to this stage | Any stage |
+
+Procedure:
+  1. Identify the task work_type from frontmatter
+  2. Look up the pipeline in the Criteria Status matrix table above
+  3. Generate the Criteria Status table with matching columns
+  4. Initialize all criterion rows with -- in each column
+  5. Determine which Stage Reports subsections to include from the pipeline table
+  6. Omit QA Report for DOCS and PLAN/SPKE pipelines
+
+Validation rules:
+  - Criteria Status subsection must exist under Acceptance Criteria
+  - Criteria Status column headers must match the task pipeline type
+  - Stage Reports section must exist and contain the correct subsections for the pipeline
+  - Primary report subsection name must match the pipeline (DEV/DOCS/TEST/PLAN Report)
+  - All stage report subsections contain placeholder content or populated data (never empty)
+
+Output: Correct section ordering, pipeline-matched Criteria Status columns, and Stage Reports subsections
 ```
 
 ### 🔧 validate-structure

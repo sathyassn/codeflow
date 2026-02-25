@@ -149,7 +149,35 @@ Re-lint to verify fixes and confirm no regressions.
 3. For each external link: flag for manual verification.
 4. Fix broken links before proceeding.
 
-### Step 7: Request Commit
+### Step 7: Update Task Markdown
+
+Before requesting commit, read the task markdown path from your assignment and update it:
+
+1. **Update `### Criteria Status` table** — in the DOCS column, mark each criterion as `DONE` (fully addressed in documentation), `PARTIAL` (partially addressed — add a note), or `N/A` (not applicable to this stage). Do not leave `--` in the DOCS column.
+
+2. **Fill in `### DOCS Report` section** — replace all placeholder text with actual data:
+
+```markdown
+### DOCS Report
+
+> Populated by cf-documentation before STAGE-COMPLETE: WS-DOCS
+
+**Documentation Summary:**
+{What was written or updated, key content decisions}
+
+**Files Changed:**
+
+| File | Action | Description |
+|------|--------|-------------|
+| {path} | created/modified | {what changed} |
+
+**Deviations from Approach:**
+{Any deviations from the planned approach and why, or "None"}
+```
+
+Include the task markdown file in the commit request to cf-git-operations (as part of the same commit or a follow-up commit before STAGE-COMPLETE).
+
+### Step 8: Request Commit
 
 SendMessage to cf-git-operations: `"Please commit: docs: {description}"` or for multiple files: `"Please commit files [{list}]: docs: {description}"`
 
