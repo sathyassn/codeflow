@@ -103,7 +103,7 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 | `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations | `memory_store`, `memory_query`, `memory_milestone`, `decision`, `finding`, `progress` |
 | `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle | `session_start`, `session_end` |
 | `config.jsonl` | `LEDGER_CONFIG` | Configuration changes | `config_change` |
-| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated` |
+| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated`, `pr_created`, `pr_outcome` |
 
 **NEVER write an event to a file that doesn't list that event type. memory_events go to memory-events.jsonl, NOT work-graph.jsonl.**
 
@@ -238,11 +238,11 @@ Event types:
 
 **When:** Team lead requests after PR merge disposition (PF6-TSK-07) and before sync-local (PF6-TSK-09).
 
-**Purpose:** Record PR lifecycle event to work-graph.jsonl while still on feature branch.
+**Purpose:** Record PR lifecycle event to pathflow-events.jsonl while still on feature branch.
 
 1. Receive PR outcome from team lead (merged/created, pr_number, merge_sha if applicable)
-2. Write event to `.state/ledger/work-graph.jsonl`:
-   - pr_merged: `{"event_type":"pr_merged","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
+2. Write event to `.state/logs/pathflow-events.jsonl`:
+   - pr_merged: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
 3. Sync to SQLite (update tasks table pr_status field)
 4. Report: `"KL-UPDATE: PR outcome recorded — {event_type} for task {task_id}"`
 
@@ -316,6 +316,16 @@ Work type classification:
 
 🔒 **Prerequisite:** classify-work must have been run to provide area_type, work_type, domain. The pf-3 sentinel must exist (branch created).
 
+🔒 **Idempotency guard:** Before creating any epic or task, query the DB to check if a record already exists for this branch:
+
+```sql
+SELECT t.id, t.format_id, e.id AS epic_id, e.format_id AS epic_format_id
+FROM tasks t JOIN epics e ON t.epic_id = e.id
+WHERE t.branch = '{branch}'
+```
+
+If a matching task is found, return the existing `task_id` and `epic_id` without creating duplicates. Log a warning: `"KNOWLEDGE: ensure-work-registered - task already exists for branch {branch}, skipping creation (task_id={id})"`. This prevents duplicate registrations when cf-knowledge-layer is respawned mid-session with stale instructions.
+
 Dual-ID system:
 
 - `id` (ULID PK): `epic-{ulid}` / `task-{ulid}` -- for DB FK references, internal lookups
@@ -375,13 +385,13 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 
 #### Epic CRUD
 
-**Create:** Validate required fields (area_type, work_type, domain, title). Generate both IDs. INSERT into epics table. Append to JSONL ledger. Create markdown file at `project-management/epics/{AREA}/{format_id}/{format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/INF-EPC-005.md`). Use templates at `project-management/templates/epic-template.md`. Return both IDs.
+**Create:** Before inserting, check for an existing epic with the same area_type, work_type, and branch to prevent duplicates: `SELECT id, format_id FROM epics WHERE area_type = '{area}' AND status != 'complete' AND branch = '{branch}'`. If found, return existing IDs with warning `"Epic already exists for branch {branch}, returning existing {format_id}"`. If not found: validate required fields (area_type, work_type, domain, title), generate both IDs, INSERT into epics table, append to JSONL ledger, create markdown file at `project-management/epics/{AREA}/{format_id}/{format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/INF-EPC-005.md`), use templates at `project-management/templates/epic-template.md`, return both IDs.
 
 **Update:** Validate epic exists. Validate status transitions (draft->planning->in_progress->complete/archived). Execute UPDATE. Append update event to JSONL. Re-render markdown. If status changed to 'complete', check child tasks.
 
 #### Task CRUD
 
-**Create:** Validate epic exists and is active. Generate both IDs. INSERT into tasks (epic_id as ULID FK). INSERT task_dependencies if specified. Append to JSONL. Create markdown file at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/tasks/INF-TSK-005-001.md`). Use templates at `project-management/templates/task-template.md`. Return both IDs.
+**Create:** Before inserting, check for an existing task with the same epic_id and branch to prevent duplicates: `SELECT id, format_id FROM tasks WHERE epic_id = '{epic_id}' AND branch = '{branch}'`. If found, return existing IDs with warning `"Task already exists for branch {branch} under epic {epic_format_id}, returning existing {task_format_id}"`. If not found: validate epic exists and is active, generate both IDs, INSERT into tasks (epic_id as ULID FK), INSERT task_dependencies if specified, append to JSONL, create markdown file at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/tasks/INF-TSK-005-001.md`), use templates at `project-management/templates/task-template.md`, return both IDs.
 
 Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, auto_merge, target_branch.
 
