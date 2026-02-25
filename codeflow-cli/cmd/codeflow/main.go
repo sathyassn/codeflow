@@ -36,6 +36,7 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newUninstallCmd())
+	rootCmd.AddCommand(newDBCmd())
 
 	return rootCmd
 }

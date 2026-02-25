@@ -243,6 +243,13 @@ func (d *DB) GetUserVersion(ctx context.Context) (int, error) {
 	return version, nil
 }
 
+// NewDB opens a new database connection at the given path. Unlike Get, this
+// does not use the singleton and each caller gets an independent connection.
+// The caller is responsible for closing the returned DB.
+func NewDB(path string) (*DB, error) {
+	return newDB(path)
+}
+
 // Close closes the underlying database connection.
 func (d *DB) Close() error {
 	if err := d.db.Close(); err != nil {
