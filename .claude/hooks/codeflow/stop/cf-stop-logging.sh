@@ -9,7 +9,6 @@
 # This hook:
 #   - Reads session_id and transcript_path from stdin JSON
 #   - Captures stop reason, PCV status, and task context
-#   - Records decision (allow/block) based on verify-work state
 #   - Writes stop event to session JSONL log
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -24,14 +23,14 @@ set -euo pipefail
 # =============================================================================
 
 TRANSCRIPT_PATH=""
-_STDIN_SESSION_ID=""
+_stdin_sid=""
 _STDIN_STOP_REASON=""
 _STDIN_STOP_HOOK_ACTIVE=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
         _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && _STDIN_SESSION_ID="$_sid"
+        [[ -n "$_sid" ]] && _stdin_sid="$_sid"
         _tp=$(echo "$_HOOK_STDIN" | jq -r '.transcript_path // empty' 2>/dev/null)
         [[ -n "$_tp" ]] && TRANSCRIPT_PATH="$_tp"
         _sr=$(echo "$_HOOK_STDIN" | jq -r '.stop_reason // empty' 2>/dev/null)
@@ -51,6 +50,16 @@ readonly VERSION="2.0.0"
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Priority: env file > stdin > fallback
+SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
@@ -88,13 +97,6 @@ fi
 # Exit early if logging is disabled
 if [[ "$STOP_LOGGING_ENABLED" == "false" ]]; then
     exit 0
-fi
-
-# Get session ID: prefer stdin, then environment, then fallback
-if [[ -n "$_STDIN_SESSION_ID" ]]; then
-    SESSION_ID="$_STDIN_SESSION_ID"
-else
-    SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 fi
 
 # Get stop reason: prefer stdin, then environment, then fallback
@@ -224,20 +226,6 @@ fi
 # =============================================================================
 
 DECISION="allow"
-
-# Check if verify-work retry state files exist (indicating a block)
-# The verify-work hook writes plain numbers (e.g. "1", "2") to retry files
-if ls "$REPO_ROOT/.state/session/${SESSION_ID:-unknown}"/verify-work-retry-* 1>/dev/null 2>&1; then
-    for retry_file in "$REPO_ROOT/.state/session/${SESSION_ID:-unknown}"/verify-work-retry-*; do
-        if [[ -f "$retry_file" ]]; then
-            _count=$(cat "$retry_file" 2>/dev/null | tr -d '[:space:]')
-            if [[ -n "$_count" ]] && [[ "$_count" -gt 0 ]] 2>/dev/null; then
-                DECISION="block"
-                break
-            fi
-        fi
-    done
-fi
 
 # =============================================================================
 # GIT STATE

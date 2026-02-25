@@ -31,12 +31,13 @@ if [[ ! -t 0 ]]; then
 fi
 
 # Extract fields from stdin JSON (primary) or env vars (testing fallback)
-SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+# Capture stdin UUID as labeled fallback only — do NOT assign to SESSION_ID yet
+_stdin_sid=""
 USER_PROMPT="${USER_PROMPT:-}"
 
 if [[ -n "$STDIN_INPUT" ]] && command -v jq &>/dev/null; then
     stdin_session=$(echo "$STDIN_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-    [[ -n "$stdin_session" ]] && SESSION_ID="$stdin_session"
+    [[ -n "$stdin_session" ]] && _stdin_sid="$stdin_session"
 
     stdin_prompt=$(echo "$STDIN_INPUT" | jq -r '.user_prompt // empty' 2>/dev/null || echo "")
     [[ -n "$stdin_prompt" ]] && USER_PROMPT="$stdin_prompt"
@@ -49,6 +50,16 @@ fi
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Priority: env file > stdin > fallback
+SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
 
 # =============================================================================
 # CONFIG LOADING

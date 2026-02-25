@@ -467,26 +467,29 @@ else
     fail "Should read transcript_path from stdin JSON"
 fi
 
-# Test 49: Stdin session_id takes priority over env var
+# Test 49: Env file session_id takes priority over stdin UUID
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 LOG_DATE=$(date +%Y-%m-%d)
 LOG_FILE="$REPO_ROOT/.state/logs/sessions/session-$LOG_DATE.jsonl"
 BEFORE_COUNT=0
 [[ -f "$LOG_FILE" ]] && BEFORE_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
-# Provide session_id via stdin JSON (should override env var)
-echo '{"session_id":"stdin-test-session","transcript_path":""}' | CODEFLOW_SESSION_ID="env-test-session" bash "$HOOK" 2>/dev/null
+# Create env file with canonical session ID
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-canonical-session'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Provide DIFFERENT session_id via stdin JSON (env file should win)
+echo '{"session_id":"stdin-uuid-session","transcript_path":""}' | bash "$HOOK" 2>/dev/null
 AFTER_COUNT=0
 [[ -f "$LOG_FILE" ]] && AFTER_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
 if [[ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]]; then
     LAST_ENTRY=$(tail -1 "$LOG_FILE")
-    if echo "$LAST_ENTRY" | grep -q "stdin-test-session"; then
-        pass "Stdin session_id takes priority over env var"
+    if echo "$LAST_ENTRY" | grep -q "env-canonical-session"; then
+        pass "Env file session_id takes priority over stdin UUID"
     else
-        fail "Stdin session_id should take priority over CODEFLOW_SESSION_ID env var"
+        fail "Env file session_id should take priority (got: $(echo "$LAST_ENTRY" | jq -r '.session_id' 2>/dev/null))"
     fi
 else
-    fail "Should create log entry with stdin session_id"
+    fail "Should create log entry with env file session_id"
 fi
 
 echo ""

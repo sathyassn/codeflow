@@ -67,14 +67,19 @@ fi
 # SETUP
 # ============================================================================
 
-TEST_SESSION_ID="ses-test-enf-$$"
+# Use valid session ID format: ses-{13-digit-timestamp}{12-hex-chars}
+# The init hook validates this format and discards env files with invalid IDs
+TEST_SESSION_ID="ses-0000000000001$(printf '%012x' $$)"
 export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
 
 setup_env() {
     mkdir -p "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow"
     mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
+    mkdir -p "$REPO_ROOT/.state/runtime"
     rm -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" 2>/dev/null || true
     rm -f "$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"/pathflow-* 2>/dev/null || true
+    # Remove stale env file so init hook generates a fresh session ID
+    rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
 }
 
 # Create pathflow-active flag for tests that need it
@@ -110,11 +115,23 @@ test_init_hook_creates_flag() {
         test_skip "init_creates_flag" "Hook not yet installed"
         return
     fi
-    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
-    if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" ]]; then
+    # Hook generates its own session ID (env file removed in setup_env)
+    # Pass REPO_ROOT so hook uses isolated test env, not git rev-parse
+    # Unset CODEFLOW_SESSION_ID so init hook generates a fresh ID and writes env file
+    (unset CODEFLOW_SESSION_ID; echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | REPO_ROOT="$REPO_ROOT" bash "$INIT_HOOK" 2>/dev/null)
+    # Read the generated session ID from env file written by the hook
+    local generated_sid=""
+    if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+        generated_sid=$(bash -c "source '$REPO_ROOT/.state/runtime/codeflow-env.sh' && echo \"\$CODEFLOW_SESSION_ID\"")
+    fi
+    if [[ -n "$generated_sid" ]] && [[ -f "$REPO_ROOT/.state/session/$generated_sid/pathflow/is-pathflow-active" ]]; then
         test_pass "Flag file created by init hook"
+        # Update TEST_SESSION_ID so subsequent tests use the correct ID
+        TEST_SESSION_ID="$generated_sid"
+        export CODEFLOW_SESSION_ID="$TEST_SESSION_ID"
+        SDIR="$REPO_ROOT/.state/sentinels/pathflow/$TEST_SESSION_ID"
     else
-        test_fail "Flag file not created by init hook"
+        test_fail "Flag file not created by init hook (generated_sid=$generated_sid)"
     fi
 }
 
@@ -129,8 +146,14 @@ test_init_hook_flag_json() {
         test_skip "init_flag_json" "jq not installed"
         return
     fi
-    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
-    local flag_file="$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active"
+    # Unset CODEFLOW_SESSION_ID so init hook generates a fresh ID and writes env file
+    (unset CODEFLOW_SESSION_ID; echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | REPO_ROOT="$REPO_ROOT" bash "$INIT_HOOK" 2>/dev/null)
+    # Read the generated session ID from env file written by the hook
+    local generated_sid=""
+    if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+        generated_sid=$(bash -c "source '$REPO_ROOT/.state/runtime/codeflow-env.sh' && echo \"\$CODEFLOW_SESSION_ID\"")
+    fi
+    local flag_file="$REPO_ROOT/.state/session/${generated_sid:-$TEST_SESSION_ID}/pathflow/is-pathflow-active"
     if jq -e '.' "$flag_file" >/dev/null 2>&1; then
         test_pass "Flag contains valid JSON"
     else
@@ -160,7 +183,7 @@ test_init_hook_graceful_no_lib() {
         return
     fi
     local exit_code=0
-    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null || exit_code=$?
+    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | REPO_ROOT="$REPO_ROOT" bash "$INIT_HOOK" 2>/dev/null || exit_code=$?
     if [[ $exit_code -eq 0 ]]; then
         test_pass "Exits 0 without library (graceful)"
     else
@@ -645,7 +668,7 @@ test_full_lifecycle() {
     fi
 
     # Step 1: Session start creates flag
-    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null
+    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | REPO_ROOT="$REPO_ROOT" bash "$INIT_HOOK" 2>/dev/null
     if [[ -f "$REPO_ROOT/.state/session/$TEST_SESSION_ID/pathflow/is-pathflow-active" ]]; then
         test_pass "Lifecycle 1: Flag created"
     else

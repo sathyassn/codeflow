@@ -73,13 +73,18 @@ if [[ -f "$_env_file_pre" ]]; then
     source "$_env_file_pre" 2>/dev/null || true
     _old_sid="${CODEFLOW_SESSION_ID:-}"
 
-    # Fix 2: Validate session ID format before using it
+    # Fix 2: Validate session ID format — but ONLY discard for fresh startup
+    # For clear/resume/compact, preserve the SID unconditionally (the user chose to continue)
     # Expected format: ses-{13-digit-timestamp}{12-hex-chars} (28 chars total)
     if [[ -n "$_old_sid" ]] && [[ ! "$_old_sid" =~ ^ses-[0-9]{13}[a-f0-9]{12}$ ]]; then
-        echo "SessionStart: Invalid session ID format '$_old_sid' — discarding env file" >&2
-        rm -f "$_env_file_pre" 2>/dev/null || true
-        unset CODEFLOW_SESSION_ID
-        _old_sid=""
+        if [[ "$_SESSION_SOURCE" == "startup" ]] || [[ "$_SESSION_SOURCE" == "unknown" ]]; then
+            echo "SessionStart: Invalid session ID format '$_old_sid' — discarding env file (source=$_SESSION_SOURCE)" >&2
+            rm -f "$_env_file_pre" 2>/dev/null || true
+            unset CODEFLOW_SESSION_ID
+            _old_sid=""
+        else
+            echo "SessionStart: WARNING: SID format unexpected '$_old_sid' but preserving for source=$_SESSION_SOURCE" >&2
+        fi
     fi
 
     if [[ -n "$_old_sid" ]]; then

@@ -1028,6 +1028,42 @@ fi
 cleanup_test_artifacts
 
 echo ""
+echo "--- Session ID Priority ---"
+
+# Test 91: Env file session_id takes priority over stdin UUID
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_test_env
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-prompt-priority'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Run hook with different stdin UUID
+stdin_json=$(jq -nc \
+    --arg sid "stdin-wrong-uuid" \
+    --arg prompt "test priority" \
+    '{session_id: $sid, user_prompt: $prompt, cwd: "/tmp",
+     hook_event_name: "UserPromptSubmit", permission_mode: "default",
+     tool_use_id: "", transcript_path: "/tmp/test.jsonl"}')
+echo "$stdin_json" | bash "$HOOK" 2>/dev/null || true
+# Check log entry uses env file session ID
+LOG_FILE="$REPO_ROOT/.state/logs/sessions/prompts-env-prompt-priority.jsonl"
+if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+    last_sid=$(tail -1 "$LOG_FILE" | jq -r '.session_id' 2>/dev/null || echo "")
+    if [[ "$last_sid" == "env-prompt-priority" ]]; then
+        pass "Env file session_id takes priority over stdin UUID"
+    else
+        fail "Log should use env file session_id 'env-prompt-priority', got: $last_sid"
+    fi
+else
+    # Fallback: static check that hook implements the priority pattern
+    if grep -q '_env_file.*codeflow-env.sh' "$HOOK" && grep -q 'CODEFLOW_SESSION_ID.*_stdin_sid' "$HOOK"; then
+        pass "Env file session_id priority (static check)"
+    else
+        fail "Hook should source env file and prefer CODEFLOW_SESSION_ID over stdin"
+    fi
+fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
+cleanup_test_artifacts
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

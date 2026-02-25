@@ -1100,6 +1100,28 @@ fi
 TESTS_RUN=$((TESTS_RUN + 1))
 cleanup_team_dirs "$_sg3_team"
 
+# Source Guard Test 3b: source=clear + dead PID → cleanup skipped (sentinels preserved)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_pid_test_env
+_sg3b_sid="ses-100000000000350000c500003"
+_sg3b_team="srcguard-team-03b"
+create_stale_session "$_sg3b_sid" "$_sg3b_team" 99999
+# Feed source=clear via stdin JSON — simulates /clear command
+echo '{"source":"clear"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+if [[ -d "$REPO_ROOT/.state/sentinels/pathflow/$_sg3b_sid" ]]; then
+    pass "Source guard: clear + dead PID preserves sentinels"
+else
+    fail "Source guard: clear + dead PID should preserve sentinels"
+fi
+# Also verify session dir preserved
+if [[ -d "$REPO_ROOT/.state/session/$_sg3b_sid" ]]; then
+    pass "Source guard: clear + dead PID preserves session dir"
+else
+    fail "Source guard: clear + dead PID should preserve session dir"
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+cleanup_team_dirs "$_sg3b_team"
+
 # Source Guard Test 4: source=unknown + dead PID → cleanup runs (fail-safe)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_pid_test_env

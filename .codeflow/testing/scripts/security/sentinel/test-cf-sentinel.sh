@@ -33,6 +33,11 @@ fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); TESTS_RUN=$((TESTS
 
 cleanup() {
     rm -rf "$TEST_SENTINEL_DIR"
+    # Clean up .state/session/ dirs created by PathFlow mode tests
+    if [[ -n "${CODEFLOW_SESSION_ID:-}" ]]; then
+        rm -rf "$REPO_ROOT/.state/session/${CODEFLOW_SESSION_ID}" 2>/dev/null || true
+        rm -rf "$REPO_ROOT/.state/sentinels/pathflow/${CODEFLOW_SESSION_ID}" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 

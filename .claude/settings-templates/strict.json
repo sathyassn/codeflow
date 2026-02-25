@@ -249,7 +249,12 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-init.sh",
             "timeout": 15
-          },
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
@@ -344,7 +349,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "TeamCreate|Task|SendMessage|Bash",
+        "matcher": "TeamCreate|TeamDelete|Task|SendMessage|Bash",
         "hooks": [
           {
             "type": "command",

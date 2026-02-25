@@ -4,10 +4,11 @@
 # Hook Type: SessionEnd
 # Usage:     Called by Claude Code at session end
 # Platform:  macOS/Linux
-# Version:   2.0.0
+# Version:   2.1.0
 #
 # This hook:
 #   - Reads session_id and transcript_path from stdin JSON
+#   - Sources codeflow-env.sh for canonical CODEFLOW_SESSION_ID
 #   - Checks logging.session_end.enabled config
 #   - Writes session end event with summary statistics to JSONL log
 #   - Calculates session duration from metadata
@@ -23,19 +24,19 @@ set -euo pipefail
 
 # Read hook data from stdin (Claude Code protocol)
 TRANSCRIPT_PATH=""
-_STDIN_SESSION_ID=""
+_stdin_sid=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
         _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && _STDIN_SESSION_ID="$_sid"
+        [[ -n "$_sid" ]] && _stdin_sid="$_sid"
         _tp=$(echo "$_HOOK_STDIN" | jq -r '.transcript_path // empty' 2>/dev/null)
         [[ -n "$_tp" ]] && TRANSCRIPT_PATH="$_tp"
     fi
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.0.0"
+readonly VERSION="2.1.0"
 
 # =============================================================================
 # SETUP
@@ -44,6 +45,16 @@ readonly VERSION="2.0.0"
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Session ID priority: env file > stdin JSON > fallback
+SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
@@ -91,13 +102,6 @@ fi
 # Exit early if logging is disabled
 if [[ "$SESSION_END_ENABLED" == "false" ]]; then
     exit 0
-fi
-
-# Get session ID: prefer stdin, then environment, then fallback
-if [[ -n "$_STDIN_SESSION_ID" ]]; then
-    SESSION_ID="$_STDIN_SESSION_ID"
-else
-    SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
 fi
 
 # =============================================================================
@@ -197,6 +201,7 @@ LOG_DATE=$(date +%Y-%m-%d)
 LOG_FILE="$LOG_DIR/session-$LOG_DATE.jsonl"
 
 # Calculate duration if session metadata exists
+# Meta file uses CODEFLOW_SESSION_ID (written by init hook as session-{ses-...}.meta)
 SESSION_META_FILE="$LOG_DIR/session-${SESSION_ID}.meta"
 DURATION_SECONDS=0
 

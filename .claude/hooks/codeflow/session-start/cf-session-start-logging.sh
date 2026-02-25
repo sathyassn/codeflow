@@ -4,10 +4,11 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   2.0.0
+# Version:   2.1.0
 #
 # This hook:
 #   - Reads session_id and permission_mode from stdin JSON (Claude Code protocol)
+#   - Sources codeflow-env.sh for canonical CODEFLOW_SESSION_ID
 #   - Checks logging.session_start.enabled config
 #   - Creates session log files
 #   - Writes session start event with metadata to JSONL log
@@ -22,20 +23,20 @@
 set -euo pipefail
 
 # Read hook data from stdin (Claude Code protocol)
-SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
+_stdin_sid=""
 PERMISSION_MODE=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
         _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && SESSION_ID="$_sid"
+        [[ -n "$_sid" ]] && _stdin_sid="$_sid"
         _pm=$(echo "$_HOOK_STDIN" | jq -r '.permission_mode // empty' 2>/dev/null)
         [[ -n "$_pm" ]] && PERMISSION_MODE="$_pm"
     fi
 fi
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="2.0.0"
+readonly VERSION="2.1.0"
 
 # =============================================================================
 # SETUP
@@ -44,6 +45,16 @@ readonly VERSION="2.0.0"
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Session ID priority: env file > stdin JSON > fallback
+SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 
@@ -92,14 +103,12 @@ if [[ "$LOGGING_ENABLED" == "false" ]]; then
     exit 0
 fi
 
-# SESSION_ID is already set from stdin reading above (prefers stdin > env > "unknown")
-
 # =============================================================================
 # WRITE SESSION ID STATE FILE
 # =============================================================================
 
-# Write session ID to current-session.txt for other hooks to read
-# Use session-scoped directory under .state
+# Write session ID to current-session.txt in the session state dir
+# The init hook already created .state/session/{ses-...}/ — reuse it, don't create orphan UUID dirs
 SESSION_STATE_DIR="$REPO_ROOT/.state/session/$SESSION_ID"
 mkdir -p "$SESSION_STATE_DIR" 2>/dev/null || true
 echo "$SESSION_ID" > "$SESSION_STATE_DIR/current-session.txt" 2>/dev/null || true

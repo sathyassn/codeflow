@@ -30,6 +30,7 @@ set -euo pipefail
 # =============================================================================
 
 # Read hook data from stdin (Claude Code protocol) or env vars (test fallback)
+_stdin_sid=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "$_HOOK_STDIN" ]] && command -v jq &>/dev/null; then
@@ -38,11 +39,9 @@ if [[ ! -t 0 ]]; then
         _ti=$(echo "$_HOOK_STDIN" | jq -c '.tool_input // empty' 2>/dev/null)
         [[ -n "$_ti" ]] && [[ "$_ti" != "null" ]] && TOOL_INPUT="$_ti"
         _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null)
-        [[ -n "$_sid" ]] && CODEFLOW_SESSION_ID="$_sid"
+        [[ -n "$_sid" ]] && _stdin_sid="$_sid"
     fi
 fi
-CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
-export CODEFLOW_SESSION_ID
 
 # =============================================================================
 # EARLY EXIT FOR NON-EDIT/WRITE TOOLS
@@ -60,6 +59,17 @@ fi
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Session ID priority: env file > stdin > fallback
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
+export CODEFLOW_SESSION_ID
 
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"

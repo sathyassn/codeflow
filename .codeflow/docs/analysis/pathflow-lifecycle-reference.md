@@ -484,17 +484,20 @@ PostToolUse fires only on success — atomically coupling flag removal to TeamDe
 
 ### Layer 3: SessionEnd (comprehensive cleanup)
 
-**Hook:** `cf-session-end-cleanup.sh` (v2.3.0)
+**Hook:** `cf-session-end-cleanup.sh` (v2.4.0)
 
-**Guard condition (v2.3.0):** When the pathflow-active flag exists, the hook performs a
+**Guard condition (v2.4.0):** When the pathflow-active flag exists, the hook performs a
 PID-based liveness check before deciding whether to skip or proceed:
 
 1. Read `pathflow-team.json` to get `lead_pid`
-2. If team file exists and `lead_pid` is alive (`kill -0` succeeds): skip cleanup
-   (this is a teammate shutdown — the lead session is still active)
-3. If team file exists and `lead_pid` is dead: proceed with cleanup
-   (orphaned session — lead crashed and SessionEnd fired late or via a stray process)
-4. If team file does not exist: proceed with cleanup
+2. If `$PPID == lead_pid`: proceed with cleanup (this IS the lead's own SessionEnd --
+   `$PPID` is the Claude Code process that invoked the hook, and it matches `lead_pid`,
+   so this is the lead ending, not a teammate)
+3. If team file exists and `lead_pid` is alive (`kill -0` succeeds): skip cleanup
+   (this is a teammate shutdown -- the lead session is still active)
+4. If team file exists and `lead_pid` is dead: proceed with cleanup
+   (orphaned session -- lead crashed and SessionEnd fired late or via a stray process)
+5. If team file does not exist: proceed with cleanup
    (pre-TeamCreate state or already cleaned)
 
 This replaces the v2.2.0 behavior of unconditionally skipping when the flag exists.
@@ -515,6 +518,19 @@ This replaces the v2.2.0 behavior of unconditionally skipping when the flag exis
 ---
 
 ## SessionStart lifecycle
+
+### Hook execution order
+
+SessionStart hooks are split into two matcher entries in `settings.json` to enforce
+sequential execution:
+
+1. **Matcher 1** (runs first): `cf-working-protocol` skill load + `cf-session-start-init.sh`
+2. **Matcher 2** (runs after matcher 1 completes): `cf-session-start-instructions.sh` + `cf-session-start-logging.sh`
+
+Hooks within the same matcher run in **parallel**. Hooks in different matchers run
+**sequentially**. This split ensures the init hook finishes writing `codeflow-env.sh`
+before the logging and instructions hooks attempt to read it, preventing orphan
+UUID-based session directories.
 
 ### Decision tree
 
@@ -627,14 +643,14 @@ Scan ~/.claude/teams/ for stale team configs (warning-only)
 ### Complete flow
 
 ```text
-SessionEnd hook fires (cf-session-end-cleanup.sh v2.3.0)
+SessionEnd hook fires (cf-session-end-cleanup.sh v2.4.0)
     |
     v
 Source env file to get SESSION_ID
 Source security-lib for is_pathflow_active()
     |
     v
-=== PATHFLOW GUARD (v2.3.0) ===
+=== PATHFLOW GUARD (v2.4.0) ===
 is_pathflow_active()?
     |
     +-- FALSE --> Lead session ending, flag absent
@@ -645,6 +661,9 @@ is_pathflow_active()?
                     |
                     +-- Team file MISSING --> Proceed with cleanup
                     |    (pre-TeamCreate state or already cleaned)
+                    |
+                    +-- PPID == lead_pid --> Proceed with cleanup
+                    |    (this IS the lead's own SessionEnd — self-reference)
                     |
                     +-- lead_pid ALIVE (kill -0 succeeds) --> Skip cleanup (exit 0)
                     |    (teammate shutdown — lead session still active)
@@ -711,6 +730,7 @@ Step-by-step hook interactions for ten scenarios covering nominal and failure ca
 | TeamDelete | PreToolUse team-guard | Checks flag + pf-6 sentinel → allows through (exit 0) | gate passed |
 | TeamDelete | PostToolUse sentinel | After TeamDelete succeeds → remove pathflow-active flag | flag removed |
 | Session end | SessionEnd cleanup | Flag absent → `_PATHFLOW_ACTIVE=false` → full cleanup | all artifacts removed |
+| (alt) Session end without TeamDelete | SessionEnd cleanup v2.4.0 | Flag present → `$PPID == lead_pid` → proceed with cleanup (lead's own SessionEnd) | all artifacts removed |
 
 **Result: CLEAN**
 
@@ -914,10 +934,14 @@ PostToolUse: cf-post-tool-use-pathflow-sentinel.sh
 SESSION END
     |
     v
-SessionEnd: cf-session-end-cleanup.sh
+SessionEnd: cf-session-end-cleanup.sh (v2.4.0)
   - Guard: check pathflow-active flag
-    FLAG PRESENT: teammate shutdown → exit 0 (skip)
     FLAG ABSENT:  lead session end → proceed
+    FLAG PRESENT: read pathflow-team.json for lead_pid
+      PPID == lead_pid:    lead's own SessionEnd → proceed
+      lead_pid alive:      teammate shutdown → exit 0 (skip)
+      lead_pid dead:       orphaned session → proceed
+      no team file:        proceed with cleanup
   - PF7 diagnostic log
   - Remove PathFlow sentinels
   - Remove skill sentinels
@@ -938,6 +962,7 @@ SessionEnd: cf-session-end-cleanup.sh
 | PID recycling (OS reuses dead lead PID for unrelated process) | Very low (PID space is large, recycling is sequential) | Acceptable risk. Window between lead death and new SessionStart is typically seconds. `kill -0` on unrelated process causes false teammate mode — session proceeds normally rather than being cleaned up. |
 | Compaction and teammate spawn race | Negligible | Claude Code executes sequentially — teammate cannot spawn during compaction. |
 | In-process teammates (non-tmux) | Common | Correct: same PID as lead, `kill -0` succeeds, treated as teammate. No cleanup. |
+| Lead's own SessionEnd with flag present | Common (PF7 without TeamDelete) | v2.4.0: `$PPID == lead_pid` check fires first, proceeds with cleanup. Without this check, `kill -0` on own PID always succeeds, falsely treating the lead's SessionEnd as a teammate shutdown. |
 | Crash within seconds of TeamCreate | Rare | `pathflow-team.json` may not exist yet. Falls to "no team file" path, checks flag instead. |
 | Team config missing at cleanup time | Possible (manually deleted) | Cleanup skips gracefully, continues with other artifacts. |
 | Multiple stale sessions | Possible | Only the session referenced by the env file is cleaned. Other stale sessions remain until their env file is referenced. |

@@ -441,12 +441,12 @@ else
     fail "Should have decision field"
 fi
 
-# Test 41: Checks verify-work retry state files for block detection
+# Test 41: verify-work-retry dead code removed (V4 cleanup)
 TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "verify-work-retry" "$HOOK"; then
-    pass "Checks verify-work retry state files"
+    fail "verify-work-retry is dead code (V3 orphan) and should be removed"
 else
-    fail "Should check verify-work-retry state files"
+    pass "verify-work-retry dead code removed"
 fi
 
 # =========================================================================
@@ -599,13 +599,26 @@ else
     pass "Log entry does not have deprecated ts field"
 fi
 
-# Test 57: Log entry has session_id from stdin
+# Test 57: Env file session_id takes priority over stdin UUID
 TESTS_RUN=$((TESTS_RUN + 1))
-if echo "$LAST_ENTRY" | jq -e '.session_id == "test-func-logentry"' >/dev/null 2>&1; then
-    pass "Log entry has session_id from stdin"
+# Create env file with canonical session ID, provide different stdin UUID
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-stop-priority'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+BEFORE_COUNT=$(count_log_entries)
+STDIN_JSON=$(build_stdin "stdin-stop-uuid" "" "task_completed")
+run_hook_stdin "$STDIN_JSON" >/dev/null 2>&1 || true
+AFTER_COUNT=$(count_log_entries)
+if [[ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]]; then
+    LAST_ENTRY=$(get_last_log_entry)
+    if echo "$LAST_ENTRY" | jq -e '.session_id == "env-stop-priority"' >/dev/null 2>&1; then
+        pass "Env file session_id takes priority over stdin UUID"
+    else
+        fail "Env file session_id should take priority (got: $(echo "$LAST_ENTRY" | jq -r '.session_id' 2>/dev/null))"
+    fi
 else
-    fail "Log entry should have stdin session_id (got: $(echo "$LAST_ENTRY" | jq -r '.session_id' 2>/dev/null))"
+    fail "Should create log entry with env file session_id"
 fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
 
 # Test 58: Log entry is valid JSON
 TESTS_RUN=$((TESTS_RUN + 1))

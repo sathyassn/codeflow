@@ -446,6 +446,18 @@ else
 fi
 
 echo ""
+echo "--- Session ID Priority ---"
+
+# Test 39: Env file session_id takes priority over stdin UUID for sentinel path
+TESTS_RUN=$((TESTS_RUN + 1))
+# Hook sources env file and uses CODEFLOW_SESSION_ID for sentinel dir at line 134
+if grep -q '_env_file.*codeflow-env.sh' "$HOOK" && grep -q 'CODEFLOW_SESSION_ID.*_stdin_sid' "$HOOK"; then
+    pass "Hook implements env file priority for session ID"
+else
+    fail "Hook should source env file and prefer CODEFLOW_SESSION_ID over stdin"
+fi
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

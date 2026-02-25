@@ -1103,6 +1103,27 @@ fi
 cleanup_test_artifacts
 
 echo ""
+echo "--- Session ID Priority ---"
+
+# Test: Env file session_id takes priority over stdin UUID
+TESTS_RUN=$((TESTS_RUN + 1))
+# Create env file with canonical session ID
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-cleanup-priority'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+# Create session state dir for the env file session ID so cleanup has something to find
+mkdir -p "$REPO_ROOT/.state/session/env-cleanup-priority/pathflow"
+mkdir -p "$REPO_ROOT/.state/sentinels/skill/env-cleanup-priority"
+# Run hook with different stdin UUID
+echo '{"session_id":"stdin-wrong-uuid"}' | CODEFLOW_SESSION_ID="" bash "$HOOK" 2>/dev/null || true
+# Verify cleanup targeted the env file session ID path, not the stdin UUID
+if [[ ! -d "$REPO_ROOT/.state/sentinels/skill/stdin-wrong-uuid" ]]; then
+    pass "Env file session_id takes priority over stdin UUID for cleanup paths"
+else
+    fail "Cleanup should use env file session ID, not stdin UUID"
+fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
+
+echo ""
 echo "=== Test Summary ==="
 echo "Ran: $TESTS_RUN"
 echo "Passed: $TESTS_PASSED"

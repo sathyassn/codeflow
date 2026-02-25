@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Test: cf-session-start-logging.sh (v2.0.0)
+# Test: cf-session-start-logging.sh (v2.1.0)
 # Location: .codeflow/testing/claude-hooks/session-start/test-cf-session-start-logging.sh
 #
-# Tests SessionStart logging hook v2.0.0
-# Verifies: stdin reading, config checks, V4 event format, metadata, rotation, current-session.txt
+# Tests SessionStart logging hook v2.1.0
+# Verifies: stdin reading, config checks, V4 event format, metadata, rotation, current-session.txt,
+#           env file session ID priority, matcher split (race condition fix)
 
 set -euo pipefail
 
@@ -160,17 +161,21 @@ else
     fail "Should parse session_id from stdin JSON"
 fi
 
-# Test 15: Stdin session_id takes priority over env var
+# Test 15: Env file session_id takes priority over stdin UUID
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 LOG_DATE=$(date +%Y-%m-%d)
 LOG_FILE="$REPO_ROOT/.state/logs/sessions/session-$LOG_DATE.jsonl"
-echo '{"session_id":"stdin-priority-test"}' | CODEFLOW_SESSION_ID="env-session" bash "$HOOK" 2>/dev/null
-if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | grep -q "stdin-priority-test"; then
-    pass "Stdin session_id takes priority over env var"
+# Create env file with canonical session ID
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-priority-test'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+echo '{"session_id":"stdin-uuid-test"}' | bash "$HOOK" 2>/dev/null
+if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | grep -q "env-priority-test"; then
+    pass "Env file session_id takes priority over stdin UUID"
 else
-    fail "Stdin session_id should take priority"
+    fail "Env file session_id should take priority over stdin UUID"
 fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
 
 echo ""
 echo "--- V4 Event Format (NEW) ---"
@@ -409,22 +414,26 @@ else
     fail "Should create state directory"
 fi
 
-# Test 43: Functional: current-session.txt has session ID
+# Test 43: Functional: current-session.txt uses env file session ID over stdin UUID
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
-STATE_FILE="$REPO_ROOT/.state/session/state-file-test/current-session.txt"
+# Create env file with canonical session ID
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='env-state-test'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+STATE_FILE="$REPO_ROOT/.state/session/env-state-test/current-session.txt"
 rm -f "$STATE_FILE" 2>/dev/null
-echo '{"session_id":"state-file-test"}' | REPO_ROOT="$REPO_ROOT" bash "$HOOK" 2>/dev/null
+echo '{"session_id":"stdin-uuid-state"}' | REPO_ROOT="$REPO_ROOT" bash "$HOOK" 2>/dev/null
 if [[ -f "$STATE_FILE" ]]; then
     STATE_CONTENT=$(cat "$STATE_FILE")
-    if [[ "$STATE_CONTENT" == "state-file-test" ]]; then
-        pass "current-session.txt has correct session ID"
+    if [[ "$STATE_CONTENT" == "env-state-test" ]]; then
+        pass "current-session.txt uses env file session ID"
     else
-        fail "current-session.txt has wrong content: $STATE_CONTENT"
+        fail "current-session.txt has wrong content: $STATE_CONTENT (expected env-state-test)"
     fi
 else
-    fail "current-session.txt not created"
+    fail "current-session.txt not created at env file session ID path"
 fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
 
 echo ""
 echo "--- Log Rotation ---"
@@ -601,12 +610,12 @@ fi
 echo ""
 echo "--- V4 Consistency with Session-End ---"
 
-# Test 64: Version is 2.0.0
+# Test 64: Version is 2.1.0
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q '2.0.0' "$HOOK"; then
-    pass "Version is 2.0.0"
+if grep -q '2.1.0' "$HOOK"; then
+    pass "Version is 2.1.0"
 else
-    fail "Should be version 2.0.0"
+    fail "Should be version 2.1.0"
 fi
 
 # Test 65: Log entry field order matches V4 (event, session_id, timestamp, metadata)
@@ -618,9 +627,53 @@ else
 fi
 
 echo ""
+echo "--- SessionStart Matcher Split (Race Condition Fix) ---"
+
+# Test 66: settings.json has SessionStart hooks split into two matcher entries
+# The init hook writes codeflow-env.sh; instructions/logging hooks read it.
+# If all hooks are in ONE matcher, they run in parallel and the env file may not exist yet.
+# Split matchers run SEQUENTIALLY: init completes before instructions/logging start.
+TESTS_RUN=$((TESTS_RUN + 1))
+_settings_file="$REAL_REPO_ROOT/.claude/settings.json"
+if [[ -f "$_settings_file" ]] && command -v jq &>/dev/null; then
+    _ss_count=$(jq '.hooks.SessionStart | length' "$_settings_file" 2>/dev/null)
+    if [[ "$_ss_count" -ge 2 ]]; then
+        # Verify first entry has init hook, second entry has logging hook
+        _first_has_init=$(jq -r '.hooks.SessionStart[0].hooks[] | select(.command | contains("session-start-init")) | .command' "$_settings_file" 2>/dev/null)
+        _second_has_logging=$(jq -r '.hooks.SessionStart[1].hooks[] | select(.command | contains("session-start-logging")) | .command' "$_settings_file" 2>/dev/null)
+        if [[ -n "$_first_has_init" ]] && [[ -n "$_second_has_logging" ]]; then
+            pass "SessionStart hooks split: init in first matcher, logging in second"
+        else
+            fail "SessionStart matchers should have init in first, logging in second"
+        fi
+    else
+        fail "SessionStart should have at least 2 matcher entries (got $_ss_count)"
+    fi
+else
+    pass "SessionStart matcher split (skipped - settings.json or jq unavailable)"
+fi
+
+# Test 67: Functional: env file written by init is available to logging hook
+# When env file exists before logging hook runs, canonical SID is used
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_test_env
+_env_test_sid="env-matcher-split-test"
+mkdir -p "$REPO_ROOT/.state/runtime"
+echo "export CODEFLOW_SESSION_ID='$_env_test_sid'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="$REPO_ROOT/.state/logs/sessions/session-$LOG_DATE.jsonl"
+echo '{"session_id":"should-not-appear-in-log"}' | bash "$HOOK" 2>/dev/null
+if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | grep -q "$_env_test_sid"; then
+    pass "Logging hook uses canonical SID from env file (matcher split ensures availability)"
+else
+    fail "Logging hook should use canonical SID from env file, not stdin UUID"
+fi
+rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
+
+echo ""
 echo "--- Functional Tests ---"
 
-# Test 66: Creates log entry on execution
+# Test 68: Creates log entry on execution
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 LOG_DATE=$(date +%Y-%m-%d)
@@ -636,7 +689,7 @@ else
     fail "Should create log entry"
 fi
 
-# Test 67: Log entry contains session_start event
+# Test 69: Log entry contains session_start event
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | grep -q '"session_start"'; then
     pass "Log entry contains session_start event"
@@ -644,7 +697,7 @@ else
     fail "Log entry should contain session_start event"
 fi
 
-# Test 68: Log entry is valid JSON
+# Test 70: Log entry is valid JSON
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
     if tail -1 "$LOG_FILE" | jq . &>/dev/null; then
@@ -656,7 +709,7 @@ else
     pass "Log JSON validation (skipped - jq not available)"
 fi
 
-# Test 69: Log entry has timestamp field
+# Test 71: Log entry has timestamp field
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e '.timestamp' &>/dev/null; then
     pass "Log entry has timestamp field"
@@ -664,7 +717,7 @@ else
     fail "Log entry should have timestamp field"
 fi
 
-# Test 70: Log entry has metadata object
+# Test 72: Log entry has metadata object
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e '.metadata' &>/dev/null; then
     pass "Log entry has metadata object"
@@ -672,7 +725,7 @@ else
     fail "Log entry should have metadata object"
 fi
 
-# Test 71: Metadata has git_branch field
+# Test 73: Metadata has git_branch field
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e '.metadata.git_branch' &>/dev/null; then
     pass "Metadata has git_branch field"
@@ -680,7 +733,7 @@ else
     fail "Metadata should have git_branch field"
 fi
 
-# Test 72: Metadata has git_commit field
+# Test 74: Metadata has git_commit field
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e '.metadata.git_commit' &>/dev/null; then
     pass "Metadata has git_commit field"
@@ -688,7 +741,7 @@ else
     fail "Metadata should have git_commit field"
 fi
 
-# Test 73: Metadata has approval_mode field
+# Test 75: Metadata has approval_mode field
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e '.metadata.approval_mode' &>/dev/null; then
     pass "Metadata has approval_mode field"
@@ -696,7 +749,7 @@ else
     fail "Metadata should have approval_mode field"
 fi
 
-# Test 74: Metadata has active_task field (null)
+# Test 76: Metadata has active_task field (null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ -f "$LOG_FILE" ]] && tail -1 "$LOG_FILE" | jq -e 'has("metadata") and (.metadata | has("active_task"))' &>/dev/null; then
     pass "Metadata has active_task field"
@@ -704,7 +757,7 @@ else
     fail "Metadata should have active_task field"
 fi
 
-# Test 75: Stdin-provided session ID appears in log entry
+# Test 77: Stdin-provided session ID appears in log entry
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
 echo '{"session_id":"functional-stdin-test"}' | REPO_ROOT="$REPO_ROOT" bash "$HOOK" 2>/dev/null

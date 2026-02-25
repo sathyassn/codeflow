@@ -4,7 +4,7 @@
 # Hook Type: SessionStart
 # Usage:     Called by Claude Code at session start
 # Platform:  macOS/Linux
-# Version:   3.0.0
+# Version:   3.1.0
 #
 # Teammates: cf-knowledge-layer (memory/task ops)
 # Operation: Session initialization and Section 2 enforcement
@@ -26,18 +26,17 @@
 set -euo pipefail
 
 # Consume stdin to prevent blocking on pipe (SessionStart provides JSON)
+_stdin_sid=""
 if [[ ! -t 0 ]]; then
     _HOOK_STDIN=$(cat)
     if [[ -n "${_HOOK_STDIN:-}" ]] && command -v jq &>/dev/null; then
         _sid=$(echo "$_HOOK_STDIN" | jq -r '.session_id // empty' 2>/dev/null) || true
-        [[ -n "${_sid:-}" ]] && CODEFLOW_SESSION_ID="$_sid"
+        [[ -n "${_sid:-}" ]] && _stdin_sid="$_sid"
     fi
 fi
-CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-unknown}"
-export CODEFLOW_SESSION_ID
 
 # shellcheck disable=SC2034  # VERSION used for identification
-readonly VERSION="3.0.0"
+readonly VERSION="3.1.0"
 
 # =============================================================================
 # CONFIGURATION
@@ -46,6 +45,17 @@ readonly VERSION="3.0.0"
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Session ID priority: env file > stdin JSON > fallback
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-${_stdin_sid:-unknown}}"
+export CODEFLOW_SESSION_ID
 
 INSTRUCTIONS_DIR="$REPO_ROOT/.codeflow/config/instructions"
 CONFIG_FILE="$INSTRUCTIONS_DIR/instructions-config.json"
