@@ -463,14 +463,21 @@ fi
 
 # Test 48: Skips cleanup when pathflow-active flag exists AND lead PID alive (guard behavior)
 # Fix 4 behavior: hook checks pathflow-team.json lead_pid liveness before skipping.
-# With a live lead PID, cleanup is skipped (teammate shutdown path).
+# With a live lead PID that is NOT this process, cleanup is skipped (teammate shutdown path).
 # The flag is NOT removed here — team-guard removes it during PF7-END.
+# NOTE: lead_pid must NOT be $$ (the test shell) because the hook's PPID equals $$
+# when invoked directly. The PPID==lead_pid check treats that as "lead's own SessionEnd"
+# and proceeds with cleanup. Use a background sleep so lead_pid is alive but not our parent.
 setup_test_dirs
 mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
-# Create pathflow-team.json with live lead PID (current shell's PID)
-echo "{\"lead_pid\": $$, \"team_name\": \"test-team-48\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+# Start a background process to act as a live "lead" PID (not our PPID)
+sleep 30 &
+_test48_lead_pid=$!
+echo "{\"lead_pid\": $_test48_lead_pid, \"team_name\": \"test-team-48\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
 CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>/dev/null || true
+kill "$_test48_lead_pid" 2>/dev/null || true
+wait "$_test48_lead_pid" 2>/dev/null || true
 if [[ -f "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active" ]]; then
     pass "Skips cleanup when pathflow-active + live lead PID (flag preserved for team-guard)"
 else
@@ -920,14 +927,20 @@ else
 fi
 
 # Test 84: Cleanup skipped when pathflow-active flag + live lead PID (teammate guard)
+# NOTE: lead_pid must NOT be $$ — use a background sleep as the live "lead" process.
+# Using $$ would cause hook's PPID==lead_pid, triggering lead's own SessionEnd path.
 setup_test_dirs
 mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
 # Fix 4: Create pathflow-team.json with live lead PID for skip behavior
-echo "{\"lead_pid\": $$, \"team_name\": \"test-team-84\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
+sleep 30 &
+_test84_lead_pid=$!
+echo "{\"lead_pid\": $_test84_lead_pid, \"team_name\": \"test-team-84\"}" > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
 touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3"
 output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+kill "$_test84_lead_pid" 2>/dev/null || true
+wait "$_test84_lead_pid" 2>/dev/null || true
 if [[ -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3" ]]; then
     pass "Cleanup skipped when flag present + live lead PID (sentinels preserved)"
 else
@@ -978,18 +991,24 @@ fi
 rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 
 # Fix 4 Test 2: PathFlow active + alive lead PID → skip cleanup (existing behavior)
+# NOTE: lead_pid must NOT be $$ — use a background sleep as the live "lead" process.
+# Using $$ would cause hook's PPID==lead_pid, triggering lead's own SessionEnd path.
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_dirs
 _team_name_alive="test-team-fix4-alive"
 mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
-# Create pathflow-team.json with ALIVE PID (current shell)
+# Create pathflow-team.json with ALIVE PID (background sleep, not $$)
+sleep 30 &
+_fix4_lead_pid=$!
 cat > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json" <<FIX4EOF2
-{"team_name":"$_team_name_alive","lead_pid":$$,"codeflow_session_id":"test-session"}
+{"team_name":"$_team_name_alive","lead_pid":$_fix4_lead_pid,"codeflow_session_id":"test-session"}
 FIX4EOF2
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
 touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3"
 output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+kill "$_fix4_lead_pid" 2>/dev/null || true
+wait "$_fix4_lead_pid" 2>/dev/null || true
 # With alive lead PID, cleanup should be SKIPPED
 if [[ -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-3" ]]; then
     pass "Fix 4: Alive lead PID — cleanup skipped (sentinels preserved)"
