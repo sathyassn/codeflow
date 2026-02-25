@@ -530,25 +530,27 @@ Note: The completed stage teammate remains active (not shut down). It is availab
 
 Each stage teammate writes its work record directly into the task markdown file before signaling STAGE-COMPLETE. This makes the task document the permanent, auditable record of the work.
 
-**Pipeline-to-column mapping:**
+**Pipeline-to-column and report name mapping:**
 
-| Pipeline | Primary Col | REV Col | QA Col |
-|----------|------------|---------|--------|
-| FEAT / FIX / RFCT / CICD / HTFX / CHOR | DEV | REV | QA |
-| DOCS | DOCS | REV | -- |
-| TEST | TEST | REV | QA |
-| PLAN / SPKE | PLAN | REV | -- |
+| Pipeline | Primary Col | Primary Report | REV Col | REV Report | QA Col | QA Report |
+|----------|------------|----------------|---------|------------|--------|-----------|
+| FEAT / FIX / RFCT / CICD / HTFX / CHOR | DEV | `### DEV Report` | REV | `### REV Report` | QA | `### QA Report` |
+| DOCS | DOCS | `### DOCS Report` | REV | `### REV Report` | -- | (omit) |
+| TEST | TEST | `### TEST Report` | REV | `### REV Report` | QA | `### QA Report` |
+| PLAN / SPKE | PLAN | `### PLAN Report` | REV | `### REV Report` | -- | (omit) |
+
+Note: The `## Stage Reports` subsection headings in the task markdown must match the pipeline. When creating or migrating a task doc, rename `### DEV Report` → `### DOCS Report` (DOCS pipeline), `### PLAN Report` (PLAN/SPKE), or `### TEST Report` (TEST). Omit `### QA Report` for DOCS and PLAN/SPKE pipelines.
 
 **What each stage writes:**
 
-| Stage | Criteria Status Update | Report Section |
-|-------|----------------------|----------------|
-| WS-DEV | Mark DEV column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DEV Report` — implementation summary, files changed, test results, deviations |
-| WS-PLAN | Mark PLAN column: `DONE` / `PARTIAL` / `N/A` per criterion | `### PLAN Report` — design decisions, deliverables, deviations |
-| WS-DOCS | Mark DOCS column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DOCS Report` — documentation summary, files updated, deviations |
-| WS-TEST | Mark TEST column: `DONE` / `PARTIAL` / `N/A` per criterion | `### TEST Report` — test implementation summary, coverage, deviations |
-| WS-REV | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment, findings log, rework history |
-| WS-QA | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, regressions |
+| Stage | Pipeline | Criteria Status Update | Report Section |
+|-------|----------|----------------------|----------------|
+| WS-DEV | FEAT/FIX/RFCT/CICD/HTFX/CHOR | Mark DEV column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DEV Report` — implementation summary, files changed, test results, deviations |
+| WS-PLAN | PLAN / SPKE | Mark PLAN column: `DONE` / `PARTIAL` / `N/A` per criterion | `### PLAN Report` — design decisions, deliverables, deviations |
+| WS-DOCS | DOCS | Mark DOCS column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DOCS Report` — documentation summary, files updated, deviations |
+| WS-TEST | TEST | Mark TEST column: `DONE` / `PARTIAL` / `N/A` per criterion | `### TEST Report` — test implementation summary, coverage, deviations |
+| WS-REV | All pipelines | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment, findings log, rework history |
+| WS-QA | FEAT/FIX/RFCT/CICD/HTFX/CHOR / TEST | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, regressions |
 
 **Status legend:**
 
@@ -815,7 +817,7 @@ WS-DEV --> WS-REV --> [approved] --> WS-QA --> [pass] --> PF5-VERIFY
 | Parameter | Default | Trigger |
 |-----------|---------|---------|
 | `max_rework_iterations` | 3 | WS-REV returns `changes_requested` --> back to primary stage |
-| `max_qa_retries` | 2 | WS-QA returns `fail` --> back to WS-DEV |
+| `max_qa_retries` | 3 | WS-QA returns `fail` --> back to WS-DEV |
 | `stage_timeout_minutes` | 60 | Any single stage exceeds time limit (autorun only) |
 
 If limits exceeded: escalate to user (interactive) or mark task `blocked` and skip to PF7-END (autorun).

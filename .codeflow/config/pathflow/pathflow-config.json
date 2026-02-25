@@ -340,7 +340,7 @@
           "id": "PF6-TSK-05",
           "task_order": 5,
           "blocked_by": ["PF6-TSK-04"],
-          "description": "Create PR via cf-git-operations (create-pr). Records pr_created event to ledger and notifies cf-knowledge-layer with PR number.",
+          "description": "Create PR via cf-git-operations (create-pr). Records pr_created event to .state/logs/git/ and notifies cf-knowledge-layer with PR number.",
           "assigned_to": "cf-git-operations",
           "operation": "create-pr",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
@@ -367,7 +367,7 @@
           "id": "PF6-TSK-08",
           "task_order": 8,
           "blocked_by": ["PF6-TSK-07"],
-          "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_merged or pr_created event. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
+          "description": "Record PR outcome to ledger via cf-knowledge-layer (record-pr-outcome). Writes pr_outcome event to .state/logs/git/pr-events-{date}.jsonl. Must run BEFORE sync-local to avoid security hook blocking writes on main.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "record-pr-outcome",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
