@@ -82,8 +82,8 @@ func TestStartWritesJSONL(t *testing.T) {
 	if event["session_id"] != sessionID {
 		t.Errorf("session_id = %v, want %s", event["session_id"], sessionID)
 	}
-	if event["claude_id"] != "test-claude-id" {
-		t.Errorf("claude_id = %v, want test-claude-id", event["claude_id"])
+	if event["user_id"] != "test-claude-id" {
+		t.Errorf("user_id = %v, want test-claude-id", event["user_id"])
 	}
 	if event["timestamp"] == nil || event["timestamp"] == "" {
 		t.Error("timestamp should not be empty")

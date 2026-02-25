@@ -85,7 +85,7 @@ func Start(ctx context.Context, d *db.DB, claudeID string, ledgerDir string, run
 	if err := writeJSONLEvent(ledgerDir, map[string]string{
 		"event":      "session_start",
 		"session_id": sessionID,
-		"claude_id":  claudeID,
+		"user_id":    claudeID,
 		"user_host":  hostname,
 		"timestamp":  now,
 	}); err != nil {
