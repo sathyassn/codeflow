@@ -1,6 +1,6 @@
 # Build artifacts
 bin/
-codeflow
+/codeflow
 
 # Test coverage
 coverage.out

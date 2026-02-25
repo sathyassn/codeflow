@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/ncruces/go-sqlite3 v0.30.5
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/spf13/cobra v1.10.2
 )
 
