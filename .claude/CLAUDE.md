@@ -229,7 +229,7 @@ SESSION END
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF1-TSK-02 blocked by PF1-TSK-01); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 2: Context Loading (PF2-CONTEXT)**
 
@@ -238,7 +238,7 @@ SESSION END
 - If user chooses resume: Route to `/cf-resume`
 - If no active work: Display "Ready for new task." Wait for user request
 
-5. **Task Tracker (MANDATORY):** TaskCreate for PF2-CONTEXT phase entry; TaskCreate for PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+5. **Task Tracker (MANDATORY):** TaskCreate for PF2-CONTEXT phase entry; TaskCreate for PF2-TSK-01, PF2-TSK-02, PF2-TSK-03, PF2-TSK-04; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF2-TSK-01 blocked by PF1-TSK-02, PF2-TSK-02 blocked by PF2-TSK-01, PF2-TSK-03 blocked by PF2-TSK-02, PF2-TSK-04 blocked by PF2-TSK-03); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 3: Tracking Decision**
 
@@ -272,7 +272,7 @@ SESSION END
 - Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→ci/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→experiment/
 - → See Section 6 for work type classification details
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF3-TSK-01 blocked by PF2-TSK-04, PF3-TSK-02 blocked by PF3-TSK-01, PF3-TSK-03 blocked by PF3-TSK-02, PF3-TSK-04 blocked by PF3-TSK-03, PF3-TSK-05 blocked by PF3-TSK-04); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 5: Work Execution (PF4-EXECUTE)**
 
@@ -296,7 +296,7 @@ SESSION END
 - **Legacy task migration:** If the task markdown lacks `### Criteria Status` or `## Stage Reports` sections (legacy task created before stage reporting was added), have cf-knowledge-layer add them before spawning the primary stage teammate using the pipeline-appropriate template from `project-management/templates/task-template.md`.
 - **Stage reporting protocol:** Stage teammates update the task markdown as part of their stage completion protocol — they write their reports directly into the task document before signaling STAGE-COMPLETE. The task doc commit is included as part of the stage commit by cf-git-operations.
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF4-TSK-01 blocked by PF3-TSK-05, PF4-TSK-02 blocked by PF4-TSK-01, PF4-TSK-03 blocked by PF4-TSK-02, PF4-TSK-04 blocked by PF4-TSK-03, PF4-TSK-05 blocked by PF4-TSK-04); TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
 **Step 6: Verification (PF5-VERIFY)**
 
@@ -305,7 +305,7 @@ SESSION END
 - Query cf-knowledge-layer for stage completion records
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 
-4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; TaskUpdate to completed when verification passes.
+4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-05, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
 
 **Step 7: Completion (PF6-COMPLETE)**
 
@@ -322,7 +322,7 @@ SESSION END
 8. Record PR outcome (PF6-TSK-08, cf-knowledge-layer — `record-pr-outcome`, must run before sync-local)
 9. Sync local (PF6-TSK-09, cf-git-operations — `sync-local`): pull main/target branch
 
-10. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-09 in order; TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
+10. **Task Tracker (MANDATORY):** TaskCreate for PF6-COMPLETE phase entry (addBlockedBy PF5); TaskCreate for PF6-TSK-01 through PF6-TSK-09 in order; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF6-TSK-01 blocked by PF5-TSK-02, PF6-TSK-02 blocked by PF6-TSK-01, PF6-TSK-03 blocked by PF6-TSK-02, PF6-TSK-04 blocked by PF6-TSK-03, PF6-TSK-05 blocked by PF6-TSK-04, PF6-TSK-06 blocked by PF6-TSK-05, PF6-TSK-07 blocked by PF6-TSK-06, PF6-TSK-08 blocked by PF6-TSK-07, PF6-TSK-09 blocked by PF6-TSK-08); TaskUpdate each to completed as each operation finishes; TaskUpdate phase entry completed when PR is verified.
 
 **Step 8: Session End (PF7-END)**
 
@@ -333,7 +333,7 @@ SESSION END
 - One PR per tracked session. New work = new session.
 - Note: The pathflow-active flag is removed automatically by the PostToolUse hook after TeamDelete. The lead's only cleanup actions are: shutdown teammates → mark PF7 tasks completed → TeamDelete.
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate PF7-TSK-03 completed BEFORE calling TeamDelete (triggers pf-7 sentinel); TaskUpdate phase entry completed; then TeamDelete.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF7-TSK-01 blocked by PF6-TSK-09, PF7-TSK-02 blocked by PF7-TSK-01, PF7-TSK-03 blocked by PF7-TSK-02); TaskUpdate each to completed as teammates shut down; TaskUpdate PF7-TSK-03 completed BEFORE calling TeamDelete (triggers pf-7 sentinel); TaskUpdate phase entry completed; then TeamDelete.
 
 ⚠️ **PF7 ordering constraint:** All PF7 TaskUpdate(status=completed) calls MUST happen BEFORE TeamDelete. TeamDelete destroys the task list, which prevents the TaskCompleted hook from firing. If TeamDelete runs first, the pf-7 sentinel will not be created and SessionEnd will log a false "Incomplete PF7 shutdown" warning.
 
@@ -998,6 +998,7 @@ Agents must NOT create sentinels manually -- if a sentinel appears missing, inve
 - NEVER club multiple phases into a single task tracker entry
 - NEVER skip creating entries for individual PF{N}-TSK-{NN} tasks
 - Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
+- 🔒 **L1 ENFORCED:** When creating individual PF{N}-TSK-{NN} task tracker entries, the lead MUST read the `blocked_by` field from `pathflow-config.json` for each task and apply it using `TaskUpdate(addBlockedBy=[...])` IMMEDIATELY after `TaskCreate`. Tasks with `blocked_by` fields that are not mirrored to the task tracker lose ordering visibility, causing downstream stages to execute out of order. This is NOT optional -- every `blocked_by` in the config MUST be reflected in the task tracker.
 - Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
 - JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
 - The task tracker step is embedded as a mandatory sub-step within each Section 4.2 phase step.
