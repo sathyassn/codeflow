@@ -103,7 +103,8 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 | `memory-events.jsonl` | `LEDGER_MEMORY` | Memory operations | `memory_store`, `memory_query`, `memory_milestone`, `decision`, `finding`, `progress` |
 | `sessions.jsonl` | `LEDGER_SESSIONS` | Session lifecycle | `session_start`, `session_end` |
 | `config.jsonl` | `LEDGER_CONFIG` | Configuration changes | `config_change` |
-| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated`, `pr_created`, `pr_outcome` |
+| `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated` |
+| `pr-events-{YYYY-MM-DD}.jsonl` | *(in `.state/logs/git/`)* | PR lifecycle events (daily rotation) | `pr_created`, `pr_outcome` |
 
 **NEVER write an event to a file that doesn't list that event type. memory_events go to memory-events.jsonl, NOT work-graph.jsonl.**
 
@@ -238,11 +239,11 @@ Event types:
 
 **When:** Team lead requests after PR merge disposition (PF6-TSK-07) and before sync-local (PF6-TSK-09).
 
-**Purpose:** Record PR lifecycle event to pathflow-events.jsonl while still on feature branch.
+**Purpose:** Record PR lifecycle event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` while still on feature branch.
 
 1. Receive PR outcome from team lead (merged/created, pr_number, merge_sha if applicable)
-2. Write event to `.state/logs/pathflow-events.jsonl`:
-   - pr_merged: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
+2. Write event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed):
+   - pr_outcome: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
 3. Sync to SQLite (update tasks table pr_status field)
 4. Report: `"KL-UPDATE: PR outcome recorded — {event_type} for task {task_id}"`
 

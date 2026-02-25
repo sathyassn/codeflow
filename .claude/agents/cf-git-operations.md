@@ -246,7 +246,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
    ```
 
 6. Capture PR URL and number from output
-7. Record `pr_created` event: Append a JSON line to `.state/logs/pathflow-events.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
+7. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
 8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update `tasks.pr_number` in SQLite
 9. Report to team lead: `"PR #{number} created: {url}"`
 
@@ -298,7 +298,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 2. If CI passes: notify team lead `"GITOPS: PR #{number} CI passed -- ready for review"`
 3. Wait for team lead to confirm merge has been completed by the user via GitHub UI
 4. After merge confirmation: `git pull origin main`
-5. Record `pr_merged` event: Append a JSON line to `.state/logs/pathflow-events.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
+5. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
 6. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 7. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
 
@@ -312,7 +312,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
    ```
 
 3. Pull updated target: `git pull origin {target_branch}`
-4. Record `pr_merged` event: Append a JSON line to `.state/logs/pathflow-events.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
+4. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
 5. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 6. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
 
@@ -322,7 +322,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
 2. If CI passes: verify PR was created successfully.
-3. Record `pr_created` event: Append a JSON line to `.state/logs/pathflow-events.jsonl` with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `task_id`, `session_id`.
+3. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `task_id`, `session_id`.
 4. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} created, task already complete, proceeding to PF7"`
 
 #### Edge Cases
