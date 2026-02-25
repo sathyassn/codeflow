@@ -327,12 +327,15 @@ SESSION END
 **Step 8: Session End (PF7-END)**
 
 - Shutdown all teammates (on-demand first, then persistent)
-- TeamDelete (ONLY after all teammates shut down and pathflow-active flag removed)
+- Mark all PF7 task tracker entries completed (PF7-TSK-01, PF7-TSK-02, PF7-TSK-03) — this triggers the TaskCompleted hook which creates the pathflow-pf-7 sentinel
+- TeamDelete (ONLY after all PF7 tasks are marked completed and pf-7 sentinel exists)
 - SessionEnd hook handles cleanup
 - One PR per tracked session. New work = new session.
-- Note: The pathflow-active flag is removed automatically by the SessionEnd hook. The lead's only cleanup actions are: shutdown teammates → TeamDelete.
+- Note: The pathflow-active flag is removed automatically by the PostToolUse hook after TeamDelete. The lead's only cleanup actions are: shutdown teammates → mark PF7 tasks completed → TeamDelete.
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate phase entry completed after TeamDelete.
+6. **Task Tracker (MANDATORY):** TaskCreate for PF7-END phase entry; TaskCreate for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03; TaskUpdate each to completed as teammates shut down; TaskUpdate PF7-TSK-03 completed BEFORE calling TeamDelete (triggers pf-7 sentinel); TaskUpdate phase entry completed; then TeamDelete.
+
+⚠️ **PF7 ordering constraint:** All PF7 TaskUpdate(status=completed) calls MUST happen BEFORE TeamDelete. TeamDelete destroys the task list, which prevents the TaskCompleted hook from firing. If TeamDelete runs first, the pf-7 sentinel will not be created and SessionEnd will log a false "Incomplete PF7 shutdown" warning.
 
 ### 4.3 Phase Reference
 
@@ -346,7 +349,7 @@ SESSION END
 | PF4-EXECUTE | pf-3 | pathflow-ws-* (pattern-matched) | Run work pipeline | Code, docs, tests, reviews |
 | PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
 | PF6-COMPLETE | ws-rev | pathflow-pf-6 (checkpoint-driven) | Create PR, verify CI, sync | PR created, PR verified, task status updated |
-| PF7-END | pf-6 | (cleanup) | Shutdown, remove flag | Clean session end |
+| PF7-END | pf-6 | pathflow-pf-7 (checkpoint-driven, must complete before TeamDelete) | Shutdown, mark tasks complete, TeamDelete | Clean session end |
 
 ### Phase Task IDs
 
@@ -639,7 +642,14 @@ Then shut down persistent teammates:
     SendMessage(type="shutdown_request", recipient="cf-security")
     |
     v
-TeamDelete
+Mark all PF7 tasks completed in task tracker:
+    TaskUpdate(PF7-TSK-01, status=completed)
+    TaskUpdate(PF7-TSK-02, status=completed)
+    TaskUpdate(PF7-TSK-03, status=completed)
+    → TaskCompleted hook fires, creates pathflow-pf-7 sentinel
+    |
+    v
+TeamDelete (task list destroyed — safe because sentinel already exists)
 ```
 
 ### Parallel Batch Execution
@@ -759,7 +769,7 @@ tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
 - Persistent function teammates (cf-security, cf-knowledge-layer, cf-git-operations) stay alive PF1 through PF7
 - On-demand role teammates remain active through PF4-EXECUTE, PF5-VERIFY, and PF6-COMPLETE, and are shut down at PF7-END alongside persistent teammates (→ See Deferred Shutdown above)
 - Individual teammate shutdown via `SendMessage(type="shutdown_request")` is SAFE -- does not affect team or task list
-- Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER removing pathflow-active flag
+- Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER all PF7 tasks are marked completed (PostToolUse hook removes pathflow-active flag after TeamDelete succeeds)
 - A PreToolUse hook (`cf-pre-tool-use-team-guard.sh`) blocks accidental team dissolution while pathflow-active flag exists
 
 ⛔ **Dissolving the team mid-session destroys the entire PathFlow task graph -- all phase markers, work stage tracking, dependency ordering, and checkpoint state. This is unrecoverable.**

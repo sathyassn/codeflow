@@ -433,10 +433,10 @@
           "id": "PF7-TSK-03",
           "task_order": 3,
           "blocked_by": ["PF7-TSK-02"],
-          "description": "TeamDelete (SessionEnd hook handles flag, sentinel, and state cleanup automatically)",
+          "description": "Complete task tracker and dissolve team. Step 1: Mark PF7-TSK-01 and PF7-TSK-02 completed via TaskUpdate, then mark PF7-TSK-03 completed — this triggers the TaskCompleted hook which creates the pathflow-pf-7 sentinel. Step 2: Call TeamDelete (PostToolUse hook removes pathflow-active flag; SessionEnd handles remaining cleanup).",
           "assigned_to": "team-lead",
-          "operation": "TeamDelete (PostToolUse hook removes pathflow-active flag after success; SessionEnd handles remaining cleanup)",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+          "operation": "Step 1: TaskUpdate(status=completed) for PF7-TSK-01, PF7-TSK-02, PF7-TSK-03 (triggers pf-7 sentinel creation via TaskCompleted hook). Step 2: TeamDelete.",
+          "enforcement_note": "You MUST execute Step 1 (all TaskUpdate calls) BEFORE Step 2 (TeamDelete). TeamDelete destroys the task list — if called before TaskUpdate, the TaskCompleted hook cannot fire and the pf-7 sentinel will not be created. This ordering is MANDATORY."
         }
       ],
       "required_tasks": [
