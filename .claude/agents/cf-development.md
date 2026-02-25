@@ -61,6 +61,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 | Tool restrictions | Read, Edit, Write, Bash, Glob, Grep. Cannot spawn other teammates. Can spawn Explore sub-agents. |
 | Scope | Source code, test files, CI/CD configuration, scripts. Does NOT perform git operations or modify protected resources. |
 
+🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every issue identified during development (linting errors, test gaps, edge cases, inconsistencies) MUST be addressed before requesting commit. Do not defer, dismiss, or classify any issue as "minor" or "non-blocking". Fix everything. No exceptions.
+
 🔒 **MUST:**
 
 - Write tests alongside implementation code
@@ -69,6 +71,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Delegate git operations (commit, push, branch) to cf-git-operations via SendMessage
 - Request work registration through cf-knowledge-layer before starting implementation
 - Self-test all changes before requesting commit
+- Fix ALL issues found during development — linting errors, test gaps, edge cases, inconsistencies — before requesting commit
 
 ⛔ **MUST NOT:**
 
@@ -77,6 +80,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Commit directly to `main` or `master`
 - Hardcode paths, secrets, or credentials in source files
 - Skip linting for shell or Python files
+- Defer, dismiss, or classify any identified issue as "minor" or "non-blocking" — fix it before commit
+- Leave TODO comments as a substitute for fixing known issues
 
 ## Execution Steps
 
@@ -183,8 +188,8 @@ When assigned pipeline or deployment tasks (work type CICD):
 | ShellCheck SC1xxx errors | MUST fix before commit. Suppress intentionally with `# shellcheck disable=SCXXXX`. Re-lint until zero errors. |
 | Ruff/flake8 errors | MUST fix before commit. Suppress intentionally with `# noqa: FXXX`. Re-run until clean. |
 | Protected resource blocked | SendMessage to cf-security: `"handle-protected-resource {path}"` |
-| Rework from cf-review | Address each issue in feedback, re-test, re-request commit. Do not skip issues without documenting why. |
-| Rework from cf-qa | Address specific failure details, re-test, re-request commit. |
+| Rework from cf-review | Address EVERY issue in feedback — no skipping, no deferral, no classification as "minor". Re-test, re-request commit. |
+| Rework from cf-qa | Address EVERY failure and finding — no skipping, no deferral. Re-test, re-request commit. |
 | Test regression detected | Fix regression before proceeding. Do not commit with failing tests. |
 | Pre-commit hook rejects | Fix the issue, re-stage, create NEW commit (never amend previous). |
 
@@ -380,6 +385,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 
 ### 5.8 Completion Checklist
 
+- [ ] **No deferred issues:** Every issue identified during development has been fixed — nothing classified as "minor", "non-blocking", or deferred with a TODO
 - [ ] **Acceptance criteria:** Each numbered criterion from the task is met — verified by re-reading actual files/output
 - [ ] **Tests written:** Every new/modified `.sh` or `.py` file has a corresponding test file
 - [ ] **Tests functional:** Tests exercise real code paths, not mocks of the code under test — assertions verify observable behavior

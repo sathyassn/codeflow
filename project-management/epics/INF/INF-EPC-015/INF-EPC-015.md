@@ -76,7 +76,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 |----|-------|--------|----------|
 | INF-TSK-015-001 | Go project initialization and build infrastructure | complete | high |
 | INF-TSK-015-002 | Core CLI entry point and simple commands | complete | high |
-| INF-TSK-015-003 | Fix DB schema drift (migration 005) | todo | high |
+| INF-TSK-015-003 | Fix DB schema drift (migration 005) | complete | high |
 | INF-TSK-015-004 | Database core package | todo | high |
 | INF-TSK-015-005 | Database CLI commands (8 subcommands) | todo | high |
 | INF-TSK-015-006 | Session package and CLI commands | todo | high |

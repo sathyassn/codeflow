@@ -64,6 +64,7 @@
       "description": "Library utilities - shell-lib, python-lib, hooks, git, settings, staging, commands",
       "files": [
         "scripts/db/test-generate-format-id.sh",
+        "scripts/db/test-migration-005.sh",
         "scripts/commands/test-commands.sh",
         "scripts/codeflow_py_lib/test_config.py",
         "scripts/codeflow_py_lib/test_paths.py",
@@ -454,6 +455,10 @@
       {
         "pattern": "scripts/db/test-schema-restructure.sh",
         "reason": "Integration test for schema migration (tests migration scripts, not a single source)"
+      },
+      {
+        "pattern": "scripts/db/test-migration-005.sh",
+        "reason": "Tests 005_fix_schema_drift.sql migration (source is SQL, not Shell)"
       },
       {
         "pattern": "scripts/db/test_schema.py",

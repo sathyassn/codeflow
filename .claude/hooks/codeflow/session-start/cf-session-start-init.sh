@@ -17,7 +17,6 @@
 #   Section 5b: Orphan sentinel sweep (sentinels without session dirs)
 #   Section 6: Active task context expiry
 #   Section 7: PathFlow flag creation (with guard)
-#   Section 7b: Sentinel recovery (context overflow)
 #   Section 7c: Checkpoint pre-initialization
 #   Section 8: Session metadata
 #   Section 9: Stale team detection
@@ -435,17 +434,14 @@ fi
 
 # Source PathFlow state library for flag creation
 _PFS_LIB="$REPO_ROOT/.codeflow/scripts/state/cf-pathflow-state.sh"
-_IS_RECOVERY="false"
 if [[ -f "$_PFS_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$_PFS_LIB"
 
     # Guard: only create flag if it doesn't already exist
     # Prevents teammate spawns from resetting tracking_level to "pending"
-    # Track whether flag pre-existed for Section 7b recovery decision
     if [[ -f "$SESSION_STATE_DIR/pathflow/is-pathflow-active" ]]; then
         echo "SessionStart: PathFlow flag already exists, preserving" >&2
-        _IS_RECOVERY="true"
     elif [[ "$_TEAMMATE_MODE" != "true" ]]; then
         # Create flag with initial metadata (lead only, not teammates)
         # team_name is empty at init (updated when TeamCreate is called)
@@ -455,29 +451,6 @@ if [[ -f "$_PFS_LIB" ]]; then
 fi
 # If library missing, skip flag creation (graceful degradation)
 
-# =============================================================================
-# SECTION 7b: SENTINEL RECOVERY
-# =============================================================================
-# If pathflow flag PRE-EXISTED this session start (genuine recovery from context
-# overflow or teammate join) and sentinel dir is empty, recreate pf-1, pf-2, pf-3
-# sentinels so the pathflow-gate hook doesn't block Edit/Write operations.
-# Fresh sessions (_IS_RECOVERY=false) skip this to preserve pf-3 enforcement.
-
-_PF_SENTINEL_DIR="$REPO_ROOT/.state/sentinels/pathflow/$CODEFLOW_SESSION_ID"
-if [[ "$_IS_RECOVERY" == "true" ]] && [[ -d "$_PF_SENTINEL_DIR" ]]; then
-    # Check if sentinel dir has any pathflow-* files
-    _sentinel_count=0
-    for _sf in "$_PF_SENTINEL_DIR"/pathflow-*; do
-        [[ -f "$_sf" ]] && _sentinel_count=$(( _sentinel_count + 1 ))
-    done
-
-    if [[ "$_sentinel_count" -eq 0 ]] && type create_sentinel &>/dev/null; then
-        create_sentinel "pf-1"
-        create_sentinel "pf-2"
-        create_sentinel "pf-3"
-        echo "SessionStart: Recovered PathFlow sentinels (pf-1, pf-2, pf-3)" >&2
-    fi
-fi
 
 # =============================================================================
 # SECTION 7c: CHECKPOINT PRE-INITIALIZATION

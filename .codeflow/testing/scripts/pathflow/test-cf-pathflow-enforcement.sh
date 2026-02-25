@@ -160,12 +160,7 @@ test_init_hook_graceful_no_lib() {
         return
     fi
     local exit_code=0
-    # Pre-seed _IS_RECOVERY for the hook subprocess. When cf-pathflow-state.sh
-    # is missing, the hook skips Section 7 (flag creation) but Section 7b still
-    # references _IS_RECOVERY. The hook should initialize this variable before
-    # the conditional block (bug: it only sets it inside the if-branch). This
-    # export provides the correct default so the graceful-degradation path works.
-    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | _IS_RECOVERY="false" bash "$INIT_HOOK" 2>/dev/null || exit_code=$?
+    echo "{\"session_id\":\"$TEST_SESSION_ID\"}" | bash "$INIT_HOOK" 2>/dev/null || exit_code=$?
     if [[ $exit_code -eq 0 ]]; then
         test_pass "Exits 0 without library (graceful)"
     else

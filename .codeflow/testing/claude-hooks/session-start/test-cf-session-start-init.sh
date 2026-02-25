@@ -28,6 +28,7 @@ fail() { echo "FAIL: $1"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
 setup_test_env() {
     rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/logs/sessions" 2>/dev/null || true
+    mkdir -p "$REPO_ROOT/.state/runtime" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/sentinels" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/sentinels/skill" 2>/dev/null || true
     mkdir -p "$REPO_ROOT/.state/session" 2>/dev/null || true
@@ -1474,6 +1475,63 @@ if echo "$VERSION_LINE" | grep -qE '"1\.[7-9]\.[0-9]+"'; then
 else
     pass "Version check (current: $VERSION_LINE)"
 fi
+
+# =============================================================================
+# SECTION 7b REMOVAL: SENTINEL RECOVERY MUST NOT EXIST
+# =============================================================================
+# Section 7b created pf-1/pf-2/pf-3 sentinels during recovery sessions when
+# the sentinel dir was empty. This bypassed the checkpoint system which is the
+# authoritative sentinel creator. Verify Section 7b code is fully removed.
+
+echo ""
+echo "--- Section 7b Removal (Sentinel Recovery) ---"
+
+# Test: No _IS_RECOVERY variable in hook
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q '_IS_RECOVERY' "$HOOK"; then
+    fail "Hook still contains _IS_RECOVERY variable (Section 7b not fully removed)"
+else
+    pass "No _IS_RECOVERY variable (Section 7b removed)"
+fi
+
+# Test: No SENTINEL RECOVERY section header
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -qi 'SENTINEL RECOVERY' "$HOOK"; then
+    fail "Hook still contains SENTINEL RECOVERY section header"
+else
+    pass "No SENTINEL RECOVERY section (Section 7b removed)"
+fi
+
+# Test: No manual create_sentinel calls for pf-1/pf-2/pf-3 recovery
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'create_sentinel "pf-1"' "$HOOK" || grep -q 'create_sentinel "pf-2"' "$HOOK" || grep -q 'create_sentinel "pf-3"' "$HOOK"; then
+    fail "Hook still has manual create_sentinel calls for pf-1/pf-2/pf-3 (Section 7b not removed)"
+else
+    pass "No manual create_sentinel calls for pf-1/pf-2/pf-3 (checkpoint system is authoritative)"
+fi
+
+# Test: Recovery session does NOT create sentinels when sentinel dir is empty
+# Simulate: pre-existing pathflow flag + empty sentinel dir
+TESTS_RUN=$((TESTS_RUN + 1))
+_sr_sid="ses-1000000000777aaa0de000777"
+_sr_dir="$REPO_ROOT/.state/session/$_sr_sid"
+mkdir -p "$_sr_dir/pathflow"
+echo "{\"session_id\":\"$_sr_sid\"}" > "$_sr_dir/pathflow/is-pathflow-active"
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$_sr_sid"
+# Run hook in recovery-like context (flag pre-exists, sentinel dir empty)
+_sr_output=$(CODEFLOW_SESSION_ID="$_sr_sid" bash "$HOOK" </dev/null 2>&1 || true)
+# Verify NO pf-1/pf-2/pf-3 sentinels were created
+_sr_sentinel_count=0
+for _sf in "$REPO_ROOT/.state/sentinels/pathflow/$_sr_sid"/pathflow-pf-*; do
+    [[ -f "$_sf" ]] && _sr_sentinel_count=$(( _sr_sentinel_count + 1 ))
+done
+if [[ "$_sr_sentinel_count" -eq 0 ]]; then
+    pass "Recovery session: no sentinel auto-creation (checkpoint system handles this)"
+else
+    fail "Recovery session: found $_sr_sentinel_count unexpected pf-* sentinels (Section 7b not fully removed)"
+fi
+rm -rf "$_sr_dir" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/$_sr_sid" 2>/dev/null || true
 
 echo ""
 echo "=== Test Summary ==="

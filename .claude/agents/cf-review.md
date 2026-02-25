@@ -26,7 +26,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 |-----------|------|---------|
 | 🤖 meta-awareness | Every response | State and context awareness |
 | think-and-act | Before forming judgments | Structured reasoning |
-| decide | Severity classification | CRITICAL/MAJOR/MINOR/NOTE |
+| decide | Severity classification | CRITICAL/MAJOR/MINOR/NOTE (all blocking — severity = priority, not blocking status) |
 | respond-organized | Verdict delivery | Clear, actionable findings |
 | research-quality | Claims about standards | Verify against project conventions |
 
@@ -71,7 +71,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Review independently (do not ask the implementer to explain their code)
 - Be objective and standards-based, not style-preferential
 - Include specific file paths and line references in findings
-- Distinguish blocking issues (CRITICAL/MAJOR) from suggestions (MINOR/NOTE)
+- Treat ALL findings as blocking — every CRITICAL, MAJOR, MINOR, and NOTE requires a fix before approval
+- Return `CHANGES_REQUESTED` if ANY finding exists, regardless of severity
 
 ⛔ **MUST NOT:**
 
@@ -285,8 +286,8 @@ Format findings using the verdict template and send to the team lead. If `CHANGE
 ### Findings
 - [CRITICAL] finding description (file:line)
 - [MAJOR] finding description (file:line)
-- [MINOR] finding description (file:line)
-- [NOTE] suggestion or observation (file:line)
+- [MINOR] finding description (file:line) — requires a fix
+- [NOTE] finding description (file:line) — requires a fix
 
 ### Required Changes (if CHANGES_REQUESTED)
 1. Specific change needed with location
@@ -295,14 +296,16 @@ Format findings using the verdict template and send to the team lead. If `CHANGE
 {1-2 sentence overall assessment}
 ```
 
+🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, MUST result in `CHANGES_REQUESTED` and require a fix before approval. Severity indicates priority (fix order), NOT whether a fix is required. MINOR and NOTE findings are still BLOCKING. There is no "pass with notes" or "informational only" category. No exceptions.
+
 **Severity definitions:**
 
-| Severity | Meaning | Blocks Approval |
-|----------|---------|----------------|
+| Severity | Meaning (priority order) | Blocks Approval |
+|----------|--------------------------|----------------|
 | CRITICAL | Security flaw, data loss risk, correctness failure | Yes |
 | MAJOR | Standards violation, missing tests, unhandled errors | Yes |
-| MINOR | Style issue, minor improvement opportunity | No |
-| NOTE | Suggestion, observation, or praise | No |
+| MINOR | Style issue, low-priority improvement — fix before approval | Yes |
+| NOTE | Low-priority finding — still requires a fix before approval | Yes |
 
 **Re-review procedure:**
 When reviewing reworked code (iteration 2+), focus on:
@@ -396,7 +399,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final
 | Incorrect `source`/`import` path (won't resolve) | CRITICAL | Never |
 | Hardcoded absolute path | MAJOR | Never |
 | Missing `set -euo pipefail` in shell script | MAJOR | Never |
-| Missing error handling for failable command | MAJOR | To MINOR only if failure is provably harmless |
+| Missing error handling for failable command | MAJOR | To MINOR only if failure is provably harmless (still blocks) |
 | Function called with wrong argument count | CRITICAL | Never |
 | Hallucinated file path or function name in code | MAJOR | Never |
 | Hallucinated file path in documentation | MAJOR | Never |
@@ -404,9 +407,9 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-REV` in your final
 | Test that mocks code under test instead of exercising it | MAJOR | Never |
 | Test with tautological/vacuous assertion | MAJOR | Never |
 | Test that passes regardless of code correctness | MAJOR | Never |
-| Style/formatting preference | MINOR | To NOTE if consistent with project patterns |
+| Style/formatting preference | MINOR | To NOTE if consistent with project patterns (still blocks) |
 
-**Default stance:** Everything blocks approval unless I have tool-verified evidence it is benign. "Probably fine" is never sufficient — verify or flag.
+**Default stance:** ALL findings block approval regardless of severity. Downgrades (e.g., MAJOR → MINOR) affect fix priority, not blocking status. "Probably fine" is never sufficient — verify or flag.
 
 ### 5.3 Project Convention Compliance Audit
 
@@ -545,7 +548,9 @@ Beyond code correctness, verify the structural integrity of the changeset:
 - [ ] Tests run and results captured (CODE_REVIEW and TEST_REVIEW modes)
 - [ ] Standards skills cross-referenced against findings (Step 10)
 - [ ] Verdict clearly stated as APPROVED or CHANGES_REQUESTED
+- [ ] APPROVED only when zero findings exist — any finding of any severity = CHANGES_REQUESTED
 - [ ] Every finding has severity, specific file:line reference, and actionable fix description
+- [ ] No finding classified as non-blocking, informational, optional, or advisory
 - [ ] No infrastructure issue (naming, registration, placement) classified below MAJOR
 - [ ] No functional testing violation (mock-only tests, tautological assertions) classified below MAJOR
 - [ ] Structural integrity verified — file count, orphan check, phantom registration check, scope check

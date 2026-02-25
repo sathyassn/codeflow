@@ -60,6 +60,7 @@
         {
           "id": "PF2-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF1-TSK-02"],
           "description": "Spawn cf-knowledge-layer teammate",
           "assigned_to": "team-lead",
           "operation": "Task(subagent_type=cf-knowledge-layer)",
@@ -119,6 +120,7 @@
         {
           "id": "PF3-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF2-TSK-04"],
           "description": "Classify work type and area",
           "assigned_to": "team-lead",
           "operation": "Work type classification from CLAUDE.md Section 6",
@@ -190,6 +192,7 @@
         {
           "id": "PF4-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF3-TSK-05"],
           "description": "Lookup the work stage pipeline for the classified work_type from the work_type_stages table in this config (e.g., FEAT → WS-DEV, WS-REV, WS-QA). This determines which teammates to spawn and in what order during PF4-EXECUTE.",
           "assigned_to": "team-lead",
           "operation": "Lookup pipeline from work_type_stages in this config",
@@ -260,6 +263,7 @@
         {
           "id": "PF5-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF4-TSK-05"],
           "description": "Verify all pipeline stages completed with pass verdict",
           "assigned_to": "team-lead",
           "operation": "Verify all stage sentinels exist",
@@ -299,6 +303,7 @@
         {
           "id": "PF6-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF5-TSK-02"],
           "description": "Complete work in WorkGraph via cf-knowledge-layer (complete-work). Includes task status update, epic status rollup if all sibling tasks complete, and Tier 2 markdown sync.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "complete-work",
@@ -409,6 +414,7 @@
         {
           "id": "PF7-TSK-01",
           "task_order": 1,
+          "blocked_by": ["PF6-TSK-09"],
           "description": "Shutdown on-demand role teammates",
           "assigned_to": "team-lead",
           "operation": "SendMessage(type=shutdown_request) to on-demand teammates",

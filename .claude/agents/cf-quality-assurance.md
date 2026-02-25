@@ -70,13 +70,16 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Delegate ALL git operations (commit, push, branch) to cf-git-operations via SendMessage
 - Use the project test runner for suite-level execution
 - Verify test determinism -- re-run flaky tests to confirm
+- Treat ALL findings as blocking — CRITICAL, MAJOR, MINOR, and NOTE alike require a fix. Every finding contributes to a FAIL verdict. No exceptions.
 
 ⛔ **MUST NOT:**
 
 - Modify source code outside test files (in WS-QA mode)
 - Run `git commit`, `git push`, or any git write commands directly
-- Report PASS when any required test fails
-- Skip tests or mark failures as acceptable without lead approval
+- Issue a PASS verdict when any test has failed
+- Issue a PASS verdict when any finding exists — CRITICAL, MAJOR, MINOR, or NOTE — every finding requires a fix before PASS
+- Skip tests or mark failures as acceptable under any circumstance
+- Classify any finding as non-blocking, advisory, or informational — there are no non-blocking findings
 - Write tests that depend on execution order or external state
 
 ## Execution Steps
@@ -124,7 +127,7 @@ bash .codeflow/testing/lib/test-coverage.sh --audit
 ```
 
 - **Clean:** Note coverage status in verdict as passing.
-- **Gaps found:** Report as findings in the verdict. If gaps are in newly-added scripts (not pre-existing), escalate to team lead as a blocking issue. Pre-existing gaps should be noted but do not block the verdict.
+- **Gaps found:** Report as findings in the verdict. All coverage gaps in the changeset scope are blocking — both newly-added and pre-existing scripts in scope. Escalate to team lead if pre-existing gaps require scope expansion.
 
 #### Step 5c: Cross-Reference File Scope Against Test Config
 
@@ -132,8 +135,10 @@ bash .codeflow/testing/lib/test-coverage.sh --audit
 
 1. Extract the list of `.sh` and `.py` files from the task's `file_scope` (or changeset)
 2. For each file, check that a corresponding entry exists in `.codeflow/testing/test-config.json`
-3. Files without test entries are reported as findings (MAJOR for newly-added files, MINOR for pre-existing files)
+3. Files without test entries are reported as findings (MAJOR for newly-added files, MAJOR for pre-existing files in the changeset scope)
 4. Config files (`.json`, `.yaml`) and template files (`.md`) are excluded from this check
+
+🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, contributes to a FAIL verdict. There is no "pass with notes" or "informational only" category. If it is worth reporting, it is worth fixing. All findings block — CRITICAL, MAJOR, MINOR, and NOTE alike.
 
 #### Step 6: Deliver Verdict
 
@@ -222,7 +227,7 @@ SendMessage to cf-git-operations: `"Please commit: test: {description}"`
 | Situation | Action |
 |-----------|--------|
 | Test infrastructure broken | Escalate: `"QA-BLOCKED: {reason}. Cannot execute tests."` |
-| Tests reveal issues outside scope | Report to team lead, do not block current verdict |
+| Tests reveal issues outside scope | Report to team lead for a separate fix task; escalate as a finding requiring its own tracked work — does not block the current task's verdict since the fix is out of scope |
 | Max QA retries reached (2) | Escalate to team lead for decision |
 | Acceptance criteria ambiguous | Escalate to team lead before delivering verdict |
 | Flaky test detected | Re-run to confirm, report as finding if non-deterministic |
@@ -412,7 +417,9 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Config bidirectional check:** test-config.json entries point to existing files AND new files have entries
 - [ ] 🔒 **Structural FAIL if warranted:** Any structural check failure → FAIL verdict regardless of test pass rate
 - [ ] 🔒 **Verdict is PASS or FAIL** with evidence — never "conditional pass" or "pass with notes"
+- [ ] 🔒 **PASS only when zero findings:** Any finding of any severity = FAIL. No exceptions.
 - [ ] 🔒 **FAIL details specific:** Test name, expected vs actual, file:line for every failure
+- [ ] 🔒 **No finding classified as non-blocking:** Every finding requires a fix before PASS verdict
 - [ ] 🔒 **Scope compliance:** No changes outside assigned task scope
 
 ### 5.9 Completion Checklist (WS-TEST)

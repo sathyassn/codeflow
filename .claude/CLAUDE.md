@@ -68,6 +68,7 @@ This is not a guideline -- it is your operating mode. Every piece of work flows 
 |-----------------|-----|-------------|
 | Edit/Write source files | Implementation is cf-development's job | cf-development |
 | Edit/Write documentation | Documentation is cf-documentation's job | cf-documentation |
+| Edit/Write agent definitions (.claude/agents/*.md) | Agent definitions are documentation | cf-documentation |
 | Edit/Write test files | Testing is cf-quality-assurance's job | cf-quality-assurance |
 | Run `git commit/push/checkout` | Git ops are cf-git-operations's job | cf-git-operations |
 | Run tests directly | QA verification is cf-quality-assurance's job | cf-quality-assurance |
@@ -837,6 +838,30 @@ Entry point commands (`/cf-plan`, `/cf-develop`, `/cf-document`, `/cf-test`, `/c
 | test, write tests, add coverage | TEST | WS-TEST --> WS-REV --> WS-QA |
 | plan, design, architect, analyze | PLAN | WS-PLAN --> WS-REV |
 | spike, investigate, prototype, POC | SPKE | WS-PLAN --> WS-REV |
+
+### Smart Teammate Utilization
+
+The lead MUST use teammates intelligently — both correct routing AND parallel execution:
+
+**Correct routing:** Match work to the right teammate type. Common mistakes to avoid:
+
+| Work Type | Wrong Route | Correct Route |
+|-----------|-------------|---------------|
+| Agent definition edits (`.claude/agents/*.md`) | cf-development | cf-documentation (agent defs are documentation) |
+| Config/infrastructure docs | cf-development | cf-documentation |
+| Test implementation | cf-development | cf-quality-assurance (WS-TEST) |
+| Design analysis | cf-development | cf-planning |
+
+**Parallel execution:** When independent tasks exist, spawn multiple teammates concurrently instead of serializing through one:
+
+| Scenario | Wrong Approach | Correct Approach |
+|----------|---------------|------------------|
+| Code fix + config edit (independent) | Wait for cf-development to finish code, then assign config | Spawn cf-development for code AND a separate agent for config in parallel |
+| 3 independent doc updates | Assign all 3 to one cf-documentation | Spawn up to `max_parallel` cf-documentation instances (→ See Section 5: Parallel Batch) |
+| Code change + doc update (independent) | Serialize: cf-development then cf-documentation | Spawn both concurrently |
+| Implementation + test writing (dependent) | Parallelize (tests depend on implementation) | Serialize: cf-development first, cf-quality-assurance after |
+
+**Key principle:** If tasks are independent (no shared state, no dependency), they SHOULD run in parallel. Default to parallel when in doubt — context exhaustion from overloading one teammate costs more than coordination overhead from multiple teammates.
 
 ### Exploration and Research Routing
 
