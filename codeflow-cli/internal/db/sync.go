@@ -271,6 +271,10 @@ func (d *DB) applyEvent(ctx context.Context, _ string, event NormalizedEvent) er
 		return d.applyBeginWork(ctx, event.Raw)
 	case "complete_work", "work_complete":
 		return d.applyCompleteWork(ctx, event.Raw)
+	case "pr_created":
+		return d.applyPRCreated(ctx, event.Raw)
+	case "pr_merged":
+		return d.applyPRMerged(ctx, event.Raw)
 	case "config_set", "config_updated":
 		// Config events are informational; no table mapping needed.
 		return nil
@@ -521,6 +525,42 @@ func (d *DB) applyCompleteWork(ctx context.Context, raw map[string]any) error {
 		"UPDATE active_work SET status = 'complete', updated_at = ? WHERE id = ?",
 		getStringDefault(raw, "timestamp", ""),
 		id,
+	)
+	return err
+}
+
+// applyPRCreated updates a task's PR number and URL from a pr_created event.
+func (d *DB) applyPRCreated(ctx context.Context, raw map[string]any) error {
+	formatID := getString(raw, "task_format_id")
+	if formatID == "" {
+		return nil // Skip events without task reference.
+	}
+
+	prNumber := raw["pr_number"]
+	prURL := getString(raw, "pr_url")
+
+	_, err := d.Execute(ctx,
+		"UPDATE tasks SET pr_number = ?, external_url = ?, updated_at = ? WHERE format_id = ?",
+		prNumber,
+		prURL,
+		getStringDefault(raw, "timestamp", ""),
+		formatID,
+	)
+	return err
+}
+
+// applyPRMerged marks a task as complete when its PR is merged.
+func (d *DB) applyPRMerged(ctx context.Context, raw map[string]any) error {
+	formatID := getString(raw, "task_format_id")
+	if formatID == "" {
+		return nil // Skip events without task reference.
+	}
+
+	_, err := d.Execute(ctx,
+		"UPDATE tasks SET status = 'complete', completed_at = ?, updated_at = ? WHERE format_id = ?",
+		getStringDefault(raw, "timestamp", ""),
+		getStringDefault(raw, "timestamp", ""),
+		formatID,
 	)
 	return err
 }

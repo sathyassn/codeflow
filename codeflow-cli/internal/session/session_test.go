@@ -82,8 +82,14 @@ func TestStartWritesJSONL(t *testing.T) {
 	if event["session_id"] != sessionID {
 		t.Errorf("session_id = %v, want %s", event["session_id"], sessionID)
 	}
-	if event["user_id"] != "test-claude-id" {
-		t.Errorf("user_id = %v, want test-claude-id", event["user_id"])
+	// user_id should be a git email or the claudeID fallback.
+	userID, _ := event["user_id"].(string)
+	if userID == "" {
+		t.Error("user_id should not be empty")
+	}
+	// claude_id preserves the original agent UUID.
+	if event["claude_id"] != "test-claude-id" {
+		t.Errorf("claude_id = %v, want test-claude-id", event["claude_id"])
 	}
 	if event["timestamp"] == nil || event["timestamp"] == "" {
 		t.Error("timestamp should not be empty")
@@ -137,14 +143,26 @@ func TestStartInsertsDBRecord(t *testing.T) {
 	if id != sessionID {
 		t.Errorf("id = %q, want %q", id, sessionID)
 	}
-	if userID != "test-claude-id" {
-		t.Errorf("user_id = %q, want %q", userID, "test-claude-id")
+	if userID == "" {
+		t.Error("user_id should not be empty")
 	}
 	if userHost == "" {
 		t.Error("user_host should not be empty")
 	}
 	if status != "active" {
 		t.Errorf("status = %q, want %q", status, "active")
+	}
+
+	// Verify claude_id is stored in session metadata.
+	var metadata string
+	err = d.QueryRow(ctx,
+		"SELECT metadata FROM sessions WHERE id = ?", sessionID,
+	).Scan(&metadata)
+	if err != nil {
+		t.Fatalf("querying metadata: %v", err)
+	}
+	if !strings.Contains(metadata, "test-claude-id") {
+		t.Errorf("metadata should contain claude_id, got %q", metadata)
 	}
 }
 
@@ -445,21 +463,33 @@ func TestStartEnsuresUserRow(t *testing.T) {
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 
 	claudeID := "user-unique-test-id"
-	_, err := Start(ctx, d, claudeID, ledgerDir, runtimeDir)
+	sessionID, err := Start(ctx, d, claudeID, ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Verify the user row was created.
+	// Query the sessions table to get the actual user_id (git email or claudeID fallback).
+	var actualUserID string
+	err = d.QueryRow(ctx,
+		"SELECT user_id FROM sessions WHERE id = ?", sessionID,
+	).Scan(&actualUserID)
+	if err != nil {
+		t.Fatalf("querying session user_id: %v", err)
+	}
+	if actualUserID == "" {
+		t.Fatal("session user_id should not be empty")
+	}
+
+	// Verify the user row was created with the actual user_id.
 	var userID string
 	err = d.QueryRow(ctx,
-		"SELECT id FROM users WHERE id = ?", claudeID,
+		"SELECT id FROM users WHERE id = ?", actualUserID,
 	).Scan(&userID)
 	if err != nil {
 		t.Fatalf("querying user: %v", err)
 	}
-	if userID != claudeID {
-		t.Errorf("user id = %q, want %q", userID, claudeID)
+	if userID != actualUserID {
+		t.Errorf("user id = %q, want %q", userID, actualUserID)
 	}
 }
 
@@ -597,6 +627,88 @@ func TestEndWithEmptyStartedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("End with empty started_at: %v", err)
 	}
+}
+
+func TestUpdateTracking(t *testing.T) {
+	t.Run("sets pathflow_mode and tracking_level", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
+		runtimeDir := filepath.Join(t.TempDir(), "runtime")
+
+		sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		if err := UpdateTracking(ctx, d, sessionID, "active", "tracked"); err != nil {
+			t.Fatalf("UpdateTracking: %v", err)
+		}
+
+		var pathflowMode, trackingLevel string
+		err = d.QueryRow(ctx,
+			"SELECT pathflow_mode, tracking_level FROM sessions WHERE id = ?", sessionID,
+		).Scan(&pathflowMode, &trackingLevel)
+		if err != nil {
+			t.Fatalf("querying session: %v", err)
+		}
+
+		if pathflowMode != "active" {
+			t.Errorf("pathflow_mode = %q, want %q", pathflowMode, "active")
+		}
+		if trackingLevel != "tracked" {
+			t.Errorf("tracking_level = %q, want %q", trackingLevel, "tracked")
+		}
+	})
+
+	t.Run("updates metadata with timestamp", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
+		runtimeDir := filepath.Join(t.TempDir(), "runtime")
+
+		sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		if err := UpdateTracking(ctx, d, sessionID, "inactive", "untracked"); err != nil {
+			t.Fatalf("UpdateTracking: %v", err)
+		}
+
+		var metadataStr string
+		err = d.QueryRow(ctx,
+			"SELECT metadata FROM sessions WHERE id = ?", sessionID,
+		).Scan(&metadataStr)
+		if err != nil {
+			t.Fatalf("querying metadata: %v", err)
+		}
+
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
+			t.Fatalf("parsing metadata: %v", err)
+		}
+
+		if _, ok := metadata["updated_at"]; !ok {
+			t.Error("metadata should contain updated_at key")
+		}
+		// Original claude_id should be preserved.
+		if metadata["claude_id"] != "test-claude-id" {
+			t.Errorf("claude_id = %v, want test-claude-id", metadata["claude_id"])
+		}
+	})
+
+	t.Run("no-op on nonexistent session", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+
+		// UpdateTracking on a session that doesn't exist should not error
+		// (UPDATE with no matching rows is not an error in SQL).
+		err := UpdateTracking(ctx, d, "ses-nonexistent", "active", "tracked")
+		if err != nil {
+			t.Fatalf("UpdateTracking on nonexistent: %v", err)
+		}
+	})
 }
 
 func TestMultipleStartEndCycles(t *testing.T) {

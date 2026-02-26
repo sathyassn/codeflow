@@ -123,7 +123,8 @@
         "claude-hooks/stop/test-cf-stop-logging.sh",
         "claude-hooks/stop/test-cf-stop-pathflow-gate.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit.sh",
-        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh"
+        "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh",
+        "cli/test-go-cli.sh"
       ]
     },
     "LOW": {
@@ -475,6 +476,10 @@
       {
         "pattern": "scripts/coordination/test_pattern_matching.py",
         "reason": "Integration test for pattern matching across coordination modules"
+      },
+      {
+        "pattern": "cli/test-go-cli.sh",
+        "reason": "Bridge test for Go CLI binary (no 1:1 shell source mapping — tests Go package code)"
       }
     ]
   },

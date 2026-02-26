@@ -223,15 +223,20 @@ func (d *DB) InitFromSchema(ctx context.Context) error {
 	return nil
 }
 
-// Migrate applies pending database migrations. Currently a placeholder that
-// reports the current schema version.
-func (d *DB) Migrate(ctx context.Context) error {
-	version, err := d.GetUserVersion(ctx)
+// Migrate loads embedded migrations and applies any that are pending.
+// Returns nil if all migrations are already applied.
+func (d *DB) Migrate(ctx context.Context) (*MigrateResult, error) {
+	migrations, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
 	if err != nil {
-		return fmt.Errorf("%w: reading user_version: %w", ErrMigration, err)
+		return nil, fmt.Errorf("%w: loading embedded migrations: %w", ErrMigration, err)
 	}
-	_ = version // Placeholder: future migration logic will use this.
-	return nil
+
+	result, err := d.ApplyMigrations(ctx, migrations)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // GetUserVersion reads the PRAGMA user_version value from the database.

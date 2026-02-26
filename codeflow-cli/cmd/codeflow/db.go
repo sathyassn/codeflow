@@ -74,23 +74,23 @@ func newDBInitCmd() *cobra.Command {
 func runDBInit(w io.Writer, dbPath string) error {
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return fmt.Errorf("creating database directory: %w", err)
+		return &exitError{code: ExitConfigError, err: fmt.Errorf("creating database directory: %w", err)}
 	}
 
 	ctx := context.Background()
 	d, err := openDB(dbPath)
 	if err != nil {
-		return err
+		return &exitError{code: ExitConfigError, err: err}
 	}
 	defer closeDB(d)
 
 	if err := d.InitFromSchema(ctx); err != nil {
-		return fmt.Errorf("initializing schema: %w", err)
+		return &exitError{code: ExitConfigError, err: fmt.Errorf("initializing schema: %w", err)}
 	}
 
 	// Set initial user_version to 1.
 	if err := d.SetUserVersion(ctx, 1); err != nil {
-		return fmt.Errorf("setting initial version: %w", err)
+		return &exitError{code: ExitConfigError, err: fmt.Errorf("setting initial version: %w", err)}
 	}
 
 	fmt.Fprintf(w, "Database initialized at %s\n", dbPath)
@@ -398,7 +398,7 @@ func newDBBackupCmd() *cobra.Command {
 	return cmd
 }
 
-// runDBBackup implements the db backup logic.
+// runDBBackup implements the db backup logic using VACUUM INTO for WAL-safe backup.
 func runDBBackup(w io.Writer, dbPath string) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return fmt.Errorf("database file not found: %s", dbPath)
@@ -408,13 +408,22 @@ func runDBBackup(w io.Writer, dbPath string) error {
 	backupDir := filepath.Dir(dbPath)
 	backupPath := filepath.Join(backupDir, fmt.Sprintf("codeflow-%s.db", timestamp))
 
-	src, err := os.ReadFile(dbPath)
-	if err != nil {
-		return fmt.Errorf("reading database: %w", err)
+	// Check if backup path already exists to avoid overwriting.
+	if _, err := os.Stat(backupPath); err == nil {
+		return fmt.Errorf("backup file already exists: %s", backupPath)
 	}
 
-	if err := os.WriteFile(backupPath, src, 0o644); err != nil {
-		return fmt.Errorf("writing backup: %w", err)
+	ctx := context.Background()
+	d, err := openDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer closeDB(d)
+
+	// VACUUM INTO creates a consistent, WAL-safe backup in a single operation.
+	// Unlike a naive file copy, this includes all WAL data and produces a valid database.
+	if _, err := d.Execute(ctx, "VACUUM INTO ?", backupPath); err != nil {
+		return fmt.Errorf("creating backup via VACUUM INTO: %w", err)
 	}
 
 	fmt.Fprintf(w, "Backup created: %s\n", backupPath)

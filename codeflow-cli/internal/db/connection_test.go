@@ -388,13 +388,52 @@ func TestClose(t *testing.T) {
 }
 
 func TestMigrate(t *testing.T) {
-	d := newTestDB(t)
-	ctx := t.Context()
+	t.Run("no-op when fully migrated", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
 
-	// Migrate should succeed on an empty database (placeholder).
-	if err := d.Migrate(ctx); err != nil {
-		t.Errorf("Migrate: %v", err)
-	}
+		// Set user_version to the latest migration so Migrate is a no-op.
+		migrations, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
+		if err != nil {
+			t.Fatalf("loading migrations: %v", err)
+		}
+		latest := migrations[len(migrations)-1].Version
+		if err := d.SetUserVersion(ctx, latest); err != nil {
+			t.Fatalf("SetUserVersion: %v", err)
+		}
+
+		result, err := d.Migrate(ctx)
+		if err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Migrate returned nil result")
+		}
+		if len(result.Applied) != 0 {
+			t.Errorf("Applied = %v, want empty (all migrations already applied)", result.Applied)
+		}
+		if result.CurrentVersion != latest {
+			t.Errorf("CurrentVersion = %d, want %d", result.CurrentVersion, latest)
+		}
+	})
+
+	t.Run("returns result with correct type", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+
+		// Set version high so no migrations apply -- just verify the return type.
+		if err := d.SetUserVersion(ctx, 9999); err != nil {
+			t.Fatalf("SetUserVersion: %v", err)
+		}
+
+		result, err := d.Migrate(ctx)
+		if err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+		if result.PendingCount != 0 {
+			t.Errorf("PendingCount = %d, want 0", result.PendingCount)
+		}
+	})
 }
 
 func TestNewDBInvalidPath(t *testing.T) {
@@ -525,7 +564,7 @@ func TestMigrateOnClosedDB(t *testing.T) {
 
 	d.db.Close()
 
-	err := d.Migrate(ctx)
+	_, err := d.Migrate(ctx)
 	if err == nil {
 		t.Error("expected error from Migrate on closed DB, got nil")
 	}

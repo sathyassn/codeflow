@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     completed_at TEXT,
     stage TEXT DEFAULT NULL
-        CHECK(stage IS NULL OR stage IN ('dev', 'work', 'review', 'qa', 'done')),
+        CHECK(stage IS NULL OR stage IN ('dev', 'plan', 'docs', 'test', 'review', 'qa', 'done')),
     stage_status TEXT DEFAULT NULL
         CHECK(stage_status IS NULL OR stage_status IN ('pending', 'in_progress', 'complete', 'failed')),
     stage_history TEXT DEFAULT '[]',    -- JSON array of stage transition records
@@ -456,7 +456,7 @@ CREATE TABLE IF NOT EXISTS active_work (
     agent TEXT,
     session_id TEXT,
     current_stage TEXT DEFAULT NULL
-        CHECK(current_stage IS NULL OR current_stage IN ('dev', 'work', 'review', 'qa')),
+        CHECK(current_stage IS NULL OR current_stage IN ('dev', 'plan', 'docs', 'test', 'review', 'qa')),
     team_name TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -569,7 +569,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     previous_session_id TEXT REFERENCES sessions(id),
     context_summary TEXT,
     tool_stats TEXT,                  -- JSON
-    metadata TEXT
+    metadata TEXT,
+    -- V4 PathFlow columns
+    pathflow_mode TEXT DEFAULT NULL
+        CHECK(pathflow_mode IS NULL OR pathflow_mode IN ('active', 'inactive')),
+    tracking_level TEXT DEFAULT NULL
+        CHECK(tracking_level IS NULL OR tracking_level IN ('tracked', 'untracked')),
+    work_item_id TEXT,                -- Reference to active_work.id
+    interaction_mode TEXT DEFAULT 'interactive'
+        CHECK(interaction_mode IS NULL OR interaction_mode IN ('interactive', 'autorun'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);

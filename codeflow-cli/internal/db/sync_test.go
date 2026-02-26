@@ -924,6 +924,125 @@ func TestApplyEventRouting(t *testing.T) {
 		}
 	})
 
+	t.Run("pr_created updates task PR fields", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		// Create epic and task.
+		_, err := d.Execute(ctx,
+			`INSERT INTO epics (id, format_id, title, area_type, work_type, domain)
+			 VALUES ('E-PR', 'INF-EPC-099', 'PR Epic', 'INF', 'FEAT', 'GENL')`)
+		if err != nil {
+			t.Fatalf("inserting epic: %v", err)
+		}
+		_, err = d.Execute(ctx,
+			`INSERT INTO tasks (id, format_id, epic_id, title, status, area_type, work_type, domain)
+			 VALUES ('T-PR', 'INF-TSK-099-001', 'E-PR', 'PR Task', 'in_progress', 'INF', 'FEAT', 'GENL')`)
+		if err != nil {
+			t.Fatalf("inserting task: %v", err)
+		}
+
+		event := NormalizedEvent{
+			Event: "pr_created",
+			Raw: map[string]any{
+				"task_format_id": "INF-TSK-099-001",
+				"pr_number":      float64(42),
+				"pr_url":         "https://github.com/test/repo/pull/42",
+				"timestamp":      "2024-06-01T00:00:00Z",
+			},
+		}
+
+		if err := d.applyEvent(ctx, FileWorkGraph, event); err != nil {
+			t.Fatalf("applyEvent: %v", err)
+		}
+
+		var prNumber int
+		var externalURL string
+		if err := d.QueryRow(ctx,
+			"SELECT pr_number, external_url FROM tasks WHERE format_id = 'INF-TSK-099-001'",
+		).Scan(&prNumber, &externalURL); err != nil {
+			t.Fatalf("querying task: %v", err)
+		}
+		if prNumber != 42 {
+			t.Errorf("pr_number = %d, want 42", prNumber)
+		}
+		if externalURL != "https://github.com/test/repo/pull/42" {
+			t.Errorf("external_url = %q, want PR URL", externalURL)
+		}
+	})
+
+	t.Run("pr_created without task_format_id is no-op", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		event := NormalizedEvent{
+			Event: "pr_created",
+			Raw:   map[string]any{"pr_number": float64(1)},
+		}
+
+		if err := d.applyEvent(ctx, FileWorkGraph, event); err != nil {
+			t.Fatalf("applyEvent should not error: %v", err)
+		}
+	})
+
+	t.Run("pr_merged marks task complete", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		// Create epic and task.
+		_, err := d.Execute(ctx,
+			`INSERT INTO epics (id, format_id, title, area_type, work_type, domain)
+			 VALUES ('E-MRG', 'INF-EPC-098', 'Merge Epic', 'INF', 'FIX', 'GENL')`)
+		if err != nil {
+			t.Fatalf("inserting epic: %v", err)
+		}
+		_, err = d.Execute(ctx,
+			`INSERT INTO tasks (id, format_id, epic_id, title, status, area_type, work_type, domain)
+			 VALUES ('T-MRG', 'INF-TSK-098-001', 'E-MRG', 'Merge Task', 'in_progress', 'INF', 'FIX', 'GENL')`)
+		if err != nil {
+			t.Fatalf("inserting task: %v", err)
+		}
+
+		event := NormalizedEvent{
+			Event: "pr_merged",
+			Raw: map[string]any{
+				"task_format_id": "INF-TSK-098-001",
+				"timestamp":      "2024-06-01T12:00:00Z",
+			},
+		}
+
+		if err := d.applyEvent(ctx, FileWorkGraph, event); err != nil {
+			t.Fatalf("applyEvent: %v", err)
+		}
+
+		var status, completedAt string
+		if err := d.QueryRow(ctx,
+			"SELECT status, completed_at FROM tasks WHERE format_id = 'INF-TSK-098-001'",
+		).Scan(&status, &completedAt); err != nil {
+			t.Fatalf("querying task: %v", err)
+		}
+		if status != "complete" {
+			t.Errorf("status = %q, want complete", status)
+		}
+		if completedAt != "2024-06-01T12:00:00Z" {
+			t.Errorf("completed_at = %q, want 2024-06-01T12:00:00Z", completedAt)
+		}
+	})
+
+	t.Run("pr_merged without task_format_id is no-op", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		event := NormalizedEvent{
+			Event: "pr_merged",
+			Raw:   map[string]any{"timestamp": "2024-06-01T00:00:00Z"},
+		}
+
+		if err := d.applyEvent(ctx, FileWorkGraph, event); err != nil {
+			t.Fatalf("applyEvent should not error: %v", err)
+		}
+	})
+
 	t.Run("config_set event is accepted silently", func(t *testing.T) {
 		d := setupDB(t)
 		ctx := t.Context()

@@ -269,7 +269,7 @@ SESSION END
 4. Register task in WorkGraph (PF3-TSK-04, cf-knowledge-layer) — **CONDITIONAL: `adhoc_only`** — skip if `origin=planned`. The `condition: adhoc_only` field means this task runs only for adhoc/unplanned work; planned tasks already have a task_id from the epic task list.
 5. Begin work session (PF3-TSK-05, cf-knowledge-layer) — writes `begin_work` event to ledger. For planned tasks, task_id comes from the epic task list; for adhoc tasks, task_id comes from PF3-TSK-04.
 
-- Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→ci/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→experiment/
+- Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→cicd/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→spike/
 - → See Section 6 for work type classification details
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF3-TSK-01 blocked by PF2-TSK-04, PF3-TSK-02 blocked by PF3-TSK-01, PF3-TSK-03 blocked by PF3-TSK-02, PF3-TSK-04 blocked by PF3-TSK-03, PF3-TSK-05 blocked by PF3-TSK-04); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
@@ -1029,7 +1029,7 @@ Three complementary mechanisms provide defense-in-depth:
 🔒 **All git write operations go through cf-git-operations teammate. Never run git write commands directly.**
 
 - No direct commits to main/master
-- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `ci/*`, `experiment/*`, `hotfix/*`
+- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `cicd/*`, `spike/*`, `hotfix/*`
 - Commit messages follow conventional format (enforced by cf-git-operations)
 - All changes through PRs to main
 

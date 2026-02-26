@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // Migration represents a single database migration.
 type Migration struct {
@@ -33,6 +37,41 @@ func (d *DB) SetUserVersion(ctx context.Context, version int) error {
 		return fmt.Errorf("db: setting user_version to %d: %w", version, err)
 	}
 	return nil
+}
+
+// EmbeddedMigrations returns the embedded migrations filesystem.
+// This allows the CLI to use migrations from the compiled binary
+// without requiring the migrations directory on disk.
+func EmbeddedMigrations() embed.FS {
+	return migrationsFS
+}
+
+// LoadMigrationsFromEmbed reads .sql files from an embed.FS and parses them
+// into Migration structs. The FS must contain files under "migrations/"
+// following the naming convention: {NNN}_{description}.sql.
+func LoadMigrationsFromEmbed(fsys embed.FS) ([]Migration, error) {
+	entries, err := fs.ReadDir(fsys, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("db: reading embedded migrations: %w", err)
+	}
+
+	var migrations []Migration
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		m, err := parseMigrationEntry(fsys, "migrations", entry)
+		if err != nil {
+			return nil, err
+		}
+		migrations = append(migrations, m)
+	}
+
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+
+	return migrations, nil
 }
 
 // LoadMigrationsFromDir reads .sql files from a directory and parses them
@@ -66,17 +105,12 @@ func LoadMigrationsFromDir(dir string) ([]Migration, error) {
 	return migrations, nil
 }
 
-// parseMigrationFile reads a single migration file and extracts its version number.
+// parseMigrationFile reads a single migration file from disk and extracts its version number.
 func parseMigrationFile(dir string, entry fs.DirEntry) (Migration, error) {
 	name := entry.Name()
-	parts := strings.SplitN(name, "_", 2)
-	if len(parts) < 2 {
-		return Migration{}, fmt.Errorf("db: invalid migration filename %q: expected NNN_description.sql", name)
-	}
-
-	version, err := strconv.Atoi(parts[0])
+	version, baseName, err := parseMigrationFilename(name)
 	if err != nil {
-		return Migration{}, fmt.Errorf("db: invalid migration version in %q: %w", name, err)
+		return Migration{}, err
 	}
 
 	content, err := os.ReadFile(filepath.Join(dir, name))
@@ -86,9 +120,44 @@ func parseMigrationFile(dir string, entry fs.DirEntry) (Migration, error) {
 
 	return Migration{
 		Version: version,
-		Name:    strings.TrimSuffix(parts[1], ".sql"),
+		Name:    baseName,
 		SQL:     string(content),
 	}, nil
+}
+
+// parseMigrationEntry reads a single migration file from an embed.FS.
+func parseMigrationEntry(fsys embed.FS, dir string, entry fs.DirEntry) (Migration, error) {
+	name := entry.Name()
+	version, baseName, err := parseMigrationFilename(name)
+	if err != nil {
+		return Migration{}, err
+	}
+
+	content, err := fs.ReadFile(fsys, dir+"/"+name)
+	if err != nil {
+		return Migration{}, fmt.Errorf("db: reading embedded migration %s: %w", name, err)
+	}
+
+	return Migration{
+		Version: version,
+		Name:    baseName,
+		SQL:     string(content),
+	}, nil
+}
+
+// parseMigrationFilename extracts the version number and description from a filename.
+func parseMigrationFilename(name string) (int, string, error) {
+	parts := strings.SplitN(name, "_", 2)
+	if len(parts) < 2 {
+		return 0, "", fmt.Errorf("db: invalid migration filename %q: expected NNN_description.sql", name)
+	}
+
+	version, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, "", fmt.Errorf("db: invalid migration version in %q: %w", name, err)
+	}
+
+	return version, strings.TrimSuffix(parts[1], ".sql"), nil
 }
 
 // ApplyMigrations applies all pending migrations from the given slice.

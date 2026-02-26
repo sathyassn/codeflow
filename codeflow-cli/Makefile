@@ -34,11 +34,8 @@ build-all:
 test:
 	go test ./...
 
-## test-cover: Run tests with coverage and enforce threshold on implemented packages
-## Skeleton doc.go-only packages are excluded (no statements to cover). cmd/ stubs excluded
-## per Go standards ("Lower threshold acceptable for cmd/ stubs"). Threshold is 80% because
-## the only internal package (testutil) has error paths that call t.Fatalf — structurally
-## untestable from within the same process. Raise to 85% when business logic packages are added.
+## test-cover: Run tests with coverage and enforce 85% threshold on business packages
+## Business packages: db, session, cmd/codeflow. Skeleton doc.go-only packages excluded.
 test-cover:
 	@go test -coverprofile=coverage.out ./... 2>&1 | tee coverage.log
 	@echo "--- Per-function coverage ---"
@@ -46,16 +43,20 @@ test-cover:
 	@echo "---"
 	@total=$$(go tool cover -func=coverage.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
 	echo "Overall coverage (all packages): $${total}%"
-	@go test -coverprofile=internal-impl.out ./internal/testutil/ > /dev/null 2>&1; \
-	impl=$$(go tool cover -func=internal-impl.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
-	rm -f internal-impl.out; \
-	echo "Implemented internal coverage: $${impl}%"; \
-	threshold=80; \
+	@go test -coverprofile=business.out \
+		./internal/db/... \
+		./internal/session/... \
+		./cmd/codeflow/... \
+		> /dev/null 2>&1; \
+	impl=$$(go tool cover -func=business.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
+	rm -f business.out; \
+	echo "Business package coverage: $${impl}%"; \
+	threshold=85; \
 	if [ $$(echo "$${impl} < $${threshold}" | bc -l) -eq 1 ]; then \
-		echo "FAIL: Implemented internal coverage $${impl}% is below $${threshold}% threshold"; \
+		echo "FAIL: Business package coverage $${impl}% is below $${threshold}% threshold"; \
 		exit 1; \
 	else \
-		echo "OK: Implemented internal coverage $${impl}% meets $${threshold}% threshold"; \
+		echo "OK: Business package coverage $${impl}% meets $${threshold}% threshold"; \
 	fi
 
 ## test-race: Run tests with race detector

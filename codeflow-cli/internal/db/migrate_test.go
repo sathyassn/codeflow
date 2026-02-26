@@ -164,6 +164,65 @@ func TestLoadMigrationsFromDir(t *testing.T) {
 	})
 }
 
+func TestLoadMigrationsFromEmbed(t *testing.T) {
+	t.Run("loads embedded migrations", func(t *testing.T) {
+		migrations, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
+		if err != nil {
+			t.Fatalf("LoadMigrationsFromEmbed: %v", err)
+		}
+
+		if len(migrations) == 0 {
+			t.Fatal("expected at least one embedded migration")
+		}
+
+		// Verify sorted by version.
+		for i := 1; i < len(migrations); i++ {
+			if migrations[i].Version <= migrations[i-1].Version {
+				t.Errorf("migrations not sorted: version %d after %d",
+					migrations[i].Version, migrations[i-1].Version)
+			}
+		}
+
+		// Verify first migration has SQL content.
+		if migrations[0].SQL == "" {
+			t.Error("first migration has empty SQL")
+		}
+
+		// Verify first migration has a name.
+		if migrations[0].Name == "" {
+			t.Error("first migration has empty name")
+		}
+	})
+
+	t.Run("embedded matches disk migrations", func(t *testing.T) {
+		embedded, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
+		if err != nil {
+			t.Fatalf("embedded: %v", err)
+		}
+
+		// Load from disk for comparison. Use the relative path from the test.
+		disk, err := LoadMigrationsFromDir("migrations")
+		if err != nil {
+			t.Fatalf("disk: %v", err)
+		}
+
+		if len(embedded) != len(disk) {
+			t.Fatalf("embedded count %d != disk count %d", len(embedded), len(disk))
+		}
+
+		for i := range embedded {
+			if embedded[i].Version != disk[i].Version {
+				t.Errorf("migration %d: embedded version %d != disk version %d",
+					i, embedded[i].Version, disk[i].Version)
+			}
+			if embedded[i].Name != disk[i].Name {
+				t.Errorf("migration %d: embedded name %q != disk name %q",
+					i, embedded[i].Name, disk[i].Name)
+			}
+		}
+	})
+}
+
 func TestApplyMigrations(t *testing.T) {
 	t.Run("applies all pending migrations", func(t *testing.T) {
 		d := newTestDB(t)

@@ -179,11 +179,11 @@
       "name": "Work Execution",
       "phase_order": 4,
       "execution_order": "parallel_stages_allowed",
-      "execution_order_note": "Within a stage, parallel batch execution is allowed per max_parallel/batch_size. Stages themselves follow pipeline order (e.g., WS-DEV before WS-REV before WS-QA). Tasks PF4-TSK-01 and PF4-TSK-02 are sequential prerequisites before stage execution begins.",
+      "execution_order_note": "⛔ MANDATORY: Within a stage, parallel batch execution MUST be used when scope involves multiple independent items. Assess file count against batch_size BEFORE spawning any stage teammate — if file count exceeds batch_size, spawn parallel instances up to max_parallel. Do NOT default to single-instance execution when parallel batching applies. Stages themselves follow pipeline order (e.g., WS-DEV before WS-REV before WS-QA). Tasks PF4-TSK-01 and PF4-TSK-02 are sequential prerequisites before stage execution begins.",
       "subject": "PF4-EXECUTE: Run work pipeline",
       "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Executing work pipeline",
-      "notes": "All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END. No teammate is shut down between stages or after pipeline completion. On-demand teammates stay alive through PF5-VERIFY and PF6-COMPLETE, then are shut down at PF7-END alongside persistent teammates. This preserves context for rework loops and avoids expensive re-spawns.",
+      "notes": "All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END. No teammate is shut down between stages or after pipeline completion. On-demand teammates stay alive through PF5-VERIFY and PF6-COMPLETE, then are shut down at PF7-END alongside persistent teammates. This preserves context for rework loops and avoids expensive re-spawns. ⛔ MANDATORY PARALLELIZATION: Before spawning any primary stage teammate, the team lead MUST assess whether the work scope involves multiple independent items. If file count exceeds batch_size for the stage, spawn parallel instances — do NOT assign all work to a single teammate. Context exhaustion from overloading one teammate costs more than coordination overhead. Default to parallel when in doubt.",
       "task_tracker": {
         "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "blocked_by_enforcement": "⛔ MANDATORY: When creating task tracker entries, apply each task's blocked_by field using TaskUpdate(addBlockedBy=[...]) IMMEDIATELY after TaskCreate. Every blocked_by in the config MUST be reflected in the task tracker. Omitting blocked_by breaks ordering visibility and causes downstream stages to execute out of order.",
@@ -215,7 +215,7 @@
           "id": "PF4-TSK-03",
           "task_order": 3,
           "blocked_by": ["PF4-TSK-02"],
-          "description": "Assess parallel batch need, then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST). If scope involves multiple independent items exceeding batch_size, spawn parallel instances per max_parallel. Default to parallel when in doubt.",
+          "description": "⛔ MANDATORY PARALLEL BATCH ASSESSMENT: Before spawning any primary stage teammate, count independent work items (files, components, sections) against batch_size for the stage. If count exceeds batch_size, MUST spawn parallel instances up to max_parallel — single-instance assignment when parallel batching applies is a PROTOCOL VIOLATION. Then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST) with appropriate parallelism.",
           "assigned_to": "team-lead",
           "operation": "Spawn stage teammate per pipeline",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."

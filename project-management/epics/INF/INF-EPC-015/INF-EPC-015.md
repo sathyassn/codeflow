@@ -3,7 +3,7 @@ id: "epic-01KJ6YG0QA7MWQQFWCZMSP7HB6"
 format_id: "INF-EPC-015"
 title: "CodeFlow Go CLI - Phase 6 V4 Implementation"
 summary: "Build the production CodeFlow CLI binary in Go — sole SQLite authority, welcome screen, doctor, autorun, cross-platform"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -62,7 +62,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 - [ ] `codeflow session start` and `codeflow session end` manage session lifecycle
 - [ ] `codeflow doctor` runs 16 health checks (13 V3 + 3 V4)
 - [ ] `codeflow init` initializes new projects with wizard flow
-- [ ] `codeflow autorun run batch.yaml` orchestrates parallel workers
+- [ ] `codeflow autorun start batch.yaml` orchestrates parallel workers (async design)
 - [ ] Welcome screen displays project state with V3 base and V4 PathFlow indicators
 - [ ] `make build-all` produces 5 platform binaries, each < 20MB, CGO_ENABLED=0
 - [ ] `make test-cover` passes with >= 85% line coverage across entire Go project
@@ -91,6 +91,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 | INF-TSK-015-015 | Doctor V4 health checks (3 new) | todo | normal |
 | INF-TSK-015-016 | Test infrastructure integration (bridge script + test-config) | todo | normal |
 | INF-TSK-015-017 | JSONL normalization and cross-compilation verification | todo | normal |
+| INF-TSK-015-018 | Go CLI spec alignment and backfill fixes | in_progress | high |
 
 ## Dependencies
 
@@ -129,7 +130,17 @@ Full design analysis at `.codeflow/docs/analysis/inf-epc-015-go-cli-design.md` c
 ## Related
 
 - Phase 6 V4 specification
+- V4 Spec source: `/Volumes/DATA/Local/software-workspace/projects/codeflow-specification-v4/08-cli/`
+- Spec alignment analysis: `.codeflow/docs/analysis/inf-epc-015-spec-alignment.md`
 - PLN-TSK-001-003: Planning session that produced this epic
 - INF-EPC-008: PathFlow PR Verification (prerequisite Phase 5 work)
 - `.codeflow/scripts/state/ledger.sh`: Current shell-based ledger operations (replaced by Go CLI)
 - `.codeflow/scripts/db/schema.sql`: Authoritative schema (embedded by Go CLI)
+
+## Spec Alignment Notes
+
+- Branch prefixes: CICD=`cicd/`, SPKE=`spike/` (schema seed data is authority; CLAUDE.md corrected)
+- Autorun subcommands: `autorun start` (not `run`), `autorun sessions` (not `list`) per V4 spec async design
+- Init wizard: Full 7-step flow per V4 spec (Claude Code + git provider required, not optional)
+- Doctor: 16 checks (epic granularity preferred over spec's 15)
+- See `.codeflow/docs/analysis/inf-epc-015-spec-alignment.md` for complete audit
