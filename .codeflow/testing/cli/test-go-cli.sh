@@ -10,13 +10,24 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 readonly REPO_ROOT
 readonly CLI_DIR="$REPO_ROOT/codeflow-cli"
 
-# Skip if Go is not available (CI may not have Go installed).
+# Skip if Go is not available or version is insufficient for go.mod.
 if ! command -v go &>/dev/null; then
     echo "=== Go CLI Bridge Tests ==="
     echo ""
     echo "SKIP: 'go' not found on PATH. Skipping Go CLI tests."
-    echo "Install Go to run these tests locally."
     exit 0
+fi
+
+# Check Go version meets go.mod requirement.
+required_go=$(grep '^go ' "$CLI_DIR/go.mod" 2>/dev/null | awk '{print $2}')
+if [[ -n "$required_go" ]]; then
+    current_go=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | sed 's/go//')
+    if [[ "$(printf '%s\n' "$required_go" "$current_go" | sort -V | head -1)" != "$required_go" ]]; then
+        echo "=== Go CLI Bridge Tests ==="
+        echo ""
+        echo "SKIP: Go $current_go < required $required_go. Skipping Go CLI tests."
+        exit 0
+    fi
 fi
 
 # Track pass/fail counts.
