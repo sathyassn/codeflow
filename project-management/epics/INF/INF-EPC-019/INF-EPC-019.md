@@ -48,7 +48,7 @@ Analysis package (8 files): `.codeflow/docs/analysis/artifact-token-efficiency/`
 |------|-----------|-------------|
 | [README.md](.codeflow/docs/analysis/artifact-token-efficiency/README.md) | Executive summary, package navigation | Start here for orientation |
 | [01-design-principles.md](.codeflow/docs/analysis/artifact-token-efficiency/01-design-principles.md) | 6 design principles + SPINE mandate + anti-patterns | **MANDATORY first read** before any task |
-| [02-skill-taxonomy.md](.codeflow/docs/analysis/artifact-token-efficiency/02-skill-taxonomy.md) | 15-skill tree, access matrix, effective knowledge per agent | When understanding skill organization |
+| [02-skill-taxonomy.md](.codeflow/docs/analysis/artifact-token-efficiency/02-skill-taxonomy.md) | 14-skill tree, access matrix, effective knowledge per agent | When understanding skill organization |
 | [03-claude-md.md](.codeflow/docs/analysis/artifact-token-efficiency/03-claude-md.md) | CLAUDE.md section audit, STAY/MOVE classification | For CLAUDE.md restructuring tasks (008, 013) |
 | [04-agent-definitions.md](.codeflow/docs/analysis/artifact-token-efficiency/04-agent-definitions.md) | All 8 agent audits, function vs role strategy | For agent definition tasks (009, 010) |
 | [05-commands.md](.codeflow/docs/analysis/artifact-token-efficiency/05-commands.md) | 14-command audit, per-command targets | For command tasks (011, 012) |
@@ -77,7 +77,7 @@ Analysis package (8 files): `.codeflow/docs/analysis/artifact-token-efficiency/`
 - Creating new agent definitions or commands
 - Modifying test infrastructure or test runner
 - Go CLI integration changes
-- Modifying existing on-demand standards skills (cf-shell-standards, cf-python-standards, cf-go-standards, cf-markdown-standards, cf-sandbox-standards)
+- Modifying existing on-demand standards skills (cf-shell-standards, cf-python-standards, cf-go-standards, cf-sandbox-standards)
 
 ## Acceptance Criteria
 
@@ -88,7 +88,7 @@ Analysis package (8 files): `.codeflow/docs/analysis/artifact-token-efficiency/`
 - [ ] 3 function agent definitions slimmed (Execution Steps replaced with skill references)
 - [ ] 5 role agent definitions slimmed (Working Protocol removed, Communication trimmed)
 - [ ] All 14 commands slimmed with ASCII diagrams (no Mermaid) and minimal working protocol references
-- [ ] Capabilities inventory in CLAUDE.md updated to reflect 15 active skills
+- [ ] Capabilities inventory in CLAUDE.md updated to reflect 14 active skills
 - [ ] Full test suite passes after restructuring
 - [ ] PathFlow E2E validates restructured artifacts work end-to-end
 
@@ -196,11 +196,11 @@ Agent-Specific (one agent each):
 Shared Agent (multiple agents):
     +-- cf-team-communication      (NEW: peer messaging, commit requests, escalation)
     +-- cf-code-exploration         (RESTORE + UPDATE: search patterns, code comprehension)
-    +-- cf-documentation-standards  (RESTORE + UPDATE: doc structure, style, quality)
+    +-- cf-documentation-standards  (RESTORE + MERGE cf-markdown-standards: doc structure, style, quality, templates)
 
 Standards (EXISTING, unchanged):
     +-- cf-shell-standards, cf-python-standards, cf-go-standards
-    +-- cf-markdown-standards, cf-sandbox-standards
+    +-- cf-sandbox-standards
 ```
 
 ### Risk Mitigations

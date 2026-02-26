@@ -141,8 +141,8 @@ description: "Memory lifecycle operations: work detection, context loading, prog
 
 ```text
 description: "Task management operations: work classification, epic/task CRUD,
-  field validation, work session lifecycle. Used by: cf-knowledge-layer,
-  cf-planning. Not used by: team-lead, cf-development."
+  field validation, work session lifecycle. Used by: cf-knowledge-layer.
+  Not used by: team-lead, cf-development, cf-planning."
 ```
 
 **Source content extraction map:**
@@ -338,31 +338,37 @@ description: "Codebase exploration patterns: Glob/Grep/Read strategies, search
 
 ---
 
-### cf-documentation-standards (RESTORE)
+### cf-documentation-standards (RESTORE + MERGE cf-markdown-standards)
 
 ```text
-description: "Documentation structure standards, style conventions, and quality
-  checks. Used by: cf-planning, cf-documentation. Not used by: cf-development,
-  cf-git-operations."
+description: "Documentation standards: markdown formatting, document templates
+  (epic, task, ADR), section structure, style conventions, heading standards,
+  quality checks. Used by: cf-planning, cf-documentation. Not used by:
+  cf-development, cf-git-operations."
 ```
 
 **Source content:**
 
 | Source | Lines | Changes |
 |--------|:----:|---------|
-| Archived cf-documentation-standards | ~267 | Remove V3 refs, add YAML frontmatter with "Used by: cf-planning, cf-documentation" |
+| Archived cf-documentation-standards | ~267 | Remove V3 refs, add YAML frontmatter |
+| Current cf-markdown-standards skill | ~410 | Merge templates, formatting rules, lint rules into combined skill |
+
+**Merge rationale:** "Markdown" is too narrow (file format). "Documentation standards" is the broader discipline covering templates, structure, style, and formatting. One merged skill replaces both.
 
 **Restoration approach (review + revamp, NOT blind restore):**
 
 1. Start from archived version at `.codeflow/docs/archived/skills/cf-documentation-standards/`
-2. Read CURRENT cf-documentation agent def -- identify documentation standards that evolved since archival
-3. Read CURRENT CLAUDE.md sections referencing documentation -- verify alignment
-4. Reconcile: archived structure + current agent def improvements + current CLAUDE.md conventions
-5. Remove V3 sentinel references, update to V4 SKILL.md format with YAML frontmatter
-6. Add Used-by scope in description field
-7. Validate no procedures are lost (lossless merge) and skill reflects current project state
+2. Read CURRENT cf-markdown-standards skill at `.claude/skills/cf-markdown-standards/SKILL.md` -- this is the second merge source
+3. Read CURRENT cf-documentation agent def -- identify documentation standards that evolved since archival
+4. Read CURRENT CLAUDE.md sections referencing documentation -- verify alignment
+5. MERGE all three sources: archived skill structure + current cf-markdown-standards content + agent def improvements
+6. Remove V3 sentinel references, update to V4 SKILL.md format with YAML frontmatter
+7. Add Used-by scope in description field
+8. Delete or archive cf-markdown-standards after merge (move to `.codeflow/docs/archived/skills/`)
+9. Validate no procedures are lost (lossless merge) and skill reflects current project state
 
-**Estimated size:** ~200-250 lines (~1.8K tokens)
+**Estimated size:** ~350-450 lines (~3K tokens)
 
 ## LOSSLESS Verification Summary
 

@@ -12,7 +12,7 @@ description: "Git operations procedures (branch, commit, PR, sync). Used by: cf-
 ---
 ```
 
-## Complete Taxonomy (15 Skills)
+## Complete Taxonomy (14 Skills)
 
 ```text
 Skill Taxonomy:
@@ -24,26 +24,27 @@ Lead-Facing (loaded by team lead):
 Agent-Specific (loaded by one agent):
     +-- cf-git-workflow           (RESTORE from archive + update from agent def)
     +-- cf-memory-management      (RESTORE from archive + update from agent def)
+    +-- cf-task-management        (RESTORE from archive + update from agent def)
     +-- cf-db-operations          (RESTORE from archive + update from agent def)
     +-- cf-security-operations    (RESTORE from archive + update from agent def)
 
 Shared Agent (loaded by multiple agents):
     +-- cf-team-communication     (NEW, extract from all 8 agent defs)
-    +-- cf-task-management        (RESTORE from archive + update from agent def)
     +-- cf-code-exploration       (RESTORE from archive + update from agent defs)
-    +-- cf-documentation-standards (RESTORE from archive + update from agent def)
+    +-- cf-documentation-standards (RESTORE + MERGE cf-markdown-standards + update from agent def)
 
 Standards (EXISTING, unchanged):
     +-- cf-shell-standards
     +-- cf-python-standards
     +-- cf-go-standards
-    +-- cf-markdown-standards
     +-- cf-sandbox-standards
 ```
 
-**Total: 15 active skills** (currently 6 active + 10 archived; target 15 active + 1 archived)
+**Total: 14 active skills** (currently 6 active + 10 archived; target 14 active + 1 archived)
 
-Note: The 3 knowledge domain skills (cf-memory-management, cf-task-management, cf-db-operations) are kept as separate functional domains rather than consolidated. Each has a distinct concern: work lifecycle, task/epic CRUD, and persistence operations. cf-knowledge-layer references all three; cf-planning also references cf-task-management for work decomposition. One skill per functional domain -- if an agent needs multiple domains, it references multiple skills.
+Note: The 3 knowledge domain skills (cf-memory-management, cf-task-management, cf-db-operations) are kept as separate functional domains rather than consolidated. Each has a distinct concern: work lifecycle, task/epic CRUD, and persistence operations. cf-knowledge-layer references all three. One skill per functional domain -- if an agent needs multiple domains, it references multiple skills.
+
+Note: cf-markdown-standards has been merged into cf-documentation-standards. "Markdown" is too narrow (file format); "documentation standards" is the broader discipline covering templates, structure, style, and formatting. The merged cf-documentation-standards absorbs all content from the current cf-markdown-standards skill.
 
 ## Skill Detail Table
 
@@ -53,16 +54,16 @@ Note: The 3 knowledge domain skills (cf-memory-management, cf-task-management, c
 | **cf-pathflow-protocol** (NEW) | Lead-facing + Agents | team-lead, cf-development, cf-planning, cf-documentation, cf-quality-assurance, cf-review | Extract from CLAUDE.md S4/S5/S6/S7/S11 + agent defs | On-demand | ~500-600 |
 | **cf-git-workflow** (RESTORE+) | Agent-specific | cf-git-operations | Restore archive + update from agent def | On-demand | ~400-500 |
 | **cf-memory-management** (RESTORE+) | Agent-specific | cf-knowledge-layer | Restore archive + update from agent def | On-demand | ~350-400 |
-| **cf-task-management** (RESTORE+) | Shared agent | cf-knowledge-layer, cf-planning | Restore archive + update from agent def | On-demand | ~350-400 |
+| **cf-task-management** (RESTORE+) | Agent-specific | cf-knowledge-layer | Restore archive + update from agent def | On-demand | ~350-400 |
 | **cf-db-operations** (RESTORE+) | Agent-specific | cf-knowledge-layer | Restore archive + update from agent def | On-demand | ~350-400 |
 | **cf-security-operations** (RESTORE+) | Agent-specific | cf-security | Restore archive + update from agent def | On-demand | ~300-400 |
 | **cf-team-communication** (NEW) | Shared agent | all agents | Extract from all 8 agent defs | On-demand | ~150-200 |
 | **cf-code-exploration** (RESTORE+) | Shared agent | cf-planning, cf-development, cf-review | Restore archive + update from agent defs | On-demand | ~200-250 |
-| **cf-documentation-standards** (RESTORE+) | Shared agent | cf-documentation | Restore archive + update from agent def | On-demand | ~200-250 |
+| **cf-documentation-standards** (RESTORE+ MERGE) | Shared agent | cf-planning, cf-documentation | Restore archive + merge current cf-markdown-standards + update from agent def | On-demand | ~350-450 |
 | **cf-shell-standards** | Standards | cf-development, cf-git-operations | EXISTING | On-demand | (unchanged) |
 | **cf-python-standards** | Standards | cf-development, cf-quality-assurance | EXISTING | On-demand | (unchanged) |
 | **cf-go-standards** | Standards | cf-development | EXISTING | On-demand | (unchanged) |
-| **cf-markdown-standards** | Standards | cf-planning, cf-documentation | EXISTING | On-demand | (unchanged) |
+| ~~cf-markdown-standards~~ | ~~Standards~~ | -- | MERGED into cf-documentation-standards | -- | -- |
 | **cf-sandbox-standards** | Standards | cf-git-operations, cf-development, cf-quality-assurance | EXISTING | On-demand | (unchanged) |
 
 ## Skill-to-Agent Access Matrix
@@ -75,7 +76,7 @@ This matrix proves that every agent retains access to all content it currently u
 | cf-pathflow-protocol | OD | -- | -- | -- | SP | SP | SP | SP | SP |
 | cf-git-workflow | -- | SP | -- | -- | -- | -- | -- | -- | -- |
 | cf-memory-management | -- | -- | SP | -- | -- | -- | -- | -- | -- |
-| cf-task-management | -- | -- | SP | -- | -- | SP | -- | -- | -- |
+| cf-task-management | -- | -- | SP | -- | -- | -- | -- | -- | -- |
 | cf-db-operations | -- | -- | SP | -- | -- | -- | -- | -- | -- |
 | cf-security-operations | -- | -- | -- | SP | -- | -- | -- | -- | -- |
 | cf-team-communication | OD | SP | SP | SP | SP | SP | SP | SP | SP |
@@ -84,7 +85,7 @@ This matrix proves that every agent retains access to all content it currently u
 | cf-shell-standards | -- | OD | -- | -- | OD | -- | -- | -- | OD |
 | cf-python-standards | -- | -- | -- | -- | OD | -- | -- | -- | OD |
 | cf-go-standards | -- | -- | -- | -- | OD | -- | -- | -- | -- |
-| cf-markdown-standards | -- | -- | -- | -- | -- | OD | OD | -- | -- |
+| ~~cf-markdown-standards~~ | -- | -- | -- | -- | -- | -- | -- | -- | -- |
 | cf-sandbox-standards | -- | OD | OD | -- | OD | -- | -- | -- | OD |
 
 **Legend:** SS = SessionStart (always-loaded), SP = Spawn-loaded (in agent def YAML + spawn prompt), OD = On-demand (agent loads when needed), -- = Not applicable.
@@ -107,7 +108,7 @@ For each agent, what they can access before and after restructuring:
 | **cf-knowledge-layer** | Agent def (571 lines) = 571 at spawn | Agent def (~180 lines) + cf-memory-management (~375 lines) + cf-task-management (~375 lines) + cf-db-operations (~375 lines) + cf-team-communication (~175 lines) = ~1,480 at spawn | MORE content (+909 lines). Gains full archived decision trees. |
 | **cf-security** | Agent def (324 lines) = 324 at spawn | Agent def (~140 lines) + cf-security-operations (~350 lines) + cf-team-communication (~175 lines) = ~665 at spawn | MORE content (+341 lines). Gains complete security decision trees. |
 | **cf-development** | Agent def (455 lines) = 455 at spawn | Agent def (~427 lines) + cf-team-communication (~175 lines) = ~602+ at spawn | MORE content (+147 lines). Gains shared communication patterns. |
-| **cf-planning** | Agent def (524 lines) = 524 at spawn | Agent def (~496 lines) + cf-team-communication (~175 lines) + cf-task-management (~375 lines) = ~1,046+ at spawn | MORE content (+522 lines). Gains full task management skill. |
+| **cf-planning** | Agent def (524 lines) = 524 at spawn | Agent def (~496 lines) + cf-team-communication (~175 lines) + cf-documentation-standards (~400 lines) = ~1,071+ at spawn | MORE content (+547 lines). Gains documentation standards (merged with markdown standards). |
 | **cf-documentation** | Agent def (409 lines) = 409 at spawn | Agent def (~381 lines) + cf-team-communication (~175 lines) + cf-documentation-standards (~250 lines) = ~806+ at spawn | MORE content (+397 lines). Gains documentation standards from archive. |
 | **cf-review** | Agent def (657 lines) = 657 at spawn | Agent def (~629 lines) + cf-team-communication (~175 lines) + cf-code-exploration (~250 lines) = ~1,054+ at spawn | MORE content (+397 lines). Gains code exploration patterns. |
 | **cf-quality-assurance** | Agent def (533 lines) = 533 at spawn | Agent def (~505 lines) + cf-team-communication (~175 lines) = ~680+ at spawn | MORE content (+147 lines). Gains shared communication patterns. |

@@ -69,7 +69,7 @@ Create or restore all 9 new/restored skills. No dependencies between skills -- a
 | INF-TSK-019-004 | cf-security-operations | RESTORE: archive + cf-security agent def | M | Normal |
 | INF-TSK-019-005 | cf-team-communication | NEW: extract from all 8 agent defs | M | Normal |
 | INF-TSK-019-006 | cf-code-exploration | RESTORE: archive (minimal changes) | S | Normal |
-| INF-TSK-019-007 | cf-documentation-standards | RESTORE: archive (minimal changes) | S | Normal |
+| INF-TSK-019-007 | cf-documentation-standards | RESTORE + MERGE cf-markdown-standards: archive + current skill + agent def | M | Normal |
 
 **Parallelization:** All 9 skill tasks are independent. Execute in batches per WS-DEV max_parallel (3 concurrent).
 
@@ -107,7 +107,7 @@ Capabilities inventory update, pathflow-config skill references, and full valida
 
 | Task | Scope | Dependencies | Estimate |
 |------|-------|-------------|:--------:|
-| INF-TSK-019-013 | Update CLAUDE.md Section 8 (Capabilities) to reflect 15 active skills | Phase A all skills created, Phase B agent definitions updated | S |
+| INF-TSK-019-013 | Update CLAUDE.md Section 8 (Capabilities) to reflect 14 active skills | Phase A all skills created, Phase B agent definitions updated | S |
 | INF-TSK-019-017 | Add `skill_ref` fields to every PF{N}-TSK-{NN} entry in pathflow-config.json | All Phase A-D tasks complete (needs final skill operation names) | S |
 | INF-TSK-019-014 | Run full test suite. Verify PathFlow E2E still works. Verify all skill references resolve. Verify no broken cross-references. | Tasks 013 and 017 complete | M |
 
@@ -178,4 +178,4 @@ INF-TSK-019-007 (cf-doc-standards)      -+  |   INF-TSK-019-011 (commands batch 
 | 15 | Archived cf-task-management has 409 lines | YES | `wc -l` verified |
 | 16 | Archived cf-db-operations has 468 lines | YES | `wc -l` verified |
 | 17 | Archived cf-security-management has 344 lines | YES | `wc -l` verified |
-| 18 | Existing on-demand standards skills remain unchanged | YES | Design decision: cf-shell-standards, cf-python-standards, cf-go-standards, cf-markdown-standards, cf-sandbox-standards stay as-is |
+| 18 | Existing on-demand standards skills remain unchanged (except cf-markdown-standards, merged into cf-documentation-standards) | YES | Design decision: cf-shell-standards, cf-python-standards, cf-go-standards, cf-sandbox-standards stay as-is. cf-markdown-standards merged into cf-documentation-standards (see 02-skill-taxonomy.md). |

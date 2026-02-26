@@ -36,7 +36,7 @@ CLAUDE.md: 1,424 lines, ~10K tokens. V4 target: ~400 lines, ~3K tokens.
 | 7d | Enforcement -- model + ops | 40 | Enforcement model table, git ops, sandbox | WHAT (awareness) | STAYS in CLAUDE.md |
 | 7e | Enforcement -- testing + PR + merge | 50 | Test commands, PR workflow, merge protection | WHAT (awareness) | STAYS in CLAUDE.md |
 | 7f | Enforcement -- decision tiers + degradation | 28 | Tier table, graceful degradation | MIXED | STAYS (tiers), MOVES (degradation) |
-| 8 | Capabilities | 80 | Inventory of skills, agents, hooks, commands | WHAT (awareness) | STAYS (update to 15 skills) |
+| 8 | Capabilities | 80 | Inventory of skills, agents, hooks, commands | WHAT (awareness) | STAYS (update to 14 skills) |
 | 9 | Project Structure | 57 | Directory tree | WHERE (reference) | STAYS in CLAUDE.md |
 | 10 | Memory | 35 | Three-tier model, operations table | WHAT (awareness) | STAYS in CLAUDE.md |
 | 11a | Recovery -- quick commands | 15 | Command table, PathFlow recovery table | WHAT (awareness) | STAYS in CLAUDE.md |
