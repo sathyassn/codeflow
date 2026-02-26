@@ -488,9 +488,9 @@ assert_contains "$output" "work_type" \
 teardown
 
 # --------------------------------------------------------------------------
-# Test 17: Tests field warning for code-producing types with code files
+# Test 17: Tests field error for code-producing types with code files
 # --------------------------------------------------------------------------
-test_subsection "Tests field warning for code-producing types"
+test_subsection "Tests field error for code-producing types"
 
 setup
 filepath="$TEST_DIR/code-no-tests.md"
@@ -507,15 +507,12 @@ file_scope: ["src/feature.sh"]
 tests: []
 ---
 TASKEOF
-# Should still pass (warning, not error)
-assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
-    "Code task with empty tests passes (warning only)"
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Code task with empty tests and code files fails"
 
-output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
-assert_contains "$output" "WARN" \
-    "Warning is emitted for code task without tests"
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
 assert_contains "$output" "tests" \
-    "Warning mentions the tests field"
+    "Error mentions the tests field"
 teardown
 
 # --------------------------------------------------------------------------
@@ -524,11 +521,11 @@ teardown
 test_subsection "No warning for non-code-producing types"
 
 setup
-filepath="$TEST_DIR/docs-no-tests.md"
+filepath="$TEST_DIR/DOC-TSK-008-001.md"
 cat > "$filepath" <<'TASKEOF'
 ---
 id: "task-123"
-format_id: "INF-TSK-008-001"
+format_id: "DOC-TSK-008-001"
 epic_id: "epic-456"
 title: "Test docs task"
 status: todo
@@ -548,11 +545,11 @@ teardown
 
 # Test PLAN work_type also does not warn
 setup
-filepath="$TEST_DIR/plan-no-tests.md"
+filepath="$TEST_DIR/PLN-TSK-008-001.md"
 cat > "$filepath" <<'TASKEOF'
 ---
 id: "task-123"
-format_id: "INF-TSK-008-001"
+format_id: "PLN-TSK-008-001"
 epic_id: "epic-456"
 title: "Test plan task"
 status: todo
@@ -573,7 +570,7 @@ teardown
 test_subsection "No warning when file_scope is empty"
 
 setup
-filepath="$TEST_DIR/code-empty-scope.md"
+filepath="$TEST_DIR/INF-TSK-008-001.md"
 cat > "$filepath" <<'TASKEOF'
 ---
 id: "task-123"
@@ -598,7 +595,7 @@ teardown
 test_subsection "No warning when file_scope has no code files"
 
 setup
-filepath="$TEST_DIR/no-code-files.md"
+filepath="$TEST_DIR/INF-TSK-008-001.md"
 cat > "$filepath" <<'TASKEOF'
 ---
 id: "task-123"
@@ -685,6 +682,528 @@ acceptance: []
 TASKEOF
 assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
     "autorun_eligible=false with empty acceptance passes"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 22: Placeholder ID rejected
+# --------------------------------------------------------------------------
+test_subsection "Placeholder ID rejected"
+
+setup
+filepath="$TEST_DIR/placeholder-id.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "PLACEHOLDER-task-id"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Placeholder task ID causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "placeholder" \
+    "Error message mentions placeholder"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 23: Template sentinel ID rejected (curly braces)
+# --------------------------------------------------------------------------
+test_subsection "Template sentinel ID rejected"
+
+setup
+filepath="$TEST_DIR/template-id.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "{task-ULID}"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Template sentinel task ID causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "template sentinel" \
+    "Error message mentions template sentinel"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 24: Placeholder epic_id rejected
+# --------------------------------------------------------------------------
+test_subsection "Placeholder epic_id rejected"
+
+setup
+filepath="$TEST_DIR/placeholder-epic-id.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-real-id-123"
+format_id: "INF-TSK-008-001"
+epic_id: "PLACEHOLDER-epic-id"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Placeholder epic_id causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "epic_id" \
+    "Error message mentions epic_id field"
+assert_contains "$output" "placeholder" \
+    "Error message mentions placeholder"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 25: Template sentinel epic_id rejected (curly braces)
+# --------------------------------------------------------------------------
+test_subsection "Template sentinel epic_id rejected"
+
+setup
+filepath="$TEST_DIR/template-epic-id.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-real-id-123"
+format_id: "INF-TSK-008-001"
+epic_id: "{epic-ULID}"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Template sentinel epic_id causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "epic_id" \
+    "Error message mentions epic_id field"
+assert_contains "$output" "template sentinel" \
+    "Error message mentions template sentinel"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 26: Invalid area_type enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid area_type enum"
+
+setup
+filepath="$TEST_DIR/invalid-area-type.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INFRA"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid area_type 'INFRA' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "area_type" \
+    "Error message mentions area_type"
+assert_contains "$output" "INFRA" \
+    "Error message mentions the invalid value"
+teardown
+
+# Valid area_type passes
+setup
+filepath="$TEST_DIR/valid-area-type.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Valid area_type 'INF' passes"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 27: format_id prefix vs area_type cross-check
+# --------------------------------------------------------------------------
+test_subsection "format_id prefix vs area_type cross-check"
+
+setup
+filepath="$TEST_DIR/prefix-mismatch.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "FRT-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "format_id prefix FRT vs area_type INF causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "prefix" \
+    "Error mentions prefix mismatch"
+assert_contains "$output" "area_type" \
+    "Error mentions area_type"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 28: Title template sentinel rejected
+# --------------------------------------------------------------------------
+test_subsection "Title template sentinel rejected"
+
+setup
+filepath="$TEST_DIR/template-title.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "{Title}"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Template sentinel in title causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "title" \
+    "Error mentions title field"
+assert_contains "$output" "template sentinel" \
+    "Error mentions template sentinel"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 29: Invalid origin enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid origin enum"
+
+setup
+filepath="$TEST_DIR/invalid-origin.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+origin: "unknown"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid origin 'unknown' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "origin" \
+    "Error mentions origin field"
+teardown
+
+# Valid origin passes
+setup
+filepath="$TEST_DIR/valid-origin.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+origin: "planned"
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Valid origin 'planned' passes"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 30: Invalid scope_policy enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid scope_policy enum"
+
+setup
+filepath="$TEST_DIR/invalid-scope-policy.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+scope_policy: "strict"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid scope_policy 'strict' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "scope_policy" \
+    "Error mentions scope_policy field"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 31: Invalid priority enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid priority enum"
+
+setup
+filepath="$TEST_DIR/invalid-priority.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+priority: "hight"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid priority 'hight' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "priority" \
+    "Error mentions priority field"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 32: Invalid boolean syntax
+# --------------------------------------------------------------------------
+test_subsection "Invalid boolean syntax"
+
+setup
+filepath="$TEST_DIR/invalid-bool.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+autorun_eligible: "yes"
+---
+TASKEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid boolean 'yes' for autorun_eligible causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "autorun_eligible" \
+    "Error mentions autorun_eligible field"
+assert_contains "$output" "boolean" \
+    "Error mentions boolean"
+teardown
+
+# Valid boolean string passes
+setup
+filepath="$TEST_DIR/valid-bool.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+autorun_eligible: true
+acceptance: ["criterion 1"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Valid boolean 'true' for autorun_eligible passes"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 33: Filename vs format_id cross-check (warning)
+# --------------------------------------------------------------------------
+test_subsection "Filename vs format_id cross-check"
+
+setup
+filepath="$TEST_DIR/INF-TSK-008-002.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-123"
+format_id: "INF-TSK-008-001"
+epic_id: "epic-456"
+title: "Test task"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+---
+TASKEOF
+# Should still pass (warning, not error)
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Filename mismatch is warning only (still passes)"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "WARN" \
+    "Warning emitted for filename mismatch"
+assert_contains "$output" "INF-TSK-008-002" \
+    "Warning mentions the filename"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 34: PII file pattern in file_scope triggers warning
+# --------------------------------------------------------------------------
+test_subsection "PII file pattern detection"
+
+setup
+filepath="$TEST_DIR/INF-TSK-008-034.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-pii-warn"
+format_id: "INF-TSK-008-034"
+epic_id: "epic-test"
+epic_format_id: "INF-EPC-008"
+title: "Auth module refactor"
+description: "Refactor authentication module"
+status: in_progress
+area_type: "INF"
+work_type: "FEAT"
+domain: "GENL"
+origin: planned
+file_scope: ["internal/auth/handler.go", "internal/auth/token.go"]
+scope_policy: soft
+tests: ["auth_test.go"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "PII pattern is warning only (still passes)"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "WARN" \
+    "Warning emitted for PII file pattern"
+assert_contains "$output" "PII" \
+    "Warning mentions PII"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 35: No PII warning when file_scope has no PII patterns
+# --------------------------------------------------------------------------
+test_subsection "No PII warning for clean file_scope"
+
+setup
+filepath="$TEST_DIR/INF-TSK-008-035.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-no-pii"
+format_id: "INF-TSK-008-035"
+epic_id: "epic-test"
+epic_format_id: "INF-EPC-008"
+title: "Refactor config loader"
+description: "Refactor config loading logic"
+status: in_progress
+area_type: "INF"
+work_type: "FEAT"
+domain: "GENL"
+origin: planned
+file_scope: ["internal/config/loader.go", "internal/config/parser.go"]
+scope_policy: soft
+tests: ["config_test.go"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "No PII patterns passes cleanly"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "PII" \
+    "No PII warning when no PII patterns present"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 36: PII warning for password-related file_scope
+# --------------------------------------------------------------------------
+test_subsection "PII warning for password pattern"
+
+setup
+filepath="$TEST_DIR/INF-TSK-008-036.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-pii-password"
+format_id: "INF-TSK-008-036"
+epic_id: "epic-test"
+epic_format_id: "INF-EPC-008"
+title: "Password reset flow"
+description: "Implement password reset"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+domain: "GENL"
+origin: planned
+file_scope: ["internal/password/reset.go"]
+scope_policy: soft
+tests: ["password_test.go"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Password PII pattern is warning only"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "PII" \
+    "Warning mentions PII for password pattern"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 37: No PII warning when file_scope is empty array
+# --------------------------------------------------------------------------
+test_subsection "No PII warning for empty file_scope"
+
+setup
+filepath="$TEST_DIR/INF-TSK-008-037.md"
+cat > "$filepath" <<'TASKEOF'
+---
+id: "task-empty-scope"
+format_id: "INF-TSK-008-037"
+epic_id: "epic-test"
+epic_format_id: "INF-EPC-008"
+title: "Empty scope task"
+description: "Task with empty scope"
+status: todo
+area_type: "INF"
+work_type: "FEAT"
+domain: "GENL"
+origin: planned
+file_scope: []
+scope_policy: soft
+tests: ["some_test.go"]
+---
+TASKEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Empty file_scope passes cleanly"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "PII" \
+    "No PII warning for empty file_scope"
 teardown
 
 # ============================================================================

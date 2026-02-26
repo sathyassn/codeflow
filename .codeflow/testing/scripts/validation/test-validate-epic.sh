@@ -121,6 +121,7 @@ id: "epic-123"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -135,6 +136,7 @@ id: "epic-123"
 format_id: "INF-EPC-008"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -155,6 +157,7 @@ format_id: "INF-EPC-008"
 title: "Test Epic"
 status: todo
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -179,6 +182,7 @@ format_id: "INVALID"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -194,6 +198,7 @@ format_id: "INF-TSK-008-001"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -209,6 +214,7 @@ format_id: "INF-EPC-08"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -246,6 +252,7 @@ format_id: "INF-EPC-008"
 title: "Test Epic"
 status: $valid_status
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
     assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -298,6 +305,8 @@ EPICEOF
 output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
 assert_contains "$output" "title" \
     "Reports missing title"
+assert_contains "$output" "work_type" \
+    "Reports missing work_type"
 assert_contains "$output" "format_id" \
     "Reports invalid format_id"
 assert_contains "$output" "bad_status" \
@@ -318,7 +327,7 @@ format_id: "INF-EPC-008"
 title: "Test Epic with null optionals"
 status: draft
 area_type: "INF"
-work_type: null
+work_type: "CHOR"
 domain: null
 is_ongoing: null
 priority: null
@@ -384,9 +393,9 @@ assert_contains "$output" "work_type" \
 teardown
 
 # --------------------------------------------------------------------------
-# Test 14: Null work_type is accepted (optional field)
+# Test 14: Missing work_type fails (now required)
 # --------------------------------------------------------------------------
-test_subsection "Null work_type accepted"
+test_subsection "Missing work_type fails"
 
 setup
 filepath="$TEST_DIR/null-work-type.md"
@@ -400,8 +409,12 @@ area_type: "INF"
 work_type: null
 ---
 EPICEOF
-assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
-    "Null work_type passes (field is optional for epics)"
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Null work_type fails (field is now required)"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "work_type" \
+    "Error mentions work_type"
 teardown
 
 # --------------------------------------------------------------------------
@@ -418,6 +431,7 @@ format_id: "INF-EPC-008"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -438,6 +452,7 @@ format_id: "INF-EPC-008"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
@@ -453,10 +468,301 @@ format_id: "INF-EPC-008"
 title: "Test Epic"
 status: draft
 area_type: "INF"
+work_type: "CHOR"
 ---
 EPICEOF
 assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
     "Mixed-case placeholder ID causes failure"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 16: Template sentinel ID rejected (curly braces)
+# --------------------------------------------------------------------------
+test_subsection "Template sentinel ID rejected"
+
+setup
+filepath="$TEST_DIR/template-id.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "{epic-ULID}"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Template sentinel epic ID causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "template sentinel" \
+    "Error message mentions template sentinel"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 17: Invalid area_type enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid area_type enum"
+
+setup
+filepath="$TEST_DIR/invalid-area-type.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INFRA"
+work_type: "CHOR"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid area_type 'INFRA' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "area_type" \
+    "Error message mentions area_type"
+assert_contains "$output" "INFRA" \
+    "Error message mentions the invalid value"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 18: format_id prefix vs area_type cross-check
+# --------------------------------------------------------------------------
+test_subsection "format_id prefix vs area_type cross-check"
+
+setup
+filepath="$TEST_DIR/prefix-mismatch.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "FRT-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "format_id prefix FRT vs area_type INF causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "prefix" \
+    "Error mentions prefix mismatch"
+assert_contains "$output" "area_type" \
+    "Error mentions area_type"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 19: Title template sentinel rejected
+# --------------------------------------------------------------------------
+test_subsection "Title template sentinel rejected"
+
+setup
+filepath="$TEST_DIR/template-title.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "{Title}"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Template sentinel in title causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "title" \
+    "Error mentions title field"
+assert_contains "$output" "template sentinel" \
+    "Error mentions template sentinel"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 20: Missing work_type fails (now required)
+# --------------------------------------------------------------------------
+test_subsection "Missing work_type fails"
+
+setup
+filepath="$TEST_DIR/missing-work-type.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Missing work_type causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "work_type" \
+    "Error mentions work_type"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 21: Invalid priority enum
+# --------------------------------------------------------------------------
+test_subsection "Invalid priority enum"
+
+setup
+filepath="$TEST_DIR/invalid-priority.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+priority: "hight"
+---
+EPICEOF
+assert_fails "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Invalid priority 'hight' causes failure"
+
+output=$(bash "$VALIDATE_SCRIPT" --quiet "$filepath" 2>&1 || true)
+assert_contains "$output" "priority" \
+    "Error mentions priority field"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 22: Filename vs format_id cross-check (warning)
+# --------------------------------------------------------------------------
+test_subsection "Filename vs format_id cross-check"
+
+setup
+filepath="$TEST_DIR/INF-EPC-009.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-123"
+format_id: "INF-EPC-008"
+title: "Test Epic"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+---
+EPICEOF
+# Should still pass (warning, not error)
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Filename mismatch is warning only (still passes)"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "WARN" \
+    "Warning emitted for filename mismatch"
+assert_contains "$output" "INF-EPC-009" \
+    "Warning mentions the filename"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 23: PII file pattern in file_scope triggers warning
+# --------------------------------------------------------------------------
+test_subsection "PII file pattern detection"
+
+setup
+filepath="$TEST_DIR/INF-EPC-010.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-pii-warn"
+format_id: "INF-EPC-010"
+title: "Auth system overhaul"
+status: planning
+area_type: "INF"
+work_type: "FEAT"
+file_scope: ["internal/auth/handler.go", "internal/auth/token.go"]
+---
+EPICEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "PII pattern is warning only (still passes)"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "WARN" \
+    "Warning emitted for PII file pattern"
+assert_contains "$output" "PII" \
+    "Warning mentions PII"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 24: No PII warning when file_scope has no PII patterns
+# --------------------------------------------------------------------------
+test_subsection "No PII warning for clean file_scope"
+
+setup
+filepath="$TEST_DIR/INF-EPC-011.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-no-pii"
+format_id: "INF-EPC-011"
+title: "Config refactor"
+status: planning
+area_type: "INF"
+work_type: "RFCT"
+file_scope: ["internal/config/loader.go", "internal/config/parser.go"]
+---
+EPICEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "No PII patterns passes cleanly"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "PII" \
+    "No PII warning when no PII patterns present"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 25: PII warning for credential-related file_scope
+# --------------------------------------------------------------------------
+test_subsection "PII warning for credential pattern"
+
+setup
+filepath="$TEST_DIR/INF-EPC-012.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-pii-cred"
+format_id: "INF-EPC-012"
+title: "Credential manager"
+status: draft
+area_type: "INF"
+work_type: "FEAT"
+file_scope: ["internal/credential/store.go"]
+---
+EPICEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Credential PII pattern is warning only"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_contains "$output" "PII" \
+    "Warning mentions PII for credential pattern"
+teardown
+
+# --------------------------------------------------------------------------
+# Test 26: No PII warning when file_scope is empty array
+# --------------------------------------------------------------------------
+test_subsection "No PII warning for empty file_scope"
+
+setup
+filepath="$TEST_DIR/INF-EPC-013.md"
+cat > "$filepath" <<'EPICEOF'
+---
+id: "epic-empty-scope"
+format_id: "INF-EPC-013"
+title: "Empty scope epic"
+status: draft
+area_type: "INF"
+work_type: "CHOR"
+file_scope: []
+---
+EPICEOF
+assert_success "bash '$VALIDATE_SCRIPT' --quiet '$filepath'" \
+    "Empty file_scope passes cleanly"
+
+output=$(bash "$VALIDATE_SCRIPT" "$filepath" 2>&1 || true)
+assert_not_contains "$output" "PII" \
+    "No PII warning for empty file_scope"
 teardown
 
 # ============================================================================

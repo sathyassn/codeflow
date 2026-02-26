@@ -20,7 +20,15 @@ readonly VERSION="1.0.0"
 readonly REQUIRED_FIELDS="id format_id epic_id title status area_type work_type"
 readonly VALID_STATUSES="todo blocked in_progress complete cancelled"
 readonly VALID_WORK_TYPES="FEAT FIX HTFX RFCT DOCS TEST CHOR CICD SPKE PLAN"
+readonly VALID_AREA_TYPES="FRT BKD INF SHR DOC PLN"
+readonly VALID_ORIGINS="planned informal auto"
+readonly VALID_SCOPE_POLICIES="soft hard permissive"
+readonly VALID_PRIORITIES="low normal high critical"
+readonly VALID_ESTIMATES="XS S M L XL"
+readonly VALID_STAGES="dev review qa done"
+readonly VALID_STAGE_STATUSES="pending in_progress complete failed"
 readonly CODE_WORK_TYPES="FEAT FIX RFCT HTFX CHOR CICD TEST"
+readonly PII_FILE_PATTERNS="auth login user session password credential token account profile identity"
 readonly FORMAT_ID_PATTERN='^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$'
 
 # =============================================================================
@@ -237,12 +245,82 @@ $line"
         fi
     done
 
+    # Validate id field does not contain placeholder or template sentinel
+    local id_value
+    id_value=$(get_field "id" "$frontmatter")
+    if [[ -n "$id_value" ]]; then
+        local id_upper
+        id_upper=$(echo "$id_value" | tr '[:lower:]' '[:upper:]')
+        if [[ "$id_upper" == *"PLACEHOLDER"* ]]; then
+            error "id field contains placeholder value — assign a real task ID"
+            ERRORS=$((ERRORS + 1))
+        fi
+        if [[ "$id_value" == *"{"* || "$id_value" == *"}"* ]]; then
+            error "id field contains unfilled template sentinel '$id_value' — assign a real task ID"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate title field does not contain template sentinel
+    local title_value
+    title_value=$(get_field "title" "$frontmatter")
+    if [[ -n "$title_value" ]]; then
+        if [[ "$title_value" == *"{"* || "$title_value" == *"}"* ]]; then
+            error "title field contains unfilled template sentinel '$title_value' — assign a real title"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate epic_id field does not contain placeholder or template sentinel
+    local epic_id_value
+    epic_id_value=$(get_field "epic_id" "$frontmatter")
+    if [[ -n "$epic_id_value" ]]; then
+        local epic_id_upper
+        epic_id_upper=$(echo "$epic_id_value" | tr '[:lower:]' '[:upper:]')
+        if [[ "$epic_id_upper" == *"PLACEHOLDER"* ]]; then
+            error "epic_id field contains placeholder value — assign a real epic ID"
+            ERRORS=$((ERRORS + 1))
+        fi
+        if [[ "$epic_id_value" == *"{"* || "$epic_id_value" == *"}"* ]]; then
+            error "epic_id field contains unfilled template sentinel '$epic_id_value' — assign a real epic ID"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
     # Validate format_id pattern
     local format_id
     format_id=$(get_field "format_id" "$frontmatter")
     if [[ -n "$format_id" ]]; then
         if ! echo "$format_id" | grep -Eq "$FORMAT_ID_PATTERN"; then
             error "Invalid format_id '$format_id': must match $FORMAT_ID_PATTERN"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate area_type enum
+    local area_type
+    area_type=$(get_field "area_type" "$frontmatter")
+    if [[ -n "$area_type" ]]; then
+        local valid_at="false"
+        local at
+        for at in $VALID_AREA_TYPES; do
+            if [[ "$area_type" == "$at" ]]; then
+                valid_at="true"
+                break
+            fi
+        done
+        if [[ "$valid_at" == "false" ]]; then
+            error "Invalid area_type '$area_type': must be one of: $VALID_AREA_TYPES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate format_id prefix matches area_type
+    if [[ -n "$format_id" && -n "$area_type" ]]; then
+        local format_prefix
+        format_prefix=$(echo "$format_id" | sed 's/-TSK-.*//')
+        if [[ "$format_prefix" != "$area_type" ]]; then
+            error "format_id prefix '$format_prefix' does not match area_type '$area_type'"
             ERRORS=$((ERRORS + 1))
         fi
     fi
@@ -316,7 +394,128 @@ $line"
         fi
     fi
 
-    # Validate tests field for code-producing work types
+    # Validate origin enum (if present)
+    local origin
+    origin=$(get_field "origin" "$frontmatter")
+    if [[ -n "$origin" ]]; then
+        local valid_or="false"
+        local or_val
+        for or_val in $VALID_ORIGINS; do
+            if [[ "$origin" == "$or_val" ]]; then
+                valid_or="true"
+                break
+            fi
+        done
+        if [[ "$valid_or" == "false" ]]; then
+            error "Invalid origin '$origin': must be one of: $VALID_ORIGINS"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate scope_policy enum (if present)
+    local scope_policy
+    scope_policy=$(get_field "scope_policy" "$frontmatter")
+    if [[ -n "$scope_policy" ]]; then
+        local valid_sp="false"
+        local sp
+        for sp in $VALID_SCOPE_POLICIES; do
+            if [[ "$scope_policy" == "$sp" ]]; then
+                valid_sp="true"
+                break
+            fi
+        done
+        if [[ "$valid_sp" == "false" ]]; then
+            error "Invalid scope_policy '$scope_policy': must be one of: $VALID_SCOPE_POLICIES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate priority enum (if present)
+    local priority
+    priority=$(get_field "priority" "$frontmatter")
+    if [[ -n "$priority" ]]; then
+        local valid_pr="false"
+        local pr
+        for pr in $VALID_PRIORITIES; do
+            if [[ "$priority" == "$pr" ]]; then
+                valid_pr="true"
+                break
+            fi
+        done
+        if [[ "$valid_pr" == "false" ]]; then
+            error "Invalid priority '$priority': must be one of: $VALID_PRIORITIES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate estimate enum (if present)
+    local estimate
+    estimate=$(get_field "estimate" "$frontmatter")
+    if [[ -n "$estimate" ]]; then
+        local valid_est="false"
+        local est
+        for est in $VALID_ESTIMATES; do
+            if [[ "$estimate" == "$est" ]]; then
+                valid_est="true"
+                break
+            fi
+        done
+        if [[ "$valid_est" == "false" ]]; then
+            error "Invalid estimate '$estimate': must be one of: $VALID_ESTIMATES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate stage enum (if present)
+    local stage
+    stage=$(get_field "stage" "$frontmatter")
+    if [[ -n "$stage" ]]; then
+        local valid_stg="false"
+        local stg
+        for stg in $VALID_STAGES; do
+            if [[ "$stage" == "$stg" ]]; then
+                valid_stg="true"
+                break
+            fi
+        done
+        if [[ "$valid_stg" == "false" ]]; then
+            error "Invalid stage '$stage': must be one of: $VALID_STAGES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate stage_status enum (if present)
+    local stage_status
+    stage_status=$(get_field "stage_status" "$frontmatter")
+    if [[ -n "$stage_status" ]]; then
+        local valid_ss="false"
+        local ss
+        for ss in $VALID_STAGE_STATUSES; do
+            if [[ "$stage_status" == "$ss" ]]; then
+                valid_ss="true"
+                break
+            fi
+        done
+        if [[ "$valid_ss" == "false" ]]; then
+            error "Invalid stage_status '$stage_status': must be one of: $VALID_STAGE_STATUSES"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Validate boolean syntax for autorun_eligible, raise_pr, auto_merge
+    local bool_field
+    for bool_field in autorun_eligible raise_pr auto_merge; do
+        local bool_raw
+        bool_raw=$(echo "$frontmatter" | grep -E "^${bool_field}:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*$//' || true)
+        if [[ -n "$bool_raw" && "$bool_raw" != "null" && "$bool_raw" != "~" ]]; then
+            if [[ "$bool_raw" != "true" && "$bool_raw" != "false" ]]; then
+                error "Invalid boolean value for $bool_field '$bool_raw': must be exactly 'true' or 'false'"
+                ERRORS=$((ERRORS + 1))
+            fi
+        fi
+    done
+
+    # Validate tests field for code-producing work types (ERROR level)
     if [[ -n "$work_type" ]]; then
         local is_code_type="false"
         local ct
@@ -342,10 +541,20 @@ $line"
                 local tests_field
                 tests_field=$(echo "$frontmatter" | grep -E "^tests:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' || true)
                 if [[ -z "$tests_field" || "$tests_field" == "[]" || "$tests_field" == "null" || "$tests_field" == "~" ]]; then
-                    warn "Tasks modifying code files should have tests defined in the 'tests' field"
-                    WARNINGS=$((WARNINGS + 1))
+                    error "Code-producing task with code files must have tests defined in the 'tests' field"
+                    ERRORS=$((ERRORS + 1))
                 fi
             fi
+        fi
+    fi
+
+    # Validate filename matches format_id (warning only)
+    if [[ -n "$format_id" ]]; then
+        local basename
+        basename=$(basename "$file_path" .md)
+        if [[ "$basename" != "$format_id" ]]; then
+            warn "Filename '$basename.md' does not match format_id '$format_id'"
+            WARNINGS=$((WARNINGS + 1))
         fi
     fi
 
@@ -359,6 +568,22 @@ $line"
             error "autorun_eligible is true but acceptance is empty: acceptance criteria are required for autorun tasks"
             ERRORS=$((ERRORS + 1))
         fi
+    fi
+
+    # Check file_scope for PII-handling file patterns (warning)
+    local file_scope_raw
+    file_scope_raw=$(echo "$frontmatter" | grep -E "^file_scope:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' || true)
+    if [[ -n "$file_scope_raw" && "$file_scope_raw" != "[]" && "$file_scope_raw" != "null" && "$file_scope_raw" != "~" ]]; then
+        local file_scope_lower
+        file_scope_lower=$(echo "$file_scope_raw" | tr '[:upper:]' '[:lower:]')
+        local pii_pattern
+        for pii_pattern in $PII_FILE_PATTERNS; do
+            if echo "$file_scope_lower" | grep -q "$pii_pattern"; then
+                warn "file_scope contains PII-sensitive path pattern '$pii_pattern' — verify PII handling compliance (encryption, hashing, sanitization, logging redaction) per OWASP/industry standards"
+                WARNINGS=$((WARNINGS + 1))
+                break
+            fi
+        done
     fi
 
     # ==========================================================================

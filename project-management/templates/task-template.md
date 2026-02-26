@@ -67,6 +67,18 @@ stage_history: "[]"                    # JSON array of stage transition records
 2. {Specific, measurable criterion}
 3. All modified script/code files (.sh, .py) have corresponding test files created/updated and registered in test-config.json
 
+### PII Handling Review
+
+- [ ] Does this task involve code that handles PII? (Y/N)
+- [ ] If Y: Direct PII check — no hardcoded PII in source/tests/comments (emails, names, tokens, IPs)
+- [ ] If Y: Code logic review — PII-handling code follows security standards:
+  - Encryption at rest and in transit
+  - Proper hashing (bcrypt/argon2 for passwords, not MD5/SHA1)
+  - Input sanitization and validation
+  - Logging redaction (no PII in logs)
+  - Access controls on PII data stores
+- [ ] If Y: Reviewed against OWASP Top 10 and industry standards (GDPR, SOC 2)
+
 ### Criteria Status
 
 <!-- Pipeline column mapping:
