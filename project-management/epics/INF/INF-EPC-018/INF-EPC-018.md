@@ -3,7 +3,7 @@ id: "epic-01KJBRH49DJPD4V4EQT3ZWFJJZ"
 format_id: "INF-EPC-018"
 title: "Infrastructure Test Reliability Fixes"
 summary: "Ad-hoc fixes to test scripts for cross-platform reliability and CI compatibility"
-status: archived
+status: in_progress
 area_type: "INF"
 work_type: "FIX"
 domain: "GENL"
