@@ -39,6 +39,10 @@ stage_history: "[]"                    # JSON array of stage transition records
 
 # {format_id}: {Title}
 
+> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the task validation script before committing:
+> `bash .codeflow/scripts/validation/validate-task.sh <file-path>`
+> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory. Script is at `.codeflow/scripts/validation/validate-task.sh`.
+
 ## Description
 
 {Detailed description of what this task accomplishes and why it is needed.}

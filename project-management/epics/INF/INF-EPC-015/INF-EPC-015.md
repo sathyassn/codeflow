@@ -3,7 +3,7 @@ id: "epic-01KJ6YG0QA7MWQQFWCZMSP7HB6"
 format_id: "INF-EPC-015"
 title: "CodeFlow Go CLI - Phase 6 V4 Implementation"
 summary: "Build the production CodeFlow CLI binary in Go — sole SQLite authority, welcome screen, doctor, autorun, cross-platform"
-status: complete
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -91,7 +91,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 | INF-TSK-015-015 | Doctor V4 health checks (3 new) | todo | normal |
 | INF-TSK-015-016 | Test infrastructure integration (bridge script + test-config) | todo | normal |
 | INF-TSK-015-017 | JSONL normalization and cross-compilation verification | todo | normal |
-| INF-TSK-015-018 | Go CLI spec alignment and backfill fixes | in_progress | high |
+| INF-TSK-015-018 | Go CLI spec alignment and backfill fixes | complete | high |
 
 ## Dependencies
 

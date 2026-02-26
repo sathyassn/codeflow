@@ -3,7 +3,7 @@
 # Location: .codeflow/testing/claude-hooks/session-start/test-cf-session-start-logging.sh
 #
 # Tests SessionStart logging hook v2.1.0
-# Verifies: stdin reading, config checks, V4 event format, metadata, rotation, current-session.txt,
+# Verifies: stdin reading, config checks, V4 event format, metadata, rotation,
 #           env file session ID priority, matcher split (race condition fix)
 
 set -euo pipefail
@@ -396,42 +396,36 @@ else
 fi
 
 echo ""
-echo "--- Current Session State File (NEW) ---"
+echo "--- Session State File Removed (dead code cleanup) ---"
 
-# Test 41: Writes current-session.txt
+# Test 41: Does NOT write current-session.txt (dead code removed)
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'current-session.txt' "$HOOK"; then
-    pass "Writes current-session.txt"
+if ! grep -q 'current-session.txt' "$HOOK"; then
+    pass "Does not write current-session.txt (dead code removed)"
 else
-    fail "Should write current-session.txt"
+    fail "Should not write current-session.txt (no consumers exist)"
 fi
 
-# Test 42: Creates state directory
+# Test 42: Does NOT create SESSION_STATE_DIR for current-session.txt
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q 'managed/state\|STATE_DIR' "$HOOK"; then
-    pass "Creates state directory"
+if ! grep -q 'SESSION_STATE_DIR' "$HOOK"; then
+    pass "Does not create SESSION_STATE_DIR (dead code removed)"
 else
-    fail "Should create state directory"
+    fail "Should not have SESSION_STATE_DIR (was only used for current-session.txt)"
 fi
 
-# Test 43: Functional: current-session.txt uses env file session ID over stdin UUID
+# Test 43: Functional: hook does not create current-session.txt
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_env
-# Create env file with canonical session ID
 mkdir -p "$REPO_ROOT/.state/runtime"
-echo "export CODEFLOW_SESSION_ID='env-state-test'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
-STATE_FILE="$REPO_ROOT/.state/session/env-state-test/current-session.txt"
+echo "export CODEFLOW_SESSION_ID='no-state-file-test'" > "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+STATE_FILE="$REPO_ROOT/.state/session/no-state-file-test/current-session.txt"
 rm -f "$STATE_FILE" 2>/dev/null
 echo '{"session_id":"stdin-uuid-state"}' | REPO_ROOT="$REPO_ROOT" bash "$HOOK" 2>/dev/null
-if [[ -f "$STATE_FILE" ]]; then
-    STATE_CONTENT=$(cat "$STATE_FILE")
-    if [[ "$STATE_CONTENT" == "env-state-test" ]]; then
-        pass "current-session.txt uses env file session ID"
-    else
-        fail "current-session.txt has wrong content: $STATE_CONTENT (expected env-state-test)"
-    fi
+if [[ ! -f "$STATE_FILE" ]]; then
+    pass "Hook does not create current-session.txt"
 else
-    fail "current-session.txt not created at env file session ID path"
+    fail "Hook should not create current-session.txt (dead code was removed)"
 fi
 rm -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" 2>/dev/null
 

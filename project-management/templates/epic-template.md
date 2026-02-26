@@ -19,6 +19,10 @@ updated_at: "{ISO-8601}"
 
 # {format_id}: {Title}
 
+> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the epic validation script before committing:
+> `bash .codeflow/scripts/validation/validate-epic.sh <file-path>`
+> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory. Script is at `.codeflow/scripts/validation/validate-epic.sh`.
+
 ## Summary
 
 {One-paragraph description of the epic's purpose and expected outcome.}

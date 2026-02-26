@@ -33,10 +33,6 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
 STOP_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || echo "false")
 
-# Set CODEFLOW_SESSION_ID for security-lib
-CODEFLOW_SESSION_ID="${SESSION_ID:-unknown}"
-export CODEFLOW_SESSION_ID
-
 # =============================================================================
 # INFINITE LOOP GUARD
 # =============================================================================
@@ -53,6 +49,17 @@ fi
 
 # Get repo root using git (most robust) or fallback to relative path
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
+
+# Source env file for canonical CODEFLOW_SESSION_ID
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [ -f "$_env_file" ]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+
+# Set CODEFLOW_SESSION_ID: prefer env file, fall back to stdin
+CODEFLOW_SESSION_ID="${CODEFLOW_SESSION_ID:-${SESSION_ID:-unknown}}"
+export CODEFLOW_SESSION_ID
 
 # Source security library for logging and pathflow detection
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
@@ -79,14 +86,9 @@ fi
 JSONL_FILE="${PATHFLOW_JSONL_FILE:-$REPO_ROOT/.state/logs/pathflow-events.jsonl}"
 
 if [ -f "$JSONL_FILE" ] && command -v jq >/dev/null 2>&1; then
-    # Read session ID from file
-    SESSION_ID_FILE="$REPO_ROOT/.state/runtime/current-session-id"
-    CURRENT_SESSION_ID=""
-    if [ -f "$SESSION_ID_FILE" ]; then
-        CURRENT_SESSION_ID=$(cat "$SESSION_ID_FILE" 2>/dev/null || echo "")
-    fi
+    CURRENT_SESSION_ID="$CODEFLOW_SESSION_ID"
 
-    if [ -n "$CURRENT_SESSION_ID" ]; then
+    if [ -n "$CURRENT_SESSION_ID" ] && [ "$CURRENT_SESSION_ID" != "unknown" ]; then
         CURRENT_PHASE=$(tail -100 "$JSONL_FILE" 2>/dev/null | \
             jq -r "select(.type==\"phase_transition\" and .session_id==\"$CURRENT_SESSION_ID\") | .phase" 2>/dev/null | \
             tail -1 || echo "")

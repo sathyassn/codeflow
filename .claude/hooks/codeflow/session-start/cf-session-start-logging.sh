@@ -12,7 +12,6 @@
 #   - Checks logging.session_start.enabled config
 #   - Creates session log files
 #   - Writes session start event with metadata to JSONL log
-#   - Writes session ID to current-session.txt for other hooks
 #   - Initializes log rotation (removes old logs)
 #
 # Compatibility: bash 3.2+ (macOS compatible)
@@ -102,16 +101,6 @@ fi
 if [[ "$LOGGING_ENABLED" == "false" ]]; then
     exit 0
 fi
-
-# =============================================================================
-# WRITE SESSION ID STATE FILE
-# =============================================================================
-
-# Write session ID to current-session.txt in the session state dir
-# The init hook already created .state/session/{ses-...}/ — reuse it, don't create orphan UUID dirs
-SESSION_STATE_DIR="$REPO_ROOT/.state/session/$SESSION_ID"
-mkdir -p "$SESSION_STATE_DIR" 2>/dev/null || true
-echo "$SESSION_ID" > "$SESSION_STATE_DIR/current-session.txt" 2>/dev/null || true
 
 # =============================================================================
 # LOG DIRECTORY SETUP

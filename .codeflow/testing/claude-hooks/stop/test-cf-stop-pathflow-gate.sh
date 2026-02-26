@@ -9,6 +9,7 @@
 #   - Exits immediately when stop_hook_active is true
 #   - Exits 0 when not in PathFlow mode
 #   - Logs phase completion when PathFlow is active
+#   - Sources codeflow-env.sh for canonical session ID (falls back to stdin session_id)
 
 set -euo pipefail
 
@@ -156,6 +157,41 @@ if [[ -z "$stdout_output" ]]; then
     pass "No stdout output (non-blocking)"
 else
     fail "Should not write to stdout (got: $stdout_output)"
+fi
+
+echo ""
+echo "--- Session ID Resolution ---"
+
+# Test 16: Sources codeflow-env.sh for canonical session ID
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'codeflow-env.sh' "$HOOK"; then
+    pass "Sources codeflow-env.sh for canonical session ID"
+else
+    fail "Should source codeflow-env.sh for canonical session ID"
+fi
+
+# Test 17: Uses CODEFLOW_SESSION_ID from env file for phase lookup
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'CODEFLOW_SESSION_ID' "$HOOK"; then
+    pass "Uses CODEFLOW_SESSION_ID for phase lookup"
+else
+    fail "Should use CODEFLOW_SESSION_ID from env file for phase lookup"
+fi
+
+# Test 18: Falls back to stdin session_id when env file unavailable
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q 'CODEFLOW_SESSION_ID:-${SESSION_ID:-' "$HOOK" || grep -q 'CODEFLOW_SESSION_ID:-.*SESSION_ID' "$HOOK"; then
+    pass "Falls back to stdin session_id when env file unavailable"
+else
+    fail "Should fall back to stdin session_id when env file unavailable"
+fi
+
+# Test 19: Does NOT use current-session-id file (removed in session ID fix)
+TESTS_RUN=$((TESTS_RUN + 1))
+if ! grep -q 'current-session-id' "$HOOK"; then
+    pass "Does not use current-session-id file (dead code removed)"
+else
+    fail "Should not use current-session-id file (replaced by codeflow-env.sh)"
 fi
 
 echo ""
