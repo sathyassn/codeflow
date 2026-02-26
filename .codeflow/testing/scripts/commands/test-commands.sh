@@ -128,9 +128,6 @@ test_yaml_frontmatter() {
         local file="$COMMANDS_DIR/${cmd}.md"
         [[ ! -f "$file" ]] && continue
 
-        local content
-        content=$(cat "$file")
-
         # Starts with ---
         local first_line
         first_line=$(head -1 "$file")
@@ -138,7 +135,7 @@ test_yaml_frontmatter() {
 
         # Extract frontmatter (between first and second ---)
         local frontmatter
-        frontmatter=$(sed -n '2,/^---$/p' "$file" | sed '$d')
+        frontmatter=$(awk 'NR==1{next} /^---$/{exit} {print}' "$file")
 
         # Has description field
         assert_contains "$frontmatter" "description:" "${cmd}: has description field"
@@ -164,11 +161,8 @@ test_section_structure() {
         local file="$COMMANDS_DIR/${cmd}.md"
         [[ ! -f "$file" ]] && continue
 
-        local content
-        content=$(cat "$file")
-
         for section in "${REQUIRED_SECTIONS[@]}"; do
-            if echo "$content" | grep -qF "$section"; then
+            if grep -qF "$section" "$file"; then
                 ((TEST_TOTAL_COUNT++)) || true
                 ((TEST_PASS_COUNT++)) || true
                 echo -e "  ${GREEN}✓${NC} ${cmd}: has '${section}'"
@@ -192,9 +186,15 @@ test_working_protocol() {
         local file="$COMMANDS_DIR/${cmd}.md"
         [[ ! -f "$file" ]] && continue
 
-        local content
-        content=$(cat "$file")
-        assert_contains "$content" "cf-working-protocol" "${cmd}: references cf-working-protocol"
+        if grep -qF "cf-working-protocol" "$file"; then
+            ((TEST_TOTAL_COUNT++)) || true
+            ((TEST_PASS_COUNT++)) || true
+            echo -e "  ${GREEN}✓${NC} ${cmd}: references cf-working-protocol"
+        else
+            ((TEST_TOTAL_COUNT++)) || true
+            ((TEST_FAIL_COUNT++)) || true
+            echo -e "  ${RED}✗${NC} ${cmd}: missing cf-working-protocol reference"
+        fi
     done
 }
 
@@ -209,15 +209,16 @@ test_forbidden_terms() {
         local file="$COMMANDS_DIR/${cmd}.md"
         [[ ! -f "$file" ]] && continue
 
-        local content
-        content=$(cat "$file")
-        local content_lower
-        content_lower=$(echo "$content" | tr '[:upper:]' '[:lower:]')
-
         for term in "${FORBIDDEN_TERMS[@]}"; do
-            local term_lower
-            term_lower=$(echo "$term" | tr '[:upper:]' '[:lower:]')
-            assert_not_contains "$content_lower" "$term_lower" "${cmd}: no forbidden term '${term}'"
+            if grep -qiF "$term" "$file"; then
+                ((TEST_TOTAL_COUNT++)) || true
+                ((TEST_FAIL_COUNT++)) || true
+                echo -e "  ${RED}✗${NC} ${cmd}: contains forbidden term '${term}'"
+            else
+                ((TEST_TOTAL_COUNT++)) || true
+                ((TEST_PASS_COUNT++)) || true
+                echo -e "  ${GREEN}✓${NC} ${cmd}: no forbidden term '${term}'"
+            fi
         done
     done
 }
