@@ -10,6 +10,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 readonly REPO_ROOT
 readonly CLI_DIR="$REPO_ROOT/codeflow-cli"
 
+# Skip if Go is not available (CI may not have Go installed).
+if ! command -v go &>/dev/null; then
+    echo "=== Go CLI Bridge Tests ==="
+    echo ""
+    echo "SKIP: 'go' not found on PATH. Skipping Go CLI tests."
+    echo "Install Go to run these tests locally."
+    exit 0
+fi
+
 # Track pass/fail counts.
 passed=0
 failed=0
