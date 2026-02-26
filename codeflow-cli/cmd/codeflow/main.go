@@ -39,6 +39,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newDBCmd())
 	rootCmd.AddCommand(newSessionCmd())
 	rootCmd.AddCommand(newInitCmd())
+	rootCmd.AddCommand(newDoctorCmd())
 
 	return rootCmd
 }
