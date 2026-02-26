@@ -215,8 +215,7 @@ Event types:
 7. Append completion event to `.state/logs/pathflow-events.jsonl`
 8. Record completion memory_event (event_type='milestone', data includes deliverables summary)
 9. Update `.state/runtime/active-task.json` status to "completed", then delete the file
-10. Create sentinel file for git commit (TTL: 600 seconds): `.state/runtime/commit-sentinel.json`
-11. Report: `"KNOWLEDGE: complete-work - {work_id} finalized, commit sentinel valid until {expiry}"`
+10. Report: `"KNOWLEDGE: complete-work - {work_id} finalized"`
 
 #### Step 6: Record Session Summary
 
