@@ -4,9 +4,10 @@
 # Hook Type: PostToolUse
 # Matcher:   Edit|Write
 # Teammate:  cf-security
-# Version:   1.2.0
+# Version:   1.3.0
 #
 # Changelog:
+#   - 1.3.0: Use CF_PROJECT_ROOT variable for staging path
 #   - 1.2.0: Added file type detection for validation guidance
 #   - 1.1.0: Adapted for codeflow project
 #   - 1.0.0: Initial from workflow project
@@ -22,11 +23,19 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd; })}"
 export REPO_ROOT
 
+# Source codeflow-env.sh for CF_PROJECT_ROOT
+_env_file="${REPO_ROOT}/.state/runtime/codeflow-env.sh"
+if [[ -f "$_env_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$_env_file"
+fi
+_cf_root="${CF_PROJECT_ROOT:-codeflow}"
+
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
 
 # Only for protected-edits tmp files in managed area
-if [[ "$FILE_PATH" != /tmp/claude/managed/codeflow/protected-edits/* ]]; then
+if [[ "$FILE_PATH" != /tmp/claude/${_cf_root}/managed/protected-edits/* ]]; then
   exit 0
 fi
 
@@ -97,12 +106,15 @@ get_validation_hint() {
 FILE_TYPE=$(detect_file_type "$FILE_PATH")
 VALIDATION_HINT=$(get_validation_hint "$FILE_TYPE")
 
+# Use variable in guidance output
+_staging_base="/tmp/claude/${_cf_root}/managed/protected-edits"
+
 if [[ "$IS_SETTINGS_FILE" == "true" ]]; then
-  cat <<'EOF'
+  cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Delegate to cf-security teammate: SendMessage(recipient="cf-security", content="sync-settings-templates after this edit")\n(6) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
+    "additionalContext": "SETTINGS FILE EDITED\n\n(1) Show user the changes\n(2) Validate: jq . {file}\n(3) Provide: sudo cp ${_staging_base}/{path} {original}\n(4) After user confirms, READ original to verify\n(5) MANDATORY: Delegate to cf-security teammate: SendMessage(recipient=\"cf-security\", content=\"sync-settings-templates after this edit\")\n(6) Cleanup: rm ${_staging_base}/{file}\n\nFORBIDDEN: Completing without sync-settings-templates for settings files"
   }
 }
 EOF
@@ -112,16 +124,16 @@ elif [[ -n "$VALIDATION_HINT" ]]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "PROTECTED RESOURCE WORKFLOW [${FILE_TYPE}]\n\n(1) Show user the changes\n(2) ${VALIDATION_HINT}\n(3) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(4) After user confirms, READ original to verify\n(5) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file} (targeted, not entire folder)"
+    "additionalContext": "PROTECTED RESOURCE WORKFLOW [${FILE_TYPE}]\n\n(1) Show user the changes\n(2) ${VALIDATION_HINT}\n(3) Provide: sudo cp ${_staging_base}/{path} {original}\n(4) After user confirms, READ original to verify\n(5) Cleanup: rm ${_staging_base}/{file} (targeted, not entire folder)"
   }
 }
 EOF
 else
-  cat <<'EOF'
+  cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "PROTECTED RESOURCE WORKFLOW\n\n(1) Show user the changes\n(2) Provide: sudo cp /tmp/claude/managed/codeflow/protected-edits/{path} {original}\n(3) After user confirms, READ original to verify\n(4) Cleanup: rm /tmp/claude/managed/codeflow/protected-edits/{file} (targeted, not entire folder)"
+    "additionalContext": "PROTECTED RESOURCE WORKFLOW\n\n(1) Show user the changes\n(2) Provide: sudo cp ${_staging_base}/{path} {original}\n(3) After user confirms, READ original to verify\n(4) Cleanup: rm ${_staging_base}/{file} (targeted, not entire folder)"
   }
 }
 EOF

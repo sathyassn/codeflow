@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Purpose:   Git-related security checks (Sections 1-4)
+# Purpose:   Git-related security checks (Sections 1-5)
 # Location:  .codeflow/scripts/security/enforcement/cf-git-protection.sh
 # Usage:     source "cf-git-protection.sh" (from main hook)
 #
 # This module handles:
 #   - Section 1: Git Hook Bypass Prevention (--no-verify, -n)
-#   - Section 2: Force Push Prevention (--force, -f)
+#   - Section 2: Force Push Prevention (--force, -f) — protected branches only
 #   - Section 3: Hook Path Manipulation (core.hooksPath, env vars)
 #   - Section 4: Git Hooks Directory Protection (.git/hooks)
 #   - Section 5: Protected Branch Operations (merge, cherry-pick, rebase, reset)
@@ -31,6 +31,43 @@ set -euo pipefail
 # Source shared library
 # shellcheck source=/dev/null  # LIB_DIR set by caller
 source "${LIB_DIR}/security-lib.sh"
+
+# =============================================================================
+# SHARED: Protected Branch Detection
+# =============================================================================
+# Used by Section 2 (force push) and Section 5 (merge/rebase/reset).
+# Defined early so all sections can reference it.
+
+# Get current branch
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+
+# Load protected branches from config
+PROT_BRANCHES=()
+if [[ -n "${CONFIG:-}" && -f "$CONFIG" ]] && command -v jq &>/dev/null; then
+    while IFS= read -r pb; do
+        [[ -n "$pb" ]] && PROT_BRANCHES+=("$pb")
+    done < <(jq -r '.protected_branches[]? // empty' "$CONFIG" 2>/dev/null)
+fi
+[[ ${#PROT_BRANCHES[@]} -eq 0 ]] && PROT_BRANCHES=("main" "master" "release/*" "production")
+
+# Check if current branch is protected
+_on_protected_branch() {
+    local branch="$1"
+    [[ -z "$branch" ]] && return 1
+    for pb in "${PROT_BRANCHES[@]}"; do
+        if [[ "$branch" == "$pb" ]]; then
+            return 0
+        fi
+        # Wildcard support (e.g., release/*)
+        if [[ "$pb" == *"*"* ]]; then
+            local pattern="${pb//\*/.*}"
+            if [[ "$branch" =~ ^${pattern}$ ]]; then
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
 
 # =============================================================================
 # SECTION 1: Git Hook Bypass Prevention
@@ -65,22 +102,31 @@ if [[ "$COMMAND" =~ ^git[[:space:]]+commit[[:space:]] ]]; then
 fi
 
 # =============================================================================
-# SECTION 2: Force Push Prevention
+# SECTION 2: Force Push Prevention (protected branches only)
 # =============================================================================
+# Force push is blocked on protected branches (main, master, release/*, production).
+# On feature branches, force push (including --force-with-lease) is allowed
+# for legitimate workflows like squash-before-PR.
 
 # --force flag (anywhere after push)
 if [[ "$COMMAND" =~ git[[:space:]]+push[[:space:]]+.*--force($|[[:space:]]) ]]; then
-  block_command "Force Push" "Force push attempt" "--force"
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Force Push" "Force push to protected branch '$CURRENT_BRANCH'" "--force"
+    fi
 fi
 
 # --force-with-lease flag
 if [[ "$COMMAND" =~ git[[:space:]]+push[[:space:]]+.*--force-with-lease($|[[:space:]]) ]]; then
-  block_command "Force Push" "Force push attempt (with lease)" "--force-with-lease"
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Force Push" "Force push (with lease) to protected branch '$CURRENT_BRANCH'" "--force-with-lease"
+    fi
 fi
 
 # -f short flag
 if [[ "$COMMAND" =~ git[[:space:]]+push[[:space:]]+(.*[[:space:]])?-f($|[[:space:]]) ]]; then
-  block_command "Force Push" "Force push attempt (short form)" "-f"
+    if _on_protected_branch "$CURRENT_BRANCH"; then
+        block_command "Force Push" "Force push (short form) to protected branch '$CURRENT_BRANCH'" "-f"
+    fi
 fi
 
 # =============================================================================
@@ -145,37 +191,9 @@ fi
 # PR-only workflow: no direct merges, cherry-picks, rebases, or resets on
 # protected branches (main, master, release/*, production).
 # These bypass pre-commit hooks (especially fast-forward merges).
-
-# Get current branch
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
-
-# Load protected branches from config
-PROT_BRANCHES=()
-if [[ -n "${CONFIG:-}" && -f "$CONFIG" ]] && command -v jq &>/dev/null; then
-    while IFS= read -r pb; do
-        [[ -n "$pb" ]] && PROT_BRANCHES+=("$pb")
-    done < <(jq -r '.protected_branches[]? // empty' "$CONFIG" 2>/dev/null)
-fi
-[[ ${#PROT_BRANCHES[@]} -eq 0 ]] && PROT_BRANCHES=("main" "master" "release/*" "production")
-
-# Check if current branch is protected
-_on_protected_branch() {
-    local branch="$1"
-    [[ -z "$branch" ]] && return 1
-    for pb in "${PROT_BRANCHES[@]}"; do
-        if [[ "$branch" == "$pb" ]]; then
-            return 0
-        fi
-        # Wildcard support (e.g., release/*)
-        if [[ "$pb" == *"*"* ]]; then
-            local pattern="${pb//\*/.*}"
-            if [[ "$branch" =~ ^${pattern}$ ]]; then
-                return 0
-            fi
-        fi
-    done
-    return 1
-}
+#
+# Note: CURRENT_BRANCH, PROT_BRANCHES, and _on_protected_branch() are defined
+# in the SHARED section above (before Section 1).
 
 # 5a. Block git merge on protected branches
 if [[ "$COMMAND" =~ ^git[[:space:]]+merge([[:space:]]|$) ]]; then

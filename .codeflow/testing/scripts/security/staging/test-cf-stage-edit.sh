@@ -10,7 +10,7 @@ set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TEST_DIR/../../../lib/test-isolation.sh"
 SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
-STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
+STAGING_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
 
 # Test counter
 TESTS_PASSED=0
@@ -311,11 +311,11 @@ rm -f "$STAGING_DIR/${ABS_SAFE}.staged" "$STAGING_DIR/${ABS_SAFE}.original" "$ST
 echo "re-stage test" > "$TEST_TMPDIR/test-stage-original.txt"
 echo "re-stage new" > "$TEST_TMPDIR/test-stage-new.txt"
 OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-stage-original.txt" "$TEST_TMPDIR/test-stage-new.txt" 2>&1 || true)
-if echo "$OUTPUT" | grep -q "/tmp/claude/managed/codeflow/protected-edits"; then
+if echo "$OUTPUT" | grep -q "/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"; then
     echo "PASS: Output shows correct staging directory"
     ((TESTS_PASSED++)) || true
 else
-    echo "FAIL: Output should reference /tmp/claude/managed/codeflow/protected-edits"
+    echo "FAIL: Output should reference /tmp/claude/\${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
     ((TESTS_FAILED++)) || true
 fi
 

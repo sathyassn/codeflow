@@ -13,7 +13,7 @@ SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-rollback-edit.sh"
 STAGE_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-stage-edit.sh"
 APPLY_SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-apply-staged-edit.sh"
 # shellcheck disable=SC2034  # used by sourced staging scripts
-STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
+STAGING_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
 # shellcheck disable=SC2034
 BACKUP_DIR="$REPO_ROOT/.state/backups/protected"
 

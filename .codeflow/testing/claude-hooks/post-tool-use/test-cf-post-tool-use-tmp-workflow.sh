@@ -114,7 +114,7 @@ fi
 
 # Test 12: Outputs workflow for protected-edits files
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/some-file.txt"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/some-file.txt"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]] && [[ "$result" == *"hookSpecificOutput"* ]]; then
     pass "Outputs workflow for protected-edits files"
 else
@@ -123,7 +123,7 @@ fi
 
 # Test 13: References protected-edits directory
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "/tmp/claude/managed/codeflow/protected-edits" "$HOOK"; then
+if grep -q "managed/protected-edits" "$HOOK"; then
     pass "References protected-edits directory"
 else
     fail "Should reference protected-edits directory"
@@ -134,7 +134,7 @@ echo "--- Settings File Handling ---"
 
 # Test 14: Has special handling for settings files
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]] && [[ "$result" == *"SETTINGS FILE"* ]]; then
     pass "Has special handling for settings files"
 else
@@ -143,7 +143,7 @@ fi
 
 # Test 15: Has special handling for settings.local.json
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/settings.local.json"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/settings.local.json"}}' | bash "$HOOK" 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:0"* ]] && [[ "$result" == *"SETTINGS FILE"* ]]; then
     pass "Has special handling for settings.local.json"
 else
@@ -152,7 +152,7 @@ fi
 
 # Test 16: Settings file workflow includes sync-settings-templates
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"sync-settings-templates"* ]]; then
     pass "Settings file workflow includes sync-settings-templates"
 else
@@ -161,7 +161,7 @@ fi
 
 # Test 17: Non-settings workflow does not include sync-settings-templates
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/other-file.txt"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/other-file.txt"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" != *"sync-settings-templates"* ]]; then
     pass "Non-settings workflow excludes sync-settings-templates"
 else
@@ -178,7 +178,7 @@ fi
 
 # Test 19: Settings workflow has FORBIDDEN step
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/settings.json"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"FORBIDDEN"* ]]; then
     pass "Settings workflow has FORBIDDEN guidance"
 else
@@ -257,7 +257,7 @@ echo "--- Validation Hints ---"
 
 # Test 28: Shell file workflow includes shellcheck hint
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/script.sh"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/script.sh"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"shellcheck"* ]] || [[ "$result" == *"bash -n"* ]]; then
     pass "Shell file workflow includes shellcheck hint"
 else
@@ -266,7 +266,7 @@ fi
 
 # Test 29: Python file workflow includes validation hint
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/script.py"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/script.py"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"py_compile"* ]] || [[ "$result" == *"ruff"* ]]; then
     pass "Python file workflow includes validation hint"
 else
@@ -275,7 +275,7 @@ fi
 
 # Test 30: JSON file workflow includes jq validation hint
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/config.json"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/config.json"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"jq"* ]] || [[ "$result" == *"json.tool"* ]]; then
     pass "JSON file workflow includes jq validation hint"
 else
@@ -284,7 +284,7 @@ fi
 
 # Test 31: YAML file workflow includes validation hint
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/config.yaml"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/config.yaml"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"yaml"* ]]; then
     pass "YAML file workflow includes validation hint"
 else
@@ -453,7 +453,7 @@ fi
 
 # Test 50: Unknown file type gets basic workflow
 TESTS_RUN=$((TESTS_RUN + 1))
-result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/managed/codeflow/protected-edits/file.unknown"}}' | bash "$HOOK" 2>&1)
+result=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/claude/codeflow/managed/protected-edits/file.unknown"}}' | bash "$HOOK" 2>&1)
 if [[ "$result" == *"PROTECTED RESOURCE WORKFLOW"* ]] && [[ "$result" != *"Validate:"* ]]; then
     pass "Unknown file type gets basic workflow"
 else

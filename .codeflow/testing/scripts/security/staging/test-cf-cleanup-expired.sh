@@ -10,7 +10,7 @@ set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TEST_DIR/../../../lib/test-isolation.sh"
 SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/staging/cf-cleanup-expired.sh"
-STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
+STAGING_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
 
 # Test counter
 TESTS_PASSED=0

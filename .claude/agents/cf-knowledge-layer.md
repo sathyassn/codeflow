@@ -581,12 +581,44 @@ Internal operations called by Parts 1 and 2.
 |-----------|--------|
 | JSONL append fails | HALT and alert team lead: Tier 0 integrity is critical |
 | Tier 2 markdown update fails | WARN but continue (regenerable from Tier 1) |
+| Protected file block (hook or OS) | Use staging workflow: agent runs `cp` to staging, edits staged copy, provides single `cp` apply command to user |
 | DB write validation fails | REJECT with specific missing/invalid fields |
 | Work registration conflict | Report overlapping active work to team lead |
 | Data inconsistency across tiers | Flag and report mismatch details to team lead |
 | Task dependency deadlock | Report deadlock chain to team lead |
 | DB exceeds 50 MB | Run VACUUM, report size to team lead |
 | active-task.json missing | Reconstruct from SQLite active_work table |
+
+### Protected File Staging Workflow
+
+When a write to a Tier 2 markdown file or `.claude/memory/` file is blocked by a hook or OS
+permission error, use the staging workflow:
+
+1. **STAGE** -- The agent runs the staging copy itself using Bash (the hook allows `cp FROM`
+   protected paths TO `/tmp/claude/`):
+
+   ```bash
+   mkdir -p /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{parent-dirs}
+   cp {original} /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}
+   ```
+
+   Do NOT ask the user to run this copy. Do NOT escalate to the team lead for staging.
+
+2. **EDIT** -- Edit the staged copy directly using Edit/Write tools. All edits are allowed in
+   the managed staging area. Do not use sed, awk, or echo >> commands.
+
+3. **PROVIDE** -- Give the user a single, ready-to-paste `cp` apply command (one line, no
+   backslash continuations, no placeholders the user must fill in):
+
+   ```bash
+   cp /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path} {original}
+   ```
+
+4. **WAIT** -- User runs the copy command (the agent cannot apply protected files).
+
+5. **VERIFY** -- Read the original file to confirm changes applied correctly.
+
+6. **CLEANUP** -- Remove only the specific staged file: `rm /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}`
 
 ## Communication
 

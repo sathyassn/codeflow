@@ -603,11 +603,14 @@ fi
 # Create fresh project temp directory for staging, test artifacts, etc.
 # Cleaned up by session-end hook.
 
-if [[ "$_TEAMMATE_MODE" != "true" ]]; then
-    PROJECT_TEMP_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}"
-    rm -rf "$PROJECT_TEMP_DIR" 2>/dev/null || true
-    mkdir -p "$PROJECT_TEMP_DIR"
-fi
+  if [[ "$_TEAMMATE_MODE" != "true" ]]; then
+      PROJECT_TEMP_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}"
+      # Guard: never rm -rf REPO_ROOT (test isolation dirs live under /tmp/claude/)
+      if [[ "$PROJECT_TEMP_DIR" != "$REPO_ROOT" ]]; then
+          rm -rf "$PROJECT_TEMP_DIR" 2>/dev/null || true
+      fi
+      mkdir -p "$PROJECT_TEMP_DIR"
+  fi
 
 # =============================================================================
 # SUCCESS

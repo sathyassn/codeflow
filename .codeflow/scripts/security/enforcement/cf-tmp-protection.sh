@@ -5,7 +5,7 @@
 #
 # This module handles:
 #   - Section 11: Managed Tmp Protection
-#     - Protects /tmp/claude/managed/ folder structure
+#     - Protects /tmp/claude/${CF_PROJECT_ROOT}/managed/ folder structure
 #     - Blocks deletion of managed folders (config-driven via enforcement-policy.json)
 #     - Blocks deletion of state files (but allows create/edit)
 #
@@ -30,8 +30,8 @@ source "${LIB_DIR}/security-lib.sh"
 # =============================================================================
 # Purpose: Protect the managed tmp structure from accidental deletion
 # Structure (config-driven, defaults shown):
-#   /tmp/claude/managed/               - Container (protected from deletion)
-#   /tmp/claude/managed/protected-edits/ - For protected resource workflow
+#   /tmp/claude/{project}/managed/               - Container (protected from deletion)
+#   /tmp/claude/{project}/managed/protected-edits/ - For protected resource workflow
 
 # Block deletion/rename of managed folders
 for folder in "${MANAGED_TMP_FOLDERS[@]}"; do

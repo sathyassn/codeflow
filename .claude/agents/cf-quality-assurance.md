@@ -92,6 +92,8 @@ Extract specific, testable criteria from the task assignment. List them as a che
 
 #### Step 2: Run Full Test Suite
 
+**Step 2a: Run shell/Python test suite:**
+
 ```text
 bash .codeflow/testing/run-all-tests.sh --mode full
 ```
@@ -99,6 +101,14 @@ bash .codeflow/testing/run-all-tests.sh --mode full
 Use `--mode standard` if the lead requests faster turnaround. Use `--mode essential` only for quick pre-checks.
 
 **Additional flags:** `--category {name}` (scoped), `--stop-on-fail`, `--verbose`, `--validate-coverage`, `--report`, `--dry-run`
+
+**Step 2b: Run Go test suite (mandatory):**
+
+```text
+cd codeflow-cli && go test -race -cover -count=1 ./...
+```
+
+This step is mandatory for every WS-QA run, not conditional on file scope. Both the shell/Python suite and Go suite must pass for WS-QA to issue a PASS verdict.
 
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
 
@@ -486,6 +496,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Structural validation passed:** All 7 checks from Section 5.2 performed BEFORE test execution
 - [ ] 🔒 **Functional testing verified:** Tests exercise real code, not mocks of code under test (Section 5.5)
 - [ ] 🔒 **Test suite executed:** `run-all-tests.sh` ran to completion with actual output captured
+- [ ] 🔒 **Go test suite executed:** `cd codeflow-cli && go test -race -cover -count=1 ./...` ran to completion and passed
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails

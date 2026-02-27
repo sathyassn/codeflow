@@ -102,6 +102,8 @@
         "scripts/worktree/test-cf-worktree-status.sh",
         "scripts/worktree/test-cf-worktree-cleanup.sh",
         "scripts/settings/test-cf-change-approval-mode.sh",
+        "scripts/settings/test-setup-managed-settings.sh",
+        "scripts/settings/test-managed-settings-json.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-edit-write.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-gh-pr.sh",
         "claude-hooks/pre-tool-use/test-cf-pre-tool-use-protected-resource.sh",
@@ -480,6 +482,14 @@
       {
         "pattern": "cli/test-go-cli.sh",
         "reason": "Bridge test for Go CLI binary (no 1:1 shell source mapping — tests Go package code)"
+      },
+      {
+        "pattern": "scripts/settings/test-managed-settings-json.sh",
+        "reason": "Tests managed-settings.json config file (source is JSON, not Shell)"
+      },
+      {
+        "pattern": "scripts/settings/test-setup-managed-settings.sh",
+        "reason": "Tests setup-managed-settings.sh which lives at .codeflow/scripts/settings/ (different path convention)"
       }
     ]
   },

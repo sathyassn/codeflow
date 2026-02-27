@@ -134,7 +134,7 @@ Parse the `protected_resources` object which contains three arrays:
 **Staging workflow steps:**
 
 1. **DETECT** -- Identify blocked path and error type
-2. **STAGE** -- Copy original to staging area:
+2. **STAGE** -- The agent runs the staging copy command itself using Bash:
 
    ```text
    # CF_PROJECT_ROOT is set by session-start hook (codeflow-env.sh)
@@ -142,12 +142,23 @@ Parse the `protected_resources` object which contains three arrays:
    cp {original} /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}
    ```
 
-3. **EDIT** -- Teammate edits the tmp file (all edits allowed in managed area)
-4. **PROVIDE** -- Give combined apply command to user:
+   The agent does NOT ask the user to run this copy. The hook allows `cp FROM` protected paths
+   TO `/tmp/claude/` -- the agent runs it directly. Do NOT escalate to the team lead for staging.
+
+3. **EDIT** -- The agent edits the staged copy directly using Edit/Write tools. All edits are
+   allowed in the managed staging area (`/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/`).
+   No manual sed/awk/echo commands -- use Edit or Write tools on the staged file path.
+
+4. **PROVIDE** -- Give the user a single, ready-to-paste `cp` apply command (one line, no
+   backslash continuations, no placeholders):
 
    ```text
-   cp /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{path} {dest} && chmod +x {dest}
+   cp /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path} {dest}
    ```
+
+   Only add `&& chmod +x {dest}` if the file is executable. NEVER ask the user to run sed,
+   awk, echo >>, or any other manual edit command. NEVER provide multi-line commands with
+   backslash continuations. NEVER use placeholders the user must fill in.
 
 5. **WAIT** -- User must run the copy command (agent CANNOT apply protected files)
 6. **VERIFY** -- After user confirms, read original to confirm changes match

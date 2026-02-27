@@ -154,7 +154,7 @@ else
 fi
 
 # Test 20: Documents managed tmp structure
-if grep -q '/tmp/claude/managed' "$MODULE"; then
+if grep -q '/managed/' "$MODULE"; then
     pass "Documents managed tmp structure"
 else
     fail "Should document managed tmp structure"

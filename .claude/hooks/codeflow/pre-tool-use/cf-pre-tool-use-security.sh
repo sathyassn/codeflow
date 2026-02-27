@@ -120,13 +120,14 @@ export COMMAND
 PROTECTED_PATHS=()
 INDIRECT_WRITE_CMDS="(cp|dd|tee|rsync|scp|install|ln)"
 
-# Managed tmp folder protection
+# Managed tmp folder protection — use CF_PROJECT_ROOT for correct path
+_cf_root="${CF_PROJECT_ROOT:-codeflow}"
 MANAGED_TMP_FOLDERS=(
-    "/tmp/claude/managed"
-    "/tmp/claude/managed/codeflow/protected-edits"
-    "/tmp/claude/managed/state"
+    "/tmp/claude/${_cf_root}/managed"
+    "/tmp/claude/${_cf_root}/managed/protected-edits"
+    "/tmp/claude/${_cf_root}/managed/state"
 )
-STATE_FOLDER="/tmp/claude/managed/state"
+STATE_FOLDER="/tmp/claude/${_cf_root}/managed/state"
 
 if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
     while IFS= read -r path; do
@@ -138,9 +139,9 @@ if [[ -f "$CONFIG" ]] && command -v jq &>/dev/null; then
     while IFS= read -r folder; do
         [[ -n "$folder" ]] && MANAGED_TMP_FOLDERS+=("$folder")
     done < <(jq -r '.managed_tmp.protected_folders[]? // empty' "$CONFIG" 2>/dev/null)
-    [[ ${#MANAGED_TMP_FOLDERS[@]} -eq 0 ]] && MANAGED_TMP_FOLDERS=("/tmp/claude/managed" "/tmp/claude/managed/codeflow/protected-edits" "/tmp/claude/managed/state")
+    [[ ${#MANAGED_TMP_FOLDERS[@]} -eq 0 ]] && MANAGED_TMP_FOLDERS=("/tmp/claude/${_cf_root}/managed" "/tmp/claude/${_cf_root}/managed/protected-edits" "/tmp/claude/${_cf_root}/managed/state")
 
-    STATE_FOLDER=$(jq -r '.managed_tmp.state_folder // "/tmp/claude/managed/state"' "$CONFIG" 2>/dev/null)
+    STATE_FOLDER=$(jq -r ".managed_tmp.state_folder // \"/tmp/claude/${_cf_root}/managed/state\"" "$CONFIG" 2>/dev/null)
 fi
 
 export PROTECTED_PATHS INDIRECT_WRITE_CMDS MANAGED_TMP_FOLDERS STATE_FOLDER

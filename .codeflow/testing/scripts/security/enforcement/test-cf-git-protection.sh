@@ -208,19 +208,94 @@ test_allows_command "git commit -m 'fix: handle -n flag properly'" \
 # PART C: Functional Tests - Section 2: Force Push Prevention
 # =========================================================================
 echo ""
-echo "--- Functional Tests: Section 2 (Force Push) ---"
+echo "--- Functional Tests: Section 2 (Force Push - Protected Branches) ---"
 
-test_blocks_command "git push --force origin main" \
-    "Blocks --force push"
+# Helper: test force push with a specific branch context
+# Uses a temp git repo to control the branch name seen by git branch --show-current
+test_force_push_on_branch() {
+    local branch="$1"
+    local command="$2"
+    local should_block="$3"  # "block" or "allow"
+    local description="$4"
 
-test_blocks_command "git push --force-with-lease origin main" \
-    "Blocks --force-with-lease push"
+    local tmpdir
+    tmpdir=$(mktemp -d)
 
-test_blocks_command "git push -f origin main" \
-    "Blocks -f short flag push"
+    # Run in captured subshell to isolate cd and guarantee cleanup
+    local result
+    result=$( (
+        git init -q "$tmpdir" 2>/dev/null || true
+        cd "$tmpdir"
+        git checkout -q -b "$branch" 2>/dev/null || true
 
+        local output
+        output=$(COMMAND="$command" REPO_ROOT="$REPO_ROOT" LIB_DIR="$LIB_DIR" \
+            bash -c "source '$MODULE'" 2>&1 || true)
+
+        if [[ "$should_block" == "block" ]]; then
+            if echo "$output" | grep -q "BLOCKED"; then
+                echo "PASS"
+            else
+                echo "FAIL_BLOCK"
+            fi
+        else
+            if echo "$output" | grep -q "BLOCKED"; then
+                echo "FAIL_ALLOW"
+            else
+                echo "PASS"
+            fi
+        fi
+    ) 2>/dev/null )
+
+    rm -rf "$tmpdir"
+
+    if [[ "$result" == "PASS" ]]; then
+        pass "$description"
+    elif [[ "$result" == "FAIL_BLOCK" ]]; then
+        fail "$description - Expected block"
+    else
+        fail "$description - Expected allow but got blocked"
+    fi
+}
+
+# --- Protected branches: force push MUST be blocked ---
+test_force_push_on_branch "main" "git push --force origin main" "block" \
+    "Blocks --force push on main"
+
+test_force_push_on_branch "main" "git push --force-with-lease origin main" "block" \
+    "Blocks --force-with-lease push on main"
+
+test_force_push_on_branch "main" "git push -f origin main" "block" \
+    "Blocks -f push on main"
+
+test_force_push_on_branch "master" "git push --force origin master" "block" \
+    "Blocks --force push on master"
+
+test_force_push_on_branch "production" "git push --force origin production" "block" \
+    "Blocks --force push on production"
+
+test_force_push_on_branch "release/v1.0" "git push --force origin release/v1.0" "block" \
+    "Blocks --force push on release/* branch"
+
+# --- Feature branches: force push MUST be allowed ---
+test_force_push_on_branch "feat/update-command" "git push --force origin feat/update-command" "allow" \
+    "Allows --force push on feature branch"
+
+test_force_push_on_branch "feat/update-command" "git push --force-with-lease origin feat/update-command" "allow" \
+    "Allows --force-with-lease push on feature branch"
+
+test_force_push_on_branch "feat/update-command" "git push -f origin feat/update-command" "allow" \
+    "Allows -f push on feature branch"
+
+test_force_push_on_branch "fix/bug-fix" "git push --force origin fix/bug-fix" "allow" \
+    "Allows --force push on fix branch"
+
+test_force_push_on_branch "refactor/cleanup" "git push --force-with-lease origin refactor/cleanup" "allow" \
+    "Allows --force-with-lease push on refactor branch"
+
+# --- Normal push still allowed ---
 test_allows_command "git push origin feature/branch" \
-    "Allows normal push"
+    "Allows normal push (no force flag)"
 
 # =========================================================================
 # PART D: Functional Tests - Section 3: Hook Path Manipulation

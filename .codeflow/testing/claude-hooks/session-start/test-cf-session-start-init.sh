@@ -1475,15 +1475,23 @@ fi
 
 # Test: Project temp dir uses rm -rf before mkdir -p (clean slate)
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -A3 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'rm -rf.*PROJECT_TEMP_DIR'; then
+if grep -A5 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'rm -rf.*PROJECT_TEMP_DIR'; then
     pass "Project temp dir uses rm -rf for clean slate"
 else
     fail "Missing rm -rf for project temp dir clean slate"
 fi
 
+# Test: Project temp dir rm -rf guarded against REPO_ROOT collision
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -A4 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'PROJECT_TEMP_DIR.*!=.*REPO_ROOT'; then
+    pass "Project temp dir rm -rf guarded against REPO_ROOT"
+else
+    fail "Missing REPO_ROOT guard for project temp dir rm -rf"
+fi
+
 # Test: Project temp dir uses mkdir -p after rm
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -A4 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'mkdir -p.*PROJECT_TEMP_DIR'; then
+if grep -A6 'PROJECT_TEMP_DIR=' "$HOOK" | grep -q 'mkdir -p.*PROJECT_TEMP_DIR'; then
     pass "Project temp dir uses mkdir -p after cleanup"
 else
     fail "Missing mkdir -p for project temp dir"

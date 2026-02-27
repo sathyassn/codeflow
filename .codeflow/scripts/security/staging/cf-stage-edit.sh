@@ -43,7 +43,7 @@ DESCRIPTION:
     staging workflow for security review.
 
     Staged files are stored in:
-      /tmp/claude/managed/codeflow/protected-edits/
+      /tmp/claude/\${CF_PROJECT_ROOT}/managed/protected-edits/
 
 EXAMPLES:
     cf-stage-edit.sh .claude/CLAUDE.md /tmp/new-content.md
@@ -97,7 +97,14 @@ NEW_CONTENT_FILE="$2"
 # =============================================================================
 
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
+
+# Source codeflow-env.sh for CF_PROJECT_ROOT
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+fi
+
+STAGING_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
 CONFIG="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 

@@ -34,7 +34,7 @@ DESCRIPTION:
     Removes staged edits that have exceeded their TTL (time-to-live).
     By default, staged edits expire after 1 hour.
 
-    Staged edit location: /tmp/claude/managed/codeflow/protected-edits/
+    Staged edit location: /tmp/claude/\${CF_PROJECT_ROOT}/managed/protected-edits/
 
     This script should be run:
       - On session start (via cf-session-start-init hook)
@@ -94,8 +94,15 @@ done
 # SETUP
 # =============================================================================
 
-STAGING_DIR="/tmp/claude/managed/codeflow/protected-edits"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# Source codeflow-env.sh for CF_PROJECT_ROOT
+if [[ -f "$REPO_ROOT/.state/runtime/codeflow-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/.state/runtime/codeflow-env.sh"
+fi
+
+STAGING_DIR="/tmp/claude/${CF_PROJECT_ROOT:-codeflow}/managed/protected-edits"
 LIB_DIR="$REPO_ROOT/.codeflow/scripts/security/lib"
 
 # Source security library if available
