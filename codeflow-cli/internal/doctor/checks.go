@@ -49,6 +49,14 @@ type Options struct {
 	// StateDir is the path to the .state/ directory.
 	StateDir string
 
+	// SessionID is the active PathFlow session ID.
+	// Populated from CODEFLOW_SESSION_ID environment variable.
+	SessionID string
+
+	// HomeDir overrides the user home directory for testing.
+	// Defaults to os.UserHomeDir().
+	HomeDir string
+
 	// LookPath locates executables. Defaults to exec.LookPath.
 	LookPath func(string) (string, error)
 
@@ -59,6 +67,11 @@ type Options struct {
 
 // applyDefaults fills in zero-value fields with production defaults.
 func (o *Options) applyDefaults() {
+	if o.HomeDir == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			o.HomeDir = h
+		}
+	}
 	if o.LookPath == nil {
 		o.LookPath = exec.LookPath
 	}
@@ -92,6 +105,9 @@ var checkNames = []string{
 	"permissions",
 	"version",
 	"network",
+	"pathflow-stuck",
+	"team-health",
+	"sentinel-drift",
 }
 
 // CheckNames returns the ordered list of all available check names.
@@ -106,22 +122,25 @@ type checkFunc func(ctx context.Context, opts *Options) Result
 
 // checkRegistry maps check names to their implementations.
 var checkRegistry = map[string]checkFunc{
-	"database":    checkDatabase,
-	"jsonl":       checkJSONL,
-	"crdt":        checkCRDT,
-	"python":      checkPython,
-	"hooks":       checkHooks,
-	"claude":      checkClaude,
-	"auth":        checkAuth,
-	"config":      checkConfig,
-	"embedding":   checkEmbedding,
-	"vector":      checkVector,
-	"permissions": checkPermissions,
-	"version":     checkVersion,
-	"network":     checkNetwork,
+	"database":       checkDatabase,
+	"jsonl":          checkJSONL,
+	"crdt":           checkCRDT,
+	"python":         checkPython,
+	"hooks":          checkHooks,
+	"claude":         checkClaude,
+	"auth":           checkAuth,
+	"config":         checkConfig,
+	"embedding":      checkEmbedding,
+	"vector":         checkVector,
+	"permissions":    checkPermissions,
+	"version":        checkVersion,
+	"network":        checkNetwork,
+	"pathflow-stuck": checkPathflowStuck,
+	"team-health":    checkTeamHealth,
+	"sentinel-drift": checkSentinelDrift,
 }
 
-// RunAll executes all 13 checks concurrently and returns results in the
+// RunAll executes all 16 checks concurrently and returns results in the
 // canonical order. Independent checks run in parallel to stay under 2 seconds.
 func RunAll(ctx context.Context, opts *Options) []Result {
 	if opts == nil {
@@ -671,6 +690,349 @@ func checkVersion(_ context.Context, _ *Options) Result {
 		Name:     "version",
 		Status:   StatusPass,
 		Message:  "version check passed",
+		Duration: time.Since(start),
+	}
+}
+
+// stuckThreshold is the maximum age for a PathFlow phase before it is
+// considered stuck. Set to half of stage_timeout_minutes (60 min / 2 = 30 min).
+const stuckThreshold = 30 * time.Minute
+
+// pathflowActive returns true if the pathflow-active flag exists for the session.
+func pathflowActive(stateDir, sessionID string) bool {
+	flag := filepath.Join(stateDir, "session", sessionID, "pathflow", "is-pathflow-active")
+	_, err := os.Stat(flag)
+	return err == nil
+}
+
+// pathflowEvent represents a single entry from pathflow-events.jsonl.
+type pathflowEvent struct {
+	EventType string `json:"event_type"`
+	Phase     string `json:"phase"`
+	Timestamp string `json:"timestamp"`
+}
+
+// readPathflowEvents reads and parses pathflow-events.jsonl from StateDir/logs/.
+func readPathflowEvents(stateDir string) ([]pathflowEvent, error) {
+	path := filepath.Join(stateDir, "logs", "pathflow-events.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open pathflow events: %w", err)
+	}
+	defer f.Close()
+
+	var events []pathflowEvent
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var ev pathflowEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue // Skip malformed lines.
+		}
+		events = append(events, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return events, fmt.Errorf("scan pathflow events: %w", err)
+	}
+	return events, nil
+}
+
+// checkPathflowStuck detects PathFlow phases older than 30 minutes.
+func checkPathflowStuck(_ context.Context, opts *Options) Result {
+	start := time.Now()
+
+	if opts.SessionID == "" || !pathflowActive(opts.StateDir, opts.SessionID) {
+		return Result{
+			Name:     "pathflow-stuck",
+			Status:   StatusPass,
+			Message:  "pathflow not active",
+			Duration: time.Since(start),
+		}
+	}
+
+	events, err := readPathflowEvents(opts.StateDir)
+	if err != nil {
+		return Result{
+			Name:     "pathflow-stuck",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("cannot read pathflow events: %v", err),
+			Duration: time.Since(start),
+		}
+	}
+
+	// Find the latest phase_transition event.
+	var latestPhase string
+	var latestTime time.Time
+	for _, ev := range events {
+		if ev.EventType != "phase_transition" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, ev.Timestamp)
+		if err != nil {
+			continue
+		}
+		if t.After(latestTime) {
+			latestTime = t
+			latestPhase = ev.Phase
+		}
+	}
+
+	if latestPhase == "" {
+		return Result{
+			Name:     "pathflow-stuck",
+			Status:   StatusPass,
+			Message:  "no phase transitions found",
+			Duration: time.Since(start),
+		}
+	}
+
+	age := time.Since(latestTime)
+	if age > stuckThreshold {
+		return Result{
+			Name:     "pathflow-stuck",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("phase %s stuck for %s (threshold: 30m)", latestPhase, age.Truncate(time.Second)),
+			Duration: time.Since(start),
+		}
+	}
+
+	return Result{
+		Name:     "pathflow-stuck",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("current phase %s started %s ago", latestPhase, age.Truncate(time.Second)),
+		Duration: time.Since(start),
+	}
+}
+
+// teamConfig represents a team config.json file.
+type teamConfig struct {
+	Members []teamMember `json:"members"`
+}
+
+// teamMember represents a single teammate entry in the team config.
+type teamMember struct {
+	Name       string `json:"name"`
+	TmuxPaneID string `json:"tmuxPaneId"`
+}
+
+// pathflowTeamConfig represents the session-scoped pathflow-team.json file.
+type pathflowTeamConfig struct {
+	TeamName string `json:"team_name"`
+}
+
+// discoverTeamName attempts to find the active team name. It checks the
+// session-scoped pathflow-team.json first, then falls back to listing
+// ~/.claude/teams/ directories.
+func discoverTeamName(stateDir, sessionID, homeDir string) string {
+	// Primary: session-scoped team config.
+	if sessionID != "" {
+		teamFile := filepath.Join(stateDir, "session", sessionID, "pathflow", "pathflow-team.json")
+		data, err := os.ReadFile(teamFile)
+		if err == nil {
+			var ptc pathflowTeamConfig
+			if json.Unmarshal(data, &ptc) == nil && ptc.TeamName != "" {
+				return ptc.TeamName
+			}
+		}
+	}
+
+	// Fallback: list ~/.claude/teams/ directories.
+	if homeDir == "" {
+		return ""
+	}
+	teamsDir := filepath.Join(homeDir, ".claude", "teams")
+	entries, err := os.ReadDir(teamsDir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return entry.Name()
+		}
+	}
+	return ""
+}
+
+// checkTeamHealth verifies that teammate tmux panes are alive.
+func checkTeamHealth(_ context.Context, opts *Options) Result {
+	start := time.Now()
+
+	teamName := discoverTeamName(opts.StateDir, opts.SessionID, opts.HomeDir)
+	if teamName == "" {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusPass,
+			Message:  "no active team",
+			Duration: time.Since(start),
+		}
+	}
+
+	configPath := filepath.Join(opts.HomeDir, ".claude", "teams", teamName, "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("cannot read team config: %v", err),
+			Duration: time.Since(start),
+		}
+	}
+
+	var tc teamConfig
+	if err := json.Unmarshal(data, &tc); err != nil {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("invalid team config JSON: %v", err),
+			Duration: time.Since(start),
+		}
+	}
+
+	if len(tc.Members) == 0 {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusPass,
+			Message:  "team has no members",
+			Duration: time.Since(start),
+		}
+	}
+
+	// Get tmux pane listing.
+	tmuxOutput, err := opts.ExecCommand("tmux", "list-panes", "-a")
+	if err != nil {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusWarn,
+			Message:  "tmux not available",
+			Duration: time.Since(start),
+		}
+	}
+
+	paneList := string(tmuxOutput)
+	var deadCount int
+	for _, member := range tc.Members {
+		if member.TmuxPaneID == "" {
+			continue
+		}
+		if !strings.Contains(paneList, member.TmuxPaneID) {
+			deadCount++
+		}
+	}
+
+	if deadCount > 0 {
+		return Result{
+			Name:     "team-health",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("%d of %d teammate panes not found in tmux", deadCount, len(tc.Members)),
+			Duration: time.Since(start),
+		}
+	}
+
+	return Result{
+		Name:     "team-health",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("all %d teammate panes alive", len(tc.Members)),
+		Duration: time.Since(start),
+	}
+}
+
+// expectedSentinels maps phase names to the sentinel files that should exist
+// once that phase completes. Phases are cumulative — PF4 implies PF1-PF3
+// sentinels should all exist.
+var expectedSentinels = map[string][]string{
+	"PF1-INIT":     {"pathflow-pf-1"},
+	"PF2-CONTEXT":  {"pathflow-pf-1", "pathflow-pf-2"},
+	"PF3-CLASSIFY": {"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3"},
+	"PF4-EXECUTE":  {"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3"},
+	"PF5-VERIFY":   {"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3"},
+	"PF6-COMPLETE": {"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3", "pathflow-pf-6"},
+	"PF7-END":      {"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3", "pathflow-pf-6", "pathflow-pf-7"},
+}
+
+// checkSentinelDrift compares sentinel files against the current phase.
+func checkSentinelDrift(_ context.Context, opts *Options) Result {
+	start := time.Now()
+
+	if opts.SessionID == "" || !pathflowActive(opts.StateDir, opts.SessionID) {
+		return Result{
+			Name:     "sentinel-drift",
+			Status:   StatusPass,
+			Message:  "no active session",
+			Duration: time.Since(start),
+		}
+	}
+
+	events, err := readPathflowEvents(opts.StateDir)
+	if err != nil {
+		return Result{
+			Name:     "sentinel-drift",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("cannot read pathflow events: %v", err),
+			Duration: time.Since(start),
+		}
+	}
+
+	// Find the latest phase_transition event to determine current phase.
+	var currentPhase string
+	var latestTime time.Time
+	for _, ev := range events {
+		if ev.EventType != "phase_transition" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, ev.Timestamp)
+		if err != nil {
+			continue
+		}
+		if t.After(latestTime) {
+			latestTime = t
+			currentPhase = ev.Phase
+		}
+	}
+
+	if currentPhase == "" {
+		return Result{
+			Name:     "sentinel-drift",
+			Status:   StatusPass,
+			Message:  "no phase transitions found",
+			Duration: time.Since(start),
+		}
+	}
+
+	expected, ok := expectedSentinels[currentPhase]
+	if !ok {
+		return Result{
+			Name:     "sentinel-drift",
+			Status:   StatusPass,
+			Message:  fmt.Sprintf("unknown phase %s, skipping drift check", currentPhase),
+			Duration: time.Since(start),
+		}
+	}
+
+	sentinelDir := filepath.Join(opts.StateDir, "sentinels", "pathflow", opts.SessionID)
+	var missing []string
+	for _, sentinel := range expected {
+		path := filepath.Join(sentinelDir, sentinel)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			missing = append(missing, sentinel)
+		}
+	}
+
+	if len(missing) > 0 {
+		return Result{
+			Name:     "sentinel-drift",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("phase %s: missing sentinels: %s", currentPhase, strings.Join(missing, ", ")),
+			Duration: time.Since(start),
+		}
+	}
+
+	return Result{
+		Name:     "sentinel-drift",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("all sentinels present for phase %s", currentPhase),
 		Duration: time.Since(start),
 	}
 }

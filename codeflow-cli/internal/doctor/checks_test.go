@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // fakeLookPath returns a LookPath function that succeeds for the given names.
@@ -31,8 +32,8 @@ func fakeExecCommand(output string, err error) func(string, ...string) ([]byte, 
 
 func TestCheckNames(t *testing.T) {
 	names := CheckNames()
-	if len(names) != 13 {
-		t.Fatalf("expected 13 check names, got %d", len(names))
+	if len(names) != 16 {
+		t.Fatalf("expected 16 check names, got %d", len(names))
 	}
 
 	// Verify the list is independent (modifying it doesn't affect the original).
@@ -678,8 +679,8 @@ func TestRunAll(t *testing.T) {
 	createTestDB(t, opts.DBPath)
 
 	results := RunAll(ctx, opts)
-	if len(results) != 13 {
-		t.Fatalf("expected 13 results, got %d", len(results))
+	if len(results) != 16 {
+		t.Fatalf("expected 16 results, got %d", len(results))
 	}
 
 	// Verify results are in the canonical order.
@@ -727,6 +728,358 @@ func TestRunCheck_UnknownCheck(t *testing.T) {
 	_, err := RunCheck(ctx, "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown check name")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pathflow-stuck tests
+// ---------------------------------------------------------------------------
+
+func TestCheckPathflowStuck_NotActive(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	// No pathflow-active flag exists.
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: "ses-test-session",
+	}
+	opts.applyDefaults()
+
+	result := checkPathflowStuck(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass when pathflow not active, got %s: %s", result.Status, result.Message)
+	}
+	if result.Name != "pathflow-stuck" {
+		t.Errorf("expected name 'pathflow-stuck', got %q", result.Name)
+	}
+}
+
+func TestCheckPathflowStuck_StuckPhase(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	sessionID := "ses-test-stuck"
+
+	// Create pathflow-active flag.
+	flagDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create pathflow-events.jsonl with a phase_transition 45 minutes ago.
+	logsDir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stuckTime := time.Now().Add(-45 * time.Minute).Format(time.RFC3339)
+	event := fmt.Sprintf(`{"event_type":"phase_transition","phase":"PF4-EXECUTE","timestamp":"%s"}`, stuckTime)
+	if err := os.WriteFile(filepath.Join(logsDir, "pathflow-events.jsonl"), []byte(event+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: sessionID,
+	}
+	opts.applyDefaults()
+
+	result := checkPathflowStuck(ctx, opts)
+	if result.Status != StatusWarn {
+		t.Errorf("expected warn for stuck phase, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckPathflowStuck_RecentPhase(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	sessionID := "ses-test-recent"
+
+	// Create pathflow-active flag.
+	flagDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create pathflow-events.jsonl with a phase_transition 5 minutes ago.
+	logsDir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recentTime := time.Now().Add(-5 * time.Minute).Format(time.RFC3339)
+	event := fmt.Sprintf(`{"event_type":"phase_transition","phase":"PF3-CLASSIFY","timestamp":"%s"}`, recentTime)
+	if err := os.WriteFile(filepath.Join(logsDir, "pathflow-events.jsonl"), []byte(event+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: sessionID,
+	}
+	opts.applyDefaults()
+
+	result := checkPathflowStuck(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass for recent phase, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckPathflowStuck_EmptySessionID(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	opts := &Options{
+		StateDir:  t.TempDir(),
+		SessionID: "",
+	}
+	opts.applyDefaults()
+
+	result := checkPathflowStuck(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass for empty session ID, got %s: %s", result.Status, result.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// team-health tests
+// ---------------------------------------------------------------------------
+
+func TestCheckTeamHealth_NoTeam(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	fakeHome := t.TempDir()
+	// No team config anywhere — empty home dir prevents fallback discovery.
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: "ses-no-team",
+		HomeDir:   fakeHome,
+	}
+	opts.applyDefaults()
+
+	result := checkTeamHealth(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass when no team, got %s: %s", result.Status, result.Message)
+	}
+	if result.Name != "team-health" {
+		t.Errorf("expected name 'team-health', got %q", result.Name)
+	}
+}
+
+func TestCheckTeamHealth_TmuxNotAvailable(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	fakeHome := t.TempDir()
+	sessionID := "ses-tmux-fail"
+
+	// Create session-scoped team config so a team is discovered.
+	teamDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	teamJSON := `{"team_name":"test-team","lead_pid":"12345","codeflow_session_id":"ses-tmux-fail"}`
+	if err := os.WriteFile(filepath.Join(teamDir, "pathflow-team.json"), []byte(teamJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create team config under fake home.
+	teamConfigDir := filepath.Join(fakeHome, ".claude", "teams", "test-team")
+	if err := os.MkdirAll(teamConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configData := `{"members":[{"name":"cf-development","tmuxPaneId":"%42"}]}`
+	if err := os.WriteFile(filepath.Join(teamConfigDir, "config.json"), []byte(configData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &Options{
+		StateDir:    stateDir,
+		SessionID:   sessionID,
+		HomeDir:     fakeHome,
+		ExecCommand: fakeExecCommand("", fmt.Errorf("tmux: no server running")),
+	}
+	opts.applyDefaults()
+
+	result := checkTeamHealth(ctx, opts)
+	if result.Status != StatusWarn {
+		t.Errorf("expected warn when tmux unavailable, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckTeamHealth_AllPanesAlive(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	fakeHome := t.TempDir()
+	sessionID := "ses-alive"
+
+	// Create session-scoped team config.
+	teamDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	teamJSON := `{"team_name":"alive-team","lead_pid":"12345","codeflow_session_id":"ses-alive"}`
+	if err := os.WriteFile(filepath.Join(teamDir, "pathflow-team.json"), []byte(teamJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create team config under fake home.
+	teamConfigDir := filepath.Join(fakeHome, ".claude", "teams", "alive-team")
+	if err := os.MkdirAll(teamConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configData := `{"members":[{"name":"cf-dev","tmuxPaneId":"%42"},{"name":"cf-git","tmuxPaneId":"%43"}]}`
+	if err := os.WriteFile(filepath.Join(teamConfigDir, "config.json"), []byte(configData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// tmux output includes both pane IDs.
+	opts := &Options{
+		StateDir:    stateDir,
+		SessionID:   sessionID,
+		HomeDir:     fakeHome,
+		ExecCommand: fakeExecCommand("session:0.0: [200x50] %42 (active)\nsession:0.1: [200x50] %43\n", nil),
+	}
+	opts.applyDefaults()
+
+	result := checkTeamHealth(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass when all panes alive, got %s: %s", result.Status, result.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sentinel-drift tests
+// ---------------------------------------------------------------------------
+
+func TestCheckSentinelDrift_NoSession(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	opts := &Options{
+		StateDir:  t.TempDir(),
+		SessionID: "",
+	}
+	opts.applyDefaults()
+
+	result := checkSentinelDrift(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass for no session, got %s: %s", result.Status, result.Message)
+	}
+	if result.Name != "sentinel-drift" {
+		t.Errorf("expected name 'sentinel-drift', got %q", result.Name)
+	}
+}
+
+func TestCheckSentinelDrift_DriftDetected(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	sessionID := "ses-drift"
+
+	// Create pathflow-active flag.
+	flagDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create events showing PF4-EXECUTE phase.
+	logsDir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recentTime := time.Now().Add(-2 * time.Minute).Format(time.RFC3339)
+	event := fmt.Sprintf(`{"event_type":"phase_transition","phase":"PF4-EXECUTE","timestamp":"%s"}`, recentTime)
+	if err := os.WriteFile(filepath.Join(logsDir, "pathflow-events.jsonl"), []byte(event+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create sentinel directory but only with pf-1 (missing pf-2, pf-3).
+	sentinelDir := filepath.Join(stateDir, "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-1"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: sessionID,
+	}
+	opts.applyDefaults()
+
+	result := checkSentinelDrift(ctx, opts)
+	if result.Status != StatusWarn {
+		t.Errorf("expected warn for drift, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckSentinelDrift_AllPresent(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	stateDir := t.TempDir()
+	sessionID := "ses-ok"
+
+	// Create pathflow-active flag.
+	flagDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create events showing PF3-CLASSIFY phase.
+	logsDir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recentTime := time.Now().Add(-1 * time.Minute).Format(time.RFC3339)
+	event := fmt.Sprintf(`{"event_type":"phase_transition","phase":"PF3-CLASSIFY","timestamp":"%s"}`, recentTime)
+	if err := os.WriteFile(filepath.Join(logsDir, "pathflow-events.jsonl"), []byte(event+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create all expected sentinels for PF3-CLASSIFY.
+	sentinelDir := filepath.Join(stateDir, "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3"} {
+		if err := os.WriteFile(filepath.Join(sentinelDir, s), []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	opts := &Options{
+		StateDir:  stateDir,
+		SessionID: sessionID,
+	}
+	opts.applyDefaults()
+
+	result := checkSentinelDrift(ctx, opts)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass when all sentinels present, got %s: %s", result.Status, result.Message)
 	}
 }
 
