@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	autorunCmd "github.com/codeflow/codeflow-cli/cmd/autorun"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +43,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newDoctorCmd())
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newUpdateCmd())
+	rootCmd.AddCommand(autorunCmd.NewCmd())
 
 	return rootCmd
 }

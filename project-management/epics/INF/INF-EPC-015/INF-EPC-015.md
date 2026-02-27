@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-23T00:00:00Z"
-updated_at: "2026-02-26T18:56:52Z"
+updated_at: "2026-02-27T11:09:01Z"
 ---
 
 # INF-EPC-015: CodeFlow Go CLI - Phase 6 V4 Implementation
@@ -86,7 +86,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 | INF-TSK-015-010 | Doctor command (13 V3 health checks) | complete | normal |
 | INF-TSK-015-011 | Config command | complete | normal |
 | INF-TSK-015-012 | Update command | complete | normal |
-| INF-TSK-015-013 | Autorun orchestrator and worker commands | todo | high |
+| INF-TSK-015-013 | Autorun orchestrator and worker commands | complete | high |
 | INF-TSK-015-014 | Welcome screen V4 PathFlow enhancements | todo | normal |
 | INF-TSK-015-015 | Doctor V4 health checks (3 new) | todo | normal |
 | INF-TSK-015-016 | Test infrastructure integration (bridge script + test-config) | todo | normal |

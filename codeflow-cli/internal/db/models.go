@@ -163,3 +163,23 @@ type AutorunWorker struct {
 	StartedAt    sql.NullString `json:"started_at"`
 	CompletedAt  sql.NullString `json:"completed_at"`
 }
+
+// AutorunTaskRun represents a row in the autorun_task_runs table.
+type AutorunTaskRun struct {
+	ID                 string         `json:"id"`
+	WorkerID           string         `json:"worker_id"`
+	TaskID             string         `json:"task_id"`
+	SessionID          string         `json:"session_id"`
+	Status             string         `json:"status"`
+	BranchName         sql.NullString `json:"branch_name"`
+	WorktreePath       sql.NullString `json:"worktree_path"`
+	PRNumber           sql.NullInt64  `json:"pr_number"`
+	PRURL              sql.NullString `json:"pr_url"`
+	StartedAt          sql.NullString `json:"started_at"`
+	CompletedAt        sql.NullString `json:"completed_at"`
+	DurationSeconds    sql.NullInt64  `json:"duration_seconds"`
+	ExitCode           sql.NullInt64  `json:"exit_code"`
+	ErrorMessage       sql.NullString `json:"error_message"`
+	VerificationResult sql.NullString `json:"verification_result"`
+	CreatedAt          string         `json:"created_at"`
+}
