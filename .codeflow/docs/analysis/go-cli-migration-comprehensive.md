@@ -1137,8 +1137,16 @@ or removable:
 The Go CLI binary (`codeflow`) organizes all subcommands under a single executable.
 This extends the architecture defined in INF-EPC-015 with the hook and migration subcommands.
 
+**Source directory:** `codeflow-cli/` in the repository root (not `.codeflow/`, which is
+the shell scripts directory). The compiled binary is named `codeflow` and placed on PATH.
+Do not confuse with the shell wrapper at `.codeflow/scripts/codeflow` — that wrapper is
+classified T3 and deleted once the Go binary is on PATH.
+
+The tree below shows the **runtime command structure** (`codeflow <subcommand>`), not
+the source layout. Source packages live under `codeflow-cli/cmd/` and `codeflow-cli/internal/`.
+
 ```text
-codeflow (Go binary)
+codeflow (Go binary — source: codeflow-cli/)
 ├── test                           -- run test suite (existing)
 ├── mode                           -- manage approval modes (existing)
 ├── version                        -- show version (existing)
