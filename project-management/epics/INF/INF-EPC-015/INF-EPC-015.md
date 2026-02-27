@@ -84,7 +84,7 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 | INF-TSK-015-008 | Preflight checks package | complete | normal |
 | INF-TSK-015-009 | Init command (project wizard) | complete | normal |
 | INF-TSK-015-010 | Doctor command (13 V3 health checks) | complete | normal |
-| INF-TSK-015-011 | Config command | todo | normal |
+| INF-TSK-015-011 | Config command | complete | normal |
 | INF-TSK-015-012 | Update command | todo | normal |
 | INF-TSK-015-013 | Autorun orchestrator and worker commands | todo | high |
 | INF-TSK-015-014 | Welcome screen V4 PathFlow enhancements | todo | normal |

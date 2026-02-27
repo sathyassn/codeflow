@@ -364,7 +364,7 @@
           "blocked_by": [
             "PF5-TSK-02"
           ],
-          "description": "Complete work in WorkGraph via cf-knowledge-layer (complete-work). Includes: (1) update task status in SQLite and JSONL, (2) active-task.json deletion, AND (3) update task status in epic markdown task status table at project-management/epics/{AREA}/{EPIC}/{EPIC}.md. The epic markdown update is MANDATORY and NOT optional — it is part of complete-work, not a separate step.",
+          "description": "complete-work via cf-knowledge-layer. CHECKLIST (all required): 1. active_work table → status=complete 2. tasks table → status=complete, completed_at set 3. Task .md frontmatter → status: complete 4. Epic .md task table → row status: complete (NEVER skip, even if siblings remain todo) 5. pathflow-events.jsonl → complete_work event 6. work-graph.jsonl → task_status_changed event (in_progress→complete) 7. active-task.json → delete if present 8. memory_events → milestone recorded. GATE: Lead verifies epic .md updated before marking PF6-TSK-01 done.",
           "assigned_to": "cf-knowledge-layer",
           "operation": "complete-work",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF5-TSK-02] when creating this task in the tracker.",

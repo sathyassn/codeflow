@@ -40,6 +40,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newSessionCmd())
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newDoctorCmd())
+	rootCmd.AddCommand(newConfigCmd())
 
 	return rootCmd
 }

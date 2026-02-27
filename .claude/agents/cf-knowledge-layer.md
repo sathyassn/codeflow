@@ -134,25 +134,31 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 
 **When:** Session start (PF2-CONTEXT initialization).
 
-1. Read `.state/runtime/active-task.json` for current session state (fields: task_id, epic_id, task_format_id, epic_format_id, title, status, branch, session_id)
+**CHECKLIST (all required):**
+
+1. Read `.state/runtime/active-task.json` — extract task_id, epic_id, task_format_id, epic_format_id, title, status, branch, session_id
 2. Query active_work table: `SELECT * FROM active_work WHERE status = 'in_progress'`
 3. For each active work entry, query recent memory_events: `SELECT * FROM memory_events WHERE work_id = '{id}' ORDER BY created_at DESC LIMIT 10`
 4. Present findings to team lead with options: resume existing work, start fresh, or cleanup stale entries
-5. Report: `"KNOWLEDGE: detect-active-work - Found {N} active items, recommended: {work_id}"`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: detect-active-work - Found {N} active items, recommended: {work_id}"`
 
 #### Step 2: Load Work Context
 
 **When:** Resuming work after detect-active-work, or on `/cf-resume`.
 
-1. Query work details from active_work by work_id (ULID PK)
-2. Load associated task from tasks table (by task_id FK)
-3. Load associated epic from epics table (by epic_id FK)
+**CHECKLIST (all required):**
+
+1. Query active_work table by work_id (ULID PK) — extract task_id, topic, branch, scope, session_id
+2. Query tasks table by task_id FK — extract format_id, epic_id, status, work_type
+3. Query epics table by epic_id FK — extract format_id, area_type, title
 4. Query recent memory_events: `SELECT * FROM memory_events WHERE work_id = '{id}' ORDER BY created_at DESC LIMIT 50`
 5. Read task markdown: `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
 6. Compile context summary: work_id, task_id, scope, branch, progress events, remaining deliverables
-7. Report loaded context to team lead
 
 **Three-tier loading priority:** active-task.json (hot) -> SQLite active_work (warm) -> JSONL ledger (cold/authoritative).
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: load-work-context - {work_id} loaded, branch={branch}, status={status}"`
 
 #### Step 3: Begin Work
 
@@ -160,16 +166,20 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 
 🔒 **Prerequisite:** task_id must exist. If missing, respond with `"task_id required - run ensure-work-registered first"`.
 
-1. Validate task exists and is actionable (status = 'todo', no unresolved blocking dependencies)
-2. If task is blocked, report: `"KNOWLEDGE: begin-work BLOCKED - unresolved dependencies: {blockers}"`
-3. Generate work_id: `work-{ulid}`
-4. INSERT into active_work: id, task_id, topic, status='in_progress', branch, scope, session_id
-5. Create `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
-6. Append event to `.state/logs/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
-7. Update task status to 'in_progress': `UPDATE tasks SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
-8. Report: `"KNOWLEDGE: begin-work - Registered work-{ulid} for task {format_id} on branch {branch}"`
+**CHECKLIST (all required unless marked CONDITIONAL):**
 
-**Autorun mode:** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by Go CLI. Skip steps 3-7, just load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
+1. Validate task exists in tasks table and is actionable (status = 'todo')
+2. Validate no unresolved blocking dependencies — if blocked, report `"KNOWLEDGE: begin-work BLOCKED - unresolved dependencies: {blockers}"` and STOP
+3. Generate work_id: `work-{ulid}` via `python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py`
+4. INSERT into active_work table: id=work_id, task_id, topic, status='in_progress', branch, scope, session_id
+5. UPDATE tasks table: `SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
+6. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"task_status_changed","task_id":"{task_id}","old_status":"todo","new_status":"in_progress","timestamp":"{ISO8601}"}`
+7. Append `begin_work` event to `.state/logs/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
+8. Write `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
+
+**CONDITIONAL (autorun):** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by Go CLI. Skip steps 3-8, load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: begin-work - Registered work-{ulid} for task {format_id} on branch {branch}"`
 
 #### Step 4: Record Work Progress
 
@@ -186,14 +196,18 @@ Event types:
 | stage_transition | Work stage changed (dev -> review -> qa) |
 | context_save | Before context window rotation |
 
+**CHECKLIST (all required unless marked CONDITIONAL):**
+
 1. Determine event_type from the update received
-2. Generate entry_id: `memory-{ulid}`
+2. Generate entry_id: `memory-{ulid}` via `python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py`
 3. Build JSON payload for data field (include summary, files_affected, rationale as applicable)
-4. INSERT into memory_events: id, event_type, domain, work_id, data, memory_type, created_at
-5. INSERT into extraction_queue: id, event_id, status='pending' (for entity extraction)
-6. Append to `.state/logs/pathflow-events.jsonl`
-7. If milestone or stage_transition, update Tier 2 markdown (task file progress section)
-8. Report: `"KNOWLEDGE: record-progress - {event_type} logged for {work_id}"`
+4. INSERT into memory_events table: id, event_type, domain, work_id, data, memory_type, created_at
+5. INSERT into extraction_queue table: id, event_id, status='pending'
+6. Append event to `.state/ledger/memory-events.jsonl`
+7. Append event to `.state/logs/pathflow-events.jsonl`
+8. **CONDITIONAL (milestone or stage_transition):** Update Tier 2 markdown task file progress section
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-progress - {event_type} logged for {work_id}"`
 
 #### Step 5: Complete Work
 
@@ -201,75 +215,86 @@ Event types:
 
 🔒 **Must be invoked BEFORE cf-git-operations creates a commit.**
 
-1. Run the validate-task-fields operation (see Part 2: Validate Task Fields) which validates both the task markdown and its parent epic. If validation fails, report errors and BLOCK completion until fields are fixed.
+**CHECKLIST (all required unless marked CONDITIONAL):**
+
+1. Run validate-task-fields (Part 2) on task markdown and parent epic — if FAIL, BLOCK and report errors
 2. Verify deliverables (interactive: check work agreement; autorun: verify acceptance criteria from `$AUTORUN_ACCEPTANCE`)
-3. UPDATE active_work: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
-4. UPDATE task status: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
-5. Update Tier 2 markdown task file: Edit the task's markdown file (`project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`) frontmatter `status` field from current value to `complete`. If the file path is unknown, query the tasks table for `markdown_path` or derive from `epic_id` + `task_id`.
-6. Epic status rollup: Query sibling tasks in the same epic: `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`, then:
-   a. Update epic status in DB: `UPDATE epics SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
-   b. Update epic markdown file frontmatter `status` field to `complete` (derive path from epic_id or query `epics.markdown_path`)
-   c. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"epic_status_changed","epic_id":"{epic_id}","old_status":"{old}","new_status":"complete","trigger":"all_tasks_complete","task_id":"{task_id}","timestamp":"{ISO8601}"}`
-   d. Run `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}` to validate the updated epic
-   If NOT all sibling tasks are complete, skip this step (no action needed).
-7. Append completion event to `.state/logs/pathflow-events.jsonl`
-8. Record completion memory_event (event_type='milestone', data includes deliverables summary)
-9. Update `.state/runtime/active-task.json` status to "completed", then delete the file
-10. Report: `"KNOWLEDGE: complete-work - {work_id} finalized"`
+3. UPDATE active_work table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
+4. UPDATE tasks table: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
+5. Edit task markdown frontmatter: set `status: complete` in `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
+6. Update epic markdown task table: set task row status to `complete` in `project-management/epics/{AREA}/{epic-format_id}/{epic-format_id}.md` — NEVER skip this, even if sibling tasks remain todo
+7. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"task_status_changed","task_id":"{task_id}","old_status":"in_progress","new_status":"complete","timestamp":"{ISO8601}"}`
+8. Append `complete_work` event to `.state/logs/pathflow-events.jsonl`: `{"event":"complete_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
+9. Record completion milestone in `.state/ledger/memory-events.jsonl` (event_type='milestone', data includes deliverables summary)
+10. Delete `.state/runtime/active-task.json` if present
+11. **CONDITIONAL (all sibling tasks complete):** Epic status rollup — query `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`:
+    a. UPDATE epics table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
+    b. Edit epic markdown frontmatter: set `status: complete`
+    c. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`
+    d. Run `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: complete-work - {work_id} finalized"`
 
 #### Step 6: Record Session Summary
 
-**Trigger:** Lead sends `record-session-summary` message (PF6-TSK-02, after complete-work)
-**Purpose:** Capture a structured session summary in project memory for cross-session continuity.
+**Trigger:** Lead sends `record-session-summary` message (PF6-TSK-02, after complete-work).
 
-1. Query active_work table for the current work_id to get: topic, branch, work_type, domain
-2. Query tasks table for all tasks modified this session (filter by branch or work_id)
-3. Collect stage verdicts from pathflow-events.jsonl (WS-DEV, WS-REV, WS-QA results)
-4. Compose session summary with:
-   - Work completed: task IDs, titles, final statuses
-   - Branch: name, commit count, PR number (if created)
-   - Pipeline results: stage verdicts (pass/fail/approved)
-   - Key decisions: any Tier 2/3 decisions made during session
-   - Open items: anything deferred or blocked
-5. Append `session_summary` event to memory-events.jsonl with summary content
-6. Report: `"KNOWLEDGE: record-session-summary — session summary recorded"`
+**CHECKLIST (all required):**
+
+1. Query active_work table for current work_id — extract topic, branch, work_type, domain
+2. Query tasks table for tasks modified this session (filter by branch or work_id)
+3. Collect stage verdicts from `.state/logs/pathflow-events.jsonl` (WS-DEV, WS-REV, WS-QA results)
+4. Compose session summary: work completed (task IDs, titles, statuses), branch (name, commit count, PR number), pipeline results (stage verdicts), key decisions (Tier 2/3), open items (deferred/blocked)
+5. Generate entry_id: `memory-{ulid}`
+6. INSERT into memory_events table: id, event_type='session_summary', domain, work_id, data=summary, created_at
+7. Append `session_summary` event to `.state/ledger/memory-events.jsonl`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-session-summary - session summary recorded"`
 
 #### Step 7: Record PR Outcome (PF6-TSK-08)
 
 **When:** Team lead requests after PR merge disposition (PF6-TSK-07) and before sync-local (PF6-TSK-09).
 
-**Purpose:** Record PR lifecycle event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` while still on feature branch.
+🔒 **MUST run BEFORE cf-git-operations sync-local (PF6-TSK-09)** — pulling main triggers security hook blocking writes on protected branches.
 
-1. Receive PR outcome from team lead (merged/created, pr_number, merge_sha if applicable)
-2. Write event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed):
-   - pr_outcome: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
-3. Sync to SQLite (update tasks table pr_status field)
-4. Report: `"KL-UPDATE: PR outcome recorded — {event_type} for task {task_id}"`
+**CHECKLIST (all required):**
 
-**IMPORTANT:** This MUST run before cf-git-operations sync-local (PF6-TSK-09) because pulling main triggers security hook blocking writes on protected branches.
+1. Receive PR outcome from team lead — extract: event_type (merged/created), pr_number, merge_sha (if applicable)
+2. Create directory if needed: `mkdir -p .state/logs/git/`
+3. Append event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl`: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
+4. UPDATE tasks table: `SET pr_status = '{event_type}', pr_number = {N} WHERE id = '{task_id}'`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KL-UPDATE: PR outcome recorded - {event_type} for task {task_id}"`
 
 #### Memory Lifecycle Management
 
 **When:** Periodic maintenance, `/cf-cleanup`, or when `.state/db/codeflow.db` exceeds 50 MB.
 
+**CHECKLIST (all required unless marked CONDITIONAL):**
+
 1. Query stale completed work: `SELECT * FROM active_work WHERE status = 'complete' AND updated_at < datetime('now', '-30 days')`
-2. For each stale entry: create long-term summary, move Tier 2 markdown to archive
-3. Prune from active_work (DELETE completed entries older than 30 days)
-4. DELETE expired work_claims
-5. Append archive events to JSONL (NEVER delete JSONL entries)
-6. If DB size > 50 MB, run `VACUUM`
-7. Report: `"KNOWLEDGE: lifecycle - Archived {N} work items, pruned {M} claims, DB size: {size}MB"`
+2. For each stale entry: create long-term summary in memory_events
+3. For each stale entry: move Tier 2 markdown to archive directory
+4. DELETE stale entries from active_work table (completed entries older than 30 days)
+5. DELETE expired work_claims from work_claims table
+6. Append archive events to `.state/ledger/memory-events.jsonl` (NEVER delete JSONL entries)
+7. **CONDITIONAL (DB size > 50 MB):** Run `VACUUM` on `.state/db/codeflow.db`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: lifecycle - Archived {N} work items, pruned {M} claims, DB size: {size}MB"`
 
 #### Search Related Work
 
 **When:** Before creating a worktree or starting work that may overlap existing work.
 
+**CHECKLIST (all required):**
+
 1. Extract scope patterns from the proposed work (file globs, directory paths)
-2. Query all active work: `SELECT * FROM active_work WHERE status = 'in_progress'`
+2. Query active_work table: `SELECT * FROM active_work WHERE status = 'in_progress'`
 3. For each active item, parse its scope field (JSON array of file patterns)
 4. Compare proposed patterns against active scopes for overlap
-5. If conflicts found, return: `{work_id, topic, branch, overlapping_patterns}`
-6. Report to team lead: `"KNOWLEDGE: search-related-work - {N} conflicts found"` or `"safe to proceed"`
+5. If conflicts found, compile overlap report: `{work_id, topic, branch, overlapping_patterns}`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: search-related-work - {N} conflicts found"` or `"KNOWLEDGE: search-related-work - safe to proceed"`
 
 ---
 
@@ -305,10 +330,14 @@ Work type classification:
 | SPKE | spike, research, explore, investigate | experiment/ |
 | PLAN | plan, design, architecture, proposal | plan/ |
 
-1. Parse work description for keywords matching tables above
-2. Determine area_type, work_type, and domain
-3. Default domain to GENL if no match
-4. Report: `"KNOWLEDGE: classify-work - {AREA}"` (work_type and domain are metadata fields, not part of the format ID)
+**CHECKLIST (all required):**
+
+1. Parse work description for keywords matching area and work type tables above
+2. Determine area_type from area keywords
+3. Determine work_type from work type keywords
+4. Determine domain — default to GENL if no match
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: classify-work - {AREA}/{WORK_TYPE}/{DOMAIN}"`
 
 #### Ensure Work Registered
 
@@ -342,11 +371,16 @@ python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py
 
 The script requires no external dependencies (pure Python, stdlib only). For multiple IDs: `--count N`. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic. This is a bridge solution until the Go CLI handles ULID generation natively.
 
-1. Search for existing open epic (status != complete) matching area_type + work_type. **Never add tasks to a completed epic** — if no open epic exists, create a new one.
-2. If no ongoing epic found, create one (generate id: `epic-{ulid}`, format_id, INSERT into epics, create markdown, append to JSONL)
-3. Create task under epic (generate id: `task-{ulid}`, format_id, INSERT into tasks, create markdown, append to JSONL)
-4. Return task_id and epic_id (both ULID PKs) to team lead
-5. Team lead can then invoke begin-work with the returned task_id
+**CHECKLIST (all required unless marked CONDITIONAL):**
+
+1. Run idempotency guard query: `SELECT t.id, t.format_id, e.id AS epic_id, e.format_id AS epic_format_id FROM tasks t JOIN epics e ON t.epic_id = e.id WHERE t.branch = '{branch}'`
+2. **CONDITIONAL (match found):** Return existing task_id and epic_id, log warning, STOP
+3. Search for existing open epic (status != 'complete') matching area_type + work_type — **NEVER add tasks to a completed epic**
+4. **CONDITIONAL (no open epic found):** Create epic: generate `epic-{ulid}`, compute format_id, INSERT into epics table, append `epic_created` to `.state/ledger/work-graph.jsonl`, create markdown at `project-management/epics/{AREA}/{format_id}/{format_id}.md`
+5. Create task: generate `task-{ulid}`, compute format_id, INSERT into tasks table, append `task_created` to `.state/ledger/work-graph.jsonl`, create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
+6. Return task_id and epic_id (both ULID PKs) to team lead
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: ensure-work-registered - task {format_id} under epic {epic_format_id}"`
 
 Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF->INF/, SHR->SHR/, DOC->DOC/, PLN->PLN/
 
@@ -354,19 +388,16 @@ Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF
 
 **When:** PF4-TSK-02 (before work execution starts), during complete-work (PF6-TSK-01), and on-demand from cf-planning during WS-PLAN.
 
-**Purpose:** Run deterministic validation on task and epic YAML frontmatter to catch missing or invalid fields before they cause downstream issues.
+**CHECKLIST (all required unless marked CONDITIONAL):**
 
-**Procedure:**
+1. Determine task markdown path from tasks table (`markdown_path` field, or derive from epic_id + task_id)
+2. Run task validation: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
+3. **CONDITIONAL (task has parent epic):** Run epic validation: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+4. Parse script output — classify as errors (BLOCK) or warnings (proceed)
+5. If errors found: BLOCK the calling operation and report errors
+6. **CONDITIONAL (validation scripts not found):** Report SKIPPED with warning and proceed
 
-1. Determine the task markdown path from the task record (query tasks table for `markdown_path` or derive from `epic_id` + `task_id`)
-2. Run validation: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
-3. If the task has a parent epic, also run: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
-4. Parse script output for errors and warnings
-5. If errors found: report `"KNOWLEDGE: validate-task-fields - FAIL: {n} errors: {details}"` and BLOCK the operation
-6. If warnings only: report `"KNOWLEDGE: validate-task-fields - PASS with {n} warnings: {details}"` and proceed
-7. If clean: report `"KNOWLEDGE: validate-task-fields - PASS"`
-
-**Error handling:** If validation scripts are not found at the expected paths, report: `"KNOWLEDGE: validate-task-fields - SKIPPED: validation scripts not found at .codeflow/scripts/validation/"` and proceed with a warning.
+**GATE:** Report result to requester. Format: `"KNOWLEDGE: validate-task-fields - PASS"` or `"KNOWLEDGE: validate-task-fields - FAIL: {n} errors: {details}"`
 
 #### Ongoing Epics
 
@@ -385,19 +416,58 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 
 #### Epic CRUD
 
-**Create:** Before inserting, check for an existing epic with the same area_type, work_type, and branch to prevent duplicates: `SELECT id, format_id FROM epics WHERE area_type = '{area}' AND status != 'complete' AND branch = '{branch}'`. If found, return existing IDs with warning `"Epic already exists for branch {branch}, returning existing {format_id}"`. If not found: validate required fields (area_type, work_type, domain, title), generate both IDs, INSERT into epics table, append to JSONL ledger, create markdown file at `project-management/epics/{AREA}/{format_id}/{format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/INF-EPC-005.md`), use templates at `project-management/templates/epic-template.md`, return both IDs.
+**Create — CHECKLIST:**
 
-**Update:** Validate epic exists. Validate status transitions (draft->planning->in_progress->complete/archived). Execute UPDATE. Append update event to JSONL. Re-render markdown. If status changed to 'complete', check child tasks.
+1. Dedup check: `SELECT id, format_id FROM epics WHERE area_type = '{area}' AND status != 'complete' AND branch = '{branch}'`
+2. **CONDITIONAL (match found):** Return existing IDs with warning, STOP
+3. Validate required fields: area_type, work_type, domain, title
+4. Generate id: `epic-{ulid}` and compute format_id: `{AREA}-EPC-{NNN}`
+5. INSERT into epics table
+6. Append `epic_created` event to `.state/ledger/work-graph.jsonl`
+7. Create markdown at `project-management/epics/{AREA}/{format_id}/{format_id}.md` using template at `project-management/templates/epic-template.md`
+
+**GATE:** Report result. Format: `"KNOWLEDGE: create-epic - {format_id} created"`
+
+**Update — CHECKLIST:**
+
+1. Validate epic exists in epics table
+2. Validate status transition is valid (draft->planning->in_progress->complete/archived)
+3. Execute UPDATE on epics table
+4. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`
+5. Re-render Tier 2 markdown (epic file frontmatter + content)
+6. **CONDITIONAL (status changed to 'complete'):** Verify all child tasks are complete
+
+**GATE:** Report result. Format: `"KNOWLEDGE: update-epic - {format_id} updated"`
 
 #### Task CRUD
 
-**Create:** Before inserting, check for an existing task with the same epic_id and branch to prevent duplicates: `SELECT id, format_id FROM tasks WHERE epic_id = '{epic_id}' AND branch = '{branch}'`. If found, return existing IDs with warning `"Task already exists for branch {branch} under epic {epic_format_id}, returning existing {task_format_id}"`. If not found: validate epic exists and is active, generate both IDs, INSERT into tasks (epic_id as ULID FK), INSERT task_dependencies if specified, append to JSONL, create markdown file at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` (e.g., `project-management/epics/INF/INF-EPC-005/tasks/INF-TSK-005-001.md`), use templates at `project-management/templates/task-template.md`, return both IDs.
+**Create — CHECKLIST:**
+
+1. Dedup check: `SELECT id, format_id FROM tasks WHERE epic_id = '{epic_id}' AND branch = '{branch}'`
+2. **CONDITIONAL (match found):** Return existing IDs with warning, STOP
+3. Validate parent epic exists and is active (status != 'complete')
+4. Generate id: `task-{ulid}` and compute format_id: `{AREA}-TSK-{NNN}-{NNN}`
+5. INSERT into tasks table (epic_id as ULID FK)
+6. **CONDITIONAL (dependencies specified):** INSERT into task_dependencies table
+7. Append `task_created` event to `.state/ledger/work-graph.jsonl`
+8. Create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` using template at `project-management/templates/task-template.md`
 
 Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, auto_merge, target_branch.
 
-**Update:** Validate task exists. Execute UPDATE on permitted fields (status, stage, stage_status, branch, pr_number). Append to JSONL. Check if this unblocks dependent tasks. Re-render markdown. If stage transition, record stage_transition memory_event.
+**GATE:** Report result. Format: `"KNOWLEDGE: create-task - {format_id} created under {epic_format_id}"`
 
-**Query:** Build SELECT query from parameters (epic_id, status, area_type, work_type, autorun_eligible, blocked). Return structured results.
+**Update — CHECKLIST:**
+
+1. Validate task exists in tasks table
+2. Execute UPDATE on permitted fields (status, stage, stage_status, branch, pr_number)
+3. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`
+4. Check if this update unblocks dependent tasks in task_dependencies table
+5. Re-render Tier 2 markdown (task file frontmatter)
+6. **CONDITIONAL (stage transition):** Record stage_transition event in memory_events
+
+**GATE:** Report result. Format: `"KNOWLEDGE: update-task - {format_id} updated"`
+
+**Query:** Build SELECT from parameters (epic_id, status, area_type, work_type, autorun_eligible, blocked). Return structured results.
 
 ---
 
@@ -405,15 +475,32 @@ Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, a
 
 Internal operations called by Parts 1 and 2.
 
-**active-work-crud:** Create, read, update records in active_work table. Generate id as `work-{ulid}`. Always update updated_at. If status='complete', trigger downstream cleanup.
+**active-work-crud — CHECKLIST:**
 
-**memory-store:** Persist memory events to SQLite and JSONL. Generate `memory-{ulid}`. Validate domain (planning, development, review, qa, ops, documentation). INSERT into memory_events and extraction_queue. Append to JSONL (Tier 0).
+1. Generate id: `work-{ulid}` (on create)
+2. INSERT or UPDATE active_work table — always set updated_at to current ISO8601
+3. **CONDITIONAL (status='complete'):** Trigger downstream cleanup (delete active-task.json)
 
-**memory-query:** Query memory events with filtering (domain, event_type, work_id, memory_type) or full-text search via FTS5 with BM25 ranking. Time-bounded queries via created_at range.
+**memory-store — CHECKLIST:**
 
-**session-record:** Track session lifecycle (start, pause, resume, end). INSERT/UPDATE sessions table. Append to JSONL.
+1. Validate domain is one of: planning, development, review, qa, ops, documentation
+2. Generate id: `memory-{ulid}`
+3. INSERT into memory_events table: id, event_type, domain, work_id, data, memory_type, created_at
+4. INSERT into extraction_queue table: id, event_id, status='pending'
+5. Append event to `.state/ledger/memory-events.jsonl` (Tier 0)
 
-**log-append:** Append audit log entries to typed log tables and daily JSONL:
+**memory-query:** Build SELECT from parameters (domain, event_type, work_id, memory_type) or FTS5 with BM25 ranking. Support time-bounded queries via created_at range. Return structured results.
+
+**session-record — CHECKLIST:**
+
+1. INSERT or UPDATE sessions table with lifecycle state (start, pause, resume, end)
+2. Append event to `.state/ledger/sessions.jsonl`
+
+**log-append — CHECKLIST:**
+
+1. Determine log type from input
+2. INSERT into typed DB table
+3. Append to daily JSONL file
 
 | Log Type | DB Table | JSONL File |
 |----------|----------|------------|
@@ -431,49 +518,62 @@ Internal operations called by Parts 1 and 2.
 
 **When:** At every PathFlow phase boundary (PF1 through PF7).
 
-1. Obtain session ID from `.state/runtime/current-session-id`
-2. On phase entry: `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t entered`
-3. On phase completion: `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t completed`
-4. Valid phases: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
-5. Valid statuses: entered, completed, skipped
-6. Report: `"KNOWLEDGE: record-phase-transition - $PHASE $STATUS recorded"`
+**CHECKLIST (all required):**
+
+1. Read session ID from `.state/runtime/current-session-id`
+2. Run transition script: `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t $STATUS`
+3. Valid phases: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
+4. Valid statuses: entered, completed, skipped
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-phase-transition - $PHASE $STATUS recorded"`
 
 #### Record Stage Transition
 
 **When:** During PF4-EXECUTE when work stages start, complete, or fail.
 
-1. Obtain session ID from `.state/runtime/current-session-id`
-2. On stage start: `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t in_progress -i $ITERATION`
-3. On stage completion with verdict: `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t complete -v $VERDICT`
-4. Valid stages: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
-5. Valid statuses: pending, in_progress, complete, failed
-6. Valid verdicts (for complete status): pass, fail, approved, changes_requested
-7. Report: `"KNOWLEDGE: record-stage-transition - $STAGE $STATUS recorded"`
+**CHECKLIST (all required):**
+
+1. Read session ID from `.state/runtime/current-session-id`
+2. Run transition script: `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t $STATUS [-i $ITERATION] [-v $VERDICT]`
+3. Valid stages: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
+4. Valid statuses: pending, in_progress, complete, failed
+5. Valid verdicts (for complete status only): pass, fail, approved, changes_requested
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-stage-transition - $STAGE $STATUS recorded"`
 
 #### Register PathFlow Session
 
 **When:** During PF1-INIT to register the session in the JSONL ledger.
 
+**CHECKLIST (all required):**
+
 1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-register.sh -s $SID [-m interactive|autorun]`
-2. This writes two events: tracking_level=pending and interaction_mode
-3. Report: `"KNOWLEDGE: register-pathflow-session - Session $SID registered"`
+2. Verify script wrote two events: tracking_level=pending and interaction_mode
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: register-pathflow-session - Session $SID registered"`
 
 #### Record Session Metadata
 
 **When:** At PF3-CLASSIFY (work_type, area_type, branch, tracking_level=tracked) and whenever session properties change.
 
+**CHECKLIST (all required):**
+
 1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-metadata.sh -s $SID -k $KEY -v $VALUE`
 2. Known keys: work_type, area_type, tracking_level, branch, task_id, interaction_mode
-3. Report: `"KNOWLEDGE: record-session-metadata - $KEY=$VALUE recorded"`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-session-metadata - $KEY=$VALUE recorded"`
 
 #### Record PathFlow Task Update
 
 **When:** When PathFlow phase tasks (PFn-TSK-nn) change status.
 
+**CHECKLIST (all required):**
+
 1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-task-update.sh -s $SID -k $TASK_ID -t $STATUS`
 2. Task ID format: PFn-TSK-nn (e.g., PF3-TSK-01)
 3. Valid statuses: pending, in_progress, completed, skipped, blocked
-4. Report: `"KNOWLEDGE: record-pathflow-task-update - $TASK_ID $STATUS recorded"`
+
+**GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-pathflow-task-update - $TASK_ID $STATUS recorded"`
 
 ## Error Handling
 
