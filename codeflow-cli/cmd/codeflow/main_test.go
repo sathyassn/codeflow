@@ -10,6 +10,37 @@ import (
 	"testing"
 )
 
+// setupPathFlowFixtures creates a temporary directory tree for PathFlow state
+// testing. Returns the temp dir root path. The caller must chdir into the
+// returned path before calling functions that use relative ".state/" paths.
+func setupPathFlowFixtures(t *testing.T, sid string) string {
+	t.Helper()
+	root := t.TempDir()
+
+	// Create pathflow-active flag.
+	flagDir := filepath.Join(root, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatalf("creating flag dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("creating flag file: %v", err)
+	}
+
+	// Create sentinel directory.
+	sentinelDir := filepath.Join(root, ".state", "sentinels", "pathflow", sid)
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatalf("creating sentinel dir: %v", err)
+	}
+
+	// Create logs directory.
+	logsDir := filepath.Join(root, ".state", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("creating logs dir: %v", err)
+	}
+
+	return root
+}
+
 func TestVersionVariable(t *testing.T) {
 	t.Parallel()
 	if version == "" {
@@ -687,5 +718,292 @@ func TestRunUninstall_PromptMessage(t *testing.T) {
 	}
 	if !strings.Contains(got, "[y/N]") {
 		t.Errorf("expected '[y/N]' in prompt, got: %q", got)
+	}
+}
+
+// ---- Welcome command tests ----
+
+func TestNewWelcomeCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newWelcomeCmd()
+	if cmd.Use != "welcome" {
+		t.Errorf("expected Use=%q, got %q", "welcome", cmd.Use)
+	}
+
+	quietFlag := cmd.Flags().Lookup("quiet")
+	if quietFlag == nil {
+		t.Fatal("welcome command should have --quiet flag")
+	}
+	if quietFlag.Shorthand != "q" {
+		t.Errorf("--quiet shorthand should be 'q', got %q", quietFlag.Shorthand)
+	}
+}
+
+func TestWelcomeCmd_ViaRootCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRootCmd()
+	subcommands := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		subcommands[sub.Use] = true
+	}
+	if !subcommands["welcome"] {
+		t.Error("expected 'welcome' subcommand to be registered in root cmd")
+	}
+}
+
+func TestDetectPhase_NoSentinels(t *testing.T) {
+	root := t.TempDir()
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	got := detectPhase("ses-test-nosent")
+	if got != "PF1-INIT" {
+		t.Errorf("detectPhase with no sentinels = %q, want %q", got, "PF1-INIT")
+	}
+}
+
+func TestDetectPhase_WithSentinels(t *testing.T) {
+	sid := "ses-test-phase"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	// Create sentinels pf-1, pf-2, pf-3.
+	sentDir := filepath.Join(root, ".state", "sentinels", "pathflow", sid)
+	for _, n := range []string{"pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-3"} {
+		if err := os.WriteFile(filepath.Join(sentDir, n), []byte(""), 0o644); err != nil {
+			t.Fatalf("creating sentinel: %v", err)
+		}
+	}
+
+	got := detectPhase(sid)
+	if got != "PF4-EXECUTE" {
+		t.Errorf("detectPhase with pf-1,2,3 = %q, want %q", got, "PF4-EXECUTE")
+	}
+}
+
+func TestDetectPhase_AllCompleted(t *testing.T) {
+	sid := "ses-test-allphase"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	sentDir := filepath.Join(root, ".state", "sentinels", "pathflow", sid)
+	for i := 1; i <= 7; i++ {
+		name := filepath.Join(sentDir, "pathflow-pf-"+strings.Repeat("", 0)+string(rune('0'+i)))
+		if err := os.WriteFile(name, []byte(""), 0o644); err != nil {
+			t.Fatalf("creating sentinel: %v", err)
+		}
+	}
+
+	got := detectPhase(sid)
+	// With all 7 sentinels, nextPhase=8 which has no name, falls back to phaseNames[7].
+	if got != "PF7-END" {
+		t.Errorf("detectPhase with all sentinels = %q, want %q", got, "PF7-END")
+	}
+}
+
+func TestDetectStage_NoSentinels(t *testing.T) {
+	root := t.TempDir()
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	got := detectStage("ses-test-nostage")
+	if got != "" {
+		t.Errorf("detectStage with no sentinel dir = %q, want empty", got)
+	}
+}
+
+func TestDetectStage_WithDevCompleted(t *testing.T) {
+	sid := "ses-test-stage"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	sentDir := filepath.Join(root, ".state", "sentinels", "pathflow", sid)
+	if err := os.WriteFile(filepath.Join(sentDir, "pathflow-ws-dev"), []byte(""), 0o644); err != nil {
+		t.Fatalf("creating sentinel: %v", err)
+	}
+
+	got := detectStage(sid)
+	// ws-dev done, next in order is ws-plan.
+	if got != "WS-PLAN" {
+		t.Errorf("detectStage with ws-dev = %q, want %q", got, "WS-PLAN")
+	}
+}
+
+func TestDetectReworkCount_NoFile(t *testing.T) {
+	root := t.TempDir()
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	got := detectReworkCount("ses-test-norework")
+	if got != "0" {
+		t.Errorf("detectReworkCount with no JSONL = %q, want %q", got, "0")
+	}
+}
+
+func TestDetectReworkCount_WithRework(t *testing.T) {
+	sid := "ses-test-rework"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	// Write JSONL with rework events.
+	events := []string{
+		`{"event":"stage_transition","stage":"WS-REV","status":"complete","verdict":"changes_requested","iteration":1,"session_id":"` + sid + `"}`,
+		`{"event":"stage_transition","stage":"WS-REV","status":"complete","verdict":"approved","iteration":1,"session_id":"` + sid + `"}`,
+		`{"event":"stage_transition","stage":"WS-REV","status":"complete","verdict":"changes_requested","iteration":2,"session_id":"` + sid + `"}`,
+		`{"event":"stage_transition","stage":"WS-REV","status":"complete","verdict":"changes_requested","iteration":1,"session_id":"other-session"}`,
+	}
+	eventsPath := filepath.Join(root, ".state", "logs", "pathflow-events.jsonl")
+	if err := os.WriteFile(eventsPath, []byte(strings.Join(events, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("writing events: %v", err)
+	}
+
+	got := detectReworkCount(sid)
+	if got != "2" {
+		t.Errorf("detectReworkCount = %q, want %q", got, "2")
+	}
+}
+
+func TestDetectReworkCount_ReworkIterationField(t *testing.T) {
+	sid := "ses-test-reworkfield"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	// Write JSONL with rework_iteration field (alternate naming).
+	events := []string{
+		`{"event":"stage_transition","stage":"WS-REV","status":"complete","verdict":"changes_requested","rework_iteration":3,"session_id":"` + sid + `"}`,
+	}
+	eventsPath := filepath.Join(root, ".state", "logs", "pathflow-events.jsonl")
+	if err := os.WriteFile(eventsPath, []byte(strings.Join(events, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("writing events: %v", err)
+	}
+
+	got := detectReworkCount(sid)
+	if got != "3" {
+		t.Errorf("detectReworkCount with rework_iteration = %q, want %q", got, "3")
+	}
+}
+
+func TestReadPathFlowState_NoSession(t *testing.T) {
+	t.Setenv("CODEFLOW_SESSION_ID", "")
+
+	got := readPathFlowState()
+	if got != nil {
+		t.Error("readPathFlowState should return nil when CODEFLOW_SESSION_ID is empty")
+	}
+}
+
+func TestReadPathFlowState_NoFlag(t *testing.T) {
+	root := t.TempDir()
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", "ses-noflag")
+
+	got := readPathFlowState()
+	if got != nil {
+		t.Error("readPathFlowState should return nil when pathflow-active flag missing")
+	}
+}
+
+func TestReadPathFlowState_WithFlag(t *testing.T) {
+	sid := "ses-test-withflag"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	got := readPathFlowState()
+	if got == nil {
+		t.Fatal("readPathFlowState should return non-nil when flag exists")
+	}
+}
+
+func TestReadTeamState_NoSession(t *testing.T) {
+	t.Setenv("CODEFLOW_SESSION_ID", "")
+
+	got := readTeamState()
+	if got != nil {
+		t.Error("readTeamState should return nil when CODEFLOW_SESSION_ID is empty")
+	}
+}
+
+func TestReadTeamState_WithTeamJSON(t *testing.T) {
+	sid := "ses-test-team"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	// Write pathflow-team.json.
+	teamJSON := `{"team_name":"my-team","lead_pid":12345,"codeflow_session_id":"` + sid + `"}`
+	teamPath := filepath.Join(root, ".state", "session", sid, "pathflow", "pathflow-team.json")
+	if err := os.WriteFile(teamPath, []byte(teamJSON), 0o644); err != nil {
+		t.Fatalf("writing team JSON: %v", err)
+	}
+
+	got := readTeamState()
+	if got == nil {
+		t.Fatal("readTeamState should return non-nil when team JSON exists")
+	}
+}
+
+func TestReadTeamState_NoTeamJSON(t *testing.T) {
+	sid := "ses-test-noteam"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	// No team JSON file -- should return nil (fallback removed since it
+	// depends on ~/.claude/teams which may be stale).
+	got := readTeamState()
+	if got != nil {
+		t.Error("readTeamState should return nil when no team JSON exists")
 	}
 }

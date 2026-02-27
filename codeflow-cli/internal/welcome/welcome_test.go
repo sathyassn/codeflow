@@ -599,6 +599,156 @@ func TestShowAllBoxCharsASCII(t *testing.T) {
 	}
 }
 
+func TestShowWithPathFlow(t *testing.T) {
+	output := renderToString(t,
+		WithVersion("0.6.0"),
+		WithPathFlow("PF4-EXECUTE", "WS-DEV", "0"),
+	)
+
+	if !strings.Contains(output, "PATHFLOW:") {
+		t.Error("output should contain PATHFLOW section label")
+	}
+	if !strings.Contains(output, "Phase:") {
+		t.Error("output should contain Phase label")
+	}
+	if !strings.Contains(output, "PF4-EXECUTE") {
+		t.Error("output should contain phase value")
+	}
+	if !strings.Contains(output, "Stage:") {
+		t.Error("output should contain Stage label")
+	}
+	if !strings.Contains(output, "WS-DEV") {
+		t.Error("output should contain stage value")
+	}
+	if !strings.Contains(output, "Rework:") {
+		t.Error("output should contain Rework label")
+	}
+	if !strings.Contains(output, "0") {
+		t.Error("output should contain rework count value")
+	}
+}
+
+func TestShowWithTeam(t *testing.T) {
+	output := renderToString(t,
+		WithVersion("0.6.0"),
+		WithTeam("inf-tsk-015-014", []string{"cf-security", "cf-knowledge-layer", "cf-git-operations"}),
+	)
+
+	if !strings.Contains(output, "TEAM:") {
+		t.Error("output should contain TEAM section label")
+	}
+	if !strings.Contains(output, "inf-tsk-015-014") {
+		t.Error("output should contain team name")
+	}
+	if !strings.Contains(output, "cf-security") {
+		t.Error("output should contain teammate cf-security")
+	}
+	if !strings.Contains(output, "cf-knowledge-layer") {
+		t.Error("output should contain teammate cf-knowledge-layer")
+	}
+	if !strings.Contains(output, "cf-git-operations") {
+		t.Error("output should contain teammate cf-git-operations")
+	}
+}
+
+func TestShowWithPathFlowAndTeam(t *testing.T) {
+	output := renderToString(t,
+		WithVersion("0.6.0"),
+		WithActiveWork("INF-TSK-015-014", "Welcome V4", "feat/welcome-v4", time.Now()),
+		WithPathFlow("PF4-EXECUTE", "WS-DEV", "1"),
+		WithTeam("inf-tsk-015-014", []string{"cf-development", "cf-review"}),
+	)
+
+	// Both sections should be present.
+	if !strings.Contains(output, "PATHFLOW:") {
+		t.Error("output should contain PATHFLOW section when both options set")
+	}
+	if !strings.Contains(output, "TEAM:") {
+		t.Error("output should contain TEAM section when both options set")
+	}
+	if !strings.Contains(output, "ACTIVE WORK:") {
+		t.Error("output should still contain ACTIVE WORK section")
+	}
+
+	// Verify rework count.
+	if !strings.Contains(output, "Rework:") {
+		t.Error("output should contain Rework label")
+	}
+
+	// Verify ordering: PATHFLOW appears after ACTIVE WORK, TEAM after PATHFLOW.
+	pathflowIdx := strings.Index(output, "PATHFLOW:")
+	teamIdx := strings.Index(output, "TEAM:")
+	activeWorkIdx := strings.Index(output, "ACTIVE WORK:")
+	if activeWorkIdx >= pathflowIdx {
+		t.Error("PATHFLOW section should appear after ACTIVE WORK section")
+	}
+	if pathflowIdx >= teamIdx {
+		t.Error("TEAM section should appear after PATHFLOW section")
+	}
+}
+
+func TestShowWithoutPathFlowOrTeam(t *testing.T) {
+	output := renderToString(t,
+		WithVersion("0.6.0"),
+		WithActiveWork("TSK-001", "Test task", "feat/test", time.Now()),
+	)
+
+	// Standard V3 layout: no PATHFLOW or TEAM sections.
+	if strings.Contains(output, "PATHFLOW:") {
+		t.Error("output should NOT contain PATHFLOW section when option not set")
+	}
+	if strings.Contains(output, "TEAM:") {
+		t.Error("output should NOT contain TEAM section when option not set")
+	}
+
+	// V3 sections should still be present.
+	if !strings.Contains(output, "ACTIVE WORK:") {
+		t.Error("output should still contain ACTIVE WORK section")
+	}
+	if !strings.Contains(output, "PROJECT:") {
+		t.Error("output should still contain PROJECT section")
+	}
+	if !strings.Contains(output, "QUICK START:") {
+		t.Error("output should still contain QUICK START section")
+	}
+}
+
+func TestShowWithTeamEmptyTeammates(t *testing.T) {
+	output := renderToString(t,
+		WithTeam("solo-team", nil),
+	)
+
+	if !strings.Contains(output, "TEAM:") {
+		t.Error("output should contain TEAM section even with empty teammates")
+	}
+	if !strings.Contains(output, "solo-team") {
+		t.Error("output should contain team name")
+	}
+}
+
+func TestShowWithPathFlowReworkCount(t *testing.T) {
+	tests := []struct {
+		name        string
+		reworkCount string
+		wantInOutput string
+	}{
+		{"zero rework", "0", "Rework: 0"},
+		{"one rework", "1", "Rework: 1"},
+		{"high rework", "3", "Rework: 3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := renderToString(t,
+				WithPathFlow("PF4-EXECUTE", "WS-REV", tt.reworkCount),
+			)
+			if !strings.Contains(output, tt.wantInOutput) {
+				t.Errorf("output should contain %q", tt.wantInOutput)
+			}
+		})
+	}
+}
+
 func TestShowBranchColorInActiveWork(t *testing.T) {
 	// Test that branch name appears when active work is set.
 	output := renderToString(t,

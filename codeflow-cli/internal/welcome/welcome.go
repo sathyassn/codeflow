@@ -109,6 +109,19 @@ type ProjectInfo struct {
 	Status string // "Active", "Warning", "Error"
 }
 
+// PathFlowInfo holds PathFlow session state for rendering.
+type PathFlowInfo struct {
+	Phase       string // e.g. "PF4-EXECUTE"
+	Stage       string // e.g. "WS-DEV"
+	ReworkCount string // e.g. "0", "1"
+}
+
+// TeamInfo holds team data for rendering.
+type TeamInfo struct {
+	Name      string   // e.g. "inf-tsk-015-014"
+	Teammates []string // e.g. ["cf-security", "cf-knowledge-layer"]
+}
+
 // UpdateInfo describes an available update.
 type UpdateInfo struct {
 	Available  bool
@@ -130,6 +143,12 @@ type Config struct {
 
 	// Quick start commands (nil = auto-detect from state).
 	QuickStart []QuickStartCmd
+
+	// PathFlow session state (nil = no active PathFlow session).
+	PathFlow *PathFlowInfo
+
+	// Team info (nil = no active team).
+	Team *TeamInfo
 
 	// Update info.
 	Update UpdateInfo
@@ -212,6 +231,29 @@ func WithTermWidth(w int) Option {
 // WithOutputFd sets the file descriptor for isatty detection.
 func WithOutputFd(fd uintptr) Option {
 	return func(c *Config) { c.OutputFd = fd }
+}
+
+// WithPathFlow sets the PathFlow session state (phase, stage, rework count).
+// When set, a PATHFLOW section is rendered in the welcome box.
+func WithPathFlow(phase, stage, reworkCount string) Option {
+	return func(c *Config) {
+		c.PathFlow = &PathFlowInfo{
+			Phase:       phase,
+			Stage:       stage,
+			ReworkCount: reworkCount,
+		}
+	}
+}
+
+// WithTeam sets the team info (team name and active teammates).
+// When set, a TEAM section is rendered in the welcome box.
+func WithTeam(name string, teammates []string) Option {
+	return func(c *Config) {
+		c.Team = &TeamInfo{
+			Name:      name,
+			Teammates: teammates,
+		}
+	}
 }
 
 // Show renders the welcome screen to the given writer.
@@ -314,6 +356,12 @@ func (r *renderer) render() {
 
 	// Active work section.
 	r.activeWorkSection()
+
+	// PathFlow section (conditional).
+	r.pathFlowSection()
+
+	// Team section (conditional).
+	r.teamSection()
 
 	r.separator()
 
@@ -448,6 +496,42 @@ func (r *renderer) activeWorkSection() {
 		r.contentLine("Start with /cf-plan or pick up existing tasks")
 		r.emptyLine()
 	}
+}
+
+func (r *renderer) pathFlowSection() {
+	if r.cfg.PathFlow == nil {
+		return
+	}
+	r.separator()
+	r.emptyLine()
+	r.contentLine(r.color(ansiBoldWhite, "PATHFLOW:"))
+
+	phaseLine := "  Phase: " + r.color(ansiCyan, r.cfg.PathFlow.Phase)
+	r.contentLine(phaseLine)
+
+	stageLine := "  Stage: " + r.color(ansiGreen, r.cfg.PathFlow.Stage)
+	r.contentLine(stageLine)
+
+	reworkLine := "  Rework: " + r.cfg.PathFlow.ReworkCount
+	r.contentLine(reworkLine)
+
+	r.emptyLine()
+}
+
+func (r *renderer) teamSection() {
+	if r.cfg.Team == nil {
+		return
+	}
+	r.separator()
+	r.emptyLine()
+	r.contentLine(r.color(ansiBoldWhite, "TEAM:") + " " + r.cfg.Team.Name)
+
+	if len(r.cfg.Team.Teammates) > 0 {
+		list := "  " + strings.Join(r.cfg.Team.Teammates, ", ")
+		r.contentLine(list)
+	}
+
+	r.emptyLine()
 }
 
 func (r *renderer) quickStartSection() {
