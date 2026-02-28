@@ -4,6 +4,7 @@
     "enforcement": "per_file",
     "business_packages": [
       "./internal/db/...",
+      "./internal/ledger/...",
       "./internal/session/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."

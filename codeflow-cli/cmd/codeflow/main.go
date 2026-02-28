@@ -50,6 +50,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newUpdateCmd())
 	rootCmd.AddCommand(autorunCmd.NewCmd())
+	rootCmd.AddCommand(newLedgerCmd())
 	rootCmd.AddCommand(newWelcomeCmd())
 
 	return rootCmd
