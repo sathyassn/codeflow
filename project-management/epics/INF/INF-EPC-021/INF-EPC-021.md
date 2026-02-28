@@ -51,21 +51,44 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 
 ## Acceptance Criteria
 
-- [ ] All 22 hook scripts replaced with Go binary invocations in `settings.json`
-- [ ] `codeflow ledger append` replaces all shell JSONL write operations with atomic, validated writes
-- [ ] `codeflow hooks session-start init` replaces the 619-line shell session-start-init script
-- [ ] `codeflow hooks pre-tool-use gate-check` replaces cf-pre-tool-use-pathflow-gate.sh
-- [ ] `codeflow hooks pre-tool-use security` replaces cf-pre-tool-use-security.sh and its 9 enforcement modules
-- [ ] `codeflow pathflow checkpoint` replaces cf-pathflow-state.sh checkpoint engine
-- [ ] All Python scripts (8) and codeflow_py_lib removed; no python3 runtime dependency
-- [ ] All shell-lib scripts (6) retired after Go equivalents are wired
-- [ ] Hook latency measured and documented (target: < 50ms per hook, down from ~300ms)
-- [ ] Full PathFlow lifecycle test passes with Go hooks (PF1 through PF7)
+### Phase B (Build) -- Tasks 001-014
+
+- [ ] All Go subcommands created with full functionality matching shell/Python equivalents
+- [ ] `codeflow ledger append` provides atomic, validated JSONL writes
+- [ ] `codeflow hooks session-start init` implements all session initialization steps
+- [ ] `codeflow hooks pre-tool-use gate-check` implements PathFlow phase enforcement
+- [ ] `codeflow hooks pre-tool-use security` consolidates all 9 enforcement modules
+- [ ] `codeflow pathflow checkpoint` implements checkpoint engine operations
+- [ ] All Go subcommands for Python scripts (claim, memory-store, stage-sync, crdt-rebuild) created
+- [ ] `make test-cover` passes in codeflow-cli with >= 85% coverage on all new business packages
+- [ ] Go code follows idiomatic Go conventions per cf-go-standards across all packages
 - [ ] `./codeflow test` passes (existing test suite not regressed)
-- [ ] `make test-cover` passes in codeflow-cli with >= 85% coverage on new packages
-- [ ] No python3 invocations remain in production code paths
+- [ ] Shell/Python scripts remain UNCHANGED and operational during Phase B
+
+### Phase C (Shadow Testing) -- Task 030
+
+- [ ] Shadow test harness runs Go subcommands alongside shell scripts
+- [ ] Output divergence detection and logging for each migrated hook
+- [ ] Zero divergences observed across shadow testing cycle
+
+### Phase D (JSONL Normalization) -- Task 026
+
+- [ ] JSONL schema normalized before cutover
+
+### Phase E (Single-Session Cutover) -- Tasks 015-024, 026-028 (025 cancelled, absorbed into 022)
+
+- [ ] All 22 hook scripts replaced with Go binary invocations in `settings.json`
+- [ ] All Python scripts (8) and codeflow_py_lib removed; no python3 runtime dependency
+- [ ] All shell-lib scripts (6) retired after Go equivalents wired
 - [ ] CLAUDE.md, agent definitions, command definitions, and skills updated to reference Go binary
 - [ ] CI workflow updated to remove Python test dependencies and add Go test coverage
+
+### Phase F (Post-Cutover Verification) -- Task 031
+
+- [ ] Full PathFlow lifecycle test passes with Go hooks (PF1 through PF7)
+- [ ] Hook latency measured and documented (target: < 50ms per hook, down from ~300ms)
+- [ ] `codeflow doctor` reports clean state post-cutover
+- [ ] One full session completed successfully with all Go hooks active
 
 ### PII Handling Review
 
@@ -94,15 +117,18 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-017 | Migrate logging hooks to Go binary | todo | normal |
 | INF-TSK-021-018 | Migrate edit-write, protected-resource, and user-prompt-submit hooks to Go binary | todo | normal |
 | INF-TSK-021-019 | Migrate worktree and report scripts to Go binary | todo | normal |
-| INF-TSK-021-020 | Migrate top-level codeflow wrapper and remove dead code | todo | normal |
+| INF-TSK-021-020 | Migrate DB migration script to Go binary | todo | normal |
 | INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | todo | high |
-| INF-TSK-021-022 | Update command definitions, skills, and settings.json hook entries | todo | high |
+| INF-TSK-021-022 | Single-session cutover: wire Go hooks, retire shell/Python scripts, update settings | todo | critical |
 | INF-TSK-021-023 | Integration testing -- full PathFlow lifecycle with Go hooks | todo | critical |
 | INF-TSK-021-024 | Performance benchmarking and hook latency verification | todo | high |
-| INF-TSK-021-025 | Remove retired shell and Python infrastructure | todo | high |
+| INF-TSK-021-025 | SUPERSEDED -- Remove retired shell and Python infrastructure (absorbed into INF-TSK-021-022) | cancelled | high |
 | INF-TSK-021-026 | Normalize JSONL schema and rebuild SQLite | todo | high |
 | INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | todo | normal |
 | INF-TSK-021-028 | Update test-config.json business_packages with migration packages | todo | high |
+| INF-TSK-021-029 | Align INF-EPC-021 task criteria with build-coexist-cutover strategy | complete | high |
+| INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | todo | high |
+| INF-TSK-021-031 | Post-cutover verification -- full lifecycle test with Go hooks | todo | high |
 
 ## Dependencies
 
@@ -119,14 +145,16 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 
 ### Migration Strategy
 
-The migration follows a "strangler fig" pattern with four phases:
+The migration follows the **Build-Coexist-Cutover** strategy (documented in `.codeflow/docs/analysis/go-cli-migration-comprehensive.md` Section 10.1) with six phases:
 
-1. **Build** -- Create all Go equivalents while shell scripts remain active (coexist)
-2. **Test** -- Run Go implementations in parallel/shadow mode to verify correctness
-3. **Normalize** -- Normalize JSONL ledger/log schema before cutover (INF-TSK-021-026)
-4. **Cutover** -- Single-session cutover: update settings.json hook entries to invoke Go binary, delete retired shell/Python scripts
+1. **Phase A (Prerequisites)** -- INF-EPC-015 (Go CLI binary built), INF-EPC-013 (session ID bugs fixed)
+2. **Phase B (Build)** -- Tasks 001-014: Create all Go subcommands with full functionality and >= 85% test coverage. Shell/Python scripts remain UNCHANGED and active. No settings.json modifications. Go code is built and tested but not wired in.
+3. **Phase C (Shadow Testing)** -- Task 030: Run Go subcommands alongside shell scripts, compare output, log divergences. Validates behavioral parity before cutover.
+4. **Phase D (JSONL Normalization)** -- Task 026: Normalize JSONL ledger/log schema before cutover to ensure Go binary reads/writes the correct format.
+5. **Phase E (Single-Session Cutover)** -- Tasks 015-024, 026-028 (025 cancelled, absorbed into 022): In a single session, update all settings.json hook entries from shell to Go binary, delete retired shell/Python scripts, update documentation and CI. This is the atomic switchover.
+6. **Phase F (Post-Cutover Verification)** -- Task 031: Full PathFlow lifecycle test (PF1-PF7) with Go hooks, `codeflow doctor` health check, performance benchmarking.
 
-At no point should both the old script and new Go command be active for the same hook. Each script is replaced one at a time with a Go subcommand, settings.json is updated to call the Go binary, the old script's tests are migrated to Go, and the old script is deleted.
+**Key principle:** During Phase B (Build), shell scripts are NOT modified. The Go code is built and tested in isolation. Cutover criteria (settings.json changes, script deletion, documentation updates) are deferred to Phase E. This ensures the live system is never in a half-migrated state.
 
 ### New Go Packages Required
 
