@@ -9,6 +9,7 @@
       "./internal/pathflow/...",
       "./internal/session/...",
       "./internal/validate/...",
+      "./internal/hooks/...",
       "./internal/workstate/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."
