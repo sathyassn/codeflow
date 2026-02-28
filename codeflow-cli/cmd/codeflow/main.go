@@ -55,6 +55,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newInternalCmd())
 	rootCmd.AddCommand(newPathflowCmd())
 	rootCmd.AddCommand(newStateCmd())
+	rootCmd.AddCommand(newValidateCmd())
 
 	return rootCmd
 }
