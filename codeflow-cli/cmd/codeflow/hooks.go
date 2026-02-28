@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codeflow/codeflow-cli/internal/hooks/gate"
 	"github.com/codeflow/codeflow-cli/internal/hooks/security"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +41,7 @@ func newPreToolUseCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newSecurityCmd())
+	cmd.AddCommand(newGateCheckCmd())
 	return cmd
 }
 
@@ -158,3 +161,100 @@ func detectPathFlowActive(projectDir, sessionID string) bool {
 	_, err := os.Stat(flagPath)
 	return err == nil
 }
+
+// newGateCheckCmd creates the "gate-check" subcommand that enforces
+// PathFlow phase gates via sentinel file checks.
+func newGateCheckCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gate-check",
+		Short: "Check PathFlow gate for tool operations",
+		Long: `Check PathFlow phase gates for tool operations.
+
+Reads Claude Code hook JSON from stdin, checks sentinel files,
+and exits 0 if allowed, 2 if blocked.
+
+Gate rules:
+  Edit/Write tools      -> require pf-3 sentinel
+  Bash git commit       -> require pf-3 sentinel
+  Bash git push / gh pr -> require pf-5 AND ws-rev sentinels
+  Task role teammates   -> require pf-3 sentinel
+
+When no PathFlow session is active, all operations are allowed.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			event, _ := cmd.Flags().GetString("event")
+			return runGateCheck(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), event)
+		},
+	}
+	cmd.Flags().String("event", "PreToolUse", "Hook event type (PreToolUse, Stop, SubagentStop)")
+	return cmd
+}
+
+// runGateCheck implements the PathFlow gate enforcement logic.
+func runGateCheck(stdin io.Reader, _ io.Writer, errW io.Writer, event string) error {
+
+	// Stop and SubagentStop events are informational only — always allow.
+	if event == "Stop" || event == "SubagentStop" {
+		return nil
+	}
+
+	// Read stdin.
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		// Read error — allow through (graceful degradation).
+		return nil
+	}
+
+	if len(data) == 0 {
+		// Empty stdin — allow through.
+		return nil
+	}
+
+	// Parse the hook input.
+	var input gate.HookInput
+	if err := json.Unmarshal(data, &input); err != nil {
+		// Parse error — allow through (graceful degradation).
+		return nil
+	}
+
+	// Detect project directory and session ID.
+	projectDir := detectProjectDir()
+	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+
+	// Check if PathFlow is active.
+	if !detectPathFlowActive(projectDir, sessionID) {
+		// No PathFlow session — allow everything.
+		return nil
+	}
+
+	// Classify the gate type to determine if we need sentinel checks.
+	gateType := gate.ClassifyGateType(input.ToolName, input.ToolInput)
+
+	// Unknown session ID + critical gate → block immediately.
+	if sessionID == "unknown" {
+		switch gateType {
+		case gate.GateGitPushPR, gate.GateRoleTeammateSpawn:
+			fmt.Fprintf(errW, "BLOCKED: PathFlow gate - session state unknown\nReason: Cannot verify prerequisites (session ID not registered)\nTool: %s\nGate: %s\n", input.ToolName, gateType)
+			return &exitError{code: ExitHookBlock, err: fmt.Errorf("gate: session state unknown for %s", gateType)}
+		}
+		// Non-critical gates with unknown session: allow (graceful degradation).
+	}
+
+	// Build sentinel directory path.
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+
+	// Create checker and evaluate.
+	checker := &gate.GateChecker{
+		SentinelDir: sentinelDir,
+		SessionID:   sessionID,
+	}
+	verdict := checker.Check(input.ToolName, input.ToolInput)
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("gate: %s", verdict.Reason)}
+	}
+
+	return nil
+}
+
