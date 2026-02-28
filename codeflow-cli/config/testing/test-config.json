@@ -8,6 +8,7 @@
       "./internal/ledger/...",
       "./internal/pathflow/...",
       "./internal/session/...",
+      "./internal/workstate/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."
     ]

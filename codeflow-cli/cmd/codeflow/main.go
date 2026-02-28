@@ -54,6 +54,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newWelcomeCmd())
 	rootCmd.AddCommand(newInternalCmd())
 	rootCmd.AddCommand(newPathflowCmd())
+	rootCmd.AddCommand(newStateCmd())
 
 	return rootCmd
 }
