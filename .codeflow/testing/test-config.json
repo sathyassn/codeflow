@@ -64,6 +64,7 @@
       "description": "Library utilities - shell-lib, python-lib, hooks, git, settings, staging, commands",
       "files": [
         "scripts/db/test-generate-format-id.sh",
+        "scripts/db/test-normalize-jsonl.sh",
         "scripts/db/test-migration-005.sh",
         "scripts/commands/test-commands.sh",
         "scripts/codeflow_py_lib/test_config.py",

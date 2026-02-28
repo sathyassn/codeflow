@@ -1198,3 +1198,73 @@ func TestRunWelcome_WithTeam(t *testing.T) {
 		t.Error("expected non-empty welcome output with team state")
 	}
 }
+
+func TestDoctorCmd_SmokeTest(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is not parallel-safe
+	//
+	// Smoke test: doctor runs without panic and outputs check names.
+	// This validates end-to-end execution of all registered health checks
+	// against a minimal state directory.
+	tmpDir := t.TempDir()
+
+	// Create minimal state structure for doctor to operate on.
+	for _, dir := range []string{".state/db", ".state/ledger", ".codeflow/config"} {
+		if err := os.MkdirAll(filepath.Join(tmpDir, dir), 0o755); err != nil {
+			t.Fatalf("creating dir: %v", err)
+		}
+	}
+
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	cmd := newRootCmd()
+	var buf strings.Builder
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"doctor", "--json"})
+
+	// Doctor may return an exitError (some checks fail in a temp dir),
+	// but it must NOT panic.
+	_ = cmd.Execute()
+
+	got := buf.String()
+
+	// Parse JSON output to verify structure and check names.
+	var results []struct {
+		Name    string `json:"name"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got), &results); err != nil {
+		t.Fatalf("failed to parse doctor JSON output: %v\nraw: %s", err, got)
+	}
+
+	// Verify at least the core checks are present in output.
+	checkNames := map[string]bool{}
+	for _, r := range results {
+		checkNames[r.Name] = true
+	}
+
+	for _, expected := range []string{"database", "jsonl", "config", "permissions", "version"} {
+		if !checkNames[expected] {
+			t.Errorf("expected check %q to appear in doctor output, got checks: %v", expected, checkNames)
+		}
+	}
+
+	// Verify each result has a valid status.
+	for _, r := range results {
+		switch r.Status {
+		case "pass", "fail", "warn":
+			// valid
+		default:
+			t.Errorf("check %q has invalid status %q", r.Name, r.Status)
+		}
+	}
+
+	// Verify we got a reasonable number of checks (currently 15).
+	if len(results) < 10 {
+		t.Errorf("expected at least 10 checks, got %d", len(results))
+	}
+}
