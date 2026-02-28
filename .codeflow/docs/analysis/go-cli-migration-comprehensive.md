@@ -19,9 +19,10 @@ related_epic: "INF-EPC-021"
 - [7. Performance Impact Analysis](#7-performance-impact-analysis)
 - [8. Dependency Elimination Matrix](#8-dependency-elimination-matrix)
 - [9. Consolidated Binary Architecture](#9-consolidated-binary-architecture)
-- [10. Migration Priority](#10-migration-priority)
-- [11. Risk Assessment](#11-risk-assessment)
-- [12. Recommendation](#12-recommendation)
+- [10. Retained Infrastructure](#10-retained-infrastructure)
+- [11. Migration Priority](#11-migration-priority)
+- [12. Risk Assessment](#12-risk-assessment)
+- [13. Recommendation](#13-recommendation)
 
 ---
 
@@ -354,6 +355,7 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 |---|---|---|---|---|---|
 | `db/generate-format-id.sh` | 199 | Generate formatted IDs via sqlite3 | T1 | `codeflow db generate-id` | sqlite3 subprocess per call |
 | `db/migrate-to-dual-id.sh` | 356 | One-time dual-ID schema migration | T3 | `codeflow db migrate` | Rarely invoked; acceptable as shell short-term |
+| `db/normalize-jsonl.sh` | 316 | Normalize JSONL ledger files to canonical format | T2 | `codeflow ledger normalize` | Created in INF-TSK-015-017; superseded by Go-based INF-TSK-021-026 |
 
 #### 4.1.3 `validation/`
 
@@ -1201,37 +1203,57 @@ codeflow (Go binary — source: codeflow-cli/)
 ├── memory
 │   └── store                      -- replaces cf-memory-store.py
 │
-└── hooks                          -- all hook logic as subcommands
-    ├── session-start              -- replaces cf-session-start-init.sh
-    ├── session-start-logging      -- replaces cf-session-start-logging.sh
-    ├── session-start-instructions -- replaces cf-session-start-instructions.sh
-    ├── session-end                -- replaces cf-session-end-cleanup.sh
-    ├── session-end-logging        -- replaces cf-session-end-logging.sh
-    ├── gate-check                 -- replaces cf-pre-tool-use-pathflow-gate.sh
-    ├── sentinel-write             -- replaces cf-post-tool-use-pathflow-sentinel.sh
-    ├── checkpoint-register        -- replaces cf-post-tool-use-phase-checkpoint.sh
-    ├── checkpoint-complete        -- replaces cf-task-completed-phase-checkpoint.sh
-    ├── edit-write-guard           -- replaces cf-pre-tool-use-edit-write.sh
-    ├── gh-pr-guard                -- replaces cf-pre-tool-use-gh-pr.sh
-    ├── protected-resource         -- replaces cf-pre-tool-use-protected-resource.sh
-    ├── team-guard                 -- replaces cf-pre-tool-use-team-guard.sh
-    ├── webfetch-guard             -- replaces cf-pre-tool-use-webfetch.sh
-    ├── post-tool-use-logging      -- replaces cf-post-tool-use-logging.sh
-    ├── settings-templates         -- replaces cf-post-tool-use-settings-templates.sh
-    ├── tmp-workflow               -- replaces cf-post-tool-use-tmp-workflow.sh
-    ├── stop-gate                  -- replaces cf-stop-pathflow-gate.sh
-    ├── stop-logging               -- replaces cf-stop-logging.sh
-    ├── user-prompt-submit         -- replaces cf-user-prompt-submit.sh
-    ├── user-prompt-submit-logging -- replaces cf-user-prompt-submit-logging.sh
-    └── security
-        ├── check-bash             -- replaces security-lib.sh + all 9 enforcement modules
-        └── check-url              -- URL validation for webfetch
+└── hooks                          -- all hook logic as subcommands (grouped by event type)
+    ├── session-start
+    │   ├── init                   -- replaces cf-session-start-init.sh
+    │   ├── logging                -- replaces cf-session-start-logging.sh
+    │   └── instructions           -- replaces cf-session-start-instructions.sh
+    ├── session-end
+    │   ├── cleanup                -- replaces cf-session-end-cleanup.sh
+    │   └── logging                -- replaces cf-session-end-logging.sh
+    ├── pre-tool-use
+    │   ├── gate-check             -- replaces cf-pre-tool-use-pathflow-gate.sh
+    │   ├── security               -- replaces security-lib.sh + all 9 enforcement modules
+    │   ├── edit-write-guard       -- replaces cf-pre-tool-use-edit-write.sh
+    │   ├── gh-pr-guard            -- replaces cf-pre-tool-use-gh-pr.sh
+    │   ├── protected-resource     -- replaces cf-pre-tool-use-protected-resource.sh
+    │   ├── team-guard             -- replaces cf-pre-tool-use-team-guard.sh
+    │   └── webfetch-guard         -- replaces cf-pre-tool-use-webfetch.sh
+    ├── post-tool-use
+    │   ├── sentinel-write         -- replaces cf-post-tool-use-pathflow-sentinel.sh
+    │   ├── checkpoint-register    -- replaces cf-post-tool-use-phase-checkpoint.sh
+    │   ├── logging                -- replaces cf-post-tool-use-logging.sh
+    │   ├── settings-templates     -- replaces cf-post-tool-use-settings-templates.sh
+    │   └── tmp-workflow           -- replaces cf-post-tool-use-tmp-workflow.sh
+    ├── user-prompt-submit
+    │   ├── validate               -- replaces cf-user-prompt-submit.sh
+    │   └── logging                -- replaces cf-user-prompt-submit-logging.sh
+    ├── stop
+    │   ├── gate                   -- replaces cf-stop-pathflow-gate.sh
+    │   └── logging                -- replaces cf-stop-logging.sh
+    └── task-completed
+        └── checkpoint-complete    -- replaces cf-task-completed-phase-checkpoint.sh
 ```
 
-### 9.1 Hook Configuration After Migration
+### 9.1 Go Package Layout
+
+The grouped CLI subcommand structure maps to a corresponding Go package layout:
+
+```text
+codeflow-cli/internal/hooks/
+├── sessionstart/        -- session-start event hooks (init, logging, instructions)
+├── sessionend/          -- session-end event hooks (cleanup, logging)
+├── pretooluse/          -- pre-tool-use event hooks (gate, security, edit-write, etc.)
+├── posttooluse/         -- post-tool-use event hooks (sentinel, checkpoint, logging, etc.)
+├── userpromptsubmit/    -- user-prompt-submit event hooks (validate, logging)
+├── stop/                -- stop event hooks (gate, logging)
+└── taskcompleted/       -- task-completed event hooks (checkpoint-complete)
+```
+
+### 9.2 Hook Configuration After Migration
 
 Each hook entry in `settings.json` shrinks from a multi-argument bash invocation to a
-single binary call:
+single binary call using the grouped subcommand structure:
 
 ```json
 {
@@ -1239,7 +1261,7 @@ single binary call:
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "codeflow hooks security check-bash"}]
+        "hooks": [{"type": "command", "command": "codeflow hooks pre-tool-use security"}]
       }
     ]
   }
@@ -1248,9 +1270,75 @@ single binary call:
 
 The `settings.json` command strings are the complete wiring. No shell scripts are needed.
 
+### 9.3 test-config.json Integration
+
+All new Go packages from this epic must integrate with `codeflow-cli/config/testing/test-config.json`:
+
+- 85% coverage threshold on business packages (`per_file` enforcement)
+- New packages added to `business_packages` array as they are created
+- `t.Parallel()` required in all test functions
+- `context.Background()` blocked (use `context.TODO()` or test context)
+- Test file must be staged with source file (enforced by convention)
+
 ---
 
-## 10. Migration Priority
+## 10. Retained Infrastructure
+
+Not everything migrates. The following infrastructure SURVIVES the Go CLI migration and remains as shell scripts, test files, or CI workflows.
+
+### 10.1 Shell Scripts Retained (13 scripts, ~2,455 lines)
+
+**Security protection scripts (7 scripts) -- require sudo/root:**
+
+| Script | Lines | Reason |
+|--------|-------|--------|
+| `.codeflow/scripts/security/protection/cf-protect-resources.sh` | 420 | Requires sudo/root for chown/chmod |
+| `.codeflow/scripts/security/protection/cf-promote-protection.sh` | 179 | Requires sudo |
+| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | Requires sudo |
+| `.codeflow/scripts/security/protection/lib/cf-protection-common.sh` | 170 | Sourced by protection scripts |
+| `.codeflow/scripts/security/protection/lib/cf-protection-core.sh` | 137 | Sourced by protection scripts |
+| `.codeflow/scripts/security/protection/lib/cf-protection-ops.sh` | 129 | Sourced by protection scripts |
+| `.codeflow/scripts/security/protection/lib/cf-protection-verify.sh` | 252 | Sourced by protection scripts |
+
+**Git hooks (5 scripts) -- standard git hook system, separate from Claude Code hooks:**
+
+| Script | Lines | Reason |
+|--------|-------|--------|
+| `.codeflow/scripts/git-hooks/pre-commit` | 672 | Enforces commit discipline; runs once per commit, not per tool call |
+| `.codeflow/scripts/git-hooks/commit-msg` | 309 | Validates conventional commit format |
+| `.codeflow/scripts/git-hooks/post-commit` | 73 | JSONL logging after commit |
+| `.codeflow/scripts/git-hooks/pre-push` | 275 | Branch naming validation |
+| `.codeflow/scripts/git-hooks/prepare-commit-msg` | 116 | Commit message template |
+
+**Why git hooks stay as shell:** They enforce git-level commit discipline (conventional commits, branch naming, linting). They run once per git operation (not per tool call), have no latency concern, and are separate from the Claude Code hook system.
+
+**Top-level wrapper:**
+
+| Script | Lines | Reason |
+|--------|-------|--------|
+| `./codeflow` (root wrapper) | 277 -> ~4 | Simplified to thin Go binary delegator |
+
+### 10.2 Test Infrastructure Retained
+
+| Path | Description |
+|------|-------------|
+| `.codeflow/testing/lib/` (10 scripts) | Test framework libraries (test-common.sh, test-runner.sh, etc.) |
+| `.codeflow/testing/cli/test-go-cli.sh` | Go test bridge script |
+| `.codeflow/testing/scripts/git-hooks/` (5 test files) | Tests for retained git hooks |
+| `.codeflow/testing/scripts/security/protection/` (~7 test files) | Tests for retained protection scripts |
+| `.codeflow/testing/ci/check-test-coverage-pairing.sh` | CI coverage pairing check (needs update post-migration) |
+
+### 10.3 CI Workflows
+
+| Workflow | Status |
+|----------|--------|
+| `.github/workflows/test-suite.yml` | MODIFIED: remove Python venv/pytest steps, retain Go test job |
+| `.github/workflows/enforce-commit-format.yml` | RETAINED unchanged |
+| `.github/workflows/prevent-force-push.yml` | RETAINED unchanged |
+
+---
+
+## 11. Migration Priority
 
 ### Phase A: Data Integrity Foundation (Blocks all other work)
 
@@ -1397,9 +1485,9 @@ INF-EPC-015 (Go CLI build-out)
 
 ---
 
-## 11. Risk Assessment
+## 12. Risk Assessment
 
-### 11.1 High Risk
+### 12.1 High Risk
 
 **Hook behavior divergence during cutover:**
 
@@ -1419,7 +1507,7 @@ records use the new format. The JSONL sync parser must handle both.
 **Mitigation:** Freeze JSONL schema before migration. Test sync parser against records
 from both the old and new writers.
 
-### 11.2 Medium Risk
+### 12.2 Medium Risk
 
 **settings.json command path changes:**
 
@@ -1439,7 +1527,7 @@ fallback must remain.
 **Mitigation:** Maintain shell hooks until the Go binary is in the install path. Use
 INF-EPC-015's existing cross-compilation Makefile targets.
 
-### 11.3 Low Risk
+### 12.3 Low Risk
 
 **Python test removal:**
 
@@ -1455,7 +1543,7 @@ urgency; risk is limited to deferred technical debt.
 
 ---
 
-## 12. Recommendation
+## 13. Recommendation
 
 > **Note:** The recommendations below were written before epic creation. The actual
 > implementation consolidated Phases A-H into a single epic: INF-EPC-021.

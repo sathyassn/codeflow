@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-18T23:00:00Z"
-updated_at: "2026-02-26T18:10:00Z"
+updated_at: "2026-02-28T04:19:00Z"
 ---
 
 # PLN-EPC-001: Ongoing Planning
@@ -50,6 +50,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-002 | Plan INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening | complete | high |
 | PLN-TSK-001-003 | Plan Go CLI Epic (INF-EPC-015) | complete | normal |
 | PLN-TSK-001-004 | Plan Artifact Token Efficiency Restructuring (INF-EPC-019) | complete | normal |
+| PLN-TSK-001-005 | Update INF-EPC-021 epic docs, analysis doc, and task files | complete | high |
 
 ## Dependencies
 
@@ -71,3 +72,4 @@ This is an ongoing epic with no planned completion date. New planning tasks are 
 - INF-EPC-008: PathFlow PR Verification, Merge Protection & Validation Hardening (produced by PLN-TSK-001-002)
 - INF-EPC-015: Go CLI (codeflow binary) (produced by PLN-TSK-001-003)
 - INF-EPC-019: Claude Artifact Token Efficiency Restructuring (produced by PLN-TSK-001-004)
+- INF-EPC-021: Go CLI Integration & Script Retirement (updated by PLN-TSK-001-005)

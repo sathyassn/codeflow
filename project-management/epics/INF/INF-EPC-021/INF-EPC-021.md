@@ -53,9 +53,9 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 
 - [ ] All 22 hook scripts replaced with Go binary invocations in `settings.json`
 - [ ] `codeflow ledger append` replaces all shell JSONL write operations with atomic, validated writes
-- [ ] `codeflow hooks session-start-init` replaces the 619-line shell session-start-init script
-- [ ] `codeflow hooks gate-check` replaces cf-pre-tool-use-pathflow-gate.sh
-- [ ] `codeflow hooks security` replaces cf-pre-tool-use-security.sh and its 9 enforcement modules
+- [ ] `codeflow hooks session-start init` replaces the 619-line shell session-start-init script
+- [ ] `codeflow hooks pre-tool-use gate-check` replaces cf-pre-tool-use-pathflow-gate.sh
+- [ ] `codeflow hooks pre-tool-use security` replaces cf-pre-tool-use-security.sh and its 9 enforcement modules
 - [ ] `codeflow pathflow checkpoint` replaces cf-pathflow-state.sh checkpoint engine
 - [ ] All Python scripts (8) and codeflow_py_lib removed; no python3 runtime dependency
 - [ ] All shell-lib scripts (6) retired after Go equivalents are wired
@@ -101,6 +101,8 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-024 | Performance benchmarking and hook latency verification | todo | high |
 | INF-TSK-021-025 | Remove retired shell and Python infrastructure | todo | high |
 | INF-TSK-021-026 | Normalize JSONL schema and rebuild SQLite | todo | high |
+| INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | todo | normal |
+| INF-TSK-021-028 | Update test-config.json business_packages with migration packages | todo | high |
 
 ## Dependencies
 
@@ -167,7 +169,7 @@ Target (Go):
 ```json
 {
   "type": "command",
-  "command": "\"$CLAUDE_PROJECT_DIR\"/codeflow-cli/bin/codeflow hooks gate-check",
+  "command": "\"$CLAUDE_PROJECT_DIR\"/codeflow-cli/bin/codeflow hooks pre-tool-use gate-check",
   "timeout": 5000
 }
 ```
