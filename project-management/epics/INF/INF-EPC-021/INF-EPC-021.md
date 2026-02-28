@@ -1,5 +1,5 @@
 ---
-id: "epic-PENDING"
+id: "epic-01KJHQCJSFC7W6MT0Q1GYEKQMH"
 format_id: "INF-EPC-021"
 title: "Go CLI Integration & Script Retirement"
 summary: "Wire the existing Go CLI binary into the live CodeFlow workflow, migrate shell/Python scripts to Go subcommands, and retire legacy infrastructure"
