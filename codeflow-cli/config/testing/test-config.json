@@ -6,6 +6,7 @@
       "./internal/db/...",
       "./internal/idgen/...",
       "./internal/ledger/...",
+      "./internal/pathflow/...",
       "./internal/session/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."
