@@ -98,26 +98,26 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-021-001 | Migrate JSONL ledger writes to Go CLI | todo | critical |
-| INF-TSK-021-002 | Migrate ULID generation and format ID to Go CLI | todo | critical |
-| INF-TSK-021-003 | Migrate checkpoint engine to Go CLI | todo | critical |
-| INF-TSK-021-004 | Migrate active task state and memory scripts to Go CLI | todo | high |
-| INF-TSK-021-005 | Migrate validation scripts to Go CLI | todo | high |
-| INF-TSK-021-006 | Consolidate security enforcement stack into Go binary | todo | critical |
-| INF-TSK-021-007 | Migrate pathflow gate hook to Go binary | todo | critical |
-| INF-TSK-021-008 | Migrate webfetch, team-guard, and gh-pr hooks to Go binary | todo | high |
-| INF-TSK-021-009 | Migrate sentinel pipeline hooks to Go binary | todo | critical |
-| INF-TSK-021-010 | Migrate session-start-init hook to Go binary | todo | high |
-| INF-TSK-021-011 | Migrate session-end-cleanup hook to Go binary | todo | high |
-| INF-TSK-021-012 | Migrate sentinel system script to Go binary | todo | high |
+| INF-TSK-021-001 | Build Go CLI for JSONL ledger writes | todo | critical |
+| INF-TSK-021-002 | Build Go CLI for ULID generation and format ID | todo | critical |
+| INF-TSK-021-003 | Build Go CLI for checkpoint engine | todo | critical |
+| INF-TSK-021-004 | Build Go CLI for active task state and memory operations | todo | high |
+| INF-TSK-021-005 | Build Go CLI for validation scripts | todo | high |
+| INF-TSK-021-006 | Build Go CLI for security enforcement stack | todo | critical |
+| INF-TSK-021-007 | Build Go CLI for pathflow gate hook | todo | critical |
+| INF-TSK-021-008 | Build Go CLI for webfetch, team-guard, and gh-pr hooks | todo | high |
+| INF-TSK-021-009 | Build Go CLI for sentinel pipeline hooks | todo | critical |
+| INF-TSK-021-010 | Build Go CLI for session-start-init hook | todo | high |
+| INF-TSK-021-011 | Build Go CLI for session-end-cleanup hook | todo | high |
+| INF-TSK-021-012 | Build Go CLI for sentinel system script | todo | high |
 | INF-TSK-021-013 | Wire codeflow session start into SessionStart hook | todo | high |
-| INF-TSK-021-014 | Eliminate Python scripts and codeflow_py_lib | todo | high |
-| INF-TSK-021-015 | Migrate shell-lib foundation to Go binary | todo | normal |
-| INF-TSK-021-016 | Migrate settings and staging scripts to Go binary | todo | normal |
-| INF-TSK-021-017 | Migrate logging hooks to Go binary | todo | normal |
-| INF-TSK-021-018 | Migrate edit-write, protected-resource, and user-prompt-submit hooks to Go binary | todo | normal |
-| INF-TSK-021-019 | Migrate worktree and report scripts to Go binary | todo | normal |
-| INF-TSK-021-020 | Migrate DB migration script to Go binary | todo | normal |
+| INF-TSK-021-014 | Build Go equivalents for Python scripts and codeflow_py_lib | todo | high |
+| INF-TSK-021-015 | Build Go CLI for shell-lib foundation | todo | normal |
+| INF-TSK-021-016 | Build Go CLI for settings and staging scripts | todo | normal |
+| INF-TSK-021-017 | Build Go CLI for logging hooks | todo | normal |
+| INF-TSK-021-018 | Build Go CLI for edit-write, protected-resource, and user-prompt-submit hooks | todo | normal |
+| INF-TSK-021-019 | Build Go CLI for worktree and report scripts | todo | normal |
+| INF-TSK-021-020 | Build Go CLI for DB migration script | todo | normal |
 | INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | todo | high |
 | INF-TSK-021-022 | Single-session cutover: wire Go hooks, retire shell/Python scripts, update settings | todo | critical |
 | INF-TSK-021-023 | Integration testing -- full PathFlow lifecycle with Go hooks | todo | critical |
@@ -129,6 +129,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-029 | Align INF-EPC-021 task criteria with build-coexist-cutover strategy | complete | high |
 | INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | todo | high |
 | INF-TSK-021-031 | Post-cutover verification -- full lifecycle test with Go hooks | todo | high |
+| INF-TSK-021-032 | Fix replace/migrate language in INF-EPC-021 build tasks | complete | high |
 
 ## Dependencies
 
