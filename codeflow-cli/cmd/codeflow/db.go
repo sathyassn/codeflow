@@ -48,6 +48,7 @@ func newDBCmd() *cobra.Command {
 	dbCmd.AddCommand(newDBCheckCmd())
 	dbCmd.AddCommand(newDBVersionCmd())
 	dbCmd.AddCommand(newDBBackupCmd())
+	dbCmd.AddCommand(newDBGenerateIdCmd())
 
 	return dbCmd
 }

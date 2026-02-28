@@ -67,7 +67,7 @@ func TestDBCmd_Subcommands(t *testing.T) {
 		subcommands[sub.Name()] = true
 	}
 
-	expected := []string{"init", "migrate", "sync", "query", "exec", "check", "version", "backup"}
+	expected := []string{"init", "migrate", "sync", "query", "exec", "check", "version", "backup", "generate-id"}
 	for _, name := range expected {
 		if !subcommands[name] {
 			t.Errorf("expected subcommand %q to be registered on db cmd", name)
@@ -105,7 +105,7 @@ func TestDBCmd_HelpOutput(t *testing.T) {
 	}
 
 	got := buf.String()
-	for _, want := range []string{"init", "migrate", "sync", "query", "exec", "check", "version", "backup"} {
+	for _, want := range []string{"init", "migrate", "sync", "query", "exec", "check", "version", "backup", "generate-id"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("db help missing %q:\n%s", want, got)
 		}
