@@ -34,29 +34,27 @@ build-all:
 test:
 	go test ./...
 
-## test-cover: Run tests with coverage and enforce 85% threshold on business packages
-## Business packages: db, session, cmd/codeflow. Skeleton doc.go-only packages excluded.
+## test-cover: Run tests with coverage and enforce threshold from config/testing/test-config.json
+## Config: config/testing/test-config.json -> coverage.business_packages, coverage.threshold
 test-cover:
-	@go test -coverprofile=coverage.out ./... 2>&1 | tee coverage.log
-	@echo "--- Per-function coverage ---"
-	@go tool cover -func=coverage.out
-	@echo "---"
-	@total=$$(go tool cover -func=coverage.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
-	echo "Overall coverage (all packages): $${total}%"
-	@go test -coverprofile=business.out \
-		./internal/db/... \
-		./internal/session/... \
-		./cmd/codeflow/... \
-		> /dev/null 2>&1; \
+	@if ! command -v jq >/dev/null 2>&1; then echo "ERROR: jq required for test-cover"; exit 1; fi
+	@BUSINESS_PKGS=$$(jq -r '.coverage.business_packages | join(" ")' config/testing/test-config.json); \
+	THRESHOLD=$$(jq -r '.coverage.threshold' config/testing/test-config.json); \
+	go test -coverprofile=coverage.out ./... 2>&1 | tee coverage.log; \
+	echo "--- Per-function coverage ---"; \
+	go tool cover -func=coverage.out; \
+	echo "---"; \
+	total=$$(go tool cover -func=coverage.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
+	echo "Overall coverage (all packages): $${total}%"; \
+	go test -coverprofile=business.out $${BUSINESS_PKGS} > /dev/null 2>&1; \
 	impl=$$(go tool cover -func=business.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
 	rm -f business.out; \
 	echo "Business package coverage: $${impl}%"; \
-	threshold=85; \
-	if [ $$(echo "$${impl} < $${threshold}" | bc -l) -eq 1 ]; then \
-		echo "FAIL: Business package coverage $${impl}% is below $${threshold}% threshold"; \
+	if [ $$(echo "$${impl} < $${THRESHOLD}" | bc -l) -eq 1 ]; then \
+		echo "FAIL: Business package coverage $${impl}% is below $${THRESHOLD}% threshold"; \
 		exit 1; \
 	else \
-		echo "OK: Business package coverage $${impl}% meets $${threshold}% threshold"; \
+		echo "OK: Business package coverage $${impl}% meets $${THRESHOLD}% threshold"; \
 	fi
 
 ## test-race: Run tests with race detector

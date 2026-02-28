@@ -47,7 +47,7 @@ func TestVersionVariable(t *testing.T) {
 		t.Fatal("version should have a default value")
 	}
 	if version != "dev" {
-		t.Errorf("expected default version to be %q, got %q", "dev", version)
+		t.Errorf("version = %q, want %q", version, "dev")
 	}
 }
 
@@ -56,10 +56,10 @@ func TestNewRootCmd(t *testing.T) {
 
 	cmd := newRootCmd()
 	if cmd.Use != "codeflow" {
-		t.Errorf("expected root command Use=%q, got %q", "codeflow", cmd.Use)
+		t.Errorf("Use = %q, want %q", cmd.Use, "codeflow")
 	}
 	if cmd.Version != version {
-		t.Errorf("expected root command Version=%q, got %q", version, cmd.Version)
+		t.Errorf("Version = %q, want %q", cmd.Version, version)
 	}
 
 	// Verify subcommands are registered.
@@ -147,7 +147,7 @@ func TestRootCmd_UnknownCommand(t *testing.T) {
 		t.Fatal("expected error for unknown command, got nil")
 	}
 	if !strings.Contains(err.Error(), "unknown command") {
-		t.Errorf("expected 'unknown command' in error, got: %v", err)
+		t.Errorf("error = %v, want it to contain %q", err, "unknown command")
 	}
 }
 
@@ -224,10 +224,10 @@ func TestVersionCmd_CheckFlag(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "not yet implemented", got)
 	}
 	if !strings.Contains(got, version) {
-		t.Errorf("expected version string in output, got: %q", got)
+		t.Errorf("output missing version %q: %q", version, got)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestRunUninstall_BinaryNotFound(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "not found") {
-		t.Errorf("expected 'not found' in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "not found", got)
 	}
 }
 
@@ -331,7 +331,7 @@ func TestRunUninstall_ForceRemovesFile(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "removed") {
-		t.Errorf("expected 'removed' in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "removed", got)
 	}
 
 	// Verify file was actually removed.
@@ -358,7 +358,7 @@ func TestRunUninstall_ConfirmYes(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "removed") {
-		t.Errorf("expected 'removed' in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "removed", got)
 	}
 
 	// Verify file was actually removed.
@@ -384,7 +384,7 @@ func TestRunUninstall_ConfirmYesFull(t *testing.T) {
 	}
 
 	if !strings.Contains(buf.String(), "removed") {
-		t.Errorf("expected 'removed' in output, got: %q", buf.String())
+		t.Errorf("output missing %q: %q", "removed", buf.String())
 	}
 }
 
@@ -406,7 +406,7 @@ func TestRunUninstall_ConfirmNo(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "cancelled") {
-		t.Errorf("expected 'cancelled' in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "cancelled", got)
 	}
 
 	// Verify file was NOT removed.
@@ -435,7 +435,7 @@ func TestRunUninstall_EmptyInput(t *testing.T) {
 		t.Fatal("expected error for empty input, got nil")
 	}
 	if !strings.Contains(err.Error(), "reading confirmation") {
-		t.Errorf("expected 'reading confirmation' in error, got: %v", err)
+		t.Errorf("error = %v, want it to contain %q", err, "reading confirmation")
 	}
 }
 
@@ -465,7 +465,7 @@ func TestRunUninstall_RemovePermissionError(t *testing.T) {
 		t.Fatal("expected error when binary cannot be removed")
 	}
 	if !strings.Contains(err.Error(), "removing") {
-		t.Errorf("expected 'removing' in error, got: %v", err)
+		t.Errorf("error = %v, want it to contain %q", err, "removing")
 	}
 }
 
@@ -555,10 +555,10 @@ func TestRunUninstall_PromptIncludesConfigPath(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "config") {
-		t.Errorf("expected prompt to mention config path, got: %q", got)
+		t.Errorf("output missing config path reference: %q", got)
 	}
 	if !strings.Contains(got, "[y/N]") {
-		t.Errorf("expected '[y/N]' in prompt, got: %q", got)
+		t.Errorf("output missing %q: %q", "[y/N]", got)
 	}
 }
 
@@ -578,10 +578,10 @@ func TestRunUninstall_KeepConfigPromptExcludesConfigPath(t *testing.T) {
 	got := buf.String()
 	// When --keep-config is set, the prompt should only mention the binary.
 	if !strings.Contains(got, "Remove codeflow binary at") {
-		t.Errorf("expected binary-only prompt, got: %q", got)
+		t.Errorf("output missing %q: %q", "Remove codeflow binary at", got)
 	}
 	if !strings.Contains(got, "[y/N]") {
-		t.Errorf("expected '[y/N]' in prompt, got: %q", got)
+		t.Errorf("output missing %q: %q", "[y/N]", got)
 	}
 }
 
@@ -593,7 +593,7 @@ func TestDefaultBinaryPath(t *testing.T) {
 		t.Fatal("defaultBinaryPath should return non-empty string")
 	}
 	if !strings.HasSuffix(path, filepath.Join(".local", "bin", "codeflow")) {
-		t.Errorf("expected path to end with .local/bin/codeflow, got: %s", path)
+		t.Errorf("defaultBinaryPath() = %s, want suffix .local/bin/codeflow", path)
 	}
 }
 
@@ -605,7 +605,7 @@ func TestDefaultConfigDir(t *testing.T) {
 		t.Fatal("defaultConfigDir should return non-empty string")
 	}
 	if !strings.HasSuffix(path, filepath.Join(".config", "codeflow")) {
-		t.Errorf("expected path to end with .config/codeflow, got: %s", path)
+		t.Errorf("defaultConfigDir() = %s, want suffix .config/codeflow", path)
 	}
 }
 
@@ -682,7 +682,7 @@ func TestUninstallCmd_ViaRootCmd(t *testing.T) {
 	// Binary likely doesn't exist at default path in test env.
 	got := buf.String()
 	if !strings.Contains(got, "not found") && !strings.Contains(got, "removed") {
-		t.Errorf("expected 'not found' or 'removed' in output, got: %q", got)
+		t.Errorf("output missing 'not found' or 'removed': %q", got)
 	}
 }
 
@@ -691,7 +691,7 @@ func TestNewVersionCmd(t *testing.T) {
 
 	cmd := newVersionCmd()
 	if cmd.Use != "version" {
-		t.Errorf("expected Use=%q, got %q", "version", cmd.Use)
+		t.Errorf("Use = %q, want %q", cmd.Use, "version")
 	}
 	if cmd.Short == "" {
 		t.Error("version command should have a short description")
@@ -714,10 +714,10 @@ func TestRunUninstall_PromptMessage(t *testing.T) {
 
 	got := buf.String()
 	if !strings.Contains(got, "Remove codeflow binary at") {
-		t.Errorf("expected prompt message in output, got: %q", got)
+		t.Errorf("output missing %q: %q", "Remove codeflow binary at", got)
 	}
 	if !strings.Contains(got, "[y/N]") {
-		t.Errorf("expected '[y/N]' in prompt, got: %q", got)
+		t.Errorf("output missing %q: %q", "[y/N]", got)
 	}
 }
 
@@ -728,7 +728,7 @@ func TestNewWelcomeCmd(t *testing.T) {
 
 	cmd := newWelcomeCmd()
 	if cmd.Use != "welcome" {
-		t.Errorf("expected Use=%q, got %q", "welcome", cmd.Use)
+		t.Errorf("Use = %q, want %q", cmd.Use, "welcome")
 	}
 
 	quietFlag := cmd.Flags().Lookup("quiet")
@@ -754,6 +754,7 @@ func TestWelcomeCmd_ViaRootCmd(t *testing.T) {
 }
 
 func TestDetectPhase_NoSentinels(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	root := t.TempDir()
 	oldWd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
@@ -768,6 +769,7 @@ func TestDetectPhase_NoSentinels(t *testing.T) {
 }
 
 func TestDetectPhase_WithSentinels(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	sid := "ses-test-phase"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -791,6 +793,7 @@ func TestDetectPhase_WithSentinels(t *testing.T) {
 }
 
 func TestDetectPhase_AllCompleted(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	sid := "ses-test-allphase"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -815,6 +818,7 @@ func TestDetectPhase_AllCompleted(t *testing.T) {
 }
 
 func TestDetectStage_NoSentinels(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	root := t.TempDir()
 	oldWd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
@@ -829,6 +833,7 @@ func TestDetectStage_NoSentinels(t *testing.T) {
 }
 
 func TestDetectStage_WithDevCompleted(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	sid := "ses-test-stage"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -850,6 +855,7 @@ func TestDetectStage_WithDevCompleted(t *testing.T) {
 }
 
 func TestDetectReworkCount_NoFile(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	root := t.TempDir()
 	oldWd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
@@ -864,6 +870,7 @@ func TestDetectReworkCount_NoFile(t *testing.T) {
 }
 
 func TestDetectReworkCount_WithRework(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	sid := "ses-test-rework"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -891,6 +898,7 @@ func TestDetectReworkCount_WithRework(t *testing.T) {
 }
 
 func TestDetectReworkCount_ReworkIterationField(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir which is global state
 	sid := "ses-test-reworkfield"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -915,6 +923,7 @@ func TestDetectReworkCount_ReworkIterationField(t *testing.T) {
 }
 
 func TestReadPathFlowState_NoSession(t *testing.T) {
+	// NOTE: no t.Parallel() -- t.Setenv is not compatible with parallel tests
 	t.Setenv("CODEFLOW_SESSION_ID", "")
 
 	got := readPathFlowState()
@@ -924,6 +933,7 @@ func TestReadPathFlowState_NoSession(t *testing.T) {
 }
 
 func TestReadPathFlowState_NoFlag(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
 	root := t.TempDir()
 	oldWd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
@@ -940,6 +950,7 @@ func TestReadPathFlowState_NoFlag(t *testing.T) {
 }
 
 func TestReadPathFlowState_WithFlag(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
 	sid := "ses-test-withflag"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -957,6 +968,7 @@ func TestReadPathFlowState_WithFlag(t *testing.T) {
 }
 
 func TestReadTeamState_NoSession(t *testing.T) {
+	// NOTE: no t.Parallel() -- t.Setenv is not compatible with parallel tests
 	t.Setenv("CODEFLOW_SESSION_ID", "")
 
 	got := readTeamState()
@@ -966,6 +978,7 @@ func TestReadTeamState_NoSession(t *testing.T) {
 }
 
 func TestReadTeamState_WithTeamJSON(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
 	sid := "ses-test-team"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -990,6 +1003,7 @@ func TestReadTeamState_WithTeamJSON(t *testing.T) {
 }
 
 func TestReadTeamState_NoTeamJSON(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
 	sid := "ses-test-noteam"
 	root := setupPathFlowFixtures(t, sid)
 	oldWd, _ := os.Getwd()
@@ -1005,5 +1019,182 @@ func TestReadTeamState_NoTeamJSON(t *testing.T) {
 	got := readTeamState()
 	if got != nil {
 		t.Error("readTeamState should return nil when no team JSON exists")
+	}
+}
+
+func TestReadTeammates_InvalidHome(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv which is not parallel-safe
+	// readTeammates returns nil when home dir lookup fails or config not found.
+	t.Setenv("HOME", "/nonexistent-home-for-test")
+
+	got := readTeammates("nonexistent-team")
+	if got != nil {
+		t.Errorf("readTeammates with bad HOME = %v, want nil", got)
+	}
+}
+
+func TestReadTeammates_InvalidJSON(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv which is not parallel-safe
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Create config file with invalid JSON.
+	configDir := filepath.Join(tmpDir, ".claude", "teams", "test-team")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"),
+		[]byte("not-json"), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	got := readTeammates("test-team")
+	if got != nil {
+		t.Errorf("readTeammates with invalid JSON = %v, want nil", got)
+	}
+}
+
+func TestReadTeammates_ValidConfig(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv which is not parallel-safe
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	configDir := filepath.Join(tmpDir, ".claude", "teams", "test-team")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+
+	configJSON := `{"teammates":{"id1":{"name":"cf-dev"},"id2":{"name":"cf-review"},"id3":{"name":""}}}`
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"),
+		[]byte(configJSON), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	got := readTeammates("test-team")
+	if len(got) != 2 {
+		t.Fatalf("readTeammates len = %d, want 2", len(got))
+	}
+	// Should be sorted.
+	if got[0] != "cf-dev" || got[1] != "cf-review" {
+		t.Errorf("readTeammates = %v, want [cf-dev cf-review]", got)
+	}
+}
+
+func TestReadTeammates_EmptyTeammates(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv which is not parallel-safe
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	configDir := filepath.Join(tmpDir, ".claude", "teams", "test-team")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+
+	configJSON := `{"teammates":{}}`
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"),
+		[]byte(configJSON), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	got := readTeammates("test-team")
+	if len(got) != 0 {
+		t.Errorf("readTeammates with empty teammates = %v, want empty", got)
+	}
+}
+
+func TestRunWelcome_Basic(t *testing.T) {
+	// NOTE: no t.Parallel -- t.Setenv incompatible with parallel tests.
+	t.Setenv("CODEFLOW_SESSION_ID", "")
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"welcome"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("welcome returned error: %v", err)
+	}
+
+	got := buf.String()
+	if len(got) == 0 {
+		t.Error("expected non-empty welcome output")
+	}
+}
+
+func TestRunWelcome_Quiet(t *testing.T) {
+	// NOTE: no t.Parallel -- t.Setenv incompatible with parallel tests.
+	t.Setenv("CODEFLOW_SESSION_ID", "")
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"welcome", "--quiet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("welcome --quiet returned error: %v", err)
+	}
+
+	got := buf.String()
+	if len(got) != 0 {
+		t.Errorf("welcome --quiet should produce no output, got: %q", got)
+	}
+}
+
+func TestRunWelcome_WithPathFlow(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
+	sid := "ses-test-welcome-pf"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"welcome"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("welcome with pathflow returned error: %v", err)
+	}
+
+	got := buf.String()
+	if len(got) == 0 {
+		t.Error("expected non-empty welcome output with PathFlow state")
+	}
+}
+
+func TestRunWelcome_WithTeam(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which are not parallel-safe
+	sid := "ses-test-welcome-team"
+	root := setupPathFlowFixtures(t, sid)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	// Write team JSON so readTeamState returns non-nil.
+	teamJSON := `{"team_name":"test-welcome-team"}`
+	teamPath := filepath.Join(root, ".state", "session", sid, "pathflow", "pathflow-team.json")
+	if err := os.WriteFile(teamPath, []byte(teamJSON), 0o644); err != nil {
+		t.Fatalf("writing team JSON: %v", err)
+	}
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"welcome"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("welcome with team returned error: %v", err)
+	}
+
+	got := buf.String()
+	if len(got) == 0 {
+		t.Error("expected non-empty welcome output with team state")
 	}
 }

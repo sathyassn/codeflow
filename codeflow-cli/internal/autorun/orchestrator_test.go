@@ -126,6 +126,7 @@ func (m *mockRunner) Run(_ context.Context, cfg WorkerConfig) (*WorkerResult, er
 }
 
 func TestOrchestratorStart_CreatesSession(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -170,6 +171,7 @@ func TestOrchestratorStart_CreatesSession(t *testing.T) {
 }
 
 func TestOrchestratorStart_TaskSequencing(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -221,6 +223,7 @@ func TestOrchestratorStart_TaskSequencing(t *testing.T) {
 }
 
 func TestOrchestratorStart_DependencyResolution(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -279,6 +282,7 @@ func TestOrchestratorStart_DependencyResolution(t *testing.T) {
 }
 
 func TestOrchestratorStart_MaxWorkersEnforced(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -346,6 +350,7 @@ func TestOrchestratorStart_MaxWorkersEnforced(t *testing.T) {
 }
 
 func TestOrchestratorStart_ErrorHandling(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -393,6 +398,7 @@ func TestOrchestratorStart_ErrorHandling(t *testing.T) {
 }
 
 func TestOrchestratorStart_StatusTracking(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -439,6 +445,7 @@ func TestOrchestratorStart_StatusTracking(t *testing.T) {
 }
 
 func TestListSessions(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -464,6 +471,7 @@ func TestListSessions(t *testing.T) {
 }
 
 func TestGetSessionWorkers(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -537,6 +545,7 @@ func waitForSessionCompletion(t *testing.T, ctx context.Context, d *db.DB, sessi
 }
 
 func TestGetSessionStatus_NotFound(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -550,6 +559,7 @@ func TestGetSessionStatus_NotFound(t *testing.T) {
 }
 
 func TestNullHelpers(t *testing.T) {
+	t.Parallel()
 	t.Run("nullString empty", func(t *testing.T) {
 		ns := nullString("")
 		if ns.Valid {
@@ -580,6 +590,7 @@ func TestNullHelpers(t *testing.T) {
 }
 
 func TestGenerateID(t *testing.T) {
+	t.Parallel()
 	id := generateID("test-")
 	if !strings.HasPrefix(id, "test-") {
 		t.Errorf("generateID prefix = %q, want test-", id)
@@ -595,6 +606,7 @@ func TestGenerateID(t *testing.T) {
 }
 
 func TestGetLatestSession(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -630,6 +642,7 @@ func TestGetLatestSession(t *testing.T) {
 }
 
 func TestListSessions_Empty(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -643,6 +656,7 @@ func TestListSessions_Empty(t *testing.T) {
 }
 
 func TestListSessions_DefaultLimit(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -657,6 +671,7 @@ func TestListSessions_DefaultLimit(t *testing.T) {
 }
 
 func TestOrchestratorStart_Cancellation(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -706,6 +721,7 @@ func TestOrchestratorStart_Cancellation(t *testing.T) {
 }
 
 func TestGetSessionWorkers_Empty(t *testing.T) {
+	// NOTE: no t.Parallel() — shared SQLite database
 	d := newTestDB(t)
 	ctx := t.Context()
 

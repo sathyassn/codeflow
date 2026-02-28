@@ -57,3 +57,35 @@ jobs:
           echo "  bash .codeflow/testing/run-all-tests.sh --mode full  # Full suite + structural"
           echo "  ./codeflow test --coverage                           # Per-file coverage"
           exit 1
+
+  test-go:
+    name: Run Go CLI Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: codeflow-cli/go.mod
+          cache: true
+          cache-dependency-path: codeflow-cli/go.sum
+
+      - name: Run Go tests with coverage
+        working-directory: codeflow-cli
+        run: make test-cover
+
+      - name: Go tests passed
+        if: success()
+        run: echo "Go CLI tests passed with coverage enforcement"
+
+      - name: Go tests failed
+        if: failure()
+        run: |
+          echo "Go CLI tests failed"
+          echo ""
+          echo "To reproduce locally:"
+          echo "  cd codeflow-cli && make test-cover"
+          exit 1

@@ -434,6 +434,208 @@ else
 fi
 
 # =============================================================================
+# GO CLI TEST + COVERAGE CHECK (config-driven)
+# =============================================================================
+# Config: codeflow-cli/config/testing/test-config.json
+# Runs Go tests and enforces per-file aggregate coverage on business packages.
+# Skipped if no Go files staged or Go toolchain unavailable.
+
+GO_FILES=$(echo "$STAGED_FILES" | grep -E '\.go$' || true)
+GO_MOD_FILE="$REPO_ROOT/codeflow-cli/go.mod"
+GO_TEST_CONFIG="$REPO_ROOT/codeflow-cli/config/testing/test-config.json"
+
+# Load config (defaults if jq or config unavailable)
+GO_THRESHOLD=85
+GO_BUSINESS_PKGS="./internal/db/... ./internal/session/... ./cmd/codeflow/... ./cmd/autorun/..."
+GO_EXCEPTION_FILES=""
+if [[ -f "$GO_TEST_CONFIG" ]] && command -v jq &>/dev/null; then
+    GO_THRESHOLD=$(jq -r '.coverage.threshold' "$GO_TEST_CONFIG")
+    GO_BUSINESS_PKGS=$(jq -r '.coverage.business_packages | join(" ")' "$GO_TEST_CONFIG")
+    GO_EXCEPTION_FILES=$(jq -r '.conventions.exceptions[]?.file // empty' "$GO_TEST_CONFIG" 2>/dev/null | tr '\n' '|')
+fi
+
+if [[ -n "$GO_FILES" ]] && [[ -f "$GO_MOD_FILE" ]] && command -v go &>/dev/null; then
+    echo "Running Go CLI tests with coverage..."
+
+    GO_COVERAGE_OUT=$(mktemp "${TMPDIR:-/tmp}/go-coverage-XXXXXX.out")
+    cleanup_go_coverage() { rm -f "${GO_COVERAGE_OUT}"; }
+    trap cleanup_go_coverage EXIT
+
+    # shellcheck disable=SC2086  # Word splitting intentional for package list
+    if ! (cd "$REPO_ROOT/codeflow-cli" && go test -coverprofile="$GO_COVERAGE_OUT" \
+        $GO_BUSINESS_PKGS \
+        -count=1 -timeout 120s) >/dev/null 2>&1; then
+        echo -e "${RED}${BOLD}❌ GO CLI TESTS FAILED${NC}" >&2
+        echo "" >&2
+        echo "Fix failing tests before committing." >&2
+        echo "Run: cd codeflow-cli && go test ./..." >&2
+        exit 1
+    fi
+
+    # Per-file aggregate coverage enforcement
+    # Parses the coverprofile directly (not go tool cover -func) to compute
+    # per-file statement coverage. The coverprofile format is:
+    #   mode: set
+    #   package/file.go:startLine.startCol,endLine.endCol numStatements count
+    # For each file, sum numStatements (total) and numStatements where count>0 (covered).
+    if command -v bc &>/dev/null; then
+        GO_COV_FAILED=0
+        GO_COV_TOTAL=$(cd "$REPO_ROOT/codeflow-cli" && go tool cover -func="$GO_COVERAGE_OUT" \
+            | grep ^total: | awk '{print $NF}' | tr -d '%')
+
+        # Compute per-file aggregate coverage from coverprofile
+        while IFS= read -r cov_line; do
+            [[ -z "$cov_line" ]] && continue
+            cov_pct=$(echo "$cov_line" | awk '{print $1}')
+            cov_file=$(echo "$cov_line" | awk '{$1=""; print substr($0,2)}')
+
+            # Extract relative path from the Go module path
+            # Coverprofile paths look like: github.com/org/repo/internal/pkg/file.go
+            rel_file=$(echo "$cov_file" | sed 's|^.*/codeflow-cli/||')
+
+            # Skip exception files
+            if [[ -n "$GO_EXCEPTION_FILES" ]] && echo "$rel_file" | grep -qE "${GO_EXCEPTION_FILES%|}"; then
+                continue
+            fi
+
+            if [ "$(echo "$cov_pct < $GO_THRESHOLD" | bc -l)" -eq 1 ]; then
+                echo -e "${RED}  FAIL: $rel_file coverage ${cov_pct}% < ${GO_THRESHOLD}%${NC}" >&2
+                GO_COV_FAILED=1
+            fi
+        done < <(awk '
+/^mode:/ { next }
+{
+    split($1, a, ":")
+    file = a[1]
+    stmts = $2
+    count = $3
+    total[file] += stmts
+    if (count > 0) covered[file] += stmts
+}
+END {
+    for (f in total) {
+        pct = (total[f] > 0) ? (covered[f] / total[f] * 100) : 0
+        printf "%.1f %s\n", pct, f
+    }
+}' "$GO_COVERAGE_OUT")
+
+        if [[ $GO_COV_FAILED -eq 1 ]]; then
+            echo -e "${RED}${BOLD}❌ GO PER-FILE COVERAGE BELOW THRESHOLD${NC}" >&2
+            echo "Some files have coverage below ${GO_THRESHOLD}%. Run: cd codeflow-cli && make test-cover" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}✓ Go CLI tests passed (aggregate: ${GO_COV_TOTAL}%, per-file ≥ ${GO_THRESHOLD}%)${NC}"
+    else
+        echo -e "${GREEN}✓ Go CLI tests passed (bc not available, coverage check skipped)${NC}"
+    fi
+elif [[ -n "$GO_FILES" ]]; then
+    echo -e "${YELLOW}⚠ Go toolchain not found, skipping Go test check${NC}"
+fi
+
+# =============================================================================
+# GO TEST FILE CONVENTION CHECK (config-driven)
+# =============================================================================
+# Ensures every staged .go source file has a corresponding _test.go file
+# that is ALSO staged. Supports exceptions from test-config.json.
+# Blocks commit (exit 1) on violation.
+
+if [[ -n "$GO_FILES" ]]; then
+    GO_MISSING_TESTS=()
+    GO_UNSTAGED_TESTS=()
+    while IFS= read -r go_file; do
+        [[ -z "$go_file" ]] && continue
+        # Skip test files, doc.go, and files outside codeflow-cli
+        [[ "$go_file" == *_test.go ]] && continue
+        [[ "$(basename "$go_file")" == "doc.go" ]] && continue
+        [[ "$go_file" != codeflow-cli/* ]] && continue
+
+        # Skip exception files from config
+        rel_path="${go_file#codeflow-cli/}"
+        if [[ -n "$GO_EXCEPTION_FILES" ]] && echo "$rel_path" | grep -qE "${GO_EXCEPTION_FILES%|}"; then
+            continue
+        fi
+
+        # Check if corresponding _test.go exists
+        test_file="${go_file%.go}_test.go"
+        if [[ ! -f "$REPO_ROOT/$test_file" ]]; then
+            GO_MISSING_TESTS+=("$go_file")
+        elif ! echo "$STAGED_FILES" | grep -qF "$test_file"; then
+            # Test file exists but is not staged with the source
+            GO_UNSTAGED_TESTS+=("$go_file")
+        fi
+    done <<< "$GO_FILES"
+
+    if [[ ${#GO_MISSING_TESTS[@]} -gt 0 ]]; then
+        echo -e "${RED}${BOLD}GO TEST FILES MISSING${NC}" >&2
+        echo "The following staged .go files have no corresponding _test.go:" >&2
+        for f in "${GO_MISSING_TESTS[@]}"; do
+            echo "  $f -> ${f%.go}_test.go" >&2
+        done
+        echo "" >&2
+        echo "Create the missing test files before committing." >&2
+        exit 1
+    fi
+
+    if [[ ${#GO_UNSTAGED_TESTS[@]} -gt 0 ]]; then
+        echo -e "${RED}${BOLD}GO TEST FILES NOT STAGED${NC}" >&2
+        echo "The following staged .go files have _test.go that is NOT staged:" >&2
+        for f in "${GO_UNSTAGED_TESTS[@]}"; do
+            echo "  $f -> ${f%.go}_test.go (exists but not staged)" >&2
+        done
+        echo "" >&2
+        echo "Stage the test files: git add <test_file>" >&2
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ All staged Go files have corresponding staged test files${NC}"
+fi
+
+# =============================================================================
+# GO TEST CONVENTION ENFORCEMENT (config-driven)
+# =============================================================================
+# BLOCKS commit on: context.Background() in tests, missing t.Parallel().
+# Escape hatches: "// NOCHECK: context.Background", "// NOTE: no t.Parallel"
+
+GO_TEST_FILES=$(echo "$STAGED_FILES" | grep -E '_test\.go$' || true)
+
+if [[ -n "$GO_TEST_FILES" ]] && command -v go &>/dev/null; then
+    echo "Checking Go test conventions..."
+    GO_CONVENTION_FAIL=0
+
+    while IFS= read -r test_file; do
+        [[ -z "$test_file" ]] && continue
+        full_path="$REPO_ROOT/$test_file"
+        [[ ! -f "$full_path" ]] && continue
+
+        # Block context.Background() unless escaped with // NOCHECK: context.Background
+        if grep -n 'context\.Background()' "$full_path" | grep -v '// NOCHECK: context\.Background' >/dev/null 2>&1; then
+            echo -e "${RED}  BLOCK $test_file: uses context.Background() (use t.Context() or add // NOCHECK: context.Background)${NC}" >&2
+            GO_CONVENTION_FAIL=1
+        fi
+
+        # Block missing t.Parallel() unless escaped with // NOTE: no t.Parallel
+        while IFS= read -r func_line; do
+            [[ -z "$func_line" ]] && continue
+            func_name=$(echo "$func_line" | sed 's/func \(Test[^ (]*\).*/\1/')
+            line_num=$(echo "$func_line" | cut -d: -f1)
+            if ! sed -n "$((line_num)),$(( line_num + 5 ))p" "$full_path" \
+                | grep -qE 't\.Parallel\(\)|// NOTE: no t\.Parallel'; then
+                echo -e "${RED}  BLOCK $test_file:$func_name: missing t.Parallel() (add t.Parallel() or // NOTE: no t.Parallel)${NC}" >&2
+                GO_CONVENTION_FAIL=1
+            fi
+        done < <(grep -n '^func Test' "$full_path")
+    done <<< "$GO_TEST_FILES"
+
+    if [[ $GO_CONVENTION_FAIL -eq 1 ]]; then
+        echo -e "${RED}${BOLD}❌ GO TEST CONVENTION CHECK FAILED${NC}" >&2
+        echo "Fix the issues above or add escape hatch comments." >&2
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ Go test convention check passed${NC}"
+fi
+
+# =============================================================================
 # TEST SUITE (Essential mode -- CRITICAL tests only)
 # =============================================================================
 # Pre-commit runs only CRITICAL tests (~10s) to keep commits fast.

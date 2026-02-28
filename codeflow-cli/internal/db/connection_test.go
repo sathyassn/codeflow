@@ -22,6 +22,7 @@ func newTestDB(t *testing.T) *DB {
 }
 
 func TestSingleton(t *testing.T) {
+	// NOTE: no t.Parallel() — modifies global singleton state via Reset()
 	t.Run("Get returns same instance", func(t *testing.T) {
 		Reset() // ensure clean state
 		t.Cleanup(Reset)
@@ -57,6 +58,7 @@ func TestSingleton(t *testing.T) {
 }
 
 func TestPRAGMAEnforcement(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -85,6 +87,7 @@ func TestPRAGMAEnforcement(t *testing.T) {
 }
 
 func TestMaxOpenConns(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	stats := d.db.Stats()
 	if stats.MaxOpenConnections != 1 {
@@ -93,6 +96,7 @@ func TestMaxOpenConns(t *testing.T) {
 }
 
 func TestInitFromSchema(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -120,6 +124,7 @@ func TestInitFromSchema(t *testing.T) {
 }
 
 func TestQuery(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -155,6 +160,7 @@ func TestQuery(t *testing.T) {
 }
 
 func TestQueryRow(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -184,6 +190,7 @@ func TestQueryRow(t *testing.T) {
 }
 
 func TestExecute(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -207,6 +214,7 @@ func TestExecute(t *testing.T) {
 }
 
 func TestTransactionCommit(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -235,6 +243,7 @@ func TestTransactionCommit(t *testing.T) {
 }
 
 func TestTransactionRollback(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -267,6 +276,7 @@ func TestTransactionRollback(t *testing.T) {
 }
 
 func TestCheckIntegrity(t *testing.T) {
+	t.Parallel()
 	t.Run("valid database passes", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -290,6 +300,7 @@ func TestCheckIntegrity(t *testing.T) {
 }
 
 func TestRetryOnBusy(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 
 	// Verify retry configuration is set.
@@ -338,6 +349,7 @@ func TestRetryOnBusy(t *testing.T) {
 }
 
 func TestGetUserVersion(t *testing.T) {
+	t.Parallel()
 	t.Run("default version is zero", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -370,6 +382,7 @@ func TestGetUserVersion(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "close.db")
 	d, err := newDB(path)
 	if err != nil {
@@ -388,6 +401,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestMigrate(t *testing.T) {
+	t.Parallel()
 	t.Run("no-op when fully migrated", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -437,6 +451,7 @@ func TestMigrate(t *testing.T) {
 }
 
 func TestNewDBInvalidPath(t *testing.T) {
+	t.Parallel()
 	// Attempting to open a directory as a DB should fail at PRAGMA execution time
 	// or when the driver rejects the path.
 	_, err := newDB(filepath.Join(t.TempDir(), "nonexistent", "sub", "test.db"))
@@ -452,6 +467,7 @@ func TestNewDBInvalidPath(t *testing.T) {
 }
 
 func TestSchemaEmbedded(t *testing.T) {
+	t.Parallel()
 	if len(schemaSQL) == 0 {
 		t.Fatal("schemaSQL is empty; go:embed failed")
 	}
@@ -461,6 +477,7 @@ func TestSchemaEmbedded(t *testing.T) {
 }
 
 func TestQueryError(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -473,6 +490,7 @@ func TestQueryError(t *testing.T) {
 }
 
 func TestExecuteError(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -484,6 +502,7 @@ func TestExecuteError(t *testing.T) {
 }
 
 func TestTransactionPanicRecovery(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -522,6 +541,7 @@ func TestTransactionPanicRecovery(t *testing.T) {
 }
 
 func TestInitFromSchemaError(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -535,6 +555,7 @@ func TestInitFromSchemaError(t *testing.T) {
 }
 
 func TestCheckIntegrityOnClosedDB(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -547,6 +568,7 @@ func TestCheckIntegrityOnClosedDB(t *testing.T) {
 }
 
 func TestGetUserVersionOnClosedDB(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -559,6 +581,7 @@ func TestGetUserVersionOnClosedDB(t *testing.T) {
 }
 
 func TestMigrateOnClosedDB(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -574,6 +597,7 @@ func TestMigrateOnClosedDB(t *testing.T) {
 }
 
 func TestTransactionBeginError(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -588,6 +612,7 @@ func TestTransactionBeginError(t *testing.T) {
 }
 
 func TestCheckIntegrityForeignKeyViolation(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -629,6 +654,7 @@ func TestCheckIntegrityForeignKeyViolation(t *testing.T) {
 }
 
 func TestCloseError(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "close-err.db")
 	d, err := newDB(path)
 	if err != nil {
@@ -646,6 +672,7 @@ func TestCloseError(t *testing.T) {
 }
 
 func TestQueryRowOnClosedDB(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -659,6 +686,7 @@ func TestQueryRowOnClosedDB(t *testing.T) {
 }
 
 func TestQueryRetryExhaustion(t *testing.T) {
+	t.Parallel()
 	// Create two DB connections to the same file. Use one to hold an exclusive
 	// lock while the other attempts a query, forcing SQLITE_BUSY retries.
 	dir := t.TempDir()
@@ -713,6 +741,7 @@ func TestQueryRetryExhaustion(t *testing.T) {
 }
 
 func TestQueryRetryExhaustionViaWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "busy2.db")
 

@@ -135,6 +135,7 @@ Execute the checklist for the assigned review mode.
 - [ ] **Correctness** -- Logic paths produce expected results
 - [ ] **Style** -- ShellCheck for `.sh` ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md)), ruff/flake8 for `.py` ([cf-python-standards](../skills/cf-python-standards/SKILL.md))
 - [ ] **Go quality** -- golangci-lint for `.go` ([cf-go-standards](../skills/cf-go-standards/SKILL.md)), race detection (`go test -race`), error wrapping, context propagation
+  - [ ] Per-file aggregate coverage meets 85% threshold for business packages (`./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`); coverage is computed from coverprofile data (not `go tool cover -func`). Threshold, package list, and exceptions are in `codeflow-cli/config/testing/test-config.json`
 - [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)
 - [ ] **Performance** -- No obvious inefficiencies
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions

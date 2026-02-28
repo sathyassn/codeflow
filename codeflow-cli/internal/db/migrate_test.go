@@ -4,9 +4,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 )
 
+func TestSetUserVersionOnClosedDB(t *testing.T) {
+	t.Parallel()
+	d := newTestDB(t)
+	ctx := t.Context()
+
+	d.db.Close()
+
+	err := d.SetUserVersion(ctx, 42)
+	if err == nil {
+		t.Fatal("expected error from SetUserVersion on closed DB, got nil")
+	}
+}
+
 func TestSetUserVersion(t *testing.T) {
+	t.Parallel()
 	t.Run("sets and reads user_version", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -66,6 +81,7 @@ func TestSetUserVersion(t *testing.T) {
 }
 
 func TestLoadMigrationsFromDir(t *testing.T) {
+	t.Parallel()
 	t.Run("loads and sorts migration files", func(t *testing.T) {
 		dir := t.TempDir()
 
@@ -165,6 +181,7 @@ func TestLoadMigrationsFromDir(t *testing.T) {
 }
 
 func TestLoadMigrationsFromEmbed(t *testing.T) {
+	t.Parallel()
 	t.Run("loads embedded migrations", func(t *testing.T) {
 		migrations, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
 		if err != nil {
@@ -224,6 +241,7 @@ func TestLoadMigrationsFromEmbed(t *testing.T) {
 }
 
 func TestApplyMigrations(t *testing.T) {
+	t.Parallel()
 	t.Run("applies all pending migrations", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -343,6 +361,7 @@ func TestApplyMigrations(t *testing.T) {
 }
 
 func TestPendingMigrations(t *testing.T) {
+	t.Parallel()
 	t.Run("returns only pending", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -403,6 +422,227 @@ func TestPendingMigrations(t *testing.T) {
 			t.Errorf("got %d pending, want 3", len(pending))
 		}
 	})
+}
+
+func TestLoadMigrationsFromDirReadError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Create a valid .sql filename but make the file unreadable.
+	badFile := filepath.Join(dir, "001_unreadable.sql")
+	writeFile(t, badFile, "SELECT 1")
+	if err := os.Chmod(badFile, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(badFile, 0o644) })
+
+	_, err := LoadMigrationsFromDir(dir)
+	if err == nil {
+		t.Error("expected error for unreadable file")
+	}
+}
+
+func TestLoadMigrationsFromDirPermissionError(t *testing.T) {
+	t.Parallel()
+	// Test the ReadDir error path (not IsNotExist).
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	_, err := LoadMigrationsFromDir(dir)
+	if err == nil {
+		t.Error("expected error for unreadable directory")
+	}
+}
+
+func TestParseMigrationFilename(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		input       string
+		wantVersion int
+		wantName    string
+		wantErr     bool
+	}{
+		{"valid simple", "001_init.sql", 1, "init", false},
+		{"valid multi-digit", "123_big_migration.sql", 123, "big_migration", false},
+		{"valid no extension in name", "005_setup", 5, "setup", false},
+		{"no underscore", "nomatch.sql", 0, "", true},
+		{"non-numeric prefix", "abc_migration.sql", 0, "", true},
+		{"empty prefix", "_migration.sql", 0, "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version, name, err := parseMigrationFilename(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for %q, got nil", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.input, err)
+			}
+			if version != tt.wantVersion {
+				t.Errorf("version = %d, want %d", version, tt.wantVersion)
+			}
+			if name != tt.wantName {
+				t.Errorf("name = %q, want %q", name, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestLoadMigrationsFromEmbedWithFakeFS(t *testing.T) {
+	t.Parallel()
+
+	t.Run("skips directories and non-sql files", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"migrations/001_real.sql":   {Data: []byte("CREATE TABLE a (id INTEGER)")},
+			"migrations/README.md":      {Data: []byte("not a migration")},
+			"migrations/subdir":         {Mode: os.ModeDir},
+			"migrations/002_also.sql":   {Data: []byte("CREATE TABLE b (id INTEGER)")},
+		}
+
+		migrations, err := LoadMigrationsFromEmbed(fakeFS)
+		if err != nil {
+			t.Fatalf("LoadMigrationsFromEmbed: %v", err)
+		}
+
+		if len(migrations) != 2 {
+			t.Fatalf("got %d migrations, want 2 (skipped dir and .md)", len(migrations))
+		}
+		if migrations[0].Version != 1 {
+			t.Errorf("first migration version = %d, want 1", migrations[0].Version)
+		}
+		if migrations[1].Version != 2 {
+			t.Errorf("second migration version = %d, want 2", migrations[1].Version)
+		}
+	})
+
+	t.Run("returns error for invalid filename", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"migrations/badname.sql": {Data: []byte("SELECT 1")},
+		}
+
+		_, err := LoadMigrationsFromEmbed(fakeFS)
+		if err == nil {
+			t.Error("expected error for invalid migration filename")
+		}
+	})
+
+	t.Run("returns error for non-numeric version", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"migrations/abc_name.sql": {Data: []byte("SELECT 1")},
+		}
+
+		_, err := LoadMigrationsFromEmbed(fakeFS)
+		if err == nil {
+			t.Error("expected error for non-numeric version prefix")
+		}
+	})
+
+	t.Run("returns error when migrations dir missing", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"other/file.txt": {Data: []byte("not migrations")},
+		}
+
+		_, err := LoadMigrationsFromEmbed(fakeFS)
+		if err == nil {
+			t.Error("expected error when migrations directory is missing")
+		}
+	})
+
+	t.Run("returns empty for empty migrations dir", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"migrations/": {Mode: os.ModeDir},
+		}
+
+		migrations, err := LoadMigrationsFromEmbed(fakeFS)
+		if err != nil {
+			t.Fatalf("LoadMigrationsFromEmbed: %v", err)
+		}
+		if len(migrations) != 0 {
+			t.Errorf("got %d migrations, want 0", len(migrations))
+		}
+	})
+
+	t.Run("parses SQL content correctly", func(t *testing.T) {
+		fakeFS := fstest.MapFS{
+			"migrations/042_setup.sql": {Data: []byte("CREATE TABLE test (id INTEGER PRIMARY KEY)")},
+		}
+
+		migrations, err := LoadMigrationsFromEmbed(fakeFS)
+		if err != nil {
+			t.Fatalf("LoadMigrationsFromEmbed: %v", err)
+		}
+
+		if len(migrations) != 1 {
+			t.Fatalf("got %d migrations, want 1", len(migrations))
+		}
+		if migrations[0].Version != 42 {
+			t.Errorf("version = %d, want 42", migrations[0].Version)
+		}
+		if migrations[0].Name != "setup" {
+			t.Errorf("name = %q, want setup", migrations[0].Name)
+		}
+		if migrations[0].SQL != "CREATE TABLE test (id INTEGER PRIMARY KEY)" {
+			t.Errorf("SQL = %q", migrations[0].SQL)
+		}
+	})
+}
+
+func TestLoadMigrationsFromEmbedContent(t *testing.T) {
+	t.Parallel()
+	// Verify that every embedded migration has non-empty SQL and a valid name.
+	migrations, err := LoadMigrationsFromEmbed(EmbeddedMigrations())
+	if err != nil {
+		t.Fatalf("LoadMigrationsFromEmbed: %v", err)
+	}
+
+	for i, m := range migrations {
+		if m.SQL == "" {
+			t.Errorf("migration[%d] (v%d %s) has empty SQL", i, m.Version, m.Name)
+		}
+		if m.Name == "" {
+			t.Errorf("migration[%d] (v%d) has empty name", i, m.Version)
+		}
+		if m.Version <= 0 {
+			t.Errorf("migration[%d] has invalid version %d", i, m.Version)
+		}
+	}
+}
+
+func TestApplyMigrationsGetVersionError(t *testing.T) {
+	t.Parallel()
+	d := newTestDB(t)
+	ctx := t.Context()
+
+	d.db.Close()
+
+	migrations := []Migration{
+		{Version: 1, Name: "test", SQL: "SELECT 1"},
+	}
+	_, err := d.ApplyMigrations(ctx, migrations)
+	if err == nil {
+		t.Fatal("expected error from ApplyMigrations on closed DB, got nil")
+	}
+}
+
+func TestPendingMigrationsOnClosedDB(t *testing.T) {
+	t.Parallel()
+	d := newTestDB(t)
+	ctx := t.Context()
+
+	d.db.Close()
+
+	_, err := d.PendingMigrations(ctx, []Migration{{Version: 1}})
+	if err == nil {
+		t.Fatal("expected error from PendingMigrations on closed DB, got nil")
+	}
 }
 
 // writeFile is a test helper that creates a file with the given content.

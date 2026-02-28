@@ -101,7 +101,7 @@ func TestTmuxWorker_SuccessfulRun(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	result, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-test",
 		WorkerID:   "arw-001",
@@ -154,7 +154,7 @@ func TestTmuxWorker_ClaudeInvocationFailure(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	result, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-test",
 		WorkerID:   "arw-001",
@@ -196,7 +196,7 @@ func TestTmuxWorker_ResultCollection(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	result, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-collect",
 		WorkerID:   "arw-collect",
@@ -237,7 +237,7 @@ func TestTmuxWorker_TimeoutHandling(t *testing.T) {
 		Timeout: 100 * time.Millisecond, // Very short timeout.
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	result, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-timeout",
 		WorkerID:   "arw-timeout",
@@ -271,7 +271,7 @@ func TestTmuxWorker_TmuxSessionCleanup(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-cleanup",
 		WorkerID:   "arw-cleanup",
@@ -309,7 +309,7 @@ func TestTmuxWorker_TmuxCreateError(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-err",
 		WorkerID:   "arw-err",
@@ -334,7 +334,7 @@ func TestTmuxWorker_TmuxSessionNaming(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-naming",
 		WorkerID:   "arw-naming",
@@ -364,7 +364,7 @@ func TestTmuxWorker_ClaudeError(t *testing.T) {
 
 	worker := NewTmuxWorker(tmux, claude)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := worker.Run(ctx, WorkerConfig{
 		SessionID:  "ars-err",
 		WorkerID:   "arw-err",

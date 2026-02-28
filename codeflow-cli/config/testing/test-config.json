@@ -1,0 +1,34 @@
+{
+  "coverage": {
+    "threshold": 85,
+    "enforcement": "per_file",
+    "business_packages": [
+      "./internal/db/...",
+      "./internal/session/...",
+      "./cmd/codeflow/...",
+      "./cmd/autorun/..."
+    ]
+  },
+  "conventions": {
+    "test_file_required": true,
+    "test_file_staged_with_source": true,
+    "t_parallel_required": true,
+    "context_background_blocked": true,
+    "exceptions": [
+      {
+        "file": "internal/autorun/worker_real.go",
+        "reason": "Thin wrapper calling real OS commands — untestable without full integration environment"
+      },
+      {
+        "file": "cmd/codeflow/update.go",
+        "function": "runUpdate",
+        "reason": "Calls update.Check (HTTP GET to GitHub releases API), update.Apply (downloads/replaces binary), and update.SyncTemplates — requires network and filesystem integration"
+      },
+      {
+        "file": "cmd/codeflow/main.go",
+        "function": "main",
+        "reason": "Entry point calls os.Exit — standard Go untestable main pattern"
+      }
+    ]
+  }
+}

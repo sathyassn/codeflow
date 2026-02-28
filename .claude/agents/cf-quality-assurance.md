@@ -105,10 +105,14 @@ Use `--mode standard` if the lead requests faster turnaround. Use `--mode essent
 **Step 2b: Run Go test suite (mandatory):**
 
 ```text
-cd codeflow-cli && go test -race -cover -count=1 ./...
+cd codeflow-cli && make test-cover
 ```
 
 This step is mandatory for every WS-QA run, not conditional on file scope. Both the shell/Python suite and Go suite must pass for WS-QA to issue a PASS verdict.
+
+`make test-cover` runs `go test ./...` with coverage profiling and enforces **85% per-file aggregate line coverage** on business packages (`./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`). Coverage is computed from the coverprofile — not `go tool cover -func`. Coverage below 85% for any file is a build failure — treat it as a FAIL finding. Threshold, business packages, and exception list are configured in `codeflow-cli/config/testing/test-config.json` (`conventions.exceptions` lists files excluded from the per-file check, such as main entry points or external process wrappers).
+
+The bridge script at `.codeflow/testing/cli/test-go-cli.sh` integrates Go test results into the shell framework's unified reporting. Go tests are registered as the `cli-go` category in `test-config.json` at MEDIUM priority.
 
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
 
@@ -496,7 +500,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Structural validation passed:** All 7 checks from Section 5.2 performed BEFORE test execution
 - [ ] 🔒 **Functional testing verified:** Tests exercise real code, not mocks of code under test (Section 5.5)
 - [ ] 🔒 **Test suite executed:** `run-all-tests.sh` ran to completion with actual output captured
-- [ ] 🔒 **Go test suite executed:** `cd codeflow-cli && go test -race -cover -count=1 ./...` ran to completion and passed
+- [ ] 🔒 **Go test suite executed:** `cd codeflow-cli && make test-cover` ran to completion, passed, and met 85% per-file aggregate coverage threshold for all business packages (threshold/exceptions from `codeflow-cli/config/testing/test-config.json`)
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails
@@ -541,3 +545,5 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell assertion library (40+ functions) |
 | Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Isolated repo root for tests |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
+| Go Test Bridge | `.codeflow/testing/cli/test-go-cli.sh` | Integrates Go test results into shell framework |
+| Go Makefile | `codeflow-cli/Makefile` | `make test-cover` (85% coverage threshold) |

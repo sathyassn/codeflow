@@ -24,6 +24,7 @@ func renderToString(t *testing.T, opts ...Option) string {
 }
 
 func TestShowFullDisplay(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithClaudeCodeVersion("v1.0.25"),
@@ -99,6 +100,7 @@ func TestShowFullDisplay(t *testing.T) {
 }
 
 func TestShowNoActiveWork(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 	)
@@ -118,6 +120,7 @@ func TestShowNoActiveWork(t *testing.T) {
 }
 
 func TestShowMissingConfig(t *testing.T) {
+	t.Parallel()
 	// Minimal call with no options — should render gracefully with defaults.
 	output := renderToString(t)
 
@@ -133,6 +136,7 @@ func TestShowMissingConfig(t *testing.T) {
 }
 
 func TestShowVersionRendering(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("1.2.3"),
 		WithClaudeCodeVersion("v2.0.0"),
@@ -147,6 +151,7 @@ func TestShowVersionRendering(t *testing.T) {
 }
 
 func TestShowBoxDrawingCorrectness(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t)
 	lines := strings.Split(output, "\n")
 
@@ -195,6 +200,7 @@ func TestShowBoxDrawingCorrectness(t *testing.T) {
 }
 
 func TestShowBlockLogoPresence(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithTermWidth(80))
 	lines := strings.Split(output, "\n")
 
@@ -213,6 +219,7 @@ func TestShowBlockLogoPresence(t *testing.T) {
 }
 
 func TestShowLogoFallbackNarrowTerminal(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithTermWidth(60), WithVersion("0.6.0"))
 
 	// Should NOT contain the full block logo.
@@ -227,6 +234,7 @@ func TestShowLogoFallbackNarrowTerminal(t *testing.T) {
 }
 
 func TestShowColorOutput(t *testing.T) {
+	t.Parallel()
 	// Show() disables color for non-terminal fds, so we test the renderer
 	// directly to verify color logic works when NoColor=false.
 	r := &renderer{
@@ -252,6 +260,7 @@ func TestShowColorOutput(t *testing.T) {
 }
 
 func TestShowNoColorMode(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithNoColor(true))
 
 	// Output should NOT contain any ANSI escape codes.
@@ -261,6 +270,7 @@ func TestShowNoColorMode(t *testing.T) {
 }
 
 func TestShowNoColorEnvVar(t *testing.T) {
+	// NOTE: no t.Parallel() -- t.Setenv is not compatible with parallel tests
 	t.Setenv("NO_COLOR", "1")
 
 	var buf bytes.Buffer
@@ -277,6 +287,7 @@ func TestShowNoColorEnvVar(t *testing.T) {
 }
 
 func TestShowUpdateNotification(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithUpdate("v1.1.0"))
 
 	if !strings.Contains(output, "UPDATE AVAILABLE") {
@@ -288,6 +299,7 @@ func TestShowUpdateNotification(t *testing.T) {
 }
 
 func TestShowNoUpdateNotification(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t)
 
 	if strings.Contains(output, "UPDATE AVAILABLE") {
@@ -296,6 +308,7 @@ func TestShowNoUpdateNotification(t *testing.T) {
 }
 
 func TestShowQuietMode(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	Show(&buf,
 		WithQuiet(true),
@@ -310,6 +323,7 @@ func TestShowQuietMode(t *testing.T) {
 }
 
 func TestShowASCIIFallback(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithASCII(true))
 
 	// Should use ASCII box characters for the frame.
@@ -337,6 +351,7 @@ func TestShowASCIIFallback(t *testing.T) {
 }
 
 func TestShowCustomQuickStart(t *testing.T) {
+	t.Parallel()
 	cmds := []QuickStartCmd{
 		{Command: "/custom-cmd", Description: "Custom command"},
 		{Command: "/another", Description: "Another one"},
@@ -352,6 +367,7 @@ func TestShowCustomQuickStart(t *testing.T) {
 }
 
 func TestShowContextAwareQuickStart(t *testing.T) {
+	t.Parallel()
 	t.Run("with active work", func(t *testing.T) {
 		output := renderToString(t,
 			WithActiveWork("TSK-001", "Test", "feat/test", time.Now()),
@@ -373,6 +389,7 @@ func TestShowContextAwareQuickStart(t *testing.T) {
 }
 
 func TestFormatTimeAgo(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		duration time.Duration
@@ -403,6 +420,7 @@ func TestFormatTimeAgo(t *testing.T) {
 }
 
 func TestVisibleLength(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -426,6 +444,7 @@ func TestVisibleLength(t *testing.T) {
 }
 
 func TestIsUTF8Terminal(t *testing.T) {
+	// NOTE: no t.Parallel() -- subtests use t.Setenv which is not compatible with parallel tests
 	t.Run("UTF-8 LANG", func(t *testing.T) {
 		t.Setenv("LANG", "en_US.UTF-8")
 		t.Setenv("LC_ALL", "")
@@ -452,6 +471,7 @@ func TestIsUTF8Terminal(t *testing.T) {
 }
 
 func TestShowProjectStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status string
 		word   string
@@ -475,6 +495,7 @@ func TestShowProjectStatus(t *testing.T) {
 }
 
 func TestShowStartedTimestamp(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithActiveWork("TSK-001", "Test task", "feat/test",
 			time.Now().Add(-2*time.Hour)),
@@ -488,6 +509,7 @@ func TestShowStartedTimestamp(t *testing.T) {
 }
 
 func TestShowEmojiInActiveWork(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithActiveWork("TSK-001", "Test", "feat/test", time.Now()),
 	)
@@ -498,6 +520,7 @@ func TestShowEmojiInActiveWork(t *testing.T) {
 }
 
 func TestDefaultQuickStart(t *testing.T) {
+	t.Parallel()
 	t.Run("with active work", func(t *testing.T) {
 		cmds := defaultQuickStart(&ActiveWork{TaskID: "TSK-001"})
 		if len(cmds) < 3 {
@@ -520,6 +543,7 @@ func TestDefaultQuickStart(t *testing.T) {
 }
 
 func TestShowNonInteractiveDisablesColor(t *testing.T) {
+	t.Parallel()
 	// When OutputFd points to a non-terminal, color should be disabled
 	// regardless of WithNoColor setting.
 	var buf bytes.Buffer
@@ -545,6 +569,7 @@ func TestShowNonInteractiveDisablesColor(t *testing.T) {
 }
 
 func TestShowLineCount(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithActiveWork("TSK-001", "Test", "feat/test", time.Now()),
@@ -562,6 +587,7 @@ func TestShowLineCount(t *testing.T) {
 }
 
 func TestRendererColorDisabled(t *testing.T) {
+	t.Parallel()
 	r := &renderer{
 		cfg: &Config{NoColor: true},
 		bc:  unicodeBox,
@@ -575,6 +601,7 @@ func TestRendererColorDisabled(t *testing.T) {
 }
 
 func TestRendererColorEnabled(t *testing.T) {
+	t.Parallel()
 	r := &renderer{
 		cfg: &Config{NoColor: false},
 		bc:  unicodeBox,
@@ -589,6 +616,7 @@ func TestRendererColorEnabled(t *testing.T) {
 }
 
 func TestShowAllBoxCharsASCII(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t, WithASCII(true))
 
 	// Verify all ASCII box characters are present.
@@ -600,6 +628,7 @@ func TestShowAllBoxCharsASCII(t *testing.T) {
 }
 
 func TestShowWithPathFlow(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithPathFlow("PF4-EXECUTE", "WS-DEV", "0"),
@@ -629,6 +658,7 @@ func TestShowWithPathFlow(t *testing.T) {
 }
 
 func TestShowWithTeam(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithTeam("inf-tsk-015-014", []string{"cf-security", "cf-knowledge-layer", "cf-git-operations"}),
@@ -652,6 +682,7 @@ func TestShowWithTeam(t *testing.T) {
 }
 
 func TestShowWithPathFlowAndTeam(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithActiveWork("INF-TSK-015-014", "Welcome V4", "feat/welcome-v4", time.Now()),
@@ -688,6 +719,7 @@ func TestShowWithPathFlowAndTeam(t *testing.T) {
 }
 
 func TestShowWithoutPathFlowOrTeam(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithVersion("0.6.0"),
 		WithActiveWork("TSK-001", "Test task", "feat/test", time.Now()),
@@ -714,6 +746,7 @@ func TestShowWithoutPathFlowOrTeam(t *testing.T) {
 }
 
 func TestShowWithTeamEmptyTeammates(t *testing.T) {
+	t.Parallel()
 	output := renderToString(t,
 		WithTeam("solo-team", nil),
 	)
@@ -727,6 +760,7 @@ func TestShowWithTeamEmptyTeammates(t *testing.T) {
 }
 
 func TestShowWithPathFlowReworkCount(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		reworkCount string
@@ -750,6 +784,7 @@ func TestShowWithPathFlowReworkCount(t *testing.T) {
 }
 
 func TestShowBranchColorInActiveWork(t *testing.T) {
+	t.Parallel()
 	// Test that branch name appears when active work is set.
 	output := renderToString(t,
 		WithActiveWork("TSK-001", "Test", "fix/bug-123", time.Now()),

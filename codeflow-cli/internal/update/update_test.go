@@ -50,16 +50,16 @@ func TestCheckNewerAvailable(t *testing.T) {
 	}
 
 	if !info.UpdateAvailable {
-		t.Error("expected UpdateAvailable=true, got false")
+		t.Error("UpdateAvailable = false, want true")
 	}
 	if info.Latest != "v2.0.0" {
-		t.Errorf("expected Latest=v2.0.0, got %s", info.Latest)
+		t.Errorf("Latest = %s, want v2.0.0", info.Latest)
 	}
 	if info.Current != "v1.0.0" {
-		t.Errorf("expected Current=v1.0.0, got %s", info.Current)
+		t.Errorf("Current = %s, want v1.0.0", info.Current)
 	}
 	if info.DownloadURL != "https://example.com/codeflow" {
-		t.Errorf("expected DownloadURL=https://example.com/codeflow, got %s", info.DownloadURL)
+		t.Errorf("DownloadURL = %s, want https://example.com/codeflow", info.DownloadURL)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestCheckAlreadyLatest(t *testing.T) {
 	}
 
 	if info.UpdateAvailable {
-		t.Error("expected UpdateAvailable=false, got true")
+		t.Error("UpdateAvailable = true, want false")
 	}
 }
 
@@ -100,7 +100,7 @@ func TestCheckNetworkError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestCheckNonOKStatus(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestCheckInvalidJSON(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestApplyAtomicReplacement(t *testing.T) {
 		t.Fatalf("reading updated binary: %v", err)
 	}
 	if string(data) != newContent {
-		t.Errorf("expected %q, got %q", newContent, string(data))
+		t.Errorf("binary content = %q, want %q", string(data), newContent)
 	}
 
 	// Verify executable permissions.
@@ -204,7 +204,7 @@ func TestApplyAlreadyLatestWithoutForce(t *testing.T) {
 
 	err := Apply(opts, info)
 	if !errors.Is(err, ErrAlreadyLatest) {
-		t.Errorf("expected ErrAlreadyLatest, got: %v", err)
+		t.Errorf("err = %v, want ErrAlreadyLatest", err)
 	}
 }
 
@@ -225,7 +225,7 @@ func TestApplyNoDownloadURL(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrUpdateFailed) {
-		t.Errorf("expected ErrUpdateFailed, got: %v", err)
+		t.Errorf("err = %v, want ErrUpdateFailed", err)
 	}
 }
 
@@ -250,7 +250,7 @@ func TestApplyDownloadError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }
 
@@ -288,7 +288,7 @@ func TestApplyForceBypassesVersionCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != "force-updated" {
-		t.Errorf("expected force-updated, got %q", string(data))
+		t.Errorf("binary content = %q, want %q", string(data), "force-updated")
 	}
 }
 
@@ -325,7 +325,7 @@ func TestSyncTemplatesUpdatesFiles(t *testing.T) {
 	}
 
 	if len(updated) != 2 {
-		t.Errorf("expected 2 updated files, got %d: %v", len(updated), updated)
+		t.Errorf("len(updated) = %d, want 2: %v", len(updated), updated)
 	}
 
 	// Verify file1.json was updated.
@@ -334,7 +334,7 @@ func TestSyncTemplatesUpdatesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != `{"a":1}` {
-		t.Errorf("expected updated content, got %q", string(data))
+		t.Errorf("file content = %q, want %q", string(data), `{"a":1}`)
 	}
 
 	// Verify file2.json was created.
@@ -343,7 +343,7 @@ func TestSyncTemplatesUpdatesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != `{"b":2}` {
-		t.Errorf("expected template content, got %q", string(data))
+		t.Errorf("file content = %q, want %q", string(data), `{"b":2}`)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestSyncTemplatesSkipsIdentical(t *testing.T) {
 	}
 
 	if len(updated) != 0 {
-		t.Errorf("expected 0 updated files for identical content, got %d", len(updated))
+		t.Errorf("len(updated) = %d, want 0 for identical content", len(updated))
 	}
 }
 
@@ -387,7 +387,7 @@ func TestSyncTemplatesEmptyTemplateDir(t *testing.T) {
 		t.Fatalf("SyncTemplates('') error: %v", err)
 	}
 	if updated != nil {
-		t.Errorf("expected nil for empty template dir, got %v", updated)
+		t.Errorf("SyncTemplates('') = %v, want nil", updated)
 	}
 }
 
@@ -403,7 +403,7 @@ func TestSyncTemplatesNonexistentDir(t *testing.T) {
 		t.Fatalf("SyncTemplates(nonexistent) error: %v", err)
 	}
 	if updated != nil {
-		t.Errorf("expected nil for nonexistent template dir, got %v", updated)
+		t.Errorf("SyncTemplates(nonexistent) = %v, want nil", updated)
 	}
 }
 
@@ -442,7 +442,7 @@ func TestCompareSemverEqual(t *testing.T) {
 		t.Fatalf("CompareSemver() error: %v", err)
 	}
 	if got != 0 {
-		t.Errorf("expected 0 for equal versions, got %d", got)
+		t.Errorf("CompareSemver(1.2.3, 1.2.3) = %d, want 0", got)
 	}
 }
 
@@ -494,7 +494,7 @@ func TestCompareSemverInvalidVersions(t *testing.T) {
 				t.Errorf("CompareSemver(%q, %q) expected error, got nil", tt.a, tt.b)
 			}
 			if !errors.Is(err, ErrInvalidVersion) {
-				t.Errorf("expected ErrInvalidVersion, got: %v", err)
+				t.Errorf("err = %v, want ErrInvalidVersion", err)
 			}
 		})
 	}
@@ -547,10 +547,10 @@ func TestCheckNoMatchingAsset(t *testing.T) {
 	}
 
 	if !info.UpdateAvailable {
-		t.Error("expected UpdateAvailable=true")
+		t.Error("UpdateAvailable = false, want true")
 	}
 	if info.DownloadURL != "" {
-		t.Errorf("expected empty DownloadURL, got %q", info.DownloadURL)
+		t.Errorf("DownloadURL = %q, want empty", info.DownloadURL)
 	}
 }
 
@@ -575,7 +575,7 @@ func TestApplyDownloadNonOKStatus(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }
 
@@ -615,7 +615,7 @@ func TestCheckCurrentNewerThanRemote(t *testing.T) {
 	}
 
 	if info.UpdateAvailable {
-		t.Error("expected UpdateAvailable=false when current is newer")
+		t.Error("UpdateAvailable = true, want false (current is newer)")
 	}
 }
 
@@ -641,7 +641,7 @@ func TestApplyCreateTempFailure(t *testing.T) {
 		t.Fatal("expected error for temp file creation failure, got nil")
 	}
 	if !errors.Is(err, ErrUpdateFailed) {
-		t.Errorf("expected ErrUpdateFailed, got: %v", err)
+		t.Errorf("err = %v, want ErrUpdateFailed", err)
 	}
 }
 
@@ -682,7 +682,7 @@ func TestApplyIOCopyFailure(t *testing.T) {
 		t.Fatal("expected error for io.Copy failure, got nil")
 	}
 	if !errors.Is(err, ErrUpdateFailed) {
-		t.Errorf("expected ErrUpdateFailed, got: %v", err)
+		t.Errorf("err = %v, want ErrUpdateFailed", err)
 	}
 
 	// Verify original binary is untouched (atomic guarantee).
@@ -691,7 +691,7 @@ func TestApplyIOCopyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != "existing" {
-		t.Errorf("expected original binary content preserved, got %q", string(data))
+		t.Errorf("binary content = %q, want %q (atomic guarantee)", string(data), "existing")
 	}
 }
 
@@ -754,6 +754,6 @@ func TestCheckDefaultHTTPGet(t *testing.T) {
 	}
 	// The error should be a network failure.
 	if !errors.Is(err, ErrNetworkFailure) {
-		t.Errorf("expected ErrNetworkFailure for nil HTTPGet, got: %v", err)
+		t.Errorf("err = %v, want ErrNetworkFailure", err)
 	}
 }

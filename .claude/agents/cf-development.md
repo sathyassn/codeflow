@@ -221,11 +221,56 @@ When assigned pipeline or deployment tasks (work type CICD):
 | Requirements unclear | Escalate to team lead: `"DEV-BLOCKED: {reason}. Need clarification on {question}"` |
 | ShellCheck SC1xxx errors | MUST fix before commit. Suppress intentionally with `# shellcheck disable=SCXXXX`. Re-lint until zero errors. |
 | Ruff/flake8 errors | MUST fix before commit. Suppress intentionally with `# noqa: FXXX`. Re-run until clean. |
-| Protected resource blocked | SendMessage to cf-security: `"handle-protected-resource {path}"` |
+| Protected resource blocked | Use the Protected Resource Staging workflow (see below) — handle independently, no cf-security delegation needed |
 | Rework from cf-review | Address EVERY issue in feedback — no skipping, no deferral, no classification as "minor". Re-test, re-request commit. |
 | Rework from cf-qa | Address EVERY failure and finding — no skipping, no deferral. Re-test, re-request commit. |
 | Test regression detected | Fix regression before proceeding. Do not commit with failing tests. |
 | Pre-commit hook rejects | Fix the issue, re-stage, create NEW commit (never amend previous). |
+
+### Protected Resource Staging Workflow
+
+When an Edit or Write call is blocked on a protected file (hook exits 2 with a protected-resource message), handle it independently using this procedure — no cf-security delegation required.
+
+**Staging path pattern:** `/tmp/claude/codeflow/managed/protected-edits/{relative-path}`
+
+Where `codeflow` is the repo basename (`CF_PROJECT_ROOT` defaults to the repo basename).
+
+**Procedure:**
+
+1. **Copy original to staging:**
+
+   ```bash
+   mkdir -p /tmp/claude/codeflow/managed/protected-edits/{parent-dirs}
+   cp {original-path} /tmp/claude/codeflow/managed/protected-edits/{relative-path}
+   ```
+
+   Example: `cp .codeflow/scripts/git-hooks/pre-commit /tmp/claude/codeflow/managed/protected-edits/.codeflow/scripts/git-hooks/pre-commit`
+
+2. **Edit the staged copy** — use Edit or Write tools on the path under `/tmp/claude/codeflow/managed/protected-edits/`. The hook's staging area exception allows these writes.
+
+3. **Write a COMPLETE modified file** — not an instruction file with line-by-line steps. The staged file must be the full, ready-to-copy file.
+
+4. **Provide the user a single reverse cp command** (copy-paste ready):
+
+   ```text
+   cp /tmp/claude/codeflow/managed/protected-edits/{relative-path} {original-path}
+   ```
+
+5. **User runs the cp command** — wait for confirmation.
+
+6. **Verify by reading the original file** — confirm the change was applied correctly.
+
+7. **Clean up the specific staged file** (not the whole directory):
+
+   ```bash
+   rm /tmp/claude/codeflow/managed/protected-edits/{relative-path}
+   ```
+
+**Key rules:**
+
+- Preserve directory structure in staging (e.g., `.claude/CLAUDE.md` → `/tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md`)
+- Never write instruction files to staging — only write the complete modified file
+- The cp command must be a single, unambiguous line the user can run directly
 
 ## Communication
 

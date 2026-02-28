@@ -7,6 +7,7 @@ import (
 )
 
 func TestStructSerialization(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		task Task
@@ -85,6 +86,7 @@ func TestStructSerialization(t *testing.T) {
 }
 
 func TestJSONFieldHandling(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		input     json.RawMessage
@@ -160,6 +162,7 @@ func TestJSONFieldHandling(t *testing.T) {
 }
 
 func TestNilSafeAccessors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		fn   func(t *testing.T)
@@ -256,6 +259,7 @@ func TestNilSafeAccessors(t *testing.T) {
 }
 
 func TestEpicSerialization(t *testing.T) {
+	t.Parallel()
 	epic := Epic{
 		ID:       "epic-01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		FormatID: "INF-EPC-015",

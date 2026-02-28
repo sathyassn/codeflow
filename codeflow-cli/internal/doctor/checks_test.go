@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/codeflow/codeflow-cli/internal/db"
 )
 
 // fakeLookPath returns a LookPath function that succeeds for the given names.
@@ -31,6 +33,7 @@ func fakeExecCommand(output string, err error) func(string, ...string) ([]byte, 
 }
 
 func TestCheckNames(t *testing.T) {
+	t.Parallel()
 	names := CheckNames()
 	if len(names) != 16 {
 		t.Fatalf("expected 16 check names, got %d", len(names))
@@ -1099,10 +1102,9 @@ func createTestDB(t *testing.T, path string) {
 	d.Close()
 }
 
-// newTestDB is a minimal wrapper to create a valid SQLite database.
-// We use the db package directly since it's an internal dependency.
+// newTestDB creates a proper SQLite database using the db package.
 func newTestDB(path string) (interface{ Close() error }, error) {
-	return newTestDBImpl(path)
+	return db.NewDB(path)
 }
 
 // setupFullFixture creates a complete project fixture for RunAll testing.

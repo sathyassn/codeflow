@@ -8,6 +8,7 @@ import (
 )
 
 func TestNormalizeEvent(t *testing.T) {
+	t.Parallel()
 	t.Run("Pattern 1: canonical event key", func(t *testing.T) {
 		raw := map[string]any{
 			"event":     "epic_created",
@@ -152,6 +153,7 @@ func TestNormalizeEvent(t *testing.T) {
 }
 
 func TestMapOpToEvent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		op    string
 		table string
@@ -181,6 +183,7 @@ func TestMapOpToEvent(t *testing.T) {
 }
 
 func TestNormalizeEventName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string
@@ -202,6 +205,7 @@ func TestNormalizeEventName(t *testing.T) {
 }
 
 func TestRenameField(t *testing.T) {
+	t.Parallel()
 	t.Run("renames existing field", func(t *testing.T) {
 		m := map[string]any{"old": "value"}
 		renameField(m, "old", "new")
@@ -238,6 +242,7 @@ func TestRenameField(t *testing.T) {
 }
 
 func TestReadAndNormalize(t *testing.T) {
+	t.Parallel()
 	t.Run("reads and normalizes valid JSONL file", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "events.jsonl")
@@ -337,6 +342,7 @@ func TestReadAndNormalize(t *testing.T) {
 }
 
 func TestReadAndNormalizeReader(t *testing.T) {
+	t.Parallel()
 	t.Run("all 4 patterns in one stream", func(t *testing.T) {
 		input := strings.NewReader(strings.Join([]string{
 			`{"event":"epic_created","id":"E-001"}`,                      // Pattern 1
@@ -379,6 +385,7 @@ func TestReadAndNormalizeReader(t *testing.T) {
 }
 
 func TestSyncFromJSONL(t *testing.T) {
+	t.Parallel()
 	t.Run("syncs events from JSONL files", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -565,6 +572,7 @@ func TestSyncFromJSONL(t *testing.T) {
 }
 
 func TestApplyEventRouting(t *testing.T) {
+	t.Parallel()
 	// Helper to create a test DB with schema initialized and a user for FK constraints.
 	setupDB := func(t *testing.T) *DB {
 		t.Helper()
@@ -1059,6 +1067,7 @@ func TestApplyEventRouting(t *testing.T) {
 }
 
 func TestCanonicalFiles(t *testing.T) {
+	t.Parallel()
 	files := CanonicalFiles()
 
 	if len(files) != 4 {
@@ -1087,6 +1096,7 @@ func TestCanonicalFiles(t *testing.T) {
 }
 
 func TestHelperFunctions(t *testing.T) {
+	t.Parallel()
 	t.Run("getString returns value for existing key", func(t *testing.T) {
 		m := map[string]any{"key": "value"}
 		if got := getString(m, "key"); got != "value" {
@@ -1162,6 +1172,152 @@ func TestHelperFunctions(t *testing.T) {
 		m := map[string]any{}
 		if got := getJSONString(m, "key"); got != "" {
 			t.Errorf("getJSONString = %q, want empty", got)
+		}
+	})
+}
+
+func TestApplyTaskCreated(t *testing.T) {
+	t.Parallel()
+	setupDB := func(t *testing.T) *DB {
+		t.Helper()
+		d := newTestDB(t)
+		ctx := t.Context()
+		if err := d.InitFromSchema(ctx); err != nil {
+			t.Fatalf("InitFromSchema: %v", err)
+		}
+		// Create domain to satisfy FK constraint on tasks.domain.
+		_, err := d.Execute(ctx,
+			"INSERT OR IGNORE INTO domains (code, name) VALUES ('GENL', 'General')")
+		if err != nil {
+			t.Fatalf("inserting domain: %v", err)
+		}
+		// Create an epic to satisfy FK constraint on tasks.epic_id.
+		_, err = d.Execute(ctx,
+			`INSERT INTO epics (id, format_id, title, area_type, work_type, domain)
+			 VALUES ('E-TC', 'INF-EPC-100', 'Test Epic', 'INF', 'FEAT', 'GENL')`)
+		if err != nil {
+			t.Fatalf("inserting epic: %v", err)
+		}
+		return d
+	}
+
+	t.Run("missing id returns error", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		err := d.applyTaskCreated(ctx, map[string]any{
+			"epic_id": "E-TC",
+			"title":   "No ID task",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing id")
+		}
+		if !strings.Contains(err.Error(), "missing id") {
+			t.Errorf("error = %v, want 'missing id'", err)
+		}
+	})
+
+	t.Run("missing epic_id returns error", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		err := d.applyTaskCreated(ctx, map[string]any{
+			"id":    "T-TC-1",
+			"title": "No epic task",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing epic_id")
+		}
+		if !strings.Contains(err.Error(), "missing epic_id") {
+			t.Errorf("error = %v, want 'missing epic_id'", err)
+		}
+	})
+
+	t.Run("format_id falls back to id", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		err := d.applyTaskCreated(ctx, map[string]any{
+			"id":        "T-TC-2",
+			"epic_id":   "E-TC",
+			"title":     "Fallback format_id",
+			"area_type": "INF",
+			"work_type": "FEAT",
+			"domain":    "GENL",
+			"timestamp": "2024-01-01T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatalf("applyTaskCreated: %v", err)
+		}
+
+		var formatID string
+		if err := d.QueryRow(ctx, "SELECT format_id FROM tasks WHERE id = 'T-TC-2'").Scan(&formatID); err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if formatID != "T-TC-2" {
+			t.Errorf("format_id = %q, want T-TC-2 (fallback to id)", formatID)
+		}
+	})
+
+	t.Run("explicit format_id is used", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		err := d.applyTaskCreated(ctx, map[string]any{
+			"id":        "T-TC-3",
+			"format_id": "INF-TSK-100-003",
+			"epic_id":   "E-TC",
+			"title":     "Explicit format_id",
+			"area_type": "INF",
+			"work_type": "FEAT",
+			"domain":    "GENL",
+			"timestamp": "2024-01-01T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatalf("applyTaskCreated: %v", err)
+		}
+
+		var formatID string
+		if err := d.QueryRow(ctx, "SELECT format_id FROM tasks WHERE id = 'T-TC-3'").Scan(&formatID); err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if formatID != "INF-TSK-100-003" {
+			t.Errorf("format_id = %q, want INF-TSK-100-003", formatID)
+		}
+	})
+
+	t.Run("default values applied for optional fields", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+
+		err := d.applyTaskCreated(ctx, map[string]any{
+			"id":        "T-TC-4",
+			"epic_id":   "E-TC",
+			"title":     "Defaults test",
+			"area_type": "INF",
+			"work_type": "FEAT",
+			"domain":    "GENL",
+			"timestamp": "2024-01-01T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatalf("applyTaskCreated: %v", err)
+		}
+
+		var status, origin, priority string
+		err = d.QueryRow(ctx,
+			"SELECT status, origin, priority FROM tasks WHERE id = 'T-TC-4'",
+		).Scan(&status, &origin, &priority)
+		if err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if status != "todo" {
+			t.Errorf("status = %q, want todo", status)
+		}
+		if origin != "planned" {
+			t.Errorf("origin = %q, want planned", origin)
+		}
+		if priority != "normal" {
+			t.Errorf("priority = %q, want normal", priority)
 		}
 	})
 }

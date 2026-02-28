@@ -46,10 +46,10 @@ func EmbeddedMigrations() embed.FS {
 	return migrationsFS
 }
 
-// LoadMigrationsFromEmbed reads .sql files from an embed.FS and parses them
+// LoadMigrationsFromEmbed reads .sql files from an fs.FS and parses them
 // into Migration structs. The FS must contain files under "migrations/"
 // following the naming convention: {NNN}_{description}.sql.
-func LoadMigrationsFromEmbed(fsys embed.FS) ([]Migration, error) {
+func LoadMigrationsFromEmbed(fsys fs.FS) ([]Migration, error) {
 	entries, err := fs.ReadDir(fsys, "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("db: reading embedded migrations: %w", err)
@@ -125,8 +125,8 @@ func parseMigrationFile(dir string, entry fs.DirEntry) (Migration, error) {
 	}, nil
 }
 
-// parseMigrationEntry reads a single migration file from an embed.FS.
-func parseMigrationEntry(fsys embed.FS, dir string, entry fs.DirEntry) (Migration, error) {
+// parseMigrationEntry reads a single migration file from an fs.FS.
+func parseMigrationEntry(fsys fs.FS, dir string, entry fs.DirEntry) (Migration, error) {
 	name := entry.Name()
 	version, baseName, err := parseMigrationFilename(name)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 )
 
 func TestTempProject(t *testing.T) {
+	t.Parallel()
 	t.Run("creates expected directory structure", func(t *testing.T) {
 		dir := TempProject(t)
 
@@ -65,6 +66,7 @@ func TestTempProject(t *testing.T) {
 }
 
 func TestCopyFixture(t *testing.T) {
+	t.Parallel()
 	t.Run("valid-project copies all contents", func(t *testing.T) {
 		dest := CopyFixture(t, "valid-project")
 
@@ -205,6 +207,7 @@ func TestCopyFixture(t *testing.T) {
 }
 
 func TestCopyDir(t *testing.T) {
+	t.Parallel()
 	t.Run("nonexistent source returns error", func(t *testing.T) {
 		dest := t.TempDir()
 		err := copyDir("/nonexistent-path-xyz-12345", dest)
@@ -282,6 +285,7 @@ func TestCopyDir(t *testing.T) {
 }
 
 func TestAssertNoError(t *testing.T) {
+	t.Parallel()
 	t.Run("nil error passes", func(t *testing.T) {
 		AssertNoError(t, nil, "should not fail")
 	})
@@ -312,6 +316,7 @@ func TestAssertNoError(t *testing.T) {
 }
 
 func TestCopyFixtureNonexistent(t *testing.T) {
+	t.Parallel()
 	// Subprocess pattern: test that CopyFixture calls t.Fatalf for a missing fixture.
 	if os.Getenv("TEST_COPY_FIXTURE_NONEXISTENT") == "1" {
 		CopyFixture(t, "absolutely-nonexistent-fixture-xyz")
@@ -329,6 +334,7 @@ func TestCopyFixtureNonexistent(t *testing.T) {
 }
 
 func TestFindModuleRoot(t *testing.T) {
+	t.Parallel()
 	t.Run("returns directory containing go.mod", func(t *testing.T) {
 		root := findModuleRoot(t)
 

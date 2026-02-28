@@ -35,6 +35,7 @@ func lookPathNotFound(file string) (string, error) {
 }
 
 func TestRunAllChecksPass(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	ctx := t.Context()
 
@@ -63,6 +64,7 @@ func TestRunAllChecksPass(t *testing.T) {
 }
 
 func TestRunMissingCodeflowDir(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Create .git/ but not .codeflow/.
 	if err := os.MkdirAll(filepath.Join(root, GitDir), 0o755); err != nil {
@@ -97,6 +99,7 @@ func TestRunMissingCodeflowDir(t *testing.T) {
 }
 
 func TestRunMissingClaudeCLI(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	ctx := t.Context()
 
@@ -126,6 +129,7 @@ func TestRunMissingClaudeCLI(t *testing.T) {
 }
 
 func TestRunNoGitRepo(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Create .codeflow/ but not .git/.
 	if err := os.MkdirAll(filepath.Join(root, CodeflowDir), 0o755); err != nil {
@@ -163,6 +167,7 @@ func TestRunNoGitRepo(t *testing.T) {
 }
 
 func TestRunStaleSessionDetected(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 
 	// Create a stale session with an old pathflow-active flag.
@@ -209,6 +214,7 @@ func TestRunStaleSessionDetected(t *testing.T) {
 }
 
 func TestRunTimingConstraint(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	ctx := t.Context()
 
@@ -235,6 +241,7 @@ func TestRunTimingConstraint(t *testing.T) {
 }
 
 func TestRunNilOptions(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	ctx := t.Context()
 
@@ -247,6 +254,7 @@ func TestRunNilOptions(t *testing.T) {
 }
 
 func TestRunReturnsStructuredResults(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	ctx := t.Context()
 
@@ -272,6 +280,7 @@ func TestRunReturnsStructuredResults(t *testing.T) {
 }
 
 func TestRunStaleSessionFreshNotDetected(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 
 	// Create a fresh session with a recent pathflow-active flag.
@@ -306,6 +315,7 @@ func TestRunStaleSessionFreshNotDetected(t *testing.T) {
 }
 
 func TestRunNoSessionDirectory(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 	// Do NOT create .state/session/ -- it should not exist.
 
@@ -325,6 +335,7 @@ func TestRunNoSessionDirectory(t *testing.T) {
 }
 
 func TestRunCodeflowDirIsFile(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Create .codeflow as a file (not a directory) -- should fail the check.
 	if err := os.WriteFile(filepath.Join(root, CodeflowDir), []byte("not a dir"), 0o644); err != nil {
@@ -350,6 +361,7 @@ func TestRunCodeflowDirIsFile(t *testing.T) {
 }
 
 func TestLevelString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		level Level
 		want  string
@@ -370,6 +382,7 @@ func TestLevelString(t *testing.T) {
 }
 
 func TestHasErrorsAndWarnings(t *testing.T) {
+	t.Parallel()
 	t.Run("no results", func(t *testing.T) {
 		if HasErrors(nil) {
 			t.Error("HasErrors should be false for nil slice")
@@ -420,6 +433,7 @@ func TestHasErrorsAndWarnings(t *testing.T) {
 }
 
 func TestRunMultipleStaleSessionsMixed(t *testing.T) {
+	t.Parallel()
 	root := setupProject(t)
 
 	// Create one stale and one fresh session.

@@ -7,6 +7,7 @@ import (
 )
 
 func TestNewQueryLogger(t *testing.T) {
+	t.Parallel()
 	t.Run("creates logger with provided slog", func(t *testing.T) {
 		d := newTestDB(t)
 		logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
@@ -34,6 +35,7 @@ func TestNewQueryLogger(t *testing.T) {
 }
 
 func TestLogQuery(t *testing.T) {
+	t.Parallel()
 	t.Run("returns query results and logs", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -137,6 +139,7 @@ func TestLogQuery(t *testing.T) {
 }
 
 func TestLogExec(t *testing.T) {
+	t.Parallel()
 	t.Run("returns rows affected and logs", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -190,6 +193,7 @@ func TestLogExec(t *testing.T) {
 }
 
 func TestTruncateQuery(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string

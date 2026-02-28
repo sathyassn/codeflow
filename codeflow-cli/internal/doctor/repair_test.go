@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -120,7 +119,7 @@ func TestRepairDatabase_ReplacesExisting(t *testing.T) {
 
 func TestRepairPermissions(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	projectDir := t.TempDir()
 	stateDir := filepath.Join(projectDir, ".state")
@@ -174,7 +173,7 @@ func TestRepairPermissions(t *testing.T) {
 
 func TestRepairConfig(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	projectDir := t.TempDir()
 
@@ -204,7 +203,7 @@ func TestRepairConfig(t *testing.T) {
 
 func TestRepairConfig_ExistingStructure(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	projectDir := t.TempDir()
 	configDir := filepath.Join(projectDir, ".codeflow", "config", "pathflow")

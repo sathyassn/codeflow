@@ -1201,6 +1201,15 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ./codeflow doctor            # Diagnose infrastructure (requires global CLI)
 ```
 
+### Go CLI Testing
+
+```text
+cd codeflow-cli && make test-cover   # Go tests + 85% business package coverage threshold
+cd codeflow-cli && make test-race    # Race detection (go test -race ./...)
+```
+
+Go tests integrate into the unified test suite via `.codeflow/testing/cli/test-go-cli.sh` (bridge script). CI runs this as the `test-go` job in `.github/workflows/test-suite.yml`. Business packages for coverage enforcement: `./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`.
+
 → See Section 9 for project file layout and Section 10 for data model
 
 ---

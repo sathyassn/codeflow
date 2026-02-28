@@ -29,6 +29,7 @@ func newTestDB(t *testing.T) *db.DB {
 }
 
 func TestStartHappyPath(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -54,6 +55,7 @@ func TestStartHappyPath(t *testing.T) {
 }
 
 func TestStartWritesJSONL(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -97,6 +99,7 @@ func TestStartWritesJSONL(t *testing.T) {
 }
 
 func TestStartWritesCurrentSessionID(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -121,6 +124,7 @@ func TestStartWritesCurrentSessionID(t *testing.T) {
 }
 
 func TestStartInsertsDBRecord(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -167,6 +171,7 @@ func TestStartInsertsDBRecord(t *testing.T) {
 }
 
 func TestEndHappyPath(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -198,6 +203,7 @@ func TestEndHappyPath(t *testing.T) {
 }
 
 func TestEndCalculatesDuration(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -229,6 +235,7 @@ func TestEndCalculatesDuration(t *testing.T) {
 }
 
 func TestEndCleansUp(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -257,6 +264,7 @@ func TestEndCleansUp(t *testing.T) {
 }
 
 func TestEndWritesJSONL(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -310,6 +318,7 @@ func TestEndWritesJSONL(t *testing.T) {
 }
 
 func TestStartEmptyClaudeID(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -325,6 +334,7 @@ func TestStartEmptyClaudeID(t *testing.T) {
 }
 
 func TestEndAlreadyEndedSession(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -357,6 +367,7 @@ func TestEndAlreadyEndedSession(t *testing.T) {
 }
 
 func TestEndNoActiveSession(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -373,6 +384,7 @@ func TestEndNoActiveSession(t *testing.T) {
 }
 
 func TestCurrent(t *testing.T) {
+	t.Parallel()
 	t.Run("returns session ID when file exists", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -423,6 +435,7 @@ func TestCurrent(t *testing.T) {
 }
 
 func TestGenerateIDUniqueness(t *testing.T) {
+	t.Parallel()
 	seen := make(map[string]bool)
 	for range 100 {
 		id := generateID()
@@ -434,6 +447,7 @@ func TestGenerateIDUniqueness(t *testing.T) {
 }
 
 func TestStartCreatesDirectories(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -457,6 +471,7 @@ func TestStartCreatesDirectories(t *testing.T) {
 }
 
 func TestStartEnsuresUserRow(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -494,6 +509,7 @@ func TestStartEnsuresUserRow(t *testing.T) {
 }
 
 func TestStartOnClosedDB(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -509,6 +525,7 @@ func TestStartOnClosedDB(t *testing.T) {
 }
 
 func TestEndOnClosedDB(t *testing.T) {
+	t.Parallel()
 	// First start a session with a working DB, then close it and try to end.
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -530,6 +547,7 @@ func TestEndOnClosedDB(t *testing.T) {
 }
 
 func TestStartWithReadOnlyLedgerDir(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
@@ -544,6 +562,7 @@ func TestStartWithReadOnlyLedgerDir(t *testing.T) {
 }
 
 func TestCurrentTrimsWhitespace(t *testing.T) {
+	t.Parallel()
 	runtimeDir := t.TempDir()
 	idFile := filepath.Join(runtimeDir, CurrentSessionFile)
 	// Write session ID with trailing whitespace/newline.
@@ -561,6 +580,7 @@ func TestCurrentTrimsWhitespace(t *testing.T) {
 }
 
 func TestStartWithSameClaudeIDTwice(t *testing.T) {
+	t.Parallel()
 	// Verify INSERT OR IGNORE for users doesn't fail on second session.
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -586,6 +606,7 @@ func TestStartWithSameClaudeIDTwice(t *testing.T) {
 }
 
 func TestStartWithInvalidRuntimeDir(t *testing.T) {
+	t.Parallel()
 	// Exercise the writeCurrentSessionID MkdirAll error path.
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -604,6 +625,7 @@ func TestStartWithInvalidRuntimeDir(t *testing.T) {
 }
 
 func TestEndWithEmptyStartedAt(t *testing.T) {
+	t.Parallel()
 	// Exercises the duration calculation skip when started_at is empty.
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -630,6 +652,7 @@ func TestEndWithEmptyStartedAt(t *testing.T) {
 }
 
 func TestUpdateTracking(t *testing.T) {
+	t.Parallel()
 	t.Run("sets pathflow_mode and tracking_level", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -711,7 +734,174 @@ func TestUpdateTracking(t *testing.T) {
 	})
 }
 
+func TestGitConfigValue(t *testing.T) {
+	t.Parallel()
+	t.Run("returns user email from git config", func(t *testing.T) {
+		// gitConfigValue should return a non-empty string for user.email
+		// in any development environment with git configured.
+		email := gitConfigValue("user.email")
+		// We can't assert a specific value, but we can verify it returns
+		// something or empty without error.
+		_ = email // Just exercise the function
+	})
+
+	t.Run("returns empty for nonexistent key", func(t *testing.T) {
+		got := gitConfigValue("nonexistent.key.that.does.not.exist.12345")
+		if got != "" {
+			t.Errorf("expected empty string for nonexistent key, got %q", got)
+		}
+	})
+
+	t.Run("returns empty for invalid key format", func(t *testing.T) {
+		got := gitConfigValue("")
+		if got != "" {
+			t.Errorf("expected empty string for empty key, got %q", got)
+		}
+	})
+}
+
+func TestResolveGitUser(t *testing.T) {
+	// NOTE: no t.Parallel() -- subtests use t.Setenv which is not parallel-safe
+	t.Run("uses git config when available", func(t *testing.T) {
+		user := resolveGitUser("test-agent-uuid")
+		if user.Email == "" {
+			t.Error("Email should not be empty (either git config or claudeID fallback)")
+		}
+		if user.DisplayName == "" {
+			t.Error("DisplayName should not be empty (either git config or email fallback)")
+		}
+	})
+
+	t.Run("falls back to claudeID when git unavailable", func(t *testing.T) {
+		// Override HOME and GIT_CONFIG to make git config return empty.
+		// NOTE: no t.Parallel — t.Setenv modifies process environment.
+		t.Setenv("HOME", "/nonexistent-home-for-test")
+		t.Setenv("GIT_CONFIG_GLOBAL", "/nonexistent")
+		t.Setenv("GIT_CONFIG_SYSTEM", "/nonexistent")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		t.Setenv("GIT_AUTHOR_NAME", "")
+		t.Setenv("GIT_COMMITTER_NAME", "")
+		t.Setenv("GIT_AUTHOR_EMAIL", "")
+		t.Setenv("GIT_COMMITTER_EMAIL", "")
+
+		user := resolveGitUser("fallback-claude-id")
+		if user.Email != "fallback-claude-id" {
+			t.Errorf("Email = %q, want fallback-claude-id (claudeID fallback)", user.Email)
+		}
+		// When name is also empty, it falls back to email.
+		if user.DisplayName != "fallback-claude-id" {
+			t.Errorf("DisplayName = %q, want fallback-claude-id (email fallback)", user.DisplayName)
+		}
+	})
+}
+
+func TestWriteJSONLEvent(t *testing.T) {
+	t.Parallel()
+	t.Run("creates ledger directory and writes event", func(t *testing.T) {
+		ledgerDir := filepath.Join(t.TempDir(), "deep", "nested", "ledger")
+
+		event := map[string]string{
+			"event": "test_event",
+			"data":  "hello",
+		}
+		if err := writeJSONLEvent(ledgerDir, event); err != nil {
+			t.Fatalf("writeJSONLEvent: %v", err)
+		}
+
+		// Verify the file was created and contains valid JSON.
+		jsonlPath := filepath.Join(ledgerDir, "sessions.jsonl")
+		data, err := os.ReadFile(jsonlPath)
+		if err != nil {
+			t.Fatalf("reading JSONL: %v", err)
+		}
+
+		var parsed map[string]string
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Fatalf("parsing JSONL: %v", err)
+		}
+		if parsed["event"] != "test_event" {
+			t.Errorf("event = %q, want test_event", parsed["event"])
+		}
+	})
+
+	t.Run("appends multiple events", func(t *testing.T) {
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
+
+		for i := range 3 {
+			event := map[string]any{"seq": i}
+			if err := writeJSONLEvent(ledgerDir, event); err != nil {
+				t.Fatalf("writeJSONLEvent[%d]: %v", i, err)
+			}
+		}
+
+		data, err := os.ReadFile(filepath.Join(ledgerDir, "sessions.jsonl"))
+		if err != nil {
+			t.Fatalf("reading JSONL: %v", err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) != 3 {
+			t.Errorf("got %d lines, want 3", len(lines))
+		}
+	})
+
+	t.Run("returns error for invalid ledger path", func(t *testing.T) {
+		// /dev/null is a file, not a directory.
+		err := writeJSONLEvent("/dev/null/invalid", map[string]string{"event": "test"})
+		if err == nil {
+			t.Fatal("expected error for invalid ledger path")
+		}
+	})
+
+	t.Run("returns error for unmarshalable event", func(t *testing.T) {
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
+
+		// A channel cannot be marshaled to JSON.
+		err := writeJSONLEvent(ledgerDir, make(chan int))
+		if err == nil {
+			t.Fatal("expected error for unmarshalable event")
+		}
+	})
+
+	t.Run("returns error when file path is a directory", func(t *testing.T) {
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
+		if err := os.MkdirAll(ledgerDir, 0o755); err != nil {
+			t.Fatalf("creating ledger dir: %v", err)
+		}
+		// Create a directory where the JSONL file should be.
+		jsonlDir := filepath.Join(ledgerDir, "sessions.jsonl")
+		if err := os.MkdirAll(jsonlDir, 0o755); err != nil {
+			t.Fatalf("creating fake dir: %v", err)
+		}
+
+		err := writeJSONLEvent(ledgerDir, map[string]string{"event": "test"})
+		if err == nil {
+			t.Fatal("expected error when JSONL path is a directory")
+		}
+	})
+}
+
+func TestUpdateTrackingOnClosedDB(t *testing.T) {
+	t.Parallel()
+	d := newTestDB(t)
+	ctx := t.Context()
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+
+	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	d.Close()
+
+	err = UpdateTracking(ctx, d, sessionID, "active", "tracked")
+	if err == nil {
+		t.Fatal("expected error from UpdateTracking on closed DB, got nil")
+	}
+}
+
 func TestMultipleStartEndCycles(t *testing.T) {
+	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")

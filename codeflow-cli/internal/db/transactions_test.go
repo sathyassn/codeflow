@@ -5,6 +5,7 @@ import (
 )
 
 func TestExecWithResult(t *testing.T) {
+	t.Parallel()
 	t.Run("returns rows affected and last insert ID", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -105,6 +106,7 @@ func TestExecWithResult(t *testing.T) {
 }
 
 func TestBatchExec(t *testing.T) {
+	t.Parallel()
 	t.Run("executes multiple statements in transaction", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -226,6 +228,7 @@ func TestBatchExec(t *testing.T) {
 }
 
 func TestInsertRow(t *testing.T) {
+	t.Parallel()
 	t.Run("inserts single row", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()

@@ -302,6 +302,11 @@
       "directory": "claude-hooks/user-prompt-submit",
       "description": "Claude Code UserPromptSubmit hook tests",
       "language": "bash"
+    },
+    "cli-go": {
+      "directory": "cli",
+      "description": "Go CLI bridge tests (build, smoke, unit tests, coverage)",
+      "language": "go"
     }
   },
   "pre_commit": {

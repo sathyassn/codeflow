@@ -18,8 +18,8 @@ description: Go development standards, patterns, and validation reference. Cover
 - Define standard package structure, naming, and interface conventions
 - Document common patterns (CLI entry, error handling, JSON, concurrency)
 - Specify lint configuration and rules
+- Defines testing standards and conventions (see `apply-testing`)
 - NOT: Linting execution (cf-development SOPs run `golangci-lint`)
-- NOT: Test writing (cf-quality-assurance handles test implementation)
 
 ## Decision Tree
 
@@ -29,7 +29,8 @@ Working with .go file:
 ├── Editing existing?       → Check conventions
 │   ├── Naming/types?       → apply-conventions
 │   ├── Logic/patterns?     → apply-patterns
-│   └── Goroutines/channels?→ apply-concurrency
+│   ├── Goroutines/channels?→ apply-concurrency
+│   └── Writing tests?      → apply-testing
 └── Before commit?          → validate-package
 ```
 
@@ -41,7 +42,8 @@ Working with .go file:
 | 2 | apply-conventions | ENF-L3 Advisory | Naming, types, interfaces, error handling, imports |
 | 3 | apply-patterns | ENF-L3 Advisory | Common patterns and anti-patterns |
 | 4 | apply-concurrency | ENF-L3 Advisory | Goroutines, channels, sync, context, race safety |
-| 5 | validate-package | ENF-L3 Advisory | Lint, format, vet, test coverage rules |
+| 5 | apply-testing | ENF-L3 Advisory | Test file organization, naming, table-driven tests, helpers, coverage |
+| 6 | validate-package | ENF-L3 Advisory | Lint, format, vet, test coverage rules |
 
 ## Operation Details
 
@@ -244,9 +246,11 @@ Common Patterns:
   | Paths            | filepath.Join for OS paths, path.Join for URLs. filepath.WalkDir.       |
   | Database         | sql.DB is a pool (don't open/close per query). context.Context for all. |
   | HTTP             | http.Client with timeouts. Never use http.DefaultClient in production.  |
-  | Testing          | Table-driven with t.Run(). t.Helper() on helpers. t.TempDir(). t.Context() (Go 1.24+). |
   | Benchmarks       | b.Loop() (Go 1.24+) instead of for i := 0; i < b.N; i++               |
   | String building  | strings.Builder for concatenation in loops.                             |
+
+  Testing conventions → see apply-testing for complete reference (table-driven tests,
+  t.Helper(), t.TempDir(), t.Context(), naming, coverage, anti-patterns).
 
 Anti-Patterns:
 
@@ -262,9 +266,10 @@ Anti-Patterns:
   | Global sql.DB                             | Dependency injection via struct field or parameter    |
   | interface{} / any overuse                 | Use generics (Go 1.18+) or specific types            |
   | Ignoring context.Context                  | Pass context as first parameter to all I/O functions  |
-  | time.Sleep in tests                       | testing/synctest (Go 1.25+) or channels              |
   | os.MkdirAll without error check           | Always check error, include path in error message    |
   | Mutable default args (slice/map literals) | Accept nil + allocate inside function                |
+
+  Test anti-patterns (time.Sleep, os.Setenv, testify, etc.) → see apply-testing.
 
 Procedure:
   1. Check implementation against common patterns table
@@ -347,8 +352,7 @@ Race Detection:
 
   ALWAYS run go test -race ./... before commit.
   Tests must pass with -race flag.
-  Use t.Setenv() instead of os.Setenv() in tests (avoids race).
-  Use testing/synctest (Go 1.25+) for deterministic concurrent tests.
+  See apply-testing for test-specific conventions (t.Setenv, testing/synctest).
 
 Signal Handling (CLI):
 
@@ -365,11 +369,136 @@ Procedure:
 Output: Concurrent code with proper cancellation, synchronization, and race safety
 ```
 
+### apply-testing
+
+```text
+When: Writing or editing test files (_test.go), setting coverage targets, or reviewing test quality
+Purpose: Apply consistent Go testing conventions — file layout, naming, table-driven tests, helpers, and anti-patterns
+Enforcement: ENF-L3 Advisory
+
+File Organization:
+
+  - Source file foo.go → test file foo_test.go in same directory, same package
+  - doc.go files do not need tests
+  - testutil/ packages contain shared test helpers (not tested themselves)
+  - testdata/ directory for test fixtures (ignored by go build and go test compilation)
+
+Test Function Naming:
+
+  | Element                        | Convention                                 | Example                       |
+  |--------------------------------|--------------------------------------------|-------------------------------|
+  | Function FuncName()            | TestFuncName(t *testing.T)                 | TestOpenDatabase              |
+  | Method Bar() on type Foo       | TestFoo_Bar(t *testing.T)                  | TestDB_Query                  |
+  | Subtest case                   | t.Run("descriptive_case", func(...) {...}) | t.Run("empty_input", ...)     |
+  | Benchmark                      | BenchmarkFuncName(b *testing.B)            | BenchmarkParseArgs            |
+  | Example (with output check)    | ExampleFuncName() + // Output: comment     | ExampleNewConfig              |
+
+  Underscores are allowed in test names — exception to the general Go naming rules.
+
+Table-Driven Tests (preferred pattern):
+
+  tests := []struct {
+      name  string
+      input Type
+      want  Type
+  }{
+      {"valid input", validIn, validOut},
+      {"empty input", emptyIn, emptyOut},
+  }
+  for _, tt := range tests {
+      t.Run(tt.name, func(t *testing.T) {
+          got := FuncName(tt.input)
+          if got != tt.want {
+              t.Errorf("FuncName(%v) = %v, want %v", tt.input, got, tt.want)
+          }
+      })
+  }
+
+Error Reporting:
+
+  - got/want ordering: t.Errorf("FuncName() = %v, want %v", got, want)
+  - Use t.Error/t.Errorf to continue running after failure (non-fatal)
+  - Use t.Fatal/t.Fatalf only when continuing is meaningless (e.g., nil pointer would panic)
+  - Include function name in all error messages
+  - For complex structs, use cmp.Diff from github.com/google/go-cmp:
+      if diff := cmp.Diff(want, got); diff != "" {
+          t.Errorf("FuncName() mismatch (-want +got):\n%s", diff)
+      }
+
+Test Helpers:
+
+  - Mark helpers with t.Helper() as first line — improves failure line attribution
+  - t.TempDir() for temp directories (auto-cleaned on test completion)
+  - t.Cleanup(func() { ... }) for teardown registration
+  - t.Setenv("KEY", "value") for environment variables (auto-restored after test)
+  - t.Context() for test-scoped context (Go 1.24+, cancelled on test completion)
+  - t.Parallel() for tests that can run concurrently (no shared mutable state)
+    SQLite tests: use t.TempDir() to give each test an isolated DB file, then t.Parallel() is safe
+
+Anti-Patterns (DO NOT):
+
+  | Anti-Pattern                              | Correct Alternative                                  |
+  |-------------------------------------------|------------------------------------------------------|
+  | Custom assertion helpers or assert libs   | stdlib testing only — t.Error/t.Fatal                |
+  | testify, gomega, or other frameworks      | stdlib testing only                                  |
+  | _test package suffix for internal code    | Same package as code under test (exception: external API tests) |
+  | time.Sleep in tests                       | testing/synctest (Go 1.25+) for deterministic concurrent tests |
+  | os.Setenv in tests                        | t.Setenv() (auto-restored, avoids race conditions)   |
+  | Manual temp dir + cleanup                 | t.TempDir() (auto-cleaned)                           |
+  | Test-specific init() functions            | Explicit setup in TestMain or per-test setup         |
+
+Coverage:
+
+  Business packages (./internal/db/..., ./internal/session/..., ./cmd/codeflow/..., ./cmd/autorun/...):
+    85% per-file aggregate line coverage threshold enforced by make test-cover.
+    Coverage is computed from coverprofile data — NOT go tool cover -func (which is for
+    inspection only, not enforcement). Threshold, business packages, and exceptions are
+    configured in codeflow-cli/config/testing/test-config.json.
+    conventions.exceptions lists files excluded from the per-file check (e.g., main entry
+    points, external process wrappers that are genuinely untestable).
+
+  Commands to run:
+    go test -coverprofile=coverage.out ./...
+    go tool cover -func=coverage.out        # inspection only, not enforcement
+    make test-cover                          # enforces 85% per-file aggregate threshold
+
+  Race detection (always):
+    go test -race ./...                      # mandatory before commit and in CI
+
+Integration with Shell Test Framework:
+
+  - Go tests are native — discovered by go test ./...
+  - Bridge script (test-go-cli.sh) translates go test output to shell framework's
+    test_pass/test_fail functions for unified reporting
+  - Registered in test-config.json as cli-go category at MEDIUM priority
+  - CRITICAL/HIGH/MEDIUM/LOW priority categories apply to shell test suites only —
+    individual Go tests do not carry these labels
+  - Pre-commit hook runs make test-cover + test file convention check
+
+Pre-Commit Convention Check:
+
+  Every *.go file in codeflow-cli/ (excluding *_test.go, doc.go, testutil/) must have
+  a corresponding *_test.go file. Enforced by the pre-commit hook alongside make test-cover.
+
+Procedure:
+  1. Verify _test.go file exists alongside each source file (not doc.go or testutil/)
+  2. Use TestFuncName / TestType_Method naming for all test functions
+  3. Implement table-driven tests with t.Run() for multi-case scenarios
+  4. Mark all test helpers with t.Helper() as the first statement
+  5. Replace any time.Sleep with testing/synctest; replace os.Setenv with t.Setenv
+  6. Replace any testify/gomega with stdlib testing assertions
+  7. Verify coverage meets 85% threshold: make test-cover
+  8. Run with race detector: go test -race ./...
+
+Output: Test files following consistent naming, table-driven patterns, stdlib-only assertions, and coverage thresholds
+```
+
 ### validate-package
 
 ```text
 When: Before committing Go packages or during pre-commit checks
 Purpose: Run lint, format, vet, and coverage checks
+See also: apply-testing for test conventions and anti-patterns
 Enforcement: ENF-L3 Advisory
 
 Lint / Format / Vet Rules:

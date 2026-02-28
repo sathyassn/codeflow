@@ -6,6 +6,7 @@ import (
 )
 
 func TestQueryToJSON(t *testing.T) {
+	t.Parallel()
 	t.Run("returns JSON array from SELECT", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -124,6 +125,7 @@ func TestQueryToJSON(t *testing.T) {
 }
 
 func TestQueryToMaps(t *testing.T) {
+	t.Parallel()
 	t.Run("returns maps from SELECT", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -150,6 +152,67 @@ func TestQueryToMaps(t *testing.T) {
 		}
 	})
 
+	t.Run("handles parameterized queries", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+
+		_, err := d.db.ExecContext(ctx, `
+			CREATE TABLE kv2 (key TEXT, val TEXT);
+			INSERT INTO kv2 VALUES ('x', 'one');
+			INSERT INTO kv2 VALUES ('y', 'two');
+		`)
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+
+		results, err := d.QueryToMaps(ctx, "SELECT val FROM kv2 WHERE key = ?", "y")
+		if err != nil {
+			t.Fatalf("QueryToMaps: %v", err)
+		}
+
+		if len(results) != 1 {
+			t.Fatalf("got %d rows, want 1", len(results))
+		}
+		if results[0]["val"] != "two" {
+			t.Errorf("val = %v, want two", results[0]["val"])
+		}
+	})
+
+	t.Run("converts byte arrays to strings", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+
+		_, err := d.db.ExecContext(ctx, `
+			CREATE TABLE blobs2 (id INTEGER PRIMARY KEY, data BLOB);
+			INSERT INTO blobs2 (data) VALUES (x'48656c6c6f');
+		`)
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+
+		results, err := d.QueryToMaps(ctx, "SELECT data FROM blobs2")
+		if err != nil {
+			t.Fatalf("QueryToMaps: %v", err)
+		}
+
+		if len(results) != 1 {
+			t.Fatalf("got %d rows, want 1", len(results))
+		}
+		if _, ok := results[0]["data"].(string); !ok {
+			t.Errorf("expected string type for blob, got %T", results[0]["data"])
+		}
+	})
+
+	t.Run("returns error for invalid SQL", func(t *testing.T) {
+		d := newTestDB(t)
+		ctx := t.Context()
+
+		_, err := d.QueryToMaps(ctx, "SELECT * FROM nonexistent_table_maps")
+		if err == nil {
+			t.Error("expected error for nonexistent table")
+		}
+	})
+
 	t.Run("returns empty slice for no rows", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -171,6 +234,7 @@ func TestQueryToMaps(t *testing.T) {
 }
 
 func TestCountRows(t *testing.T) {
+	t.Parallel()
 	t.Run("counts rows correctly", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
@@ -236,6 +300,7 @@ func TestCountRows(t *testing.T) {
 }
 
 func TestIsValidIdentifier(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
