@@ -45,14 +45,15 @@ func writeMinimalConfig(t *testing.T, dir string) string {
 				"tasks": []any{
 					map[string]any{"id": "PF3-TSK-01"},
 					map[string]any{"id": "PF3-TSK-02"},
-					map[string]any{"id": "PF3-TSK-03", "condition": "adhoc_only"},
+					map[string]any{"id": "PF3-TSK-03"},
 				},
 			},
 			"PF4-EXECUTE": map[string]any{
-				"required_tasks": []string{"PF4-TSK-01", "PF4-TSK-02"},
+				"required_tasks": []string{"PF4-TSK-01", "PF4-TSK-02", "PF4-TSK-07"},
 				"tasks": []any{
-					map[string]any{"id": "PF4-TSK-01"},
-					map[string]any{"id": "PF4-TSK-02", "condition": "if_pipeline_includes_qa"},
+					map[string]any{"id": "PF4-TSK-01", "condition": "adhoc_only"},
+					map[string]any{"id": "PF4-TSK-02"},
+					map[string]any{"id": "PF4-TSK-07", "condition": "if_pipeline_includes_qa"},
 				},
 			},
 			"PF5-VERIFY": map[string]any{
@@ -166,14 +167,14 @@ func TestCheckpoint_InitAllPhases(t *testing.T) {
 			t.Fatalf("reading checkpoint: %v", err)
 		}
 
-		// PF3-TSK-03 has condition "adhoc_only".
-		if got := cf.Phases["PF3"].Conditions["PF3-TSK-03"]; got != "adhoc_only" {
-			t.Errorf("PF3-TSK-03 condition = %q, want %q", got, "adhoc_only")
+		// PF4-TSK-01 has condition "adhoc_only".
+		if got := cf.Phases["PF4"].Conditions["PF4-TSK-01"]; got != "adhoc_only" {
+			t.Errorf("PF4-TSK-01 condition = %q, want %q", got, "adhoc_only")
 		}
 
-		// PF4-TSK-02 has condition "if_pipeline_includes_qa".
-		if got := cf.Phases["PF4"].Conditions["PF4-TSK-02"]; got != "if_pipeline_includes_qa" {
-			t.Errorf("PF4-TSK-02 condition = %q, want %q", got, "if_pipeline_includes_qa")
+		// PF4-TSK-07 has condition "if_pipeline_includes_qa".
+		if got := cf.Phases["PF4"].Conditions["PF4-TSK-07"]; got != "if_pipeline_includes_qa" {
+			t.Errorf("PF4-TSK-07 condition = %q, want %q", got, "if_pipeline_includes_qa")
 		}
 	})
 
@@ -694,9 +695,9 @@ func TestIsPhaseComplete(t *testing.T) {
 	t.Run("auto-skip if_pipeline_includes_qa for DOCS", func(t *testing.T) {
 		t.Parallel()
 		pc := &PhaseCheckpoint{
-			Expected:   []string{"PF4-TSK-01", "PF4-TSK-02"},
-			Conditions: map[string]string{"PF4-TSK-02": "if_pipeline_includes_qa"},
-			Completed:  map[string]string{"PF4-TSK-01": "t1"},
+			Expected:   []string{"PF4-TSK-05", "PF4-TSK-07"},
+			Conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
+			Completed:  map[string]string{"PF4-TSK-05": "t1"},
 			Skipped:    map[string]string{},
 		}
 
@@ -711,9 +712,9 @@ func TestIsPhaseComplete(t *testing.T) {
 	t.Run("no auto-skip if_pipeline_includes_qa for FEAT", func(t *testing.T) {
 		t.Parallel()
 		pc := &PhaseCheckpoint{
-			Expected:   []string{"PF4-TSK-01", "PF4-TSK-02"},
-			Conditions: map[string]string{"PF4-TSK-02": "if_pipeline_includes_qa"},
-			Completed:  map[string]string{"PF4-TSK-01": "t1"},
+			Expected:   []string{"PF4-TSK-05", "PF4-TSK-07"},
+			Conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
+			Completed:  map[string]string{"PF4-TSK-05": "t1"},
 			Skipped:    map[string]string{},
 		}
 		ctx := map[string]string{"work_type": "FEAT"}
@@ -725,9 +726,9 @@ func TestIsPhaseComplete(t *testing.T) {
 	t.Run("no auto-skip without context", func(t *testing.T) {
 		t.Parallel()
 		pc := &PhaseCheckpoint{
-			Expected:   []string{"PF3-TSK-01", "PF3-TSK-03"},
-			Conditions: map[string]string{"PF3-TSK-03": "adhoc_only"},
-			Completed:  map[string]string{"PF3-TSK-01": "t1"},
+			Expected:   []string{"PF4-TSK-01", "PF4-TSK-02"},
+			Conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
+			Completed:  map[string]string{"PF4-TSK-02": "t1"},
 			Skipped:    map[string]string{},
 		}
 		if IsPhaseComplete(pc, nil) {

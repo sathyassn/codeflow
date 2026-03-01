@@ -123,15 +123,15 @@
       "name": "Work Classification",
       "phase_order": 3,
       "execution_order": "sequential",
-      "execution_order_note": "Tasks must execute in order: classify work type, spawn cf-git-operations, create branch, register task (conditional), begin work. No parallelism.",
-      "subject": "PF3-CLASSIFY: Classify and register work",
-      "description": "Classify work type, register task in WorkGraph, create branch. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "execution_order_note": "Tasks must execute in order: classify work type, spawn cf-git-operations, create branch. No parallelism. Task registration and begin-work moved to PF4-EXECUTE to avoid circular dependency with pf-3 sentinel.",
+      "subject": "PF3-CLASSIFY: Classify and create branch",
+      "description": "Classify work type, create branch (unlocks Edit/Write). Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
       "activeForm": "Classifying work and creating branch",
       "task_tracker": {
         "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
         "blocked_by_enforcement": "⛔ MANDATORY: When creating task tracker entries, apply each task's blocked_by field using TaskUpdate(addBlockedBy=[...]) IMMEDIATELY after TaskCreate. Every blocked_by in the config MUST be reflected in the task tracker. Omitting blocked_by breaks ordering visibility and causes downstream stages to execute out of order.",
         "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
-        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF3-TSK-01, PF3-TSK-02, PF3-TSK-03, PF3-TSK-04, PF3-TSK-05)",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF3-TSK-01, PF3-TSK-02, PF3-TSK-03)",
         "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
         "on_phase_complete": "TaskUpdate status=completed for the phase entry"
       },
@@ -171,10 +171,35 @@
           "operation": "create-feature-branch",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF3-TSK-02] when creating this task in the tracker.",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
-        },
+        }
+      ],
+      "required_tasks": [
+        "PF3-TSK-01",
+        "PF3-TSK-02",
+        "PF3-TSK-03"
+      ]
+    },
+    "PF4-EXECUTE": {
+      "name": "Work Execution",
+      "phase_order": 4,
+      "execution_order": "parallel_stages_allowed",
+      "execution_order_note": "⛔ MANDATORY: PF4-TSK-01 (register-task, conditional) and PF4-TSK-02 (begin-work) run first as sequential prerequisites — these were moved from PF3 to avoid circular dependency with the pf-3 sentinel. PF4-TSK-03 (lookup-pipeline) and PF4-TSK-04 (validate-task-fields) are also sequential prerequisites before stage execution begins. Within a stage, parallel batch execution MUST be used when scope involves multiple independent items. Assess file count against batch_size BEFORE spawning any stage teammate — if file count exceeds batch_size, spawn parallel instances up to max_parallel. Do NOT default to single-instance execution when parallel batching applies. Stages themselves follow pipeline order (e.g., WS-DEV before WS-REV before WS-QA).",
+      "subject": "PF4-EXECUTE: Run work pipeline",
+      "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
+      "activeForm": "Executing work pipeline",
+      "notes": "All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END. No teammate is shut down between stages or after pipeline completion. On-demand teammates stay alive through PF5-VERIFY and PF6-COMPLETE, then are shut down at PF7-END alongside persistent teammates. This preserves context for rework loops and avoids expensive re-spawns. ⛔ MANDATORY PARALLELIZATION: Before spawning any primary stage teammate, the team lead MUST assess whether the work scope involves multiple independent items. If file count exceeds batch_size for the stage, spawn parallel instances — do NOT assign all work to a single teammate. Context exhaustion from overloading one teammate costs more than coordination overhead. Default to parallel when in doubt.",
+      "task_tracker": {
+        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
+        "blocked_by_enforcement": "⛔ MANDATORY: When creating task tracker entries, apply each task's blocked_by field using TaskUpdate(addBlockedBy=[...]) IMMEDIATELY after TaskCreate. Every blocked_by in the config MUST be reflected in the task tracker. Omitting blocked_by breaks ordering visibility and causes downstream stages to execute out of order.",
+        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
+        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF4-TSK-01, PF4-TSK-02, PF4-TSK-03, PF4-TSK-04, PF4-TSK-05, PF4-TSK-06, PF4-TSK-07); also TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA, etc.)",
+        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
+        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
+      },
+      "tasks": [
         {
-          "id": "PF3-TSK-04",
-          "task_order": 4,
+          "id": "PF4-TSK-01",
+          "task_order": 1,
           "blocked_by": [
             "PF3-TSK-03"
           ],
@@ -186,65 +211,14 @@
           "enforcement_note": "Evaluate the condition field first. If condition applies: MUST execute, mark completed after success. If condition does not apply: mark skipped. Skipping without evaluating the condition is a PROTOCOL VIOLATION."
         },
         {
-          "id": "PF3-TSK-05",
-          "task_order": 5,
-          "blocked_by": [
-            "PF3-TSK-04"
-          ],
-          "description": "Begin work session by writing begin_work event to ledger",
-          "assigned_to": "cf-knowledge-layer",
-          "operation": "begin-work",
-          "blocked_by_enforcement": "Enforce addBlockedBy: [PF3-TSK-04] when creating this task in the tracker.",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
-        }
-      ],
-      "required_tasks": [
-        "PF3-TSK-01",
-        "PF3-TSK-02",
-        "PF3-TSK-03",
-        "PF3-TSK-04",
-        "PF3-TSK-05"
-      ]
-    },
-    "PF4-EXECUTE": {
-      "name": "Work Execution",
-      "phase_order": 4,
-      "execution_order": "parallel_stages_allowed",
-      "execution_order_note": "⛔ MANDATORY: Within a stage, parallel batch execution MUST be used when scope involves multiple independent items. Assess file count against batch_size BEFORE spawning any stage teammate — if file count exceeds batch_size, spawn parallel instances up to max_parallel. Do NOT default to single-instance execution when parallel batching applies. Stages themselves follow pipeline order (e.g., WS-DEV before WS-REV before WS-QA). Tasks PF4-TSK-01 and PF4-TSK-02 are sequential prerequisites before stage execution begins.",
-      "subject": "PF4-EXECUTE: Run work pipeline",
-      "description": "Execute stage pipeline for {work_type}: {pipeline}. Phase: {phase_id}, Task: {task_id}, Session: {session_id}.",
-      "activeForm": "Executing work pipeline",
-      "notes": "All on-demand teammates spawned during PF4-EXECUTE remain active until PF7-END. No teammate is shut down between stages or after pipeline completion. On-demand teammates stay alive through PF5-VERIFY and PF6-COMPLETE, then are shut down at PF7-END alongside persistent teammates. This preserves context for rework loops and avoids expensive re-spawns. ⛔ MANDATORY PARALLELIZATION: Before spawning any primary stage teammate, the team lead MUST assess whether the work scope involves multiple independent items. If file count exceeds batch_size for the stage, spawn parallel instances — do NOT assign all work to a single teammate. Context exhaustion from overloading one teammate costs more than coordination overhead. Default to parallel when in doubt.",
-      "task_tracker": {
-        "enforcement": "⛔ MANDATORY: The team lead MUST create INDIVIDUAL task tracker entries for EACH task listed below using TaskCreate, and update EACH with TaskUpdate as they complete. Clubbing multiple tasks into a single entry, skipping task registration, or deferring registration is a PROTOCOL VIOLATION that breaks phase visibility, dependency tracking, and stage ordering. Failure to register tasks individually WILL cause downstream phase gates to lose ordering context and review stages to miss acceptance criteria. Register each task BEFORE starting it, mark it in_progress when work begins, and completed when done. NO EXCEPTIONS.",
-        "blocked_by_enforcement": "⛔ MANDATORY: When creating task tracker entries, apply each task's blocked_by field using TaskUpdate(addBlockedBy=[...]) IMMEDIATELY after TaskCreate. Every blocked_by in the config MUST be reflected in the task tracker. Omitting blocked_by breaks ordering visibility and causes downstream stages to execute out of order.",
-        "on_phase_enter": "TaskCreate(subject, description, activeForm) — one entry for this phase",
-        "per_task": "TaskCreate one entry per task ID in tasks[] below (PF4-TSK-01, PF4-TSK-02, PF4-TSK-03, PF4-TSK-04, PF4-TSK-05); also TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA, etc.)",
-        "on_task_complete": "TaskUpdate status=completed for each task entry as it finishes",
-        "on_phase_complete": "TaskUpdate status=completed for the phase entry"
-      },
-      "tasks": [
-        {
-          "id": "PF4-TSK-01",
-          "task_order": 1,
-          "blocked_by": [
-            "PF3-TSK-05"
-          ],
-          "description": "Lookup the work stage pipeline for the classified work_type from the work_type_stages table in this config (e.g., FEAT → WS-DEV, WS-REV, WS-QA). This determines which teammates to spawn and in what order during PF4-EXECUTE.",
-          "assigned_to": "team-lead",
-          "operation": "Lookup pipeline from work_type_stages in this config",
-          "blocked_by_enforcement": "Enforce addBlockedBy: [PF3-TSK-05] when creating this task in the tracker.",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
-        },
-        {
           "id": "PF4-TSK-02",
           "task_order": 2,
           "blocked_by": [
             "PF4-TSK-01"
           ],
-          "description": "Validate task and epic fields before work starts",
+          "description": "Begin work session by writing begin_work event to ledger",
           "assigned_to": "cf-knowledge-layer",
-          "operation": "validate-task-fields",
+          "operation": "begin-work",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-01] when creating this task in the tracker.",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
@@ -254,9 +228,9 @@
           "blocked_by": [
             "PF4-TSK-02"
           ],
-          "description": "⛔ MANDATORY PARALLEL BATCH ASSESSMENT: Before spawning any primary stage teammate, count independent work items (files, components, sections) against batch_size for the stage. If count exceeds batch_size, MUST spawn parallel instances up to max_parallel — single-instance assignment when parallel batching applies is a PROTOCOL VIOLATION. Then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST) with appropriate parallelism.",
+          "description": "Lookup the work stage pipeline for the classified work_type from the work_type_stages table in this config (e.g., FEAT → WS-DEV, WS-REV, WS-QA). This determines which teammates to spawn and in what order during PF4-EXECUTE.",
           "assigned_to": "team-lead",
-          "operation": "Spawn stage teammate per pipeline",
+          "operation": "Lookup pipeline from work_type_stages in this config",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-02] when creating this task in the tracker.",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
@@ -266,9 +240,9 @@
           "blocked_by": [
             "PF4-TSK-03"
           ],
-          "description": "Execute WS-REV stage (universal review)",
-          "assigned_to": "team-lead",
-          "operation": "Spawn cf-review with mode per work type",
+          "description": "Validate task and epic fields before work starts",
+          "assigned_to": "cf-knowledge-layer",
+          "operation": "validate-task-fields",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-03] when creating this task in the tracker.",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
@@ -278,11 +252,35 @@
           "blocked_by": [
             "PF4-TSK-04"
           ],
+          "description": "⛔ MANDATORY PARALLEL BATCH ASSESSMENT: Before spawning any primary stage teammate, count independent work items (files, components, sections) against batch_size for the stage. If count exceeds batch_size, MUST spawn parallel instances up to max_parallel — single-instance assignment when parallel batching applies is a PROTOCOL VIOLATION. Then execute primary stage (WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST) with appropriate parallelism.",
+          "assigned_to": "team-lead",
+          "operation": "Spawn stage teammate per pipeline",
+          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-04] when creating this task in the tracker.",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+        },
+        {
+          "id": "PF4-TSK-06",
+          "task_order": 6,
+          "blocked_by": [
+            "PF4-TSK-05"
+          ],
+          "description": "Execute WS-REV stage (universal review)",
+          "assigned_to": "team-lead",
+          "operation": "Spawn cf-review with mode per work type",
+          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-05] when creating this task in the tracker.",
+          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+        },
+        {
+          "id": "PF4-TSK-07",
+          "task_order": 7,
+          "blocked_by": [
+            "PF4-TSK-06"
+          ],
           "description": "Execute WS-QA stage (if pipeline includes it)",
           "assigned_to": "team-lead",
           "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
           "condition": "if_pipeline_includes_qa",
-          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-04] when creating this task in the tracker.",
+          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-06] when creating this task in the tracker.",
           "enforcement_note": "Evaluate the condition field first. If condition applies: MUST execute, mark completed after success. If condition does not apply: mark skipped. Skipping without evaluating the condition is a PROTOCOL VIOLATION."
         }
       ],
@@ -291,7 +289,9 @@
         "PF4-TSK-02",
         "PF4-TSK-03",
         "PF4-TSK-04",
-        "PF4-TSK-05"
+        "PF4-TSK-05",
+        "PF4-TSK-06",
+        "PF4-TSK-07"
       ]
     },
     "PF5-VERIFY": {
@@ -315,12 +315,12 @@
           "id": "PF5-TSK-01",
           "task_order": 1,
           "blocked_by": [
-            "PF4-TSK-05"
+            "PF4-TSK-07"
           ],
           "description": "Verify all pipeline stages completed with pass verdict",
           "assigned_to": "team-lead",
           "operation": "Verify all stage sentinels exist",
-          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-05] when creating this task in the tracker.",
+          "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-07] when creating this task in the tracker.",
           "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
         },
         {

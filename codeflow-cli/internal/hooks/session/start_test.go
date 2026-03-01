@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/codeflow/codeflow-cli/internal/db"
+	"github.com/codeflow/codeflow-cli/internal/session"
 )
 
 // fixedTime is a deterministic timestamp for tests.
@@ -31,6 +35,26 @@ func (m mockTmuxChecker) IsPaneAlive(paneID string) bool {
 	return m.alive[paneID]
 }
 
+// mockSessionStarter returns a fixed session ID for testing.
+type mockSessionStarter struct {
+	id  string
+	err error
+}
+
+func (m mockSessionStarter) StartSession(_ context.Context, _ string, _ string) (string, error) {
+	return m.id, m.err
+}
+
+// mockSessionStarterFunc wraps a function as a SessionStarter for flexible test control.
+type mockSessionStarterFunc func(ctx context.Context, claudeID string, projectDir string) (string, error)
+
+func (f mockSessionStarterFunc) StartSession(ctx context.Context, claudeID string, projectDir string) (string, error) {
+	return f(ctx, claudeID, projectDir)
+}
+
+// testULIDSessionID is a deterministic ULID-format session ID for tests.
+const testULIDSessionID = "ses-01jk0000000000000000000000"
+
 // newTestInitializer creates an Initializer with test defaults.
 func newTestInitializer(t *testing.T) *Initializer {
 	t.Helper()
@@ -38,6 +62,7 @@ func newTestInitializer(t *testing.T) *Initializer {
 		Now:            func() time.Time { return fixedTime },
 		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
 		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
+		SessionStarter: mockSessionStarter{id: testULIDSessionID},
 		PPID:           99999,
 		HomeDir:        t.TempDir(),
 	}
@@ -58,7 +83,10 @@ func TestStartInit_FreshSession(t *testing.T) {
 		t.Fatalf("StartInit() error = %v", err)
 	}
 
-	// Verify session ID was generated.
+	// Verify session ID was generated in ULID format.
+	if result.SessionID != testULIDSessionID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, testULIDSessionID)
+	}
 	if !ValidateSessionID(result.SessionID) {
 		t.Errorf("SessionID %q does not match expected format", result.SessionID)
 	}
@@ -408,11 +436,17 @@ func TestValidateSessionID(t *testing.T) {
 		sid   string
 		valid bool
 	}{
-		{"valid", "ses-1709136000000abcdef012345", true},
-		{"valid_all_zeros", "ses-0000000000000000000000000", true},
+		// Legacy format: ses-{13-digit-timestamp}{12-hex-chars} (25 total after prefix).
+		{"valid_legacy", "ses-1709136000000abcdef012345", true},
+		{"valid_legacy_all_zeros", "ses-0000000000000000000000000", true},
+		// ULID format: ses-{26-lowercase-alphanumeric} (30 chars total).
+		{"valid_ulid", "ses-01jk0000000000000000000000", true},
+		{"valid_ulid_mixed", "ses-01jk1234567890abcdefghijkl", true},
+		// Invalid cases.
 		{"too_short", "ses-123", false},
 		{"missing_prefix", "1709136000000abcdef012345", false},
 		{"uppercase_hex", "ses-1709136000000ABCDEF012345", false},
+		{"uppercase_ulid", "ses-01JK0000000000000000000000", false},
 		{"empty", "", false},
 		{"uuid_format", "abc-def-123", false},
 	}
@@ -487,34 +521,231 @@ func TestParseEnvFileSessionID(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionID(t *testing.T) {
+func TestSessionStarterIntegration(t *testing.T) {
 	t.Parallel()
 
+	projectDir := t.TempDir()
 	init_ := newTestInitializer(t)
-	sid := init_.generateSessionID()
 
-	if !ValidateSessionID(sid) {
-		t.Errorf("generateSessionID() = %q, does not match format", sid)
+	// Create pathflow config for checkpoint init.
+	setupPathflowConfig(t, projectDir)
+
+	// Use a mock starter that returns a specific ULID-format ID.
+	wantID := "ses-01jk1234567890abcdefghijkl"
+	init_.SessionStarter = mockSessionStarter{id: wantID}
+
+	stdin := strings.NewReader(`{"session_id":"test-uuid","source":"startup"}`)
+	result, err := init_.StartInit(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("StartInit() error = %v", err)
 	}
-	if !strings.HasPrefix(sid, "ses-") {
-		t.Errorf("generateSessionID() = %q, missing ses- prefix", sid)
+
+	// Verify the ULID-format session ID was used.
+	if result.SessionID != wantID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, wantID)
 	}
-	if len(sid) != 29 {
-		t.Errorf("generateSessionID() length = %d, want 29", len(sid))
+	if !ValidateSessionID(result.SessionID) {
+		t.Errorf("SessionID %q does not match expected format", result.SessionID)
+	}
+	if len(result.SessionID) != 30 {
+		t.Errorf("SessionID length = %d, want 30 (ses- + 26 ULID chars)", len(result.SessionID))
 	}
 }
 
-func TestGenerateSessionID_Unique(t *testing.T) {
+func TestSessionStarterError(t *testing.T) {
 	t.Parallel()
 
+	projectDir := t.TempDir()
 	init_ := newTestInitializer(t)
-	ids := make(map[string]bool, 100)
-	for range 100 {
-		sid := init_.generateSessionID()
-		if ids[sid] {
-			t.Fatalf("duplicate session ID generated: %s", sid)
-		}
-		ids[sid] = true
+
+	// Create pathflow config for checkpoint init.
+	setupPathflowConfig(t, projectDir)
+
+	// Use a mock starter that returns an error.
+	init_.SessionStarter = mockSessionStarter{err: fmt.Errorf("db connection failed")}
+
+	stdin := strings.NewReader(`{"session_id":"test-uuid","source":"startup"}`)
+	_, err := init_.StartInit(stdin, projectDir)
+	if err == nil {
+		t.Fatal("StartInit() should return error when SessionStarter fails")
+	}
+	if !strings.Contains(err.Error(), "db connection failed") {
+		t.Errorf("error = %q, should contain 'db connection failed'", err.Error())
+	}
+}
+
+func TestSessionStarterPassesClaudeID(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	init_ := newTestInitializer(t)
+
+	// Create pathflow config for checkpoint init.
+	setupPathflowConfig(t, projectDir)
+
+	// Use a function-based mock to capture the claudeID argument.
+	var capturedClaudeID string
+	init_.SessionStarter = mockSessionStarterFunc(func(_ context.Context, claudeID string, _ string) (string, error) {
+		capturedClaudeID = claudeID
+		return testULIDSessionID, nil
+	})
+
+	stdin := strings.NewReader(`{"session_id":"my-claude-uuid","source":"startup"}`)
+	_, err := init_.StartInit(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("StartInit() error = %v", err)
+	}
+
+	if capturedClaudeID != "my-claude-uuid" {
+		t.Errorf("claudeID = %q, want %q", capturedClaudeID, "my-claude-uuid")
+	}
+}
+
+func TestDBSessionStarterIntegration(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	init_ := newTestInitializer(t)
+	setupPathflowConfig(t, projectDir)
+
+	// Create a real DB for integration testing.
+	dbPath := filepath.Join(projectDir, ".state", "db", "codeflow.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	ctx := t.Context()
+	if err := d.InitFromSchema(ctx); err != nil {
+		t.Fatalf("InitFromSchema: %v", err)
+	}
+
+	// Use a real SessionStarter backed by session.Start.
+	init_.SessionStarter = mockSessionStarterFunc(func(ctx context.Context, claudeID string, pDir string) (string, error) {
+		ledgerDir := filepath.Join(pDir, ".state", "ledger")
+		runtimeDir := filepath.Join(pDir, ".state", "runtime")
+		return session.Start(ctx, d, claudeID, ledgerDir, runtimeDir)
+	})
+
+	stdin := strings.NewReader(`{"session_id":"integration-uuid","source":"startup"}`)
+	result, err := init_.StartInit(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("StartInit() error = %v", err)
+	}
+
+	// Verify ULID format: ses-{26 lowercase alphanumeric}.
+	if !strings.HasPrefix(result.SessionID, "ses-") {
+		t.Errorf("SessionID %q should start with ses-", result.SessionID)
+	}
+	if len(result.SessionID) != 30 {
+		t.Errorf("SessionID length = %d, want 30", len(result.SessionID))
+	}
+	if result.SessionID != strings.ToLower(result.SessionID) {
+		t.Errorf("SessionID %q should be lowercase", result.SessionID)
+	}
+	if !ValidateSessionID(result.SessionID) {
+		t.Errorf("SessionID %q does not match expected format", result.SessionID)
+	}
+
+	// Verify env vars contain the ULID session ID.
+	if result.EnvVars["CODEFLOW_SESSION_ID"] != result.SessionID {
+		t.Errorf("EnvVars[CODEFLOW_SESSION_ID] = %q, want %q",
+			result.EnvVars["CODEFLOW_SESSION_ID"], result.SessionID)
+	}
+
+	// Verify session was recorded in the database.
+	var status string
+	err = d.QueryRow(ctx,
+		"SELECT status FROM sessions WHERE id = ?", result.SessionID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("DB query for session record: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("session status = %q, want %q", status, "active")
+	}
+
+	// Verify current-session-id file was written.
+	sessionIDPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
+	sidData, err := os.ReadFile(sessionIDPath)
+	if err != nil {
+		t.Fatalf("reading current-session-id: %v", err)
+	}
+	if string(sidData) != result.SessionID {
+		t.Errorf("current-session-id = %q, want %q", string(sidData), result.SessionID)
+	}
+
+	// Verify JSONL event was written.
+	jsonlPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
+	jsonlData, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatalf("reading sessions.jsonl: %v", err)
+	}
+	if !strings.Contains(string(jsonlData), result.SessionID) {
+		t.Errorf("sessions.jsonl does not contain session ID %q", result.SessionID)
+	}
+	if !strings.Contains(string(jsonlData), "session_start") {
+		t.Error("sessions.jsonl does not contain session_start event")
+	}
+}
+
+func TestDBSessionStarter_Direct(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+
+	starter := dbSessionStarter{}
+	ctx := t.Context()
+
+	sessionID, err := starter.StartSession(ctx, "test-claude-id", projectDir)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	// Verify ULID format.
+	if !strings.HasPrefix(sessionID, "ses-") {
+		t.Errorf("session ID should start with ses-, got %q", sessionID)
+	}
+	if len(sessionID) != 30 {
+		t.Errorf("session ID length = %d, want 30", len(sessionID))
+	}
+	if !ValidateSessionID(sessionID) {
+		t.Errorf("session ID %q does not validate", sessionID)
+	}
+
+	// Verify DB was created.
+	dbPath := filepath.Join(projectDir, ".state", "db", "codeflow.db")
+	assertFileExists(t, dbPath)
+
+	// Verify current-session-id was written.
+	sidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
+	sidData, err := os.ReadFile(sidPath)
+	if err != nil {
+		t.Fatalf("reading current-session-id: %v", err)
+	}
+	if string(sidData) != sessionID {
+		t.Errorf("current-session-id = %q, want %q", string(sidData), sessionID)
+	}
+
+	// Verify JSONL event was written.
+	jsonlPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
+	assertFileExists(t, jsonlPath)
+}
+
+func TestDBSessionStarter_EmptyClaudeID(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	starter := dbSessionStarter{}
+	ctx := t.Context()
+
+	_, err := starter.StartSession(ctx, "", projectDir)
+	if err == nil {
+		t.Fatal("StartSession() should fail with empty claudeID")
 	}
 }
 
@@ -1001,6 +1232,9 @@ func TestNewInitializer(t *testing.T) {
 	}
 	if init_.HomeDir == "" {
 		t.Error("NewInitializer().HomeDir is empty")
+	}
+	if init_.SessionStarter == nil {
+		t.Error("NewInitializer().SessionStarter is nil")
 	}
 	// Verify Now returns a time close to now.
 	now := init_.Now()
@@ -1776,23 +2010,23 @@ func setupPathflowConfig(t *testing.T, projectDir string) {
 				},
 			},
 			"PF3-CLASSIFY": map[string]any{
-				"required_tasks": []string{"PF3-TSK-01", "PF3-TSK-02", "PF3-TSK-03", "PF3-TSK-04", "PF3-TSK-05"},
+				"required_tasks": []string{"PF3-TSK-01", "PF3-TSK-02", "PF3-TSK-03"},
 				"tasks": []any{
 					map[string]string{"id": "PF3-TSK-01"},
 					map[string]string{"id": "PF3-TSK-02"},
 					map[string]string{"id": "PF3-TSK-03"},
-					map[string]any{"id": "PF3-TSK-04", "condition": "adhoc_only"},
-					map[string]string{"id": "PF3-TSK-05"},
 				},
 			},
 			"PF4-EXECUTE": map[string]any{
-				"required_tasks": []string{"PF4-TSK-01", "PF4-TSK-02", "PF4-TSK-03", "PF4-TSK-04", "PF4-TSK-05"},
+				"required_tasks": []string{"PF4-TSK-01", "PF4-TSK-02", "PF4-TSK-03", "PF4-TSK-04", "PF4-TSK-05", "PF4-TSK-06", "PF4-TSK-07"},
 				"tasks": []any{
-					map[string]string{"id": "PF4-TSK-01"},
+					map[string]any{"id": "PF4-TSK-01", "condition": "adhoc_only"},
 					map[string]string{"id": "PF4-TSK-02"},
 					map[string]string{"id": "PF4-TSK-03"},
 					map[string]string{"id": "PF4-TSK-04"},
-					map[string]any{"id": "PF4-TSK-05", "condition": "if_pipeline_includes_qa"},
+					map[string]string{"id": "PF4-TSK-05"},
+					map[string]string{"id": "PF4-TSK-06"},
+					map[string]any{"id": "PF4-TSK-07", "condition": "if_pipeline_includes_qa"},
 				},
 			},
 			"PF5-VERIFY": map[string]any{

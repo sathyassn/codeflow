@@ -456,7 +456,7 @@ checkpoint_complete_task() {
 }
 
 # Mark a task as skipped in the checkpoint file (conditional tasks not applicable).
-# Args: task_id (e.g., "PF3-TSK-04")
+# Args: task_id (e.g., "PF4-TSK-01")
 # Returns: 0 on success, 1 on error
 checkpoint_skip_task() {
     local task_id="$1"

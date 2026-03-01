@@ -275,20 +275,20 @@ else
 fi
 cleanup_test "$reg_session"
 
-# Test 20: Registers PF3-TSK-04 (multi-digit phase, with required sentinel)
+# Test 20: Registers PF4-TSK-01 (multi-digit phase, with required sentinel)
 TESTS_RUN=$((TESTS_RUN + 1))
 reg_session="ses-register-20"
 create_test_flag "$reg_session"
 create_test_env_file "$reg_session"
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/$reg_session"
-touch "$REPO_ROOT/.state/sentinels/pathflow/$reg_session/pathflow-pf-2"
-stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF3-TSK-04: Register task in WorkGraph"},"session_id":"ignored"}'
+touch "$REPO_ROOT/.state/sentinels/pathflow/$reg_session/pathflow-pf-3"
+stdin_json='{"tool_name":"TaskCreate","tool_input":{"subject":"PF4-TSK-01: Register task in WorkGraph"},"session_id":"ignored"}'
 bash "$HOOK" <<< "$stdin_json" 2>/dev/null || true
 ckpt=$(read_checkpoint "$reg_session")
-if echo "$ckpt" | jq -e '.PF3.registered["PF3-TSK-04"]' >/dev/null 2>&1; then
-    pass "PF3-TSK-04 registered in checkpoint"
+if echo "$ckpt" | jq -e '.PF4.registered["PF4-TSK-01"]' >/dev/null 2>&1; then
+    pass "PF4-TSK-01 registered in checkpoint"
 else
-    fail "PF3-TSK-04 should be registered in checkpoint"
+    fail "PF4-TSK-01 should be registered in checkpoint"
 fi
 cleanup_test "$reg_session"
 

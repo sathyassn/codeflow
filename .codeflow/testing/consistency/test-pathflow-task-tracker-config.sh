@@ -396,13 +396,13 @@ for phase in $EXPECTED_PHASES; do
 done
 assert_equals "2" "$CONDITION_FIELD_COUNT" "Both conditional notes contain 'condition field'"
 
-# Verify specific conditional tasks are PF3-TSK-04 and PF4-TSK-05
+# Verify specific conditional tasks are PF4-TSK-01 and PF4-TSK-07
 COND_TASK_IDS=$(jq -r '.phases | to_entries[] | .value.tasks[] | select(.condition != null) | .id' "$CONFIG_FILE" 2>/dev/null | sort)
-EXPECTED_COND_IDS=$(echo -e "PF3-TSK-04\nPF4-TSK-05" | sort)
+EXPECTED_COND_IDS=$(echo -e "PF4-TSK-01\nPF4-TSK-07" | sort)
 if [[ "$COND_TASK_IDS" == "$EXPECTED_COND_IDS" ]]; then
-    test_pass "Conditional tasks are PF3-TSK-04 and PF4-TSK-05"
+    test_pass "Conditional tasks are PF4-TSK-01 and PF4-TSK-07"
 else
-    test_fail "Conditional tasks should be PF3-TSK-04 and PF4-TSK-05 (got: $COND_TASK_IDS)"
+    test_fail "Conditional tasks should be PF4-TSK-01 and PF4-TSK-07 (got: $COND_TASK_IDS)"
 fi
 
 # ============================================================================

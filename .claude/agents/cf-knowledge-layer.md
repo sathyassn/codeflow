@@ -341,7 +341,7 @@ Work type classification:
 
 #### Ensure Work Registered
 
-**When:** Informal (adhoc) work request with no pre-existing task_id. Runs after the pf-3 sentinel is created (PF3-TSK-04), so Edit/Write operations are unlocked for DB and markdown writes. Skipped when the task has `origin: planned` (task already exists in WorkGraph).
+**When:** Informal (adhoc) work request with no pre-existing task_id. Runs at the start of PF4-EXECUTE (PF4-TSK-01), after the pf-3 sentinel exists, so Edit/Write operations are unlocked for DB and markdown writes. Skipped when the task has `origin: planned` (task already exists in WorkGraph).
 
 🔒 **Prerequisite:** classify-work must have been run to provide area_type, work_type, domain. The pf-3 sentinel must exist (branch created).
 
@@ -386,7 +386,7 @@ Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF
 
 #### Validate Task Fields
 
-**When:** PF4-TSK-02 (before work execution starts), during complete-work (PF6-TSK-01), and on-demand from cf-planning during WS-PLAN.
+**When:** PF4-TSK-04 (before work execution starts), during complete-work (PF6-TSK-01), and on-demand from cf-planning during WS-PLAN.
 
 **CHECKLIST (all required unless marked CONDITIONAL):**
 

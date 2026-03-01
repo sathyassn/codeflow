@@ -168,13 +168,14 @@ Active work found?
                          |
                          v
 PF3-CLASSIFY                                            [team-lead]
-Classify work type + area                               [cf-knowledge-layer]
-Register task in WorkGraph
+Classify work type + area
 Spawn cf-git-operations                                 [cf-git-operations]
 Create feature branch
     |
     v
 PF4-EXECUTE                                             [on-demand teammates]
+Register task (adhoc only)                              [cf-knowledge-layer]
+Begin work session                                      [cf-knowledge-layer]
 Route to pipeline by work type:
     |
     +--FEAT/FIX/RFCT/CICD--> WS-DEV --> WS-REV --> WS-QA
@@ -266,21 +267,22 @@ SESSION END
 1. Classify work type and area (PF3-TSK-01, team-lead)
 2. Spawn cf-git-operations (PF3-TSK-02, team-lead): `"Read .claude/agents/cf-git-operations.md, then create branch {prefix}/{name}"`
 3. Create feature branch (PF3-TSK-03, cf-git-operations) — triggers pf-3 sentinel via PostToolUse hook, UNLOCKS Edit/Write operations
-4. Register task in WorkGraph (PF3-TSK-04, cf-knowledge-layer) — **CONDITIONAL: `adhoc_only`** — skip if `origin=planned`. The `condition: adhoc_only` field means this task runs only for adhoc/unplanned work; planned tasks already have a task_id from the epic task list.
-5. Begin work session (PF3-TSK-05, cf-knowledge-layer) — writes `begin_work` event to ledger. For planned tasks, task_id comes from the epic task list; for adhoc tasks, task_id comes from PF3-TSK-04.
 
 - Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→cicd/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→spike/
 - → See Section 6 for work type classification details
+- Note: Task registration (ensure-work-registered) and begin-work were moved from PF3 to PF4-EXECUTE (PF4-TSK-01/02) to avoid circular dependency with the pf-3 sentinel. These operations require Write access (for markdown files and active-task.json), which is gated on the pf-3 sentinel. Keeping them in PF3 created a deadlock: they couldn't complete without the sentinel, but the sentinel required all PF3 tasks to complete.
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-05; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF3-TSK-01 blocked by PF2-TSK-04, PF3-TSK-02 blocked by PF3-TSK-01, PF3-TSK-03 blocked by PF3-TSK-02, PF3-TSK-04 blocked by PF3-TSK-03, PF3-TSK-05 blocked by PF3-TSK-04); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
+4. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-03; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF3-TSK-01 blocked by PF2-TSK-04, PF3-TSK-02 blocked by PF3-TSK-01, PF3-TSK-03 blocked by PF3-TSK-02); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
 **Step 5: Work Execution (PF4-EXECUTE)**
 
-1. Lookup pipeline from work type (PF4-TSK-01, team-lead — → See Section 6: Work Pipelines)
-2. Validate task and epic fields via cf-knowledge-layer (PF4-TSK-02, cf-knowledge-layer — `validate-task-fields` before spawning primary stage)
-3. Execute primary stage — WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST (PF4-TSK-03, team-lead — assess parallel batch need, then spawn stage teammate(s) per pipeline. → See Section 5: Parallel Batch Execution)
-4. Execute WS-REV stage — universal review (PF4-TSK-04, team-lead — spawn cf-review with mode per work type)
-5. Execute WS-QA stage — if pipeline includes it (PF4-TSK-05, team-lead — spawn cf-quality-assurance)
+1. Register task in WorkGraph (PF4-TSK-01, cf-knowledge-layer) — **CONDITIONAL: `adhoc_only`** — skip if `origin=planned`. The `condition: adhoc_only` field means this task runs only for adhoc/unplanned work; planned tasks already have a task_id from the epic task list.
+2. Begin work session (PF4-TSK-02, cf-knowledge-layer) — writes `begin_work` event to ledger. For planned tasks, task_id comes from the epic task list; for adhoc tasks, task_id comes from PF4-TSK-01.
+3. Lookup pipeline from work type (PF4-TSK-03, team-lead — → See Section 6: Work Pipelines)
+4. Validate task and epic fields via cf-knowledge-layer (PF4-TSK-04, cf-knowledge-layer — `validate-task-fields` before spawning primary stage)
+5. Execute primary stage — WS-DEV, WS-PLAN, WS-DOCS, or WS-TEST (PF4-TSK-05, team-lead — assess parallel batch need, then spawn stage teammate(s) per pipeline. → See Section 5: Parallel Batch Execution)
+6. Execute WS-REV stage — universal review (PF4-TSK-06, team-lead — spawn cf-review with mode per work type)
+7. Execute WS-QA stage — if pipeline includes it (PF4-TSK-07, team-lead — spawn cf-quality-assurance)
 
 - For each stage in the pipeline:
   1. Spawn the stage's on-demand teammate with full task specification (→ See Section 5: Spawn Patterns)
@@ -292,11 +294,11 @@ SESSION END
 - Rework: If WS-REV returns `changes_requested`, re-assign work to primary stage teammate (still active, no re-spawn needed) (max 3 iterations)
 - Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 2 retries)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
-- **Parallel batch assessment (MANDATORY for PF4-TSK-03):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
+- **Parallel batch assessment (MANDATORY for PF4-TSK-05):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
 - **Legacy task migration:** If the task markdown lacks `### Criteria Status` or `## Stage Reports` sections (legacy task created before stage reporting was added), have cf-knowledge-layer add them before spawning the primary stage teammate using the pipeline-appropriate template from `project-management/templates/task-template.md`.
 - **Stage reporting protocol:** Stage teammates update the task markdown as part of their stage completion protocol — they write their reports directly into the task document before signaling STAGE-COMPLETE. The task doc commit is included as part of the stage commit by cf-git-operations.
 
-6. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-05; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF4-TSK-01 blocked by PF3-TSK-05, PF4-TSK-02 blocked by PF4-TSK-01, PF4-TSK-03 blocked by PF4-TSK-02, PF4-TSK-04 blocked by PF4-TSK-03, PF4-TSK-05 blocked by PF4-TSK-04); TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
+8. **Task Tracker (MANDATORY):** TaskCreate for PF4-EXECUTE phase entry (addBlockedBy PF3); TaskCreate for PF4-TSK-01 through PF4-TSK-07; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF4-TSK-01 blocked by PF3-TSK-03, PF4-TSK-02 blocked by PF4-TSK-01, PF4-TSK-03 blocked by PF4-TSK-02, PF4-TSK-04 blocked by PF4-TSK-03, PF4-TSK-05 blocked by PF4-TSK-04, PF4-TSK-06 blocked by PF4-TSK-05, PF4-TSK-07 blocked by PF4-TSK-06); TaskCreate one entry per work stage spawned (WS-DEV, WS-REV, WS-QA) with addBlockedBy ordering; TaskUpdate each stage and task entry to completed as it finishes.
 
 **Step 6: Verification (PF5-VERIFY)**
 
@@ -305,7 +307,7 @@ SESSION END
 - Query cf-knowledge-layer for stage completion records
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 
-4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-05, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
+4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-07, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
 
 **Step 7: Completion (PF6-COMPLETE)**
 
@@ -345,8 +347,8 @@ SESSION END
 |-------|----------------------|-------------------------------|------------|-------------|
 | PF1-INIT | (none) | pathflow-pf-1 (checkpoint-driven) | TeamCreate, spawn cf-security | pathflow-active flag, team config |
 | PF2-CONTEXT | pf-1 | pathflow-pf-2 (checkpoint-driven) | Spawn cf-knowledge-layer | Active work state, tracking decision |
-| PF3-CLASSIFY | pf-2 | pathflow-pf-3 (checkpoint-driven, on all PF3 tasks complete) | Create branch (UNLOCKS Edit/Write). Conditional task registration for adhoc tasks (skipped when origin=planned). | Task record (adhoc), branch, tracking_level='tracked' |
-| PF4-EXECUTE | pf-3 | pathflow-ws-* (pattern-matched) | Run work pipeline | Code, docs, tests, reviews |
+| PF3-CLASSIFY | pf-2 | pathflow-pf-3 (checkpoint-driven, on all PF3 tasks complete) | Create branch (UNLOCKS Edit/Write) | Branch, tracking_level='tracked' |
+| PF4-EXECUTE | pf-3 | pathflow-ws-* (pattern-matched) | Register task (adhoc_only), begin work, run work pipeline | Task record (adhoc), code, docs, tests, reviews |
 | PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
 | PF6-COMPLETE | ws-rev | pathflow-pf-6 (checkpoint-driven) | Create PR, verify CI, sync | PR created, PR verified, task status updated |
 | PF7-END | pf-6 | pathflow-pf-7 (checkpoint-driven, must complete before TeamDelete) | Shutdown, mark tasks complete, TeamDelete | Clean session end |
@@ -1292,7 +1294,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 |-----------|------|-------------|
 | Detect active work | PF2-CONTEXT (session start) | cf-knowledge-layer |
 | Load work context | Resume flow | cf-knowledge-layer |
-| Register task | PF3-CLASSIFY | cf-knowledge-layer |
+| Register task | PF4-EXECUTE (PF4-TSK-01/02) | cf-knowledge-layer |
 | Record progress | During PF4-EXECUTE | cf-knowledge-layer (via teammate reports) |
 | Complete work (pre-PR) | PF6-COMPLETE | cf-knowledge-layer |
 | Write session summary | PF7-END | cf-knowledge-layer |

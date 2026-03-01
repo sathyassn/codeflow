@@ -8,7 +8,7 @@
 //
 //   - Parse stdin JSON for session metadata (Claude's per-agent UUID and source)
 //   - Detect stale sessions via PID-based cleanup (crashed lead detection)
-//   - Generate or load a CODEFLOW_SESSION_ID (ses-{timestamp}{hex} format)
+//   - Generate or load a CODEFLOW_SESSION_ID (ses-{ULID} format via session.Start())
 //   - Create required .state/ directories
 //   - Detect and warn about stale sessions and teams
 //   - Clean up orphan sentinel directories

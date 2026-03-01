@@ -1,8 +1,7 @@
 package session
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,11 +12,56 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeflow/codeflow-cli/internal/db"
 	"github.com/codeflow/codeflow-cli/internal/pathflow"
+	"github.com/codeflow/codeflow-cli/internal/session"
 )
 
-// sessionIDRe validates the CODEFLOW_SESSION_ID format: ses-{13-digit-timestamp}{12-hex-chars}.
-var sessionIDRe = regexp.MustCompile(`^ses-[0-9]{13}[a-f0-9]{12}$`)
+// sessionIDRe validates the CODEFLOW_SESSION_ID format. Accepts both:
+//   - Legacy format: ses-{13-digit-timestamp}{12-hex-chars} (25 chars total)
+//   - ULID format:   ses-{26-char-lowercase-ULID}          (30 chars total)
+var sessionIDRe = regexp.MustCompile(`^ses-(?:[0-9]{13}[a-f0-9]{12}|[0-9a-z]{26})$`)
+
+// SessionStarter abstracts session ID generation and DB registration for testability.
+type SessionStarter interface {
+	// StartSession generates a ULID-based session ID, records the session in the
+	// database and ledger, and writes the current-session-id file. Returns the
+	// generated session ID.
+	StartSession(ctx context.Context, claudeID string, projectDir string) (string, error)
+}
+
+// dbSessionStarter implements SessionStarter using the real session.Start function.
+type dbSessionStarter struct{}
+
+func (dbSessionStarter) StartSession(ctx context.Context, claudeID string, projectDir string) (string, error) {
+	dbDir := filepath.Join(projectDir, ".state", "db")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating database directory: %w", err)
+	}
+
+	dbPath := filepath.Join(dbDir, "codeflow.db")
+	d, err := db.NewDB(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("opening database: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.InitFromSchema(ctx); err != nil {
+		return "", fmt.Errorf("initializing database schema: %w", err)
+	}
+
+	ledgerDir := filepath.Join(projectDir, ".state", "ledger")
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+
+	// Ensure ledger and runtime directories exist before session.Start writes to them.
+	for _, dir := range []string{ledgerDir, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("creating directory %s: %w", dir, err)
+		}
+	}
+
+	return session.Start(ctx, d, claudeID, ledgerDir, runtimeDir)
+}
 
 // hookInput represents the JSON structure sent by Claude Code on stdin to
 // SessionStart hooks.
@@ -102,6 +146,9 @@ type Initializer struct {
 	// TmuxChecker checks if a tmux pane is alive.
 	TmuxChecker TmuxChecker
 
+	// SessionStarter generates session IDs and registers sessions in the database.
+	SessionStarter SessionStarter
+
 	// PPID is the parent process ID for pathflow-team.json updates.
 	PPID int
 
@@ -116,6 +163,7 @@ func NewInitializer() *Initializer {
 		Now:            func() time.Time { return time.Now().UTC() },
 		ProcessChecker: osProcessChecker{},
 		TmuxChecker:    osTmuxChecker{},
+		SessionStarter: dbSessionStarter{},
 		PPID:           os.Getppid(),
 		HomeDir:        home,
 	}
@@ -161,7 +209,20 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 		sessionID = os.Getenv("CODEFLOW_SESSION_ID")
 	}
 	if sessionID == "" {
-		sessionID = init_.generateSessionID()
+		// Generate session ID via session.Start (DB-backed, ULID format).
+		// Use the Claude agent UUID as the claudeID; fall back to "unknown" if empty.
+		claudeID := input.SessionID
+		if claudeID == "" {
+			claudeID = "unknown"
+		}
+		var startErr error
+		sessionID, startErr = init_.SessionStarter.StartSession(
+			context.TODO(), claudeID, projectDir,
+		)
+		if startErr != nil {
+			result.warn("session start error: %v", startErr)
+			return nil, fmt.Errorf("session init: generating session ID: %w", startErr)
+		}
 		// Write env file atomically
 		if err := init_.writeEnvFile(envFilePath, sessionID, projectDir); err != nil {
 			result.warn("env file write error: %v", err)
@@ -378,22 +439,6 @@ func parseEnvFileSessionID(content string) string {
 	return ""
 }
 
-// generateSessionID creates a new session ID in the format ses-{13-digit-timestamp}{12-hex-chars}.
-func (init_ *Initializer) generateSessionID() string {
-	ts := init_.Now().UnixMilli()
-	// Pad timestamp to 13 digits.
-	tsStr := fmt.Sprintf("%013d", ts)
-
-	// Generate 6 random bytes -> 12 hex chars.
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback: use time-based pseudo-random.
-		b = []byte(fmt.Sprintf("%06x", ts%0xFFFFFF))[:6]
-	}
-	hexStr := hex.EncodeToString(b)
-
-	return "ses-" + tsStr + hexStr
-}
 
 // writeEnvFile atomically writes the codeflow-env.sh file.
 func (init_ *Initializer) writeEnvFile(envFilePath, sessionID, projectDir string) error {

@@ -110,7 +110,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-010 | Build Go CLI for session-start-init hook | complete | high |
 | INF-TSK-021-011 | Build Go CLI for session-end-cleanup hook | complete | high |
 | INF-TSK-021-012 | Build Go CLI for sentinel system script | complete | high |
-| INF-TSK-021-013 | Wire codeflow session start into SessionStart hook | todo | high |
+| INF-TSK-021-013 | Wire codeflow session start into SessionStart hook | complete | high |
 | INF-TSK-021-014 | Build Go equivalents for Python scripts and codeflow_py_lib | todo | high |
 | INF-TSK-021-015 | Build Go CLI for shell-lib foundation | todo | normal |
 | INF-TSK-021-016 | Build Go CLI for settings and staging scripts | todo | normal |

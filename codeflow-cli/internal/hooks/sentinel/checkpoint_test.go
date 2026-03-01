@@ -405,14 +405,14 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		sessionDir, sentinelDir := setupCheckpointEnv(t)
 
-		// PF3 has 2 tasks, one with adhoc_only condition.
-		// With origin=planned, PF3-TSK-04 should auto-skip.
+		// PF4 has 2 tasks, one with adhoc_only condition.
+		// With origin=planned, PF4-TSK-01 should auto-skip.
 		writeTestCheckpoint(t, sessionDir, map[string]any{
-			"PF3": map[string]any{
-				"expected":   []string{"PF3-TSK-03", "PF3-TSK-04"},
-				"conditions": map[string]any{"PF3-TSK-04": "adhoc_only"},
+			"PF4": map[string]any{
+				"expected":   []string{"PF4-TSK-01", "PF4-TSK-02"},
+				"conditions": map[string]any{"PF4-TSK-01": "adhoc_only"},
 				"registered": map[string]any{
-					"PF3-TSK-03": "2026-02-28T12:00:00Z",
+					"PF4-TSK-02": "2026-02-28T12:00:00Z",
 				},
 				"completed":        map[string]any{},
 				"skipped":          map[string]any{},
@@ -424,22 +424,22 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
-		// Create pf-2 sentinel for cross-phase gate.
-		createTestSentinel(t, sentinelDir, "pf-2")
+		// Create pf-3 sentinel for cross-phase gate.
+		createTestSentinel(t, sentinelDir, "pf-3")
 
-		// Complete PF3-TSK-03 -- should trigger phase completion because
-		// PF3-TSK-04 auto-skips (adhoc_only + planned).
-		stdin := `{"task_subject":"PF3-TSK-03: Create feature branch"}`
+		// Complete PF4-TSK-02 -- should trigger phase completion because
+		// PF4-TSK-01 auto-skips (adhoc_only + planned).
+		stdin := `{"task_subject":"PF4-TSK-02: Begin work session"}`
 		verdict := CompleteCheckpointTask(strings.NewReader(stdin), sessionDir, sentinelDir)
 
 		if !verdict.Allow {
 			t.Fatalf("blocked: %s", verdict.Reason)
 		}
 
-		// pf-3 sentinel should be created.
-		path := filepath.Join(sentinelDir, "pathflow-pf-3")
+		// pf-4 sentinel should be created.
+		path := filepath.Join(sentinelDir, "pathflow-pf-4")
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			t.Error("expected pf-3 sentinel to be created (adhoc_only auto-skip)")
+			t.Error("expected pf-4 sentinel to be created (adhoc_only auto-skip)")
 		}
 	})
 
@@ -450,10 +450,10 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		writeTestCheckpoint(t, sessionDir, map[string]any{
 			"PF4": map[string]any{
-				"expected":   []string{"PF4-TSK-03", "PF4-TSK-05"},
-				"conditions": map[string]any{"PF4-TSK-05": "if_pipeline_includes_qa"},
+				"expected":   []string{"PF4-TSK-05", "PF4-TSK-07"},
+				"conditions": map[string]any{"PF4-TSK-07": "if_pipeline_includes_qa"},
 				"registered": map[string]any{
-					"PF4-TSK-03": "2026-02-28T12:00:00Z",
+					"PF4-TSK-05": "2026-02-28T12:00:00Z",
 				},
 				"completed":        map[string]any{},
 				"skipped":          map[string]any{},
@@ -467,7 +467,7 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		createTestSentinel(t, sentinelDir, "pf-3")
 
-		stdin := `{"task_subject":"PF4-TSK-03: Execute primary stage"}`
+		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
 		verdict := CompleteCheckpointTask(strings.NewReader(stdin), sessionDir, sentinelDir)
 
 		if !verdict.Allow {
@@ -487,10 +487,10 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		writeTestCheckpoint(t, sessionDir, map[string]any{
 			"PF4": map[string]any{
-				"expected":   []string{"PF4-TSK-03", "PF4-TSK-05"},
-				"conditions": map[string]any{"PF4-TSK-05": "if_pipeline_includes_qa"},
+				"expected":   []string{"PF4-TSK-05", "PF4-TSK-07"},
+				"conditions": map[string]any{"PF4-TSK-07": "if_pipeline_includes_qa"},
 				"registered": map[string]any{
-					"PF4-TSK-03": "2026-02-28T12:00:00Z",
+					"PF4-TSK-05": "2026-02-28T12:00:00Z",
 				},
 				"completed":        map[string]any{},
 				"skipped":          map[string]any{},
@@ -504,14 +504,14 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		createTestSentinel(t, sentinelDir, "pf-3")
 
-		stdin := `{"task_subject":"PF4-TSK-03: Execute primary stage"}`
+		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
 		verdict := CompleteCheckpointTask(strings.NewReader(stdin), sessionDir, sentinelDir)
 
 		if !verdict.Allow {
 			t.Fatalf("blocked: %s", verdict.Reason)
 		}
 
-		// pf-4 should NOT be created -- PF4-TSK-05 is not auto-skipped for FEAT.
+		// pf-4 should NOT be created -- PF4-TSK-07 is not auto-skipped for FEAT.
 		path := filepath.Join(sentinelDir, "pathflow-pf-4")
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Error("pf-4 sentinel should NOT be created for FEAT (QA required)")
@@ -525,10 +525,10 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		writeTestCheckpoint(t, sessionDir, map[string]any{
 			"PF4": map[string]any{
-				"expected":   []string{"PF4-TSK-03", "PF4-TSK-05"},
-				"conditions": map[string]any{"PF4-TSK-05": "if_pipeline_includes_qa"},
+				"expected":   []string{"PF4-TSK-05", "PF4-TSK-07"},
+				"conditions": map[string]any{"PF4-TSK-07": "if_pipeline_includes_qa"},
 				"registered": map[string]any{
-					"PF4-TSK-03": "2026-02-28T12:00:00Z",
+					"PF4-TSK-05": "2026-02-28T12:00:00Z",
 				},
 				"completed":        map[string]any{},
 				"skipped":          map[string]any{},
@@ -542,7 +542,7 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		createTestSentinel(t, sentinelDir, "pf-3")
 
-		stdin := `{"task_subject":"PF4-TSK-03: Execute primary stage"}`
+		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
 		verdict := CompleteCheckpointTask(strings.NewReader(stdin), sessionDir, sentinelDir)
 
 		if !verdict.Allow {
@@ -562,10 +562,10 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		writeTestCheckpoint(t, sessionDir, map[string]any{
 			"PF4": map[string]any{
-				"expected":   []string{"PF4-TSK-03", "PF4-TSK-05"},
-				"conditions": map[string]any{"PF4-TSK-05": "if_pipeline_includes_qa"},
+				"expected":   []string{"PF4-TSK-05", "PF4-TSK-07"},
+				"conditions": map[string]any{"PF4-TSK-07": "if_pipeline_includes_qa"},
 				"registered": map[string]any{
-					"PF4-TSK-03": "2026-02-28T12:00:00Z",
+					"PF4-TSK-05": "2026-02-28T12:00:00Z",
 				},
 				"completed":        map[string]any{},
 				"skipped":          map[string]any{},
@@ -579,7 +579,7 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 
 		createTestSentinel(t, sentinelDir, "pf-3")
 
-		stdin := `{"task_subject":"PF4-TSK-03: Execute primary stage"}`
+		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
 		verdict := CompleteCheckpointTask(strings.NewReader(stdin), sessionDir, sentinelDir)
 
 		if !verdict.Allow {
@@ -660,7 +660,7 @@ func TestExtractPhaseNum(t *testing.T) {
 		wantErr bool
 	}{
 		{"PF1-TSK-01", 1, false},
-		{"PF3-TSK-05", 3, false},
+		{"PF3-TSK-03", 3, false},
 		{"PF7-TSK-03", 7, false},
 		{"PF10-TSK-01", 10, false},
 		{"invalid", 0, true},
@@ -735,9 +735,9 @@ func TestIsPhaseComplete(t *testing.T) {
 		{
 			name: "auto-skip adhoc_only with planned",
 			phase: &CheckpointPhase{
-				Expected:   []string{"PF3-TSK-03", "PF3-TSK-04"},
-				Conditions: map[string]string{"PF3-TSK-04": "adhoc_only"},
-				Completed:  map[string]string{"PF3-TSK-03": "ts"},
+				Expected:   []string{"PF4-TSK-01", "PF4-TSK-02"},
+				Conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
+				Completed:  map[string]string{"PF4-TSK-02": "ts"},
 				Skipped:    map[string]string{},
 			},
 			ctx:  &CheckpointContext{Origin: "planned"},
@@ -746,9 +746,9 @@ func TestIsPhaseComplete(t *testing.T) {
 		{
 			name: "adhoc_only NOT skipped for adhoc origin",
 			phase: &CheckpointPhase{
-				Expected:   []string{"PF3-TSK-03", "PF3-TSK-04"},
-				Conditions: map[string]string{"PF3-TSK-04": "adhoc_only"},
-				Completed:  map[string]string{"PF3-TSK-03": "ts"},
+				Expected:   []string{"PF4-TSK-01", "PF4-TSK-02"},
+				Conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
+				Completed:  map[string]string{"PF4-TSK-02": "ts"},
 				Skipped:    map[string]string{},
 			},
 			ctx:  &CheckpointContext{Origin: "adhoc"},
@@ -798,50 +798,50 @@ func TestAutoSkipped(t *testing.T) {
 		},
 		{
 			name:       "nil context",
-			taskID:     "PF3-TSK-04",
-			conditions: map[string]string{"PF3-TSK-04": "adhoc_only"},
+			taskID:     "PF4-TSK-01",
+			conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
 			ctx:        nil,
 			want:       false,
 		},
 		{
 			name:       "adhoc_only with planned origin",
-			taskID:     "PF3-TSK-04",
-			conditions: map[string]string{"PF3-TSK-04": "adhoc_only"},
+			taskID:     "PF4-TSK-01",
+			conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
 			ctx:        &CheckpointContext{Origin: "planned"},
 			want:       true,
 		},
 		{
 			name:       "adhoc_only with adhoc origin",
-			taskID:     "PF3-TSK-04",
-			conditions: map[string]string{"PF3-TSK-04": "adhoc_only"},
+			taskID:     "PF4-TSK-01",
+			conditions: map[string]string{"PF4-TSK-01": "adhoc_only"},
 			ctx:        &CheckpointContext{Origin: "adhoc"},
 			want:       false,
 		},
 		{
 			name:       "if_pipeline_includes_qa with DOCS",
-			taskID:     "PF4-TSK-05",
-			conditions: map[string]string{"PF4-TSK-05": "if_pipeline_includes_qa"},
+			taskID:     "PF4-TSK-07",
+			conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
 			ctx:        &CheckpointContext{WorkType: "DOCS"},
 			want:       true,
 		},
 		{
 			name:       "if_pipeline_includes_qa with PLAN",
-			taskID:     "PF4-TSK-05",
-			conditions: map[string]string{"PF4-TSK-05": "if_pipeline_includes_qa"},
+			taskID:     "PF4-TSK-07",
+			conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
 			ctx:        &CheckpointContext{WorkType: "PLAN"},
 			want:       true,
 		},
 		{
 			name:       "if_pipeline_includes_qa with SPKE",
-			taskID:     "PF4-TSK-05",
-			conditions: map[string]string{"PF4-TSK-05": "if_pipeline_includes_qa"},
+			taskID:     "PF4-TSK-07",
+			conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
 			ctx:        &CheckpointContext{WorkType: "SPKE"},
 			want:       true,
 		},
 		{
 			name:       "if_pipeline_includes_qa with FEAT (not skipped)",
-			taskID:     "PF4-TSK-05",
-			conditions: map[string]string{"PF4-TSK-05": "if_pipeline_includes_qa"},
+			taskID:     "PF4-TSK-07",
+			conditions: map[string]string{"PF4-TSK-07": "if_pipeline_includes_qa"},
 			ctx:        &CheckpointContext{WorkType: "FEAT"},
 			want:       false,
 		},

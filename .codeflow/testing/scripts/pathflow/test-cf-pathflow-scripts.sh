@@ -613,7 +613,7 @@ test_task_update_valid_task_ids() {
 
     setup_pathflow_test
 
-    local task_ids="PF1-TSK-01 PF3-TSK-05 PF7-TSK-99 PF4-TSK-10"
+    local task_ids="PF1-TSK-01 PF3-TSK-03 PF7-TSK-99 PF4-TSK-10"
     for task_id in $task_ids; do
         local exit_code=0
         "$PATHFLOW_DIR/cf-pathflow-task-update.sh" -s "SES-IDS" -k "$task_id" -t "pending" >/dev/null 2>&1 || exit_code=$?

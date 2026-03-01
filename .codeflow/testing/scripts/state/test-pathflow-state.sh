@@ -1056,8 +1056,8 @@ test_checkpoint_skip_task() {
     (
         unset _CF_PATHFLOW_STATE_LIB_SOURCED 2>/dev/null || true
         source "$LIBRARY_UNDER_TEST"
-        checkpoint_init_phase "PF3"
-        checkpoint_skip_task "PF3-TSK-04"
+        checkpoint_init_phase "PF4"
+        checkpoint_skip_task "PF4-TSK-01"
     )
     local result
     result=$(
@@ -1065,7 +1065,7 @@ test_checkpoint_skip_task() {
         source "$LIBRARY_UNDER_TEST"
         checkpoint_read
     )
-    if echo "$result" | jq -e '.PF3.skipped["PF3-TSK-04"]' >/dev/null 2>&1; then
+    if echo "$result" | jq -e '.PF4.skipped["PF4-TSK-01"]' >/dev/null 2>&1; then
         test_pass "Task marked as skipped"
     else
         test_fail "Task should be marked as skipped"
@@ -1269,13 +1269,13 @@ test_checkpoint_init_all_phases_expected_tasks() {
     else
         test_fail "PF1 expected 2 tasks, got $pf1_count"
     fi
-    # PF3 should have 5 expected tasks
+    # PF3 should have 3 expected tasks (register-task and begin-work moved to PF4)
     local pf3_count
     pf3_count=$(echo "$result" | jq '.PF3.expected | length' 2>/dev/null)
-    if [[ "$pf3_count" == "5" ]]; then
-        test_pass "PF3 has 5 expected tasks"
+    if [[ "$pf3_count" == "3" ]]; then
+        test_pass "PF3 has 3 expected tasks"
     else
-        test_fail "PF3 expected 5 tasks, got $pf3_count"
+        test_fail "PF3 expected 3 tasks, got $pf3_count"
     fi
 }
 
