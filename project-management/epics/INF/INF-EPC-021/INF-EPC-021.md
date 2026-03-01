@@ -106,7 +106,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-006 | Build Go CLI for security enforcement stack | complete | critical |
 | INF-TSK-021-007 | Build Go CLI for pathflow gate hook | complete | critical |
 | INF-TSK-021-008 | Build Go CLI for webfetch, team-guard, and gh-pr hooks | complete | high |
-| INF-TSK-021-009 | Build Go CLI for sentinel pipeline hooks | todo | critical |
+| INF-TSK-021-009 | Build Go CLI for sentinel pipeline hooks | complete | critical |
 | INF-TSK-021-010 | Build Go CLI for session-start-init hook | todo | high |
 | INF-TSK-021-011 | Build Go CLI for session-end-cleanup hook | todo | high |
 | INF-TSK-021-012 | Build Go CLI for sentinel system script | todo | high |

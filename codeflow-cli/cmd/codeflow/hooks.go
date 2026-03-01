@@ -12,6 +12,7 @@ import (
 	"github.com/codeflow/codeflow-cli/internal/hooks/gate"
 	"github.com/codeflow/codeflow-cli/internal/hooks/ghpr"
 	"github.com/codeflow/codeflow-cli/internal/hooks/security"
+	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 	"github.com/codeflow/codeflow-cli/internal/hooks/team"
 	"github.com/codeflow/codeflow-cli/internal/hooks/webfetch"
 	"github.com/spf13/cobra"
@@ -29,6 +30,8 @@ func newHooksCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newPreToolUseCmd())
+	cmd.AddCommand(newPostToolUseCmd())
+	cmd.AddCommand(newTaskCompletedCmd())
 	return cmd
 }
 
@@ -460,6 +463,169 @@ func runTeamGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	if !verdict.Allow {
 		fmt.Fprint(errW, verdict.Reason)
 		return &exitError{code: ExitHookBlock, err: fmt.Errorf("team-guard: blocked")}
+	}
+
+	return nil
+}
+
+// newPostToolUseCmd creates the "post-tool-use" subcommand group.
+func newPostToolUseCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "post-tool-use",
+		Short: "Post-tool-use hook handlers",
+		Long:  "Handlers that run after tool execution for sentinel and checkpoint management.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newSentinelWriteCmd())
+	cmd.AddCommand(newHookCheckpointRegisterCmd())
+	return cmd
+}
+
+// newTaskCompletedCmd creates the "task-completed" subcommand group.
+func newTaskCompletedCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "task-completed",
+		Short: "Task-completed hook handlers",
+		Long:  "Handlers that run when a task is marked complete.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newHookCheckpointCompleteCmd())
+	return cmd
+}
+
+// newSentinelWriteCmd creates the "sentinel-write" subcommand that creates
+// stage sentinel files when STAGE-COMPLETE messages are detected.
+func newSentinelWriteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sentinel-write",
+		Short: "Create stage sentinels from STAGE-COMPLETE messages",
+		Long: `Create PathFlow stage sentinel files from STAGE-COMPLETE messages.
+
+Reads Claude Code PostToolUse hook JSON from stdin, detects SendMessage
+calls containing "STAGE-COMPLETE: WS-{STAGE}", validates stage ordering,
+and creates the corresponding sentinel file. Exits 0 if allowed, 2 if blocked.
+
+Stage ordering rules:
+  WS-REV requires a prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)
+  WS-QA  requires prior ws-dev or ws-test
+
+Stdin format:
+  {"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSentinelWrite(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runSentinelWrite implements the stage sentinel creation logic.
+func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	if sessionID == "" {
+		// No session ID — no PathFlow, allow.
+		return nil
+	}
+
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentinelDir)
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("sentinel-write: blocked")}
+	}
+
+	return nil
+}
+
+// newHookCheckpointRegisterCmd creates the "checkpoint-register" subcommand that
+// registers PF tasks in the checkpoint file when TaskCreate fires.
+func newHookCheckpointRegisterCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "checkpoint-register",
+		Short: "Register PF tasks in checkpoint on TaskCreate",
+		Long: `Register PathFlow phase tasks in the checkpoint file.
+
+Reads Claude Code PostToolUse hook JSON from stdin, detects TaskCreate
+calls with PF{N}-TSK-{NN} subjects, validates cross-phase dependencies,
+and registers the task in the checkpoint. Exits 0 if allowed, 2 if blocked.
+
+Cross-phase gate: PF{N} tasks cannot register until pf-{N-1} sentinel exists.
+
+Stdin format:
+  {"tool_name":"TaskCreate","tool_input":{"subject":"PF3-TSK-01 Classify work"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runHookCheckpointRegister(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runHookCheckpointRegister implements the hook-based checkpoint task registration logic.
+func runHookCheckpointRegister(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	if sessionID == "" {
+		return nil
+	}
+
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+
+	verdict := sentinel.RegisterCheckpointTask(stdin, sessionDir, sentinelDir)
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("checkpoint-register: blocked")}
+	}
+
+	return nil
+}
+
+// newHookCheckpointCompleteCmd creates the "checkpoint-complete" subcommand that
+// marks PF tasks complete and creates phase sentinels when all tasks are done.
+func newHookCheckpointCompleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "checkpoint-complete",
+		Short: "Mark PF tasks complete and create phase sentinels",
+		Long: `Mark PathFlow phase tasks complete in the checkpoint file.
+
+Reads Claude Code TaskCompleted hook JSON from stdin, detects tasks with
+PF{N}-TSK-{NN} subjects, validates cross-phase dependencies, marks the
+task complete, and creates a phase sentinel if all tasks in the phase are
+done, skipped, or auto-skipped by condition. Exits 0 if allowed, 2 if blocked.
+
+Stdin format:
+  {"task_subject":"PF3-TSK-01 Classify work"}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runHookCheckpointComplete(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runHookCheckpointComplete implements the hook-based checkpoint task completion logic.
+func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	if sessionID == "" {
+		return nil
+	}
+
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+
+	verdict := sentinel.CompleteCheckpointTask(stdin, sessionDir, sentinelDir)
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("checkpoint-complete: blocked")}
 	}
 
 	return nil

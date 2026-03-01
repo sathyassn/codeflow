@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 )
 
 func TestNewHooksCmd(t *testing.T) {
@@ -1133,5 +1135,497 @@ func TestPreToolUseCmdHasAllSubcommands(t *testing.T) {
 		if !names[name] {
 			t.Errorf("newPreToolUseCmd() missing subcommand %q", name)
 		}
+	}
+}
+
+// --- Post-tool-use command group ---
+
+func TestNewPostToolUseCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newPostToolUseCmd()
+	if cmd.Use != "post-tool-use" {
+		t.Errorf("newPostToolUseCmd().Use = %q, want %q", cmd.Use, "post-tool-use")
+	}
+	if !cmd.HasSubCommands() {
+		t.Error("newPostToolUseCmd() has no subcommands")
+	}
+
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	expected := []string{"sentinel-write", "checkpoint-register"}
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("newPostToolUseCmd() missing subcommand %q", name)
+		}
+	}
+}
+
+func TestPostToolUseCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newPostToolUseCmd()
+	cmd.SetArgs([]string{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("post-tool-use help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "sentinel and checkpoint management") {
+		t.Errorf("post-tool-use help output = %q, want to contain 'sentinel and checkpoint management'", out.String())
+	}
+}
+
+// --- Task-completed command group ---
+
+func TestNewTaskCompletedCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newTaskCompletedCmd()
+	if cmd.Use != "task-completed" {
+		t.Errorf("newTaskCompletedCmd().Use = %q, want %q", cmd.Use, "task-completed")
+	}
+	if !cmd.HasSubCommands() {
+		t.Error("newTaskCompletedCmd() has no subcommands")
+	}
+
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["checkpoint-complete"] {
+		t.Error("newTaskCompletedCmd() missing subcommand 'checkpoint-complete'")
+	}
+}
+
+func TestTaskCompletedCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newTaskCompletedCmd()
+	cmd.SetArgs([]string{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("task-completed help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "task is marked complete") {
+		t.Errorf("task-completed help output = %q, want to contain 'task is marked complete'", out.String())
+	}
+}
+
+// --- Hooks cmd has post-tool-use and task-completed ---
+
+func TestHooksCmdHasAllGroups(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHooksCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	expected := []string{"pre-tool-use", "post-tool-use", "task-completed"}
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("newHooksCmd() missing subcommand group %q", name)
+		}
+	}
+}
+
+// --- Sentinel write CLI handler ---
+
+func TestRunSentinelWrite(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		stdin     string
+		wantErr   bool
+		wantBlock bool
+	}{
+		{
+			name:  "non-SendMessage tool allowed",
+			stdin: `{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`,
+		},
+		{
+			name:  "empty stdin allowed",
+			stdin: "",
+		},
+		{
+			name:  "invalid JSON allowed",
+			stdin: "not json",
+		},
+		{
+			name:  "SendMessage without stage pattern allowed",
+			stdin: `{"tool_name":"SendMessage","tool_input":{"content":"Hello world"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := strings.NewReader(tt.stdin)
+			var stdout, stderr bytes.Buffer
+			err := runSentinelWrite(stdin, &stdout, &stderr)
+
+			if tt.wantErr && err == nil {
+				t.Error("runSentinelWrite() error = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("runSentinelWrite() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunSentinelWriteCreatesFile(t *testing.T) {
+	t.Parallel()
+
+	// Call the business logic directly (not through runSentinelWrite which
+	// uses env vars) to verify integration between CLI and package.
+	sentinelDir := t.TempDir()
+	stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+
+	verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentinelDir)
+	if !verdict.Allow {
+		t.Errorf("expected allow, got block: %s", verdict.Reason)
+	}
+
+	// Verify sentinel file was created.
+	path := filepath.Join(sentinelDir, "pathflow-ws-dev")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("sentinel file pathflow-ws-dev not created")
+	}
+}
+
+func TestRunSentinelWriteWithSession(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which modify process-wide state.
+
+	// Set up temp project dir with sentinel directory.
+	projectDir := t.TempDir()
+	sessionID := "ses-test-sentinel"
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override detectProjectDir by changing cwd.
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create a git repo in the temp dir so detectProjectDir returns it.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
+
+	t.Run("creates sentinel on STAGE-COMPLETE", func(t *testing.T) {
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+		var stdout, stderr bytes.Buffer
+		err := runSentinelWrite(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Errorf("runSentinelWrite() unexpected error: %v", err)
+		}
+
+		path := filepath.Join(sentinelDir, "pathflow-ws-dev")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Error("sentinel file pathflow-ws-dev not created")
+		}
+	})
+
+	t.Run("blocks ws-rev without primary stage", func(t *testing.T) {
+		// Remove ws-dev sentinel to ensure rev is blocked.
+		_ = os.Remove(filepath.Join(sentinelDir, "pathflow-ws-dev"))
+
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`)
+		var stdout, stderr bytes.Buffer
+		err := runSentinelWrite(stdin, &stdout, &stderr)
+		if err == nil {
+			t.Fatal("runSentinelWrite() expected error for blocked ws-rev")
+		}
+		var ee *exitError
+		if ok := isExitError(err, &ee); !ok {
+			t.Errorf("error type = %T, want *exitError", err)
+		} else if ee.code != ExitHookBlock {
+			t.Errorf("exit code = %d, want %d", ee.code, ExitHookBlock)
+		}
+		if !strings.Contains(stderr.String(), "BLOCKED") {
+			t.Errorf("stderr = %q, want substring 'BLOCKED'", stderr.String())
+		}
+	})
+}
+
+func TestSentinelWriteCmdViaRoot(t *testing.T) {
+	t.Parallel()
+
+	root := newHooksCmd()
+	root.SetArgs([]string{"post-tool-use", "sentinel-write"})
+	root.SetIn(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`))
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	err := root.Execute()
+	if err != nil {
+		t.Errorf("sentinel-write command returned error: %v", err)
+	}
+}
+
+// --- Checkpoint register CLI handler ---
+
+func TestRunHookCheckpointRegister(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		stdin string
+	}{
+		{
+			name:  "non-TaskCreate tool allowed",
+			stdin: `{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`,
+		},
+		{
+			name:  "empty stdin allowed",
+			stdin: "",
+		},
+		{
+			name:  "invalid JSON allowed",
+			stdin: "not json",
+		},
+		{
+			name:  "TaskCreate without PF pattern allowed",
+			stdin: `{"tool_name":"TaskCreate","tool_input":{"subject":"Regular task"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := strings.NewReader(tt.stdin)
+			var stdout, stderr bytes.Buffer
+			err := runHookCheckpointRegister(stdin, &stdout, &stderr)
+
+			if err != nil {
+				t.Errorf("runHookCheckpointRegister() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunHookCheckpointRegisterWithSession(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which modify process-wide state.
+
+	projectDir := t.TempDir()
+	sessionID := "ses-test-checkpoint-reg"
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create git repo so detectProjectDir works.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
+
+	// Create a checkpoint file with PF1 phase.
+	checkpointFile := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
+	checkpointJSON := `{"PF1":{"expected":["PF1-TSK-01"],"conditions":{},"registered":{},"completed":{},"skipped":{},"sentinel_created":false},"PF2":{"expected":["PF2-TSK-01"],"conditions":{},"registered":{},"completed":{},"skipped":{},"sentinel_created":false}}`
+	if err := os.WriteFile(checkpointFile, []byte(checkpointJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("registers PF1 task", func(t *testing.T) {
+		stdin := strings.NewReader(`{"tool_name":"TaskCreate","tool_input":{"subject":"PF1-TSK-01 Init"}}`)
+		var stdout, stderr bytes.Buffer
+		err := runHookCheckpointRegister(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Errorf("runHookCheckpointRegister() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("blocks PF2 task without pf-1 sentinel", func(t *testing.T) {
+		stdin := strings.NewReader(`{"tool_name":"TaskCreate","tool_input":{"subject":"PF2-TSK-01 Context"}}`)
+		var stdout, stderr bytes.Buffer
+		err := runHookCheckpointRegister(stdin, &stdout, &stderr)
+		if err == nil {
+			t.Fatal("runHookCheckpointRegister() expected error for cross-phase block")
+		}
+		var ee *exitError
+		if ok := isExitError(err, &ee); !ok {
+			t.Errorf("error type = %T, want *exitError", err)
+		} else if ee.code != ExitHookBlock {
+			t.Errorf("exit code = %d, want %d", ee.code, ExitHookBlock)
+		}
+		if !strings.Contains(stderr.String(), "CHECKPOINT BLOCK") {
+			t.Errorf("stderr = %q, want substring 'CHECKPOINT BLOCK'", stderr.String())
+		}
+	})
+}
+
+func TestCheckpointRegisterCmdViaRoot(t *testing.T) {
+	t.Parallel()
+
+	root := newHooksCmd()
+	root.SetArgs([]string{"post-tool-use", "checkpoint-register"})
+	root.SetIn(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`))
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	err := root.Execute()
+	if err != nil {
+		t.Errorf("checkpoint-register command returned error: %v", err)
+	}
+}
+
+// --- Checkpoint complete CLI handler ---
+
+func TestRunHookCheckpointComplete(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		stdin string
+	}{
+		{
+			name:  "empty stdin allowed",
+			stdin: "",
+		},
+		{
+			name:  "invalid JSON allowed",
+			stdin: "not json",
+		},
+		{
+			name:  "non-PF task subject allowed",
+			stdin: `{"task_subject":"Regular task completion"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := strings.NewReader(tt.stdin)
+			var stdout, stderr bytes.Buffer
+			err := runHookCheckpointComplete(stdin, &stdout, &stderr)
+
+			if err != nil {
+				t.Errorf("runHookCheckpointComplete() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunHookCheckpointCompleteWithSession(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses t.Setenv and os.Chdir which modify process-wide state.
+
+	projectDir := t.TempDir()
+	sessionID := "ses-test-checkpoint-cpl"
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create git repo so detectProjectDir works.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
+
+	// Create a checkpoint file with PF1 phase (single task, already registered).
+	checkpointFile := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
+	checkpointJSON := `{"PF1":{"expected":["PF1-TSK-01"],"conditions":{},"registered":{"PF1-TSK-01":"2026-02-28T00:00:00Z"},"completed":{},"skipped":{},"sentinel_created":false},"PF2":{"expected":["PF2-TSK-01"],"conditions":{},"registered":{},"completed":{},"skipped":{},"sentinel_created":false}}`
+	if err := os.WriteFile(checkpointFile, []byte(checkpointJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("completes PF1 task and creates sentinel", func(t *testing.T) {
+		stdin := strings.NewReader(`{"task_subject":"PF1-TSK-01 Init"}`)
+		var stdout, stderr bytes.Buffer
+		err := runHookCheckpointComplete(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Errorf("runHookCheckpointComplete() unexpected error: %v", err)
+		}
+
+		// Verify phase sentinel was created (PF1 has 1 task, now complete).
+		path := filepath.Join(sentinelDir, "pathflow-pf-1")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Error("phase sentinel pathflow-pf-1 not created")
+		}
+	})
+
+	t.Run("blocks PF2 task without pf-1 sentinel", func(t *testing.T) {
+		// Remove pf-1 sentinel to test cross-phase block.
+		_ = os.Remove(filepath.Join(sentinelDir, "pathflow-pf-1"))
+
+		stdin := strings.NewReader(`{"task_subject":"PF2-TSK-01 Context"}`)
+		var stdout, stderr bytes.Buffer
+		err := runHookCheckpointComplete(stdin, &stdout, &stderr)
+		if err == nil {
+			t.Fatal("runHookCheckpointComplete() expected error for cross-phase block")
+		}
+		var ee *exitError
+		if ok := isExitError(err, &ee); !ok {
+			t.Errorf("error type = %T, want *exitError", err)
+		} else if ee.code != ExitHookBlock {
+			t.Errorf("exit code = %d, want %d", ee.code, ExitHookBlock)
+		}
+		if !strings.Contains(stderr.String(), "CHECKPOINT BLOCK") {
+			t.Errorf("stderr = %q, want substring 'CHECKPOINT BLOCK'", stderr.String())
+		}
+	})
+}
+
+func TestCheckpointCompleteCmdViaRoot(t *testing.T) {
+	t.Parallel()
+
+	root := newHooksCmd()
+	root.SetArgs([]string{"task-completed", "checkpoint-complete"})
+	root.SetIn(strings.NewReader(`{"task_subject":"Regular task"}`))
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	err := root.Execute()
+	if err != nil {
+		t.Errorf("checkpoint-complete command returned error: %v", err)
 	}
 }
