@@ -45,7 +45,8 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 - Claude Code wrapping/exec (Phase 7)
 - NX monorepo setup
 - Package manager distribution
-- Protection scripts requiring sudo (`cf-protect-resources.sh`, `cf-promote-protection.sh`, `cf-reload-protection.sh`) -- these stay as shell
+- Protection scripts requiring sudo (`cf-protect-resources.sh`) -- stays as shell (requires sudo chown/chmod)
+- `cf-promote-protection.sh` and `cf-reload-protection.sh` are now migratable to Go (see INF-TSK-021-036); they do NOT require sudo
 - Web UI or dashboard
 - CRDT implementation in Go (Loro integration deferred)
 
@@ -113,7 +114,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-013 | Wire codeflow session start into SessionStart hook | complete | high |
 | INF-TSK-021-014 | Build Go equivalents for Python scripts and codeflow_py_lib | complete | high |
 | INF-TSK-021-015 | Build Go CLI for shell-lib foundation | complete | normal |
-| INF-TSK-021-016 | Build Go CLI for settings and staging scripts | todo | normal |
+| INF-TSK-021-016 | Build Go CLI for settings validation and protection guard | todo | normal |
 | INF-TSK-021-017 | Build Go CLI for logging hooks | todo | normal |
 | INF-TSK-021-018 | Build Go CLI for edit-write, protected-resource, and user-prompt-submit hooks | todo | normal |
 | INF-TSK-021-019 | Build Go CLI for worktree and report scripts | todo | normal |
@@ -130,6 +131,10 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | todo | high |
 | INF-TSK-021-031 | Post-cutover verification -- full lifecycle test with Go hooks | todo | high |
 | INF-TSK-021-032 | Fix replace/migrate language in INF-EPC-021 build tasks | complete | high |
+| INF-TSK-021-033 | Align INF-EPC-021 tasks with revised Go CLI migration decisions | complete | high |
+| INF-TSK-021-034 | Build Go CLI for session-start instructions hook | todo | high |
+| INF-TSK-021-035 | Migrate git hooks to Go with thin shell wrappers | todo | normal |
+| INF-TSK-021-036 | Migrate protection management scripts to Go | todo | low |
 
 ## Dependencies
 
@@ -149,7 +154,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 The migration follows the **Build-Coexist-Cutover** strategy (documented in `.codeflow/docs/analysis/go-cli-migration-comprehensive.md` Section 10.1) with six phases:
 
 1. **Phase A (Prerequisites)** -- INF-EPC-015 (Go CLI binary built), INF-EPC-013 (session ID bugs fixed)
-2. **Phase B (Build)** -- Tasks 001-014: Create all Go subcommands with full functionality and >= 85% test coverage. Shell/Python scripts remain UNCHANGED and active. No settings.json modifications. Go code is built and tested but not wired in.
+2. **Phase B (Build)** -- Tasks 001-015, 017-020, 033-036: Create all Go subcommands with full functionality and >= 85% test coverage. Shell/Python scripts remain UNCHANGED and active. No settings.json modifications. Go code is built and tested but not wired in.
 3. **Phase C (Shadow Testing)** -- Task 030: Run Go subcommands alongside shell scripts, compare output, log divergences. Validates behavioral parity before cutover.
 4. **Phase D (JSONL Normalization)** -- Task 026: Normalize JSONL ledger/log schema before cutover to ensure Go binary reads/writes the correct format.
 5. **Phase E (Single-Session Cutover)** -- Tasks 015-024, 026-028 (025 cancelled, absorbed into 022): In a single session, update all settings.json hook entries from shell to Go binary, delete retired shell/Python scripts, update documentation and CI. This is the atomic switchover.
@@ -178,7 +183,7 @@ codeflow-cli/internal/
   sentinel/        # Sentinel system (create, check, list)
   validate/        # Epic/task markdown validation
   workstate/       # Active task state management
-  shellutil/       # Shell-lib equivalents (logging, config, errors)
+  cliutil/         # Shell-lib equivalents (logging, config, errors)
 ```
 
 ### Hook Invocation Pattern
@@ -206,12 +211,35 @@ Target (Go):
 ### Key Constraints
 
 - No backward compatibility concerns -- optimize for best end state
-- Shell scripts requiring sudo (protection scripts) STAY as shell
+- `cf-protect-resources.sh` STAYS as shell (requires sudo chown/chmod; cannot avoid)
+- `cf-promote-protection.sh` and `cf-reload-protection.sh` are migratable to Go (INF-TSK-021-036: no sudo required; pure text file I/O)
 - Dead code (`cf-hook-bypass.sh`, `shell-lib/index.sh`) is removed, not migrated
 - All hook scripts read stdin JSON -- Go binary must accept the same stdin format
 - Go binary must handle `CLAUDE_PROJECT_DIR`, `CODEFLOW_SESSION_ID`, and other env vars
 - Settings.json timeout values can be reduced (Go is faster) but not eliminated
 - Platform-specific bugs (macOS/Linux) are fixed by Go's stdlib (no more `date`/`stat`/`flock` splits)
+
+### Scope Revisions (Post-Initial Planning)
+
+**INF-TSK-021-016 scope revised (INF-TSK-021-033):**
+
+- Original scope: settings scripts (cf-change-approval-mode.sh, setup-managed-settings.sh) + staging scripts
+- Revised scope: settings validation (`codeflow settings validate` / `codeflow hooks post-tool-use settings-validate`) + protection-guard command (`codeflow hooks pre-tool-use protection-guard`)
+- 5 dormant staging scripts in `.codeflow/scripts/security/staging/` are replaced by the protection-guard command; they were never called programmatically
+- `cf-post-tool-use-settings-templates.sh` consolidated into `codeflow settings validate` -- single Go function serves both CLI and hook entry points
+- `cf-post-tool-use-tmp-workflow.sh` consolidated into protection-guard command
+- Approval mode shell script (`cf-change-approval-mode.sh`) dropped from scope; the `/cf-approval-mode` slash command stays as-is
+
+**New tasks added (Phase B build phase):**
+
+- INF-TSK-021-034: Session-start instructions hook (`cf-session-start-instructions.sh`) now has a build task; previously omitted from Phase B
+- INF-TSK-021-035: Git hooks migrated to Go with thin shell wrappers -- hybrid approach: `pre-commit` retains shell wrapper for linting tool invocations (shellcheck, ruff, markdownlint), all others get thin shell wrappers delegating to `codeflow git-hooks <name>`; Go subcommand `codeflow git-hooks pre-commit-validate` handles pure-logic checks; blocked by TSK-015 and TSK-006
+- INF-TSK-021-036: Protection management scripts (`cf-promote-protection.sh`, `cf-reload-protection.sh`) migrated to Go; blocked by TSK-015
+
+**Retained scripts count revised:**
+
+- Git hooks: previously 5 permanently retained (shell) → 1 hybrid (pre-commit: shell wrapper + Go logic) + 4 thin wrappers (minimal shell delegation)
+- Protection: previously 3 retained (all shell) → 1 retained (`cf-protect-resources.sh`, requires sudo) + 2 migrated to Go (TSK-036)
 
 ### Test Migration Strategy
 

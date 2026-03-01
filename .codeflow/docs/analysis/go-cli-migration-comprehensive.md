@@ -298,14 +298,13 @@ Go migration for consistency and elimination of the shell testing framework.
 
 ### 3.4 Tier 4 — KEEP AS SHELL
 
-**5 scripts.** These scripts have genuine shell dependencies that cannot or should not
+**4 scripts.** These scripts have genuine shell dependencies that cannot or should not
 be replaced with Go.
 
 | Script | Lines | Why Keep |
 |--------|-------|----------|
 | `.codeflow/scripts/security/validation/cf-validate-shell.sh` | 158 | Requires `bash -n` and `shellcheck` — tool validation |
 | `.codeflow/scripts/security/protection/cf-protect-resources.sh` | 420 | Requires `sudo chown`/`chmod` — privilege escalation |
-| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | Requires `sudo` — privilege escalation |
 | `.codeflow/scripts/security/enforcement/cf-hook-bypass.sh` | 37 | **DEAD CODE** — remove entirely |
 | `.codeflow/scripts/shell-lib/index.sh` | ~25 | Module loader concept disappears in Go |
 
@@ -385,7 +384,7 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
-| `shell-lib/common.sh` | 187 | Common shell utilities (sourced by others) | T2 | `internal/shellutil/` | Sourced by most scripts; disappears in Go |
+| `shell-lib/common.sh` | 187 | Common shell utilities (sourced by others) | T2 | `internal/cliutil/` | Sourced by most scripts; disappears in Go |
 | `shell-lib/config.sh` | 143 | Read codeflow config (YAML via python3) | T2 | `internal/config/` | python3 subprocess for YAML parsing |
 | `shell-lib/errors.sh` | 184 | Error handling and exit utilities | T2 | `internal/errors/` | Sourced by most scripts |
 | `shell-lib/index.sh` | 25 | Module loader (sources other lib files) | T4 | Remove | Concept disappears in Go; no callers outside scripts |
@@ -418,13 +417,19 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 
 #### 4.1.9 `security/staging/`
 
+> **Status: DORMANT.** These 5 scripts are never called by any hook or agent programmatically.
+> Verified by searching for callers across all hook scripts and agent definitions — zero callers found.
+> They are replaced by the protection-guard command (`codeflow hooks pre-tool-use protection-guard`,
+> INF-TSK-021-016) which consolidates the protected-resource tier check, staging workflow guidance,
+> and tmp-workflow state management into a single Go command.
+
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
-| `security/staging/cf-stage-edit.sh` | 248 | Stage an edit for review before apply | T2 | `codeflow hooks edit-write-guard` | Part of staged edit workflow |
-| `security/staging/cf-apply-staged-edit.sh` | 269 | Apply a previously staged edit | T2 | `codeflow hooks edit-write-guard` | Part of staged edit workflow |
-| `security/staging/cf-rollback-edit.sh` | 225 | Roll back a staged edit | T2 | `codeflow hooks edit-write-guard` | Part of staged edit workflow |
-| `security/staging/cf-reject-staged-edit.sh` | 162 | Reject a pending staged edit | T2 | `codeflow hooks edit-write-guard` | Part of staged edit workflow |
-| `security/staging/cf-cleanup-expired.sh` | 195 | Remove expired staged edits | T2 | `codeflow hooks edit-write-guard` | TTL cleanup |
+| `security/staging/cf-stage-edit.sh` | 248 | Stage an edit for review before apply | DORMANT | `codeflow hooks pre-tool-use protection-guard` | Never called programmatically; replaced by protection-guard |
+| `security/staging/cf-apply-staged-edit.sh` | 269 | Apply a previously staged edit | DORMANT | `codeflow hooks pre-tool-use protection-guard` | Never called programmatically; replaced by protection-guard |
+| `security/staging/cf-rollback-edit.sh` | 225 | Roll back a staged edit | DORMANT | `codeflow hooks pre-tool-use protection-guard` | Never called programmatically; replaced by protection-guard |
+| `security/staging/cf-reject-staged-edit.sh` | 162 | Reject a pending staged edit | DORMANT | `codeflow hooks pre-tool-use protection-guard` | Never called programmatically; replaced by protection-guard |
+| `security/staging/cf-cleanup-expired.sh` | 195 | Remove expired staged edits | DORMANT | `codeflow hooks pre-tool-use protection-guard` | Never called programmatically; replaced by protection-guard |
 
 #### 4.1.10 `security/sentinel/`
 
@@ -437,8 +442,8 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
 | `security/protection/cf-protect-resources.sh` | 420 | Apply filesystem protection via chown/chmod | T4 | Keep shell | Requires sudo; cannot avoid |
-| `security/protection/cf-reload-protection.sh` | 246 | Reload protection rules | T4 | Keep shell | Requires sudo |
-| `security/protection/cf-promote-protection.sh` | 179 | Promote resource to protected status | T3 | `codeflow hooks protected-resource` | sudo calls isolatable |
+| `security/protection/cf-reload-protection.sh` | 246 | Reload protection rules | T3 | `codeflow protection reload` | MIGRATABLE (INF-TSK-021-036) — does not require sudo |
+| `security/protection/cf-promote-protection.sh` | 179 | Promote resource to protected status | T3 | `codeflow protection promote` | MIGRATABLE (INF-TSK-021-036) — sudo calls isolatable |
 | `security/protection/lib/cf-protection-common.sh` | 170 | Common protection utilities | T3 | `internal/protection/` | Sourced by protection scripts |
 | `security/protection/lib/cf-protection-core.sh` | 137 | Core protection logic | T3 | `internal/protection/` | Sourced by protection scripts |
 | `security/protection/lib/cf-protection-ops.sh` | 129 | Protection file operations | T3 | `internal/protection/` | Sourced by protection scripts |
@@ -508,8 +513,8 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 | `post-tool-use/cf-post-tool-use-pathflow-sentinel.sh` | 267 | Create stage sentinels on STAGE-COMPLETE | T1 | `codeflow hooks sentinel-write` | Sentinel creation on critical enforcement path |
 | `post-tool-use/cf-post-tool-use-phase-checkpoint.sh` | 180 | Register/complete phase checkpoint tasks | T1 | `codeflow hooks checkpoint-register` | Phase sentinel creation on critical path |
 | `post-tool-use/cf-post-tool-use-logging.sh` | 217 | Log every tool call with result | T2 | `codeflow hooks post-tool-use-logging` | UUID session ID bug |
-| `post-tool-use/cf-post-tool-use-settings-templates.sh` | 457 | Sync settings.json from managed templates | T2 | `codeflow hooks settings-templates` | Largest post-tool-use hook |
-| `post-tool-use/cf-post-tool-use-tmp-workflow.sh` | 142 | Manage tmp workflow state files | T2 | `codeflow hooks tmp-workflow` | Tmp file lifecycle management |
+| `post-tool-use/cf-post-tool-use-settings-templates.sh` | 457 | Sync settings.json from managed templates | T2 | `codeflow hooks post-tool-use settings-validate` | Consolidated into `codeflow settings validate` (INF-TSK-021-016); single Go function serves both CLI and hook entry points |
+| `post-tool-use/cf-post-tool-use-tmp-workflow.sh` | 142 | Manage tmp workflow state files | T2 | `codeflow hooks pre-tool-use protection-guard` | Consolidated into protection-guard command (INF-TSK-021-016) |
 
 #### 4.2.5 `user-prompt-submit/`
 
@@ -1173,6 +1178,21 @@ codeflow (Go binary — source: codeflow-cli/)
 │   ├── end                        -- replaces session-end-cleanup hook logic
 │   └── status                     -- query current session state
 │
+├── settings
+│   ├── validate                   -- replaces cf-post-tool-use-settings-templates.sh; also callable as codeflow hooks post-tool-use settings-validate
+│   └── setup-managed              -- replaces setup-managed-settings.sh (INF-TSK-021-016)
+│
+├── protection                     -- protection management commands (INF-TSK-021-036)
+│   ├── promote                    -- replaces cf-promote-protection.sh
+│   └── reload                     -- replaces cf-reload-protection.sh
+│
+├── git-hooks                      -- git hook logic as Go subcommands (INF-TSK-021-035)
+│   ├── pre-commit-validate        -- pure-logic checks (branch protection, sensitive files, JSON, Go test conventions, coverage)
+│   ├── commit-msg                 -- validates conventional commit format; replaces commit-msg shell hook
+│   ├── post-commit                -- JSONL logging after commit; replaces post-commit shell hook; fixes JSON construction bug
+│   ├── pre-push                   -- branch naming validation; replaces pre-push shell hook; TTY via os.Open("/dev/tty")
+│   └── prepare-commit-msg        -- commit message template; replaces prepare-commit-msg shell hook
+│
 ├── ledger
 │   ├── append <event-type>        -- replaces echo-to-jsonl pattern
 │   ├── validate <file>            -- validate JSONL integrity
@@ -1203,6 +1223,8 @@ codeflow (Go binary — source: codeflow-cli/)
 ├── memory
 │   └── store                      -- replaces cf-memory-store.py
 │
+├── shadow-test                    -- run Go subcommands alongside shell scripts and compare output (INF-TSK-021-030)
+│
 └── hooks                          -- all hook logic as subcommands (grouped by event type)
     ├── session-start
     │   ├── init                   -- replaces cf-session-start-init.sh
@@ -1214,17 +1236,16 @@ codeflow (Go binary — source: codeflow-cli/)
     ├── pre-tool-use
     │   ├── gate-check             -- replaces cf-pre-tool-use-pathflow-gate.sh
     │   ├── security               -- replaces security-lib.sh + all 9 enforcement modules
-    │   ├── edit-write-guard       -- replaces cf-pre-tool-use-edit-write.sh
+    │   ├── edit-write-guard       -- replaces cf-pre-tool-use-edit-write.sh (path scope enforcement)
     │   ├── gh-pr-guard            -- replaces cf-pre-tool-use-gh-pr.sh
-    │   ├── protected-resource     -- replaces cf-pre-tool-use-protected-resource.sh
+    │   ├── protection-guard       -- replaces cf-pre-tool-use-protected-resource.sh + cf-post-tool-use-tmp-workflow.sh + 5 dormant staging scripts
     │   ├── team-guard             -- replaces cf-pre-tool-use-team-guard.sh
     │   └── webfetch-guard         -- replaces cf-pre-tool-use-webfetch.sh
     ├── post-tool-use
     │   ├── sentinel-write         -- replaces cf-post-tool-use-pathflow-sentinel.sh
     │   ├── checkpoint-register    -- replaces cf-post-tool-use-phase-checkpoint.sh
     │   ├── logging                -- replaces cf-post-tool-use-logging.sh
-    │   ├── settings-templates     -- replaces cf-post-tool-use-settings-templates.sh
-    │   └── tmp-workflow           -- replaces cf-post-tool-use-tmp-workflow.sh
+    │   └── settings-validate      -- replaces cf-post-tool-use-settings-templates.sh (also exposed as `codeflow settings validate`)
     ├── user-prompt-submit
     │   ├── validate               -- replaces cf-user-prompt-submit.sh
     │   └── logging                -- replaces cf-user-prompt-submit-logging.sh
@@ -1286,31 +1307,33 @@ All new Go packages from this epic must integrate with `codeflow-cli/config/test
 
 Not everything migrates. The following infrastructure SURVIVES the Go CLI migration and remains as shell scripts, test files, or CI workflows.
 
-### 10.1 Shell Scripts Retained (13 scripts, ~2,455 lines)
+### 10.1 Shell Scripts Retained (partially revised — see below)
 
-**Security protection scripts (7 scripts) -- require sudo/root:**
+**Security protection scripts — revised classification:**
 
-| Script | Lines | Reason |
-|--------|-------|--------|
-| `.codeflow/scripts/security/protection/cf-protect-resources.sh` | 420 | Requires sudo/root for chown/chmod |
-| `.codeflow/scripts/security/protection/cf-promote-protection.sh` | 179 | Requires sudo |
-| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | Requires sudo |
-| `.codeflow/scripts/security/protection/lib/cf-protection-common.sh` | 170 | Sourced by protection scripts |
-| `.codeflow/scripts/security/protection/lib/cf-protection-core.sh` | 137 | Sourced by protection scripts |
-| `.codeflow/scripts/security/protection/lib/cf-protection-ops.sh` | 129 | Sourced by protection scripts |
-| `.codeflow/scripts/security/protection/lib/cf-protection-verify.sh` | 252 | Sourced by protection scripts |
+| Script | Lines | Status | Reason |
+|--------|-------|--------|--------|
+| `.codeflow/scripts/security/protection/cf-protect-resources.sh` | 420 | RETAINED | Requires sudo/root for chown/chmod — cannot avoid privilege escalation |
+| `.codeflow/scripts/security/protection/cf-promote-protection.sh` | 179 | MIGRATABLE (INF-TSK-021-036) | Does NOT require sudo — pure text file I/O; promotes resource tier in config |
+| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | MIGRATABLE (INF-TSK-021-036) | Does NOT require sudo — reads config, builds JSON cache |
+| `.codeflow/scripts/security/protection/lib/cf-protection-common.sh` | 170 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
+| `.codeflow/scripts/security/protection/lib/cf-protection-core.sh` | 137 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
+| `.codeflow/scripts/security/protection/lib/cf-protection-ops.sh` | 129 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
+| `.codeflow/scripts/security/protection/lib/cf-protection-verify.sh` | 252 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
 
-**Git hooks (5 scripts) -- standard git hook system, separate from Claude Code hooks:**
+**Original rationale for retaining cf-promote-protection.sh and cf-reload-protection.sh was incorrect.** These scripts do not call sudo. `cf-protect-resources.sh` is the only script in this group with a genuine sudo dependency. The two management scripts are now targets for INF-TSK-021-036.
 
-| Script | Lines | Reason |
-|--------|-------|--------|
-| `.codeflow/scripts/git-hooks/pre-commit` | 672 | Enforces commit discipline; runs once per commit, not per tool call |
-| `.codeflow/scripts/git-hooks/commit-msg` | 309 | Validates conventional commit format |
-| `.codeflow/scripts/git-hooks/post-commit` | 73 | JSONL logging after commit |
-| `.codeflow/scripts/git-hooks/pre-push` | 275 | Branch naming validation |
-| `.codeflow/scripts/git-hooks/prepare-commit-msg` | 116 | Commit message template |
+**Git hooks (partially migrated — hybrid approach via INF-TSK-021-035):**
 
-**Why git hooks stay as shell:** They enforce git-level commit discipline (conventional commits, branch naming, linting). They run once per git operation (not per tool call), have no latency concern, and are separate from the Claude Code hook system.
+| Script | Lines | Status | Notes |
+|--------|-------|--------|-------|
+| `.codeflow/scripts/git-hooks/pre-commit` | 672 | HYBRID | Shell wrapper retained for linting tool invocations (shellcheck, ruff, markdownlint with auto-fix+re-staging). Go subcommand `codeflow git-hooks pre-commit-validate` handles pure-logic checks (branch protection, sensitive files, JSON validation, Go test conventions, coverage enforcement). |
+| `.codeflow/scripts/git-hooks/commit-msg` | 309 | THIN WRAPPER | Delegates to `codeflow git-hooks commit-msg` — eliminates jq JSON construction |
+| `.codeflow/scripts/git-hooks/post-commit` | 73 | THIN WRAPPER | Delegates to `codeflow git-hooks post-commit` — fixes systemic JSON construction bug |
+| `.codeflow/scripts/git-hooks/pre-push` | 275 | THIN WRAPPER | Delegates to `codeflow git-hooks pre-push` — TTY override via os.Open("/dev/tty") |
+| `.codeflow/scripts/git-hooks/prepare-commit-msg` | 116 | THIN WRAPPER | Delegates to `codeflow git-hooks prepare-commit-msg` |
+
+**Revised rationale for git hook migration:** Latency is not the primary driver. Go provides type-safe config parsing (eliminates jq subprocess chains), fixes a systemic JSON construction bug in post-commit, and enables consistent testing via the Go test framework. All parameters configurable via enforcement-policy.json — downstream teams customize config, not code. The `core.hooksPath` setting is unchanged; only the hook script content changes.
 
 **Top-level wrapper:**
 
@@ -1324,7 +1347,7 @@ Not everything migrates. The following infrastructure SURVIVES the Go CLI migrat
 |------|-------------|
 | `.codeflow/testing/lib/` (10 scripts) | Test framework libraries (test-common.sh, test-runner.sh, etc.) |
 | `.codeflow/testing/cli/test-go-cli.sh` | Go test bridge script |
-| `.codeflow/testing/scripts/git-hooks/` (5 test files) | Tests for retained git hooks |
+| `.codeflow/testing/scripts/git-hooks/` (5 test files) | Tests for git hook shell wrappers (partially migrated per INF-TSK-021-035) |
 | `.codeflow/testing/scripts/security/protection/` (~7 test files) | Tests for retained protection scripts |
 | `.codeflow/testing/ci/check-test-coverage-pairing.sh` | CI coverage pairing check (needs update post-migration) |
 
@@ -1335,6 +1358,37 @@ Not everything migrates. The following infrastructure SURVIVES the Go CLI migrat
 | `.github/workflows/test-suite.yml` | MODIFIED: remove Python venv/pytest steps, retain Go test job |
 | `.github/workflows/enforce-commit-format.yml` | RETAINED unchanged |
 | `.github/workflows/prevent-force-push.yml` | RETAINED unchanged |
+
+### 10.4 Consolidation Design Decisions
+
+**protection-guard command consolidation (INF-TSK-021-016):**
+
+`protection-guard` (`codeflow hooks pre-tool-use protection-guard`) consolidates three previously separate concerns into a single Go command:
+
+1. `cf-pre-tool-use-protected-resource.sh` — tier check (CRITICAL/HIGH/MODERATE) and policy response
+2. `cf-post-tool-use-tmp-workflow.sh` — staging workflow guidance and tmp file lifecycle management
+3. 5 dormant staging scripts (`cf-stage-edit.sh`, `cf-apply-staged-edit.sh`, `cf-rollback-edit.sh`, `cf-reject-staged-edit.sh`, `cf-cleanup-expired.sh`) — these scripts were never called programmatically and are fully replaced by the protection-guard workflow
+
+A single Go command handles the complete protected-resource edit workflow: detect the tier, advise the agent on staging path, and manage tmp state.
+
+**protection-guard vs edit-write-guard — they are complementary, not overlapping:**
+
+| Command | Subcommand | Purpose | Triggered By |
+|---------|------------|---------|--------------|
+| `edit-write-guard` | `codeflow hooks pre-tool-use edit-write-guard` | Enforces which files agents CAN edit — path scope permissions | Every Edit/Write tool call |
+| `protection-guard` | `codeflow hooks pre-tool-use protection-guard` | Handles what happens when agents try to edit PROTECTED files — tier check + auto-staging workflow | Edit/Write tool calls on protected resource paths |
+
+`edit-write-guard` answers "is this file in the agent's allowed scope?" — a broad scope enforcement check.
+`protection-guard` answers "this file is protected — what tier is it and how should the agent proceed?" — a targeted policy response for files that pass scope but require special handling.
+
+**settings-validate consolidation (INF-TSK-021-016):**
+
+`cf-post-tool-use-settings-templates.sh` is consolidated into `codeflow settings validate`. The same Go function is exposed at two entry points:
+
+- `codeflow settings validate` — CLI entry point for manual validation
+- `codeflow hooks post-tool-use settings-validate` — hook entry point (replaces the PostToolUse hook script)
+
+This eliminates the code duplication between the CLI `mode` command (which read settings.json) and the hook (which synced settings.json from managed templates).
 
 ---
 
