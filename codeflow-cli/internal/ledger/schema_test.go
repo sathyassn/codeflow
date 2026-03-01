@@ -34,6 +34,60 @@ func TestValidateEvent(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid claim_created",
+			event: Event{
+				EventType: "claim_created",
+				Data: map[string]any{
+					"id": "claim_01ABCDEF",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid claim_released",
+			event: Event{
+				EventType: "claim_released",
+				Data: map[string]any{
+					"claim_id": "claim_01ABCDEF",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid claim_renewed",
+			event: Event{
+				EventType: "claim_renewed",
+				Data: map[string]any{
+					"claim_id": "claim_01ABCDEF",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "claim_created missing id",
+			event: Event{
+				EventType: "claim_created",
+				Data:      map[string]any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "claim_released missing claim_id",
+			event: Event{
+				EventType: "claim_released",
+				Data:      map[string]any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "claim_renewed missing claim_id",
+			event: Event{
+				EventType: "claim_renewed",
+				Data:      map[string]any{},
+			},
+			wantErr: true,
+		},
+		{
 			name: "valid config_set with no extra fields",
 			event: Event{
 				EventType: "config_set",

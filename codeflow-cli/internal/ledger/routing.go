@@ -32,6 +32,9 @@ var eventRoutes = map[string]string{
 	"session_end":      FileSessions,
 	"session_progress": FileSessions,
 	"work_claimed":     FileSessions,
+	"claim_created":    FileSessions,
+	"claim_released":   FileSessions,
+	"claim_renewed":    FileSessions,
 
 	// work-graph.jsonl
 	"epic_created":        FileWorkGraph,

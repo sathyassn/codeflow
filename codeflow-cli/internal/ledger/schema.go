@@ -13,6 +13,9 @@ var requiredFields = map[string][]string{
 	"session_end":      {"session_id"},
 	"session_progress": {"session_id"},
 	"work_claimed":     {"session_id"},
+	"claim_created":    {"id"},
+	"claim_released":   {"claim_id"},
+	"claim_renewed":    {"claim_id"},
 
 	// work-graph.jsonl
 	"epic_created":        {"id", "title"},

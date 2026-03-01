@@ -17,6 +17,9 @@ func TestRouteEvent(t *testing.T) {
 		{"session_end", FileSessions, false},
 		{"session_progress", FileSessions, false},
 		{"work_claimed", FileSessions, false},
+		{"claim_created", FileSessions, false},
+		{"claim_released", FileSessions, false},
+		{"claim_renewed", FileSessions, false},
 		{"epic_created", FileWorkGraph, false},
 		{"epic_status_changed", FileWorkGraph, false},
 		{"task_created", FileWorkGraph, false},
@@ -71,6 +74,10 @@ func TestValidateRoute(t *testing.T) {
 		wantErr   error
 	}{
 		{"correct route", "session_start", FileSessions, nil},
+		{"claim_created correct route", "claim_created", FileSessions, nil},
+		{"claim_released correct route", "claim_released", FileSessions, nil},
+		{"claim_renewed correct route", "claim_renewed", FileSessions, nil},
+		{"claim_created misrouted", "claim_created", FileWorkGraph, ErrMisroutedEvent},
 		{"misrouted event", "session_start", FileWorkGraph, ErrMisroutedEvent},
 		{"unknown event type", "fake_event", FileSessions, ErrUnknownEventType},
 	}
