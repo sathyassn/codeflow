@@ -740,40 +740,6 @@ func TestSweepOrphanSentinels(t *testing.T) {
 	}
 }
 
-func TestCleanupExpiredSentinels(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	projectDir := t.TempDir()
-	sid := "ses-1709136000000abcdef012345"
-
-	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sid)
-	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create expired sentinel.
-	expired, _ := json.Marshal(map[string]int64{"expires": fixedTime.Unix() - 3600})
-	if err := os.WriteFile(filepath.Join(sentinelDir, "expired.json"), expired, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create valid sentinel.
-	valid, _ := json.Marshal(map[string]int64{"expires": fixedTime.Unix() + 3600})
-	if err := os.WriteFile(filepath.Join(sentinelDir, "valid.json"), valid, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	init_.cleanupExpiredSentinels(projectDir, sid)
-
-	if _, err := os.Stat(filepath.Join(sentinelDir, "expired.json")); !os.IsNotExist(err) {
-		t.Error("expired sentinel should have been removed")
-	}
-	if _, err := os.Stat(filepath.Join(sentinelDir, "valid.json")); os.IsNotExist(err) {
-		t.Error("valid sentinel should remain")
-	}
-}
-
 func TestDetectCompactRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -1446,55 +1412,6 @@ func TestUpdateLeadPID(t *testing.T) {
 			t.Error("file should not exist after invalid JSON")
 		}
 	})
-}
-
-func TestCleanupExpiredSentinels_InvalidJSON(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	projectDir := t.TempDir()
-	sid := "ses-1709136000000abcdef012345"
-
-	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sid)
-	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Invalid JSON sentinel should be removed.
-	if err := os.WriteFile(filepath.Join(sentinelDir, "invalid.json"), []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	init_.cleanupExpiredSentinels(projectDir, sid)
-
-	if _, err := os.Stat(filepath.Join(sentinelDir, "invalid.json")); !os.IsNotExist(err) {
-		t.Error("invalid JSON sentinel should have been removed")
-	}
-}
-
-func TestCleanupExpiredSentinels_NoExpires(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	projectDir := t.TempDir()
-	sid := "ses-1709136000000abcdef012345"
-
-	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sid)
-	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Sentinel without expires field should be preserved.
-	noExpires, _ := json.Marshal(map[string]string{"type": "skill"})
-	if err := os.WriteFile(filepath.Join(sentinelDir, "no-expires.json"), noExpires, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	init_.cleanupExpiredSentinels(projectDir, sid)
-
-	if _, err := os.Stat(filepath.Join(sentinelDir, "no-expires.json")); os.IsNotExist(err) {
-		t.Error("sentinel without expires should be preserved")
-	}
 }
 
 func TestDetectStaleSessions_NoStale(t *testing.T) {

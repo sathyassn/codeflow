@@ -105,10 +105,7 @@ func (c *Cleaner) EndCleanup(stdin io.Reader, projectDir string) (*CleanupResult
 	// --- Section 5: PathFlow sentinel cleanup ---
 	c.cleanPathflowSentinels(projectDir, sessionID, result)
 
-	// --- Section 6: Skill sentinel cleanup ---
-	c.cleanSkillSentinels(projectDir, sessionID, result)
-
-	// --- Section 7: Active task preservation ---
+	// --- Section 6: Active task preservation ---
 	c.handleActiveTask(projectDir, result)
 
 	// --- Section 8: Read team info before removing session dir ---
@@ -273,24 +270,6 @@ func (c *Cleaner) cleanPathflowSentinels(projectDir, sessionID string, result *C
 	}
 	if err := os.RemoveAll(sentinelDir); err == nil {
 		result.SentinelsCleaned++
-	}
-}
-
-// cleanSkillSentinels removes all skill sentinels for this session.
-func (c *Cleaner) cleanSkillSentinels(projectDir, sessionID string, result *CleanupResult) {
-	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sessionID)
-	entries, err := os.ReadDir(sentinelDir)
-	if err != nil {
-		return
-	}
-	count := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			count++
-		}
-	}
-	if err := os.RemoveAll(sentinelDir); err == nil {
-		result.SentinelsCleaned += count
 	}
 }
 

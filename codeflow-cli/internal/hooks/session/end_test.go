@@ -559,42 +559,6 @@ func TestEndCleanup_TeamArtifactCleanup(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_SkillSentinelCleanup(t *testing.T) {
-	t.Parallel()
-
-	sessionID := "ses-1234567890123abcdef012345"
-	projectDir := setupCleanupFixture(t, sessionID)
-	cleaner := newTestCleaner(t)
-
-	// Create skill sentinel directory with sentinel files.
-	skillSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sessionID)
-	if err := os.MkdirAll(skillSentinelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillSentinelDir, "skill-a.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillSentinelDir, "skill-b.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	stdin := strings.NewReader(`{}`)
-	result, err := cleaner.EndCleanup(stdin, projectDir)
-	if err != nil {
-		t.Fatalf("EndCleanup() error = %v", err)
-	}
-
-	// Should count skill sentinels.
-	if result.SentinelsCleaned < 2 {
-		t.Errorf("SentinelsCleaned = %d, want >= 2 (skill sentinels)", result.SentinelsCleaned)
-	}
-
-	// Skill sentinel directory should be removed.
-	if _, err := os.Stat(skillSentinelDir); !os.IsNotExist(err) {
-		t.Error("skill sentinel dir still exists after cleanup")
-	}
-}
-
 func TestEndCleanup_LedgerEventContent(t *testing.T) {
 	t.Parallel()
 

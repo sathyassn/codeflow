@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newStateCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHooksCmd())
+	rootCmd.AddCommand(newSentinelCmd())
 
 	return rootCmd
 }

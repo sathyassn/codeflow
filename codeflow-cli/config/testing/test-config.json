@@ -10,6 +10,7 @@
       "./internal/session/...",
       "./internal/validate/...",
       "./internal/hooks/...",
+      "./internal/sentinel/...",
       "./internal/workstate/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."

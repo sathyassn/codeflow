@@ -11,7 +11,7 @@
 //   - Generate or load a CODEFLOW_SESSION_ID (ses-{timestamp}{hex} format)
 //   - Create required .state/ directories
 //   - Detect and warn about stale sessions and teams
-//   - Clean up expired sentinels and orphan sentinel directories
+//   - Clean up orphan sentinel directories
 //   - Create the pathflow-active flag (is-pathflow-active JSON file)
 //   - Initialize the checkpoint file for all 7 PathFlow phases
 //   - Write session metadata and current-session-id files
@@ -29,7 +29,7 @@
 //   - Resolve CODEFLOW_SESSION_ID from env file, environment, or current-session-id
 //   - PathFlow guard: skip cleanup for teammate shutdowns while lead is alive
 //   - Validate PF7 completion (check for pathflow-pf-7 sentinel)
-//   - Clean up PathFlow and skill sentinels for the session
+//   - Clean up PathFlow sentinels for the session
 //   - Preserve in-progress tasks, remove completed ones
 //   - Remove team config and task list directories (backstop cleanup)
 //   - Remove session state directory

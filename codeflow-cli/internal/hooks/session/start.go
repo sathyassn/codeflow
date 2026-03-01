@@ -180,10 +180,7 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 		result.warn("%s", w)
 	}
 
-	// --- Section 5: Sentinel cleanup (expires-based) ---
-	init_.cleanupExpiredSentinels(projectDir, sessionID)
-
-	// --- Section 5b: Orphan sentinel sweep ---
+	// --- Section 5: Orphan sentinel sweep ---
 	init_.sweepOrphanSentinels(projectDir, sessionID)
 
 	// --- Section 6: Active task context expiry ---
@@ -507,37 +504,6 @@ func (init_ *Initializer) isSessionStale(flagPath string) bool {
 		}
 	}
 	return true
-}
-
-// cleanupExpiredSentinels removes sentinel files that have an expired JSON "expires" field.
-func (init_ *Initializer) cleanupExpiredSentinels(projectDir, sessionID string) {
-	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "skill", sessionID)
-	entries, err := os.ReadDir(sentinelDir)
-	if err != nil {
-		return
-	}
-
-	now := init_.Now().Unix()
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		path := filepath.Join(sentinelDir, e.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var sentinel struct {
-			Expires int64 `json:"expires"`
-		}
-		if err := json.Unmarshal(data, &sentinel); err != nil {
-			_ = os.Remove(path)
-			continue
-		}
-		if sentinel.Expires > 0 && now >= sentinel.Expires {
-			_ = os.Remove(path)
-		}
-	}
 }
 
 // sweepOrphanSentinels removes pathflow sentinel dirs that have no corresponding session dir.
