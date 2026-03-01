@@ -10,7 +10,10 @@ import (
 	"strings"
 
 	"github.com/codeflow/codeflow-cli/internal/hooks/gate"
+	"github.com/codeflow/codeflow-cli/internal/hooks/ghpr"
 	"github.com/codeflow/codeflow-cli/internal/hooks/security"
+	"github.com/codeflow/codeflow-cli/internal/hooks/team"
+	"github.com/codeflow/codeflow-cli/internal/hooks/webfetch"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +45,9 @@ func newPreToolUseCmd() *cobra.Command {
 
 	cmd.AddCommand(newSecurityCmd())
 	cmd.AddCommand(newGateCheckCmd())
+	cmd.AddCommand(newGHPRGuardCmd())
+	cmd.AddCommand(newWebFetchGuardCmd())
+	cmd.AddCommand(newTeamGuardCmd())
 	return cmd
 }
 
@@ -258,3 +264,203 @@ func runGateCheck(stdin io.Reader, _ io.Writer, errW io.Writer, event string) er
 	return nil
 }
 
+// newGHPRGuardCmd creates the "gh-pr-guard" subcommand that blocks
+// gh pr merge commands targeting protected branches.
+func newGHPRGuardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gh-pr-guard",
+		Short: "Block gh pr merge against protected branches",
+		Long: `Check whether a gh pr merge command targets a protected branch.
+
+Reads Claude Code hook JSON from stdin, extracts the command,
+and blocks merges targeting protected branches (main, master,
+release/*, production). Exits 0 if allowed, 2 if blocked.
+
+Protected branches are read from enforcement-policy.json.
+
+Stdin format:
+  {"tool_name":"Bash","tool_input":{"command":"gh pr merge 42"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGHPRGuard(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// ghPRResolver resolves PR target branches using the gh CLI.
+type ghPRResolver struct{}
+
+func (ghPRResolver) ResolveTargetBranch(prNumber string) string {
+	out, err := exec.Command("gh", "pr", "view", prNumber, "--json", "baseRefName", "--jq", ".baseRefName").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// runGHPRGuard implements the gh-pr merge protection logic.
+func runGHPRGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	branches := ghpr.LoadProtectedBranches(projectDir)
+
+	checker := &ghpr.PRChecker{ProtectedBranches: branches}
+	verdict, err := checker.CheckWithResolver(stdin, ghPRResolver{})
+	if err != nil {
+		// Errors are not security violations — allow through.
+		return nil
+	}
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("ghpr: blocked")}
+	}
+
+	return nil
+}
+
+// newWebFetchGuardCmd creates the "webfetch-guard" subcommand that validates
+// URLs against trusted domain allowlists.
+func newWebFetchGuardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "webfetch-guard",
+		Short: "Validate URLs against trusted domain allowlists",
+		Long: `Validate URLs in WebFetch, WebSearch, and Bash network commands.
+
+Reads Claude Code hook JSON from stdin, extracts URLs, and validates
+them against the trusted domain allowlist. Blocks internal IPs,
+localhost, file:// URLs, and data: URLs. Exits 0 if allowed, 2 if blocked.
+
+Configuration is loaded from enforcement-policy.json and trusted-domains/*.list.
+
+Stdin format:
+  {"tool_name":"WebFetch","tool_input":{"url":"https://example.com"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runWebFetchGuard(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runWebFetchGuard implements the URL validation logic.
+func runWebFetchGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	checker := loadWebFetchChecker(projectDir)
+
+	verdict, err := checker.Check(stdin)
+	if err != nil {
+		// Parse errors are not security violations — allow through.
+		return nil
+	}
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("webfetch: blocked")}
+	}
+
+	return nil
+}
+
+// loadWebFetchChecker creates a URLChecker configured from enforcement-policy.json
+// and the trusted-domains list files.
+func loadWebFetchChecker(projectDir string) *webfetch.URLChecker {
+	checker := &webfetch.URLChecker{}
+
+	configPath := filepath.Join(projectDir, ".codeflow", "config", "enforcement", "enforcement-policy.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return checker
+	}
+
+	var policy struct {
+		Network struct {
+			AlwaysBlockDomains struct {
+				Enabled        bool     `json:"enabled"`
+				Patterns       []string `json:"patterns"`
+				PrivateIPRange []string `json:"private_ip_ranges"`
+			} `json:"always_block_domains"`
+		} `json:"network"`
+	}
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return checker
+	}
+
+	if policy.Network.AlwaysBlockDomains.Enabled {
+		checker.BlockedPatterns = policy.Network.AlwaysBlockDomains.Patterns
+		checker.PrivateIPRanges = policy.Network.AlwaysBlockDomains.PrivateIPRange
+	}
+
+	// Load trusted domains from list files (default to standard mode).
+	trustedDir := filepath.Join(projectDir, ".codeflow", "config", "enforcement", "trusted-domains")
+	listFile := filepath.Join(trustedDir, "standard.list")
+	checker.TrustedDomains = loadTrustedDomains(listFile)
+
+	return checker
+}
+
+// loadTrustedDomains reads domains from a .list file, skipping comments and blank lines.
+func loadTrustedDomains(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var domains []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		domains = append(domains, line)
+	}
+	return domains
+}
+
+// newTeamGuardCmd creates the "team-guard" subcommand that blocks
+// TeamDelete during active PathFlow sessions.
+func newTeamGuardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "team-guard",
+		Short: "Block TeamDelete during active PathFlow sessions",
+		Long: `Check whether TeamDelete or team cleanup is safe to execute.
+
+Reads Claude Code hook JSON from stdin and checks:
+  - If pathflow-active flag exists AND pf-6 sentinel does NOT exist → block
+  - If pf-6 sentinel exists → allow (PF7-END in progress)
+  - If no pathflow-active flag → allow (no active session)
+
+Exits 0 if allowed, 2 if blocked.
+
+Stdin format:
+  {"tool_name":"TeamDelete","tool_input":{}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runTeamGuard(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runTeamGuard implements the team guard enforcement logic.
+func runTeamGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	if sessionID == "" {
+		// No session ID — no PathFlow, allow.
+		return nil
+	}
+
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+
+	verdict, err := team.CheckTeamDelete(stdin, sessionDir, sentinelDir)
+	if err != nil {
+		// Parse errors are not security violations — allow through.
+		return nil
+	}
+
+	if !verdict.Allow {
+		fmt.Fprint(errW, verdict.Reason)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("team-guard: blocked")}
+	}
+
+	return nil
+}
