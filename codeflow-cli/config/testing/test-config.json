@@ -12,6 +12,7 @@
       "./internal/hooks/...",
       "./internal/sentinel/...",
       "./internal/claim/...",
+      "./internal/cliutil/...",
       "./internal/workstate/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."

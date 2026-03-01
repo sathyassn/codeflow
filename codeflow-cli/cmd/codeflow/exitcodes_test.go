@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/codeflow/codeflow-cli/internal/cliutil"
 )
 
 func TestExitCodes(t *testing.T) {
@@ -90,4 +92,39 @@ func TestExitCode(t *testing.T) {
 			t.Errorf("exitCode = %d, want %d (should unwrap)", got, ExitExternalError)
 		}
 	})
+
+	t.Run("returns code from cliutil ExitError", func(t *testing.T) {
+		t.Parallel()
+		err := cliutil.NewExitError(cliutil.ExitConfigError, "bad config")
+		if got := exitCode(err); got != ExitConfigError {
+			t.Errorf("exitCode = %d, want %d (should handle cliutil.ExitError)", got, ExitConfigError)
+		}
+	})
+}
+
+func TestExitCodes_MatchCliutil(t *testing.T) {
+	t.Parallel()
+
+	// Verify re-exported constants match the cliutil source values.
+	tests := []struct {
+		name   string
+		pkg    int
+		shared int
+	}{
+		{"ExitSuccess", ExitSuccess, cliutil.ExitSuccess},
+		{"ExitGeneralError", ExitGeneralError, cliutil.ExitGeneralError},
+		{"ExitConfigError", ExitConfigError, cliutil.ExitConfigError},
+		{"ExitRuntimeError", ExitRuntimeError, cliutil.ExitRuntimeError},
+		{"ExitExternalError", ExitExternalError, cliutil.ExitExternalError},
+		{"ExitInternalError", ExitInternalError, cliutil.ExitInternalError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.pkg != tt.shared {
+				t.Errorf("%s: package value %d != cliutil value %d", tt.name, tt.pkg, tt.shared)
+			}
+		})
+	}
 }

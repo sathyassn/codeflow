@@ -1,33 +1,25 @@
 package main
 
-import "errors"
+import (
+	"errors"
 
-// Exit codes for the codeflow CLI.
+	"github.com/codeflow/codeflow-cli/internal/cliutil"
+)
+
+// Exit codes imported from the shared cliutil package. All cmd/ packages
+// should use these constants via cliutil directly for new code.
 const (
-	// ExitSuccess indicates successful execution.
-	ExitSuccess = 0
-
-	// ExitGeneralError indicates a general runtime error.
-	ExitGeneralError = 1
-
-	// ExitConfigError indicates a configuration or setup error
-	// (missing config, invalid flags, schema init failure).
-	ExitConfigError = 2
-
-	// ExitRuntimeError indicates a runtime failure during command execution
-	// (query failed, sync failed, migration failed).
-	ExitRuntimeError = 3
-
-	// ExitExternalError indicates a failure in an external dependency
-	// (git not found, network unreachable, external API error).
-	ExitExternalError = 4
-
-	// ExitInternalError indicates an internal/unexpected error
-	// (panic recovery, assertion failure, corrupt state).
-	ExitInternalError = 5
+	ExitSuccess       = cliutil.ExitSuccess
+	ExitGeneralError  = cliutil.ExitGeneralError
+	ExitConfigError   = cliutil.ExitConfigError
+	ExitRuntimeError  = cliutil.ExitRuntimeError
+	ExitExternalError = cliutil.ExitExternalError
+	ExitInternalError = cliutil.ExitInternalError
 )
 
 // exitError wraps an error with a specific exit code.
+// Retained as a package-private type for backward compatibility with existing
+// &exitError{code: ..., err: ...} constructions across cmd/codeflow files.
 type exitError struct {
 	code int
 	err  error
@@ -36,12 +28,12 @@ type exitError struct {
 func (e *exitError) Error() string { return e.err.Error() }
 func (e *exitError) Unwrap() error { return e.err }
 
-// exitCode extracts the exit code from an error. Returns ExitGeneralError
-// if the error is not an *exitError.
+// exitCode extracts the exit code from an error. Checks both the
+// package-private exitError and the shared cliutil.ExitError types.
 func exitCode(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
 		return ee.code
 	}
-	return ExitGeneralError
+	return cliutil.ExitCode(err)
 }
