@@ -34,6 +34,7 @@ func newHooksCmd() *cobra.Command {
 	cmd.AddCommand(newPostToolUseCmd())
 	cmd.AddCommand(newTaskCompletedCmd())
 	cmd.AddCommand(newHookSessionStartCmd())
+	cmd.AddCommand(newHookSessionEndCmd())
 	return cmd
 }
 
@@ -702,6 +703,79 @@ func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) err
 	if !verdict.Allow {
 		fmt.Fprint(errW, verdict.Reason)
 		return &exitError{code: ExitHookBlock, err: fmt.Errorf("checkpoint-complete: blocked")}
+	}
+
+	return nil
+}
+
+// newHookSessionEndCmd creates the "session-end" subcommand group under hooks.
+func newHookSessionEndCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "session-end",
+		Short: "Session-end hook handlers",
+		Long:  "Subcommands invoked by Claude Code session-end hooks for cleanup.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newHookSessionEndCleanupCmd())
+	return cmd
+}
+
+// newHookSessionEndCleanupCmd creates the "cleanup" subcommand that performs all
+// session cleanup: validate PF7, clean sentinels, archive state, remove stale
+// files, write session_end ledger event.
+func newHookSessionEndCleanupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cleanup",
+		Short: "Clean up session state at session end",
+		Long: `Perform all session cleanup steps at session end.
+
+Reads Claude Code SessionEnd hook JSON from stdin, validates PF7 completion,
+cleans up sentinels, archives session state, removes stale runtime files,
+and writes a session_end ledger event.
+
+This replaces the cf-session-end-cleanup.sh shell script with a single binary call.
+
+Stdin format:
+  {"session_id":"<claude-uuid>","transcript_path":"<path>"}
+
+Exit codes:
+  0 - Cleanup completed (always exits 0, warnings on stderr)`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSessionEndCleanup(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runSessionEndCleanup implements the session-end cleanup logic.
+func runSessionEndCleanup(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+
+	cleaner := session.NewCleaner()
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		fmt.Fprintf(errW, "session-end cleanup error: %v\n", err)
+		return &exitError{code: ExitGeneralError, err: fmt.Errorf("session-end cleanup: %w", err)}
+	}
+
+	// Emit warnings to stderr.
+	for _, w := range result.Warnings {
+		fmt.Fprintf(errW, "WARNING: %s\n", w)
+	}
+
+	// Emit messages to stderr (informational).
+	for _, m := range result.Messages {
+		fmt.Fprintf(errW, "%s\n", m)
+	}
+
+	// Emit cleanup summary.
+	if result.SentinelsCleaned > 0 {
+		fmt.Fprintf(errW, "SessionEnd: Cleaned %d sentinel(s)\n", result.SentinelsCleaned)
+	} else {
+		fmt.Fprintln(errW, "SessionEnd: No expired sentinels to clean")
 	}
 
 	return nil

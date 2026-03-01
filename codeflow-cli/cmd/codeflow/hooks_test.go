@@ -1812,3 +1812,216 @@ func TestSessionStartCmdHelp(t *testing.T) {
 		t.Errorf("session-start help output = %q, want to contain 'session-start'", out.String())
 	}
 }
+
+func TestNewHookSessionEndCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionEndCmd()
+	if cmd.Use != "session-end" {
+		t.Errorf("newHookSessionEndCmd().Use = %q, want %q", cmd.Use, "session-end")
+	}
+	if !cmd.HasSubCommands() {
+		t.Error("newHookSessionEndCmd() has no subcommands, want cleanup")
+	}
+
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["cleanup"] {
+		t.Error("newHookSessionEndCmd() missing subcommand 'cleanup'")
+	}
+}
+
+func TestNewHookSessionEndCleanupCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionEndCleanupCmd()
+	if cmd.Use != "cleanup" {
+		t.Errorf("newHookSessionEndCleanupCmd().Use = %q, want %q", cmd.Use, "cleanup")
+	}
+}
+
+func TestRunSessionEndCleanup(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir to control detectProjectDir.
+
+	projectDir := t.TempDir()
+	sessionID := "ses-1234567890123abcdef012345"
+
+	// Create .git dir so detectProjectDir returns our temp dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create runtime dir with env file and current-session-id.
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "export CODEFLOW_SESSION_ID='" + sessionID + "'\nexport CF_PROJECT_ROOT='testproject'\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte(sessionID), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create ledger directory.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "ledger"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create sentinel directories.
+	pfSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	if err := os.MkdirAll(pfSentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pfSentinelDir, "pathflow-pf-7"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create session state directory.
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(sessionStateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	t.Run("cleanup completes successfully", func(t *testing.T) {
+		stdin := strings.NewReader(`{"session_id":"test-uuid","transcript_path":"/tmp/tx"}`)
+		var stdout, stderr bytes.Buffer
+		err := runSessionEndCleanup(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("runSessionEndCleanup() unexpected error: %v", err)
+		}
+
+		// Stderr should contain cleanup messages.
+		stderrStr := stderr.String()
+		if !strings.Contains(stderrStr, "SessionEnd") {
+			t.Errorf("stderr = %q, want to contain 'SessionEnd'", stderrStr)
+		}
+	})
+
+	t.Run("handles empty stdin gracefully", func(t *testing.T) {
+		// Re-create runtime files for this subtest.
+		if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Re-create session and ledger dirs.
+		if err := os.MkdirAll(sessionStateDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(projectDir, ".state", "ledger"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		stdin := strings.NewReader("")
+		var stdout, stderr bytes.Buffer
+		err := runSessionEndCleanup(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("runSessionEndCleanup() with empty stdin unexpected error: %v", err)
+		}
+	})
+}
+
+func TestSessionEndCleanupCmdViaRoot(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir.
+
+	projectDir := t.TempDir()
+	sessionID := "ses-1234567890123abcdef012345"
+
+	// Create .git dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create runtime dir with env file.
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "export CODEFLOW_SESSION_ID='" + sessionID + "'\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create ledger directory.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "ledger"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create session state directory.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "session", sessionID, "pathflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Execute the full command path: hooks session-end cleanup
+	root := newHooksCmd()
+	root.SetArgs([]string{"session-end", "cleanup"})
+	root.SetIn(strings.NewReader(`{"session_id":"test-uuid"}`))
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	err = root.Execute()
+	if err != nil {
+		t.Errorf("session-end cleanup command returned error: %v", err)
+	}
+
+	if !strings.Contains(stderr.String(), "SessionEnd") {
+		t.Errorf("stderr = %q, want to contain 'SessionEnd'", stderr.String())
+	}
+}
+
+func TestSessionEndCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionEndCmd()
+	cmd.SetArgs([]string{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("session-end help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "session-end") {
+		t.Errorf("session-end help output = %q, want to contain 'session-end'", out.String())
+	}
+}
+
+func TestHooksCmd_HasSessionEnd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHooksCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["session-end"] {
+		t.Error("newHooksCmd() missing subcommand 'session-end'")
+	}
+	if !names["session-start"] {
+		t.Error("newHooksCmd() missing subcommand 'session-start'")
+	}
+}
