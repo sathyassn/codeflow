@@ -1230,7 +1230,7 @@ func TestHooksCmdHasAllGroups(t *testing.T) {
 	for _, sub := range subs {
 		names[sub.Name()] = true
 	}
-	expected := []string{"pre-tool-use", "post-tool-use", "task-completed"}
+	expected := []string{"pre-tool-use", "post-tool-use", "task-completed", "session-start"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("newHooksCmd() missing subcommand group %q", name)
@@ -1627,5 +1627,188 @@ func TestCheckpointCompleteCmdViaRoot(t *testing.T) {
 	err := root.Execute()
 	if err != nil {
 		t.Errorf("checkpoint-complete command returned error: %v", err)
+	}
+}
+
+// --- Session-start command group ---
+
+func TestNewHookSessionStartCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionStartCmd()
+	if cmd.Use != "session-start" {
+		t.Errorf("newHookSessionStartCmd().Use = %q, want %q", cmd.Use, "session-start")
+	}
+	if !cmd.HasSubCommands() {
+		t.Error("newHookSessionStartCmd() has no subcommands, want init")
+	}
+
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["init"] {
+		t.Error("newHookSessionStartCmd() missing subcommand 'init'")
+	}
+}
+
+func TestNewHookSessionStartInitCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionStartInitCmd()
+	if cmd.Use != "init" {
+		t.Errorf("newHookSessionStartInitCmd().Use = %q, want %q", cmd.Use, "init")
+	}
+}
+
+func TestRunSessionStartInit(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir to control detectProjectDir.
+
+	projectDir := t.TempDir()
+
+	// Create .git dir so detectProjectDir returns our temp dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create pathflow config for checkpoint init (minimal with 7 phases).
+	configDir := filepath.Join(projectDir, ".codeflow", "config", "pathflow")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pfConfig := `{"phases":{"PF1":{"tasks":["PF1-TSK-01"]},"PF2":{"tasks":["PF2-TSK-01"]},"PF3":{"tasks":["PF3-TSK-01"]},"PF4":{"tasks":["PF4-TSK-01"]},"PF5":{"tasks":["PF5-TSK-01"]},"PF6":{"tasks":["PF6-TSK-01"]},"PF7":{"tasks":["PF7-TSK-01"]}}}`
+	if err := os.WriteFile(filepath.Join(configDir, "pathflow-config.json"), []byte(pfConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create runtime dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	t.Run("fresh session init", func(t *testing.T) {
+		stdin := strings.NewReader(`{"session_id":"test-uuid","source":"startup"}`)
+		var stdout, stderr bytes.Buffer
+		err := runSessionStartInit(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("runSessionStartInit() unexpected error: %v", err)
+		}
+
+		// Stdout should contain env JSON.
+		output := stdout.String()
+		if !strings.Contains(output, "CODEFLOW_SESSION_ID") {
+			t.Errorf("stdout = %q, want to contain 'CODEFLOW_SESSION_ID'", output)
+		}
+		if !strings.Contains(output, "CF_PROJECT_ROOT") {
+			t.Errorf("stdout = %q, want to contain 'CF_PROJECT_ROOT'", output)
+		}
+		if !strings.Contains(output, "ses-") {
+			t.Errorf("stdout = %q, want to contain session ID starting with 'ses-'", output)
+		}
+	})
+
+	t.Run("handles empty stdin gracefully", func(t *testing.T) {
+		stdin := strings.NewReader("")
+		var stdout, stderr bytes.Buffer
+		err := runSessionStartInit(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("runSessionStartInit() with empty stdin unexpected error: %v", err)
+		}
+
+		output := stdout.String()
+		if !strings.Contains(output, "CODEFLOW_SESSION_ID") {
+			t.Errorf("stdout = %q, want to contain 'CODEFLOW_SESSION_ID'", output)
+		}
+	})
+
+	t.Run("handles invalid JSON gracefully", func(t *testing.T) {
+		stdin := strings.NewReader("not json")
+		var stdout, stderr bytes.Buffer
+		err := runSessionStartInit(stdin, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("runSessionStartInit() with invalid JSON unexpected error: %v", err)
+		}
+
+		output := stdout.String()
+		if !strings.Contains(output, "CODEFLOW_SESSION_ID") {
+			t.Errorf("stdout = %q, want to contain 'CODEFLOW_SESSION_ID'", output)
+		}
+	})
+}
+
+func TestSessionStartInitCmdViaRoot(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir.
+
+	projectDir := t.TempDir()
+
+	// Create .git dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create pathflow config.
+	configDir := filepath.Join(projectDir, ".codeflow", "config", "pathflow")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pfConfig := `{"phases":{"PF1":{"tasks":["PF1-TSK-01"]},"PF2":{"tasks":["PF2-TSK-01"]},"PF3":{"tasks":["PF3-TSK-01"]},"PF4":{"tasks":["PF4-TSK-01"]},"PF5":{"tasks":["PF5-TSK-01"]},"PF6":{"tasks":["PF6-TSK-01"]},"PF7":{"tasks":["PF7-TSK-01"]}}}`
+	if err := os.WriteFile(filepath.Join(configDir, "pathflow-config.json"), []byte(pfConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create runtime dir.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Execute the full command path: hooks session-start init
+	root := newHooksCmd()
+	root.SetArgs([]string{"session-start", "init"})
+	root.SetIn(strings.NewReader(`{"session_id":"test-uuid","source":"startup"}`))
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	err = root.Execute()
+	if err != nil {
+		t.Errorf("session-start init command returned error: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "CODEFLOW_SESSION_ID") {
+		t.Errorf("stdout = %q, want to contain 'CODEFLOW_SESSION_ID'", stdout.String())
+	}
+}
+
+func TestSessionStartCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionStartCmd()
+	cmd.SetArgs([]string{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("session-start help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "session-start") {
+		t.Errorf("session-start help output = %q, want to contain 'session-start'", out.String())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/codeflow/codeflow-cli/internal/hooks/ghpr"
 	"github.com/codeflow/codeflow-cli/internal/hooks/security"
 	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 	"github.com/codeflow/codeflow-cli/internal/hooks/team"
 	"github.com/codeflow/codeflow-cli/internal/hooks/webfetch"
 	"github.com/spf13/cobra"
@@ -32,6 +33,7 @@ func newHooksCmd() *cobra.Command {
 	cmd.AddCommand(newPreToolUseCmd())
 	cmd.AddCommand(newPostToolUseCmd())
 	cmd.AddCommand(newTaskCompletedCmd())
+	cmd.AddCommand(newHookSessionStartCmd())
 	return cmd
 }
 
@@ -464,6 +466,80 @@ func runTeamGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 		fmt.Fprint(errW, verdict.Reason)
 		return &exitError{code: ExitHookBlock, err: fmt.Errorf("team-guard: blocked")}
 	}
+
+	return nil
+}
+
+// newHookSessionStartCmd creates the "session-start" subcommand group under hooks.
+func newHookSessionStartCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "session-start",
+		Short: "Session-start hook handlers",
+		Long:  "Subcommands invoked by Claude Code session-start hooks for initialization.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newHookSessionStartInitCmd())
+	return cmd
+}
+
+// newHookSessionStartInitCmd creates the "init" subcommand that performs all
+// session initialization: parse stdin, detect stale sessions, generate
+// session ID, create directories, initialize PathFlow state.
+func newHookSessionStartInitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Initialize a new CodeFlow session",
+		Long: `Perform all session initialization steps.
+
+Reads Claude Code SessionStart hook JSON from stdin, detects stale sessions,
+generates or loads a CODEFLOW_SESSION_ID, creates required .state/ directories,
+initializes PathFlow state, and outputs environment variables as JSON.
+
+This replaces the cf-session-start-init.sh shell script with a single binary call.
+
+Stdin format:
+  {"session_id":"<claude-uuid>","source":"startup|resume|compact|clear"}
+
+Output (stdout):
+  {"env":{"CODEFLOW_SESSION_ID":"ses-...","CF_PROJECT_ROOT":"..."}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSessionStartInit(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// runSessionStartInit implements the session-start init logic.
+func runSessionStartInit(stdin io.Reader, outW io.Writer, errW io.Writer) error {
+	projectDir := detectProjectDir()
+
+	initializer := session.NewInitializer()
+	result, err := initializer.StartInit(stdin, projectDir)
+	if err != nil {
+		fmt.Fprintf(errW, "session-start init error: %v\n", err)
+		return &exitError{code: ExitGeneralError, err: fmt.Errorf("session-start init: %w", err)}
+	}
+
+	// Emit warnings to stderr.
+	for _, w := range result.Warnings {
+		fmt.Fprintf(errW, "WARNING: %s\n", w)
+	}
+
+	// Emit messages to stderr (informational).
+	for _, m := range result.Messages {
+		fmt.Fprintf(errW, "%s\n", m)
+	}
+
+	// Output env vars as JSON to stdout (for hook framework).
+	envJSON, err := result.FormatEnvOutput()
+	if err != nil {
+		fmt.Fprintf(errW, "session-start init: failed to format output: %v\n", err)
+		return &exitError{code: ExitGeneralError, err: fmt.Errorf("session-start init format: %w", err)}
+	}
+	fmt.Fprintln(outW, string(envJSON))
 
 	return nil
 }
