@@ -1670,6 +1670,9 @@ func TestNewHookSessionStartCmd(t *testing.T) {
 	if !names["init"] {
 		t.Error("newHookSessionStartCmd() missing subcommand 'init'")
 	}
+	if !names["instructions"] {
+		t.Error("newHookSessionStartCmd() missing subcommand 'instructions'")
+	}
 }
 
 func TestNewHookSessionStartInitCmd(t *testing.T) {
@@ -2222,6 +2225,9 @@ func TestSessionStartCmdHasLogging(t *testing.T) {
 	if !names["init"] {
 		t.Error("newHookSessionStartCmd() missing subcommand 'init'")
 	}
+	if !names["instructions"] {
+		t.Error("newHookSessionStartCmd() missing subcommand 'instructions'")
+	}
 }
 
 func TestSessionEndCmdHasLogging(t *testing.T) {
@@ -2255,6 +2261,52 @@ func TestPostToolUseCmdHasLogging(t *testing.T) {
 	}
 	if !names["sentinel-write"] {
 		t.Error("newPostToolUseCmd() missing subcommand 'sentinel-write'")
+	}
+}
+
+func TestNewHookSessionStartInstructionsCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionStartInstructionsCmd()
+	if cmd.Use != "instructions" {
+		t.Errorf("newHookSessionStartInstructionsCmd().Use = %q, want %q", cmd.Use, "instructions")
+	}
+}
+
+func TestSessionStartInstructionsCmdViaRoot(t *testing.T) {
+	// NOTE: no t.Parallel() -- uses os.Chdir.
+
+	projectDir := t.TempDir()
+
+	// Create .git dir so detectProjectDir() finds the project root.
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Execute the full command path: hooks session-start instructions
+	root := newHooksCmd()
+	root.SetArgs([]string{"session-start", "instructions"})
+	root.SetIn(strings.NewReader(`{"session_id":"test-uuid","source":"startup"}`))
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&bytes.Buffer{})
+	err = root.Execute()
+	if err != nil {
+		t.Errorf("session-start instructions command returned error: %v", err)
+	}
+
+	// With no instructions-config.json, the fallback message should appear.
+	if !strings.Contains(stdout.String(), "SESSION START") {
+		t.Errorf("stdout = %q, want to contain 'SESSION START' (fallback instructions)", stdout.String())
 	}
 }
 

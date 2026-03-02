@@ -489,7 +489,27 @@ func newHookSessionStartCmd() *cobra.Command {
 
 	cmd.AddCommand(newHookSessionStartInitCmd())
 	cmd.AddCommand(newSessionStartLogCmd())
+	cmd.AddCommand(newHookSessionStartInstructionsCmd())
 	return cmd
+}
+
+// newHookSessionStartInstructionsCmd creates the "instructions" subcommand
+// that outputs session-start instructions for Claude Code injection.
+func newHookSessionStartInstructionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "instructions",
+		Short: "Output session-start instructions for Claude Code injection",
+		Long: `Reads enabled SessionStart instructions from config, outputs active task
+context and PathFlow recovery info.
+
+Reads Claude Code SessionStart hook JSON from stdin. Outputs enabled instruction
+files, active task context, and PathFlow recovery checklist to stdout.
+Always exits 0 (SessionStart hooks must never block).`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return session.RunInstructions(cmd.InOrStdin(), cmd.OutOrStdout(), detectProjectDir())
+		},
+	}
 }
 
 // newHookSessionStartInitCmd creates the "init" subcommand that performs all
