@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // allowedTables is the allowlist of table names that NextFormatID may query.
@@ -90,4 +91,29 @@ func FormatEpicID(areaType string, seq int) string {
 // Example: FormatTaskID("INF", 21, 1) returns "INF-TSK-021-001".
 func FormatTaskID(areaType string, epicSeq int, taskSeq int) string {
 	return fmt.Sprintf("%s-TSK-%03d-%03d", areaType, epicSeq, taskSeq)
+}
+
+// ErrInvalidFormatID indicates the format ID string does not match the
+// expected pattern.
+var ErrInvalidFormatID = errors.New("idgen: invalid format ID")
+
+// ParseEpicSeq extracts the numeric sequence from an epic format ID.
+// Example: "INF-EPC-021" returns 21.
+// Returns ErrInvalidFormatID if the format doesn't match {AREA}-EPC-{NNN}.
+func ParseEpicSeq(formatID string) (int, error) {
+	parts := strings.Split(formatID, "-")
+	if len(parts) != 3 || parts[1] != "EPC" {
+		return 0, fmt.Errorf("%w: expected {AREA}-EPC-{NNN}, got %q", ErrInvalidFormatID, formatID)
+	}
+	if parts[0] == "" {
+		return 0, fmt.Errorf("%w: empty area type in %q", ErrInvalidFormatID, formatID)
+	}
+	var seq int
+	if _, err := fmt.Sscanf(parts[2], "%d", &seq); err != nil {
+		return 0, fmt.Errorf("%w: non-numeric sequence in %q", ErrInvalidFormatID, formatID)
+	}
+	if seq < 1 {
+		return 0, fmt.Errorf("%w: sequence must be >= 1, got %d in %q", ErrInvalidFormatID, seq, formatID)
+	}
+	return seq, nil
 }

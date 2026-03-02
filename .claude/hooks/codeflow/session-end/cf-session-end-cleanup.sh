@@ -148,14 +148,14 @@ if [[ "$_PATHFLOW_ACTIVE" == "true" ]]; then
                 _skip_cleanup="false"
             fi
         else
-            # lead_pid is 0 or missing — cannot verify, proceed with cleanup
-            echo "SessionEnd: PathFlow active but lead PID unknown — proceeding with cleanup" >&2
-            _skip_cleanup="false"
+            # lead_pid is 0 or missing — cannot verify, skip cleanup (safe default)
+            echo "SessionEnd: PathFlow active but lead PID unknown — skipping cleanup (safe default)" >&2
+            exit 0
         fi
     else
-        # No team file — cannot verify lead, proceed with cleanup
-        echo "SessionEnd: PathFlow active but no team file — proceeding with cleanup (no lead to protect)" >&2
-        _skip_cleanup="false"
+        # No team file — cannot verify lead, skip cleanup (safe default when PathFlow active)
+        echo "SessionEnd: PathFlow active but no team file — skipping cleanup (safe default)" >&2
+        exit 0
     fi
 
     if [[ "$_skip_cleanup" == "true" ]]; then

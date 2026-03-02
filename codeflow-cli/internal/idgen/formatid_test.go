@@ -232,6 +232,51 @@ func TestNextFormatID_ScanError(t *testing.T) {
 	}
 }
 
+// ---- ParseEpicSeq Tests ----
+
+func TestParseEpicSeq(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{name: "standard", input: "INF-EPC-021", want: 21},
+		{name: "single digit", input: "CLI-EPC-001", want: 1},
+		{name: "three digits", input: "INF-EPC-100", want: 100},
+		{name: "large number", input: "INF-EPC-999", want: 999},
+		{name: "wrong segment count", input: "INF-EPC", wantErr: true},
+		{name: "not EPC", input: "INF-TSK-021", wantErr: true},
+		{name: "empty area", input: "-EPC-021", wantErr: true},
+		{name: "non-numeric seq", input: "INF-EPC-abc", wantErr: true},
+		{name: "zero seq", input: "INF-EPC-000", wantErr: true},
+		{name: "negative seq", input: "INF-EPC--01", wantErr: true},
+		{name: "too many segments", input: "INF-EPC-021-001", wantErr: true},
+		{name: "empty string", input: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseEpicSeq(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseEpicSeq(%q) expected error, got %d", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseEpicSeq(%q) error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseEpicSeq(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // ---- Format Helper Tests ----
 
 func TestFormatEpicID(t *testing.T) {

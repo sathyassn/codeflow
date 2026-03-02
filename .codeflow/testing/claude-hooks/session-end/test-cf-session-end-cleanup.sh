@@ -1024,21 +1024,40 @@ TESTS_RUN=$((TESTS_RUN + 1))
 rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 rm -rf "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
 
-# Fix 4 Test 3: PathFlow active + no team file → proceed with cleanup
+# Fix 4 Test 3: PathFlow active + no team file → skip cleanup (safe default)
 TESTS_RUN=$((TESTS_RUN + 1))
 setup_test_dirs
 mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
-# NO pathflow-team.json — simulates pre-TeamCreate crash
+# NO pathflow-team.json — simulates pre-TeamCreate crash or teammate SessionEnd
 mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
 touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-1"
 output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
-if [[ ! -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-1" ]]; then
-    pass "Fix 4: No team file — cleanup proceeds (sentinels cleaned)"
+if [[ -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-1" ]]; then
+    pass "Fix 4: No team file — cleanup skipped (safe default, sentinels preserved)"
 else
-    fail "Fix 4: No team file — should proceed with cleanup"
-    rm -rf "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+    fail "Fix 4: No team file — should skip cleanup when PathFlow active"
 fi
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+
+# Fix 4 Test 3b: PathFlow active + team file with lead_pid=0 → skip cleanup (safe default)
+TESTS_RUN=$((TESTS_RUN + 1))
+setup_test_dirs
+mkdir -p "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
+echo "active" > "$REPO_ROOT/.state/session/test-session/pathflow/is-pathflow-active"
+cat > "$REPO_ROOT/.state/session/test-session/pathflow/pathflow-team.json" <<FIX4EOF_PID0
+{"team_name":"test-team-fix4-pid0","lead_pid":0,"codeflow_session_id":"test-session"}
+FIX4EOF_PID0
+mkdir -p "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
+touch "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-1"
+output=$(CODEFLOW_SESSION_ID="test-session" bash "$HOOK" </dev/null 2>&1) || true
+if [[ -f "$REPO_ROOT/.state/sentinels/pathflow/test-session/pathflow-pf-1" ]]; then
+    pass "Fix 4: lead_pid=0 — cleanup skipped (safe default, sentinels preserved)"
+else
+    fail "Fix 4: lead_pid=0 — should skip cleanup when PathFlow active"
+fi
+rm -rf "$REPO_ROOT/.state/sentinels/pathflow/test-session" 2>/dev/null || true
 rm -rf "$REPO_ROOT/.state/session/test-session/pathflow" 2>/dev/null || true
 
 # Fix 4 Test 4: Dead lead PID logs appropriate message

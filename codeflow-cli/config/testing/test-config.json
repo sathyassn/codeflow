@@ -18,7 +18,8 @@
       "./internal/worktree/...",
       "./internal/report/...",
       "./cmd/codeflow/...",
-      "./cmd/autorun/..."
+      "./cmd/autorun/...",
+      "./internal/workgraph/..."
     ]
   },
   "conventions": {
