@@ -164,6 +164,57 @@ func TestReadEnforcementPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("edit_write parsed", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		policyDir := filepath.Join(dir, ".codeflow", "config", "enforcement")
+		if err := os.MkdirAll(policyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := `{
+			"protected_resources": {"critical": [], "high": [], "moderate": []},
+			"edit_write": {
+				"blocked_directories": [".git", "node_modules"],
+				"allowed_tmp_prefixes": ["/tmp/claude/"],
+				"dangerous_extensions": {
+					"binary": [".exe", ".dll"],
+					"credential": [".pem", ".key"],
+					"archive": [".tar.gz"]
+				},
+				"warn_on_dangerous": true
+			}
+		}`
+		if err := os.WriteFile(filepath.Join(policyDir, "enforcement-policy.json"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		policy, err := ReadEnforcementPolicy(dir)
+		if err != nil {
+			t.Fatalf("ReadEnforcementPolicy() error: %v", err)
+		}
+		if len(policy.EditWrite.BlockedDirectories) != 2 {
+			t.Errorf("BlockedDirectories = %d, want 2", len(policy.EditWrite.BlockedDirectories))
+		}
+		if policy.EditWrite.BlockedDirectories[0] != ".git" {
+			t.Errorf("BlockedDirectories[0] = %q, want %q", policy.EditWrite.BlockedDirectories[0], ".git")
+		}
+		if len(policy.EditWrite.AllowedTmpPrefixes) != 1 {
+			t.Errorf("AllowedTmpPrefixes = %d, want 1", len(policy.EditWrite.AllowedTmpPrefixes))
+		}
+		if len(policy.EditWrite.DangerousExtensions.Binary) != 2 {
+			t.Errorf("DangerousExtensions.Binary = %d, want 2", len(policy.EditWrite.DangerousExtensions.Binary))
+		}
+		if len(policy.EditWrite.DangerousExtensions.Credential) != 2 {
+			t.Errorf("DangerousExtensions.Credential = %d, want 2", len(policy.EditWrite.DangerousExtensions.Credential))
+		}
+		if len(policy.EditWrite.DangerousExtensions.Archive) != 1 {
+			t.Errorf("DangerousExtensions.Archive = %d, want 1", len(policy.EditWrite.DangerousExtensions.Archive))
+		}
+		if !policy.EditWrite.WarnOnDangerous {
+			t.Error("WarnOnDangerous = false, want true")
+		}
+	})
+
 	t.Run("missing file", func(t *testing.T) {
 		t.Parallel()
 		_, err := ReadEnforcementPolicy(t.TempDir())

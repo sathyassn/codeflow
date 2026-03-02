@@ -58,6 +58,7 @@ func newPreToolUseCmd() *cobra.Command {
 	cmd.AddCommand(newWebFetchGuardCmd())
 	cmd.AddCommand(newTeamGuardCmd())
 	cmd.AddCommand(newProtectionGuardCmd())
+	cmd.AddCommand(newEditWriteGuardCmd())
 	return cmd
 }
 
@@ -887,5 +888,6 @@ func newUserPromptSubmitCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newUserPromptSubmitLogCmd())
+	cmd.AddCommand(newPromptValidateCmd())
 	return cmd
 }

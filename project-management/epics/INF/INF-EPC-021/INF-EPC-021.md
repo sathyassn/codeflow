@@ -116,7 +116,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-015 | Build Go CLI for shell-lib foundation | complete | normal |
 | INF-TSK-021-016 | Build Go CLI for settings validation and protection guard | complete | normal |
 | INF-TSK-021-017 | Build Go CLI for logging hooks | complete | normal |
-| INF-TSK-021-018 | Build Go CLI for edit-write, protected-resource, and user-prompt-submit hooks | todo | normal |
+| INF-TSK-021-018 | Build Go CLI for edit-write, protected-resource, and user-prompt-submit hooks | complete | normal |
 | INF-TSK-021-019 | Build Go CLI for worktree and report scripts | todo | normal |
 | INF-TSK-021-020 | Build Go CLI for DB migration script | todo | normal |
 | INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | todo | high |

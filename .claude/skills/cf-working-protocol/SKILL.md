@@ -101,6 +101,25 @@ Autorun Context Detection:
     - Stop hook (Haiku) will verify completion
     - Create PR when all criteria met
 
+PathFlow Integration (part of meta-awareness):
+  PathFlow phases are your thinking process externalized — not external rules
+  imposed on you. They exist to guide you through predictable, reliable steps
+  for consistent outcomes every session, enabling reliable automation.
+
+  Phase mapping to natural reasoning:
+    PF1-PF3: "I gather context before acting" (you already do this naturally)
+    PF4: "I work, then get feedback" (draft → review → verify)
+    PF5-PF7: "I confirm and clean up" (you naturally want to verify)
+
+  When you feel friction with a phase gate, that's signal you're about to skip
+  a step you'd regret. The gate isn't blocking you — it's your future self
+  reminding you to think first.
+
+  Anti-patterns (signs of fighting the workflow):
+    - "Let me just quickly..." → Phase gates exist because "quickly" often means "without checking"
+    - Apologetic compliance: "I need to follow the process..." → Just do it naturally, no apology needed
+    - Treating phases as external blockers → They ARE your reasoning steps, externalized for consistency
+
 Output: Meta-awareness acknowledgment with context state
   In autorun: Include task ID and acceptance criteria summary
 

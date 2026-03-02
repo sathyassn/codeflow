@@ -33,6 +33,24 @@ type EnforcementPolicy struct {
 	} `json:"managed_tmp"`
 
 	SettingsTemplates SettingsTemplates `json:"settings_templates"`
+
+	EditWrite EditWrite `json:"edit_write"`
+}
+
+// EditWrite represents the edit_write section of enforcement-policy.json,
+// configuring Edit/Write tool scope enforcement rules.
+type EditWrite struct {
+	BlockedDirectories  []string            `json:"blocked_directories"`
+	AllowedTmpPrefixes  []string            `json:"allowed_tmp_prefixes"`
+	DangerousExtensions DangerousExtensions `json:"dangerous_extensions"`
+	WarnOnDangerous     bool                `json:"warn_on_dangerous"`
+}
+
+// DangerousExtensions groups file extensions by risk category.
+type DangerousExtensions struct {
+	Binary     []string `json:"binary"`
+	Credential []string `json:"credential"`
+	Archive    []string `json:"archive"`
 }
 
 // SettingsTemplates represents the settings_templates section of

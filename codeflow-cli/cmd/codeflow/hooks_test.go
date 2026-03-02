@@ -54,6 +54,9 @@ func TestNewPreToolUseCmd(t *testing.T) {
 	if !names["protection-guard"] {
 		t.Error("newPreToolUseCmd() missing subcommand 'protection-guard'")
 	}
+	if !names["edit-write-guard"] {
+		t.Error("newPreToolUseCmd() missing subcommand 'edit-write-guard'")
+	}
 }
 
 func TestNewSecurityCmd(t *testing.T) {
@@ -2154,6 +2157,20 @@ func TestStopCmdHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "stop") {
 		t.Error("stop help output does not contain 'stop'")
+	}
+}
+
+func TestUserPromptSubmitCmd_HasValidate(t *testing.T) {
+	t.Parallel()
+
+	cmd := newUserPromptSubmitCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["validate"] {
+		t.Error("newUserPromptSubmitCmd() missing subcommand 'validate'")
 	}
 }
 
