@@ -1233,7 +1233,7 @@ func TestHooksCmdHasAllGroups(t *testing.T) {
 	for _, sub := range subs {
 		names[sub.Name()] = true
 	}
-	expected := []string{"pre-tool-use", "post-tool-use", "task-completed", "session-start"}
+	expected := []string{"pre-tool-use", "post-tool-use", "task-completed", "session-start", "session-end", "stop", "user-prompt-submit"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("newHooksCmd() missing subcommand group %q", name)
@@ -2106,6 +2106,125 @@ func TestRunSettingsValidateHook_NonTemplateEdit(t *testing.T) {
 	err := cmd.Execute()
 	if err != nil {
 		t.Errorf("settings-validate should be advisory (exit 0), got error: %v", err)
+	}
+}
+
+// --- Stop and user-prompt-submit group wiring tests ---
+
+func TestHooksCmd_HasStop(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHooksCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["stop"] {
+		t.Error("newHooksCmd() missing subcommand 'stop'")
+	}
+}
+
+func TestHooksCmd_HasUserPromptSubmit(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHooksCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["user-prompt-submit"] {
+		t.Error("newHooksCmd() missing subcommand 'user-prompt-submit'")
+	}
+}
+
+func TestStopCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newStopCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("stop help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "stop") {
+		t.Error("stop help output does not contain 'stop'")
+	}
+}
+
+func TestUserPromptSubmitCmdHelp(t *testing.T) {
+	t.Parallel()
+
+	cmd := newUserPromptSubmitCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("user-prompt-submit help returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "user-prompt-submit") {
+		t.Error("user-prompt-submit help output does not contain 'user-prompt-submit'")
+	}
+}
+
+// --- Logging subcommand wiring tests ---
+
+func TestSessionStartCmdHasLogging(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionStartCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["logging"] {
+		t.Error("newHookSessionStartCmd() missing subcommand 'logging'")
+	}
+	if !names["init"] {
+		t.Error("newHookSessionStartCmd() missing subcommand 'init'")
+	}
+}
+
+func TestSessionEndCmdHasLogging(t *testing.T) {
+	t.Parallel()
+
+	cmd := newHookSessionEndCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["logging"] {
+		t.Error("newHookSessionEndCmd() missing subcommand 'logging'")
+	}
+	if !names["cleanup"] {
+		t.Error("newHookSessionEndCmd() missing subcommand 'cleanup'")
+	}
+}
+
+func TestPostToolUseCmdHasLogging(t *testing.T) {
+	t.Parallel()
+
+	cmd := newPostToolUseCmd()
+	subs := cmd.Commands()
+	names := make(map[string]bool)
+	for _, sub := range subs {
+		names[sub.Name()] = true
+	}
+	if !names["logging"] {
+		t.Error("newPostToolUseCmd() missing subcommand 'logging'")
+	}
+	if !names["sentinel-write"] {
+		t.Error("newPostToolUseCmd() missing subcommand 'sentinel-write'")
 	}
 }
 

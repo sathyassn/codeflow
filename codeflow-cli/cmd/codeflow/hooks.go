@@ -36,6 +36,8 @@ func newHooksCmd() *cobra.Command {
 	cmd.AddCommand(newTaskCompletedCmd())
 	cmd.AddCommand(newHookSessionStartCmd())
 	cmd.AddCommand(newHookSessionEndCmd())
+	cmd.AddCommand(newStopCmd())
+	cmd.AddCommand(newUserPromptSubmitCmd())
 	return cmd
 }
 
@@ -485,6 +487,7 @@ func newHookSessionStartCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newHookSessionStartInitCmd())
+	cmd.AddCommand(newSessionStartLogCmd())
 	return cmd
 }
 
@@ -561,6 +564,7 @@ func newPostToolUseCmd() *cobra.Command {
 	cmd.AddCommand(newSentinelWriteCmd())
 	cmd.AddCommand(newHookCheckpointRegisterCmd())
 	cmd.AddCommand(newSettingsValidateHookCmd())
+	cmd.AddCommand(newPostToolUseLogCmd())
 	return cmd
 }
 
@@ -723,6 +727,7 @@ func newHookSessionEndCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newHookSessionEndCleanupCmd())
+	cmd.AddCommand(newSessionEndLogCmd())
 	return cmd
 }
 
@@ -853,4 +858,34 @@ func runSessionEndCleanup(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	}
 
 	return nil
+}
+
+// newStopCmd creates the "stop" subcommand group under hooks.
+func newStopCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop hook handlers",
+		Long:  "Subcommands invoked by Claude Code stop hooks for logging and gate checks.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newStopLogCmd())
+	return cmd
+}
+
+// newUserPromptSubmitCmd creates the "user-prompt-submit" subcommand group under hooks.
+func newUserPromptSubmitCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "user-prompt-submit",
+		Short: "User-prompt-submit hook handlers",
+		Long:  "Subcommands invoked by Claude Code user-prompt-submit hooks for logging.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	cmd.AddCommand(newUserPromptSubmitLogCmd())
+	return cmd
 }
