@@ -13,6 +13,7 @@
       "./internal/sentinel/...",
       "./internal/claim/...",
       "./internal/cliutil/...",
+      "./internal/settings/...",
       "./internal/workstate/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/..."
@@ -37,6 +38,10 @@
         "file": "cmd/codeflow/main.go",
         "function": "main",
         "reason": "Entry point calls os.Exit — standard Go untestable main pattern"
+      },
+      {
+        "file": "internal/settings/sudo.go",
+        "reason": "Thin wrappers around sudo exec.Command calls — requires root privileges to test"
       }
     ]
   }

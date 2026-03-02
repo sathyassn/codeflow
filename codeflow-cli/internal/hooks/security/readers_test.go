@@ -113,6 +113,57 @@ func TestReadEnforcementPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("settings_templates parsed", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		policyDir := filepath.Join(dir, ".codeflow", "config", "enforcement")
+		if err := os.MkdirAll(policyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := `{
+			"protected_resources": {"critical": [], "high": [], "moderate": []},
+			"settings_templates": {
+				"directory": ".claude/settings-templates",
+				"copy_mappings": [
+					{
+						"template": "autonomous.json",
+						"destination": ".claude/settings.json",
+						"purpose": "Main settings"
+					},
+					{
+						"template": "local.json",
+						"destination": ".claude/settings.local.json",
+						"purpose": "Local overrides"
+					}
+				]
+			}
+		}`
+		if err := os.WriteFile(filepath.Join(policyDir, "enforcement-policy.json"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		policy, err := ReadEnforcementPolicy(dir)
+		if err != nil {
+			t.Fatalf("ReadEnforcementPolicy() error: %v", err)
+		}
+		if policy.SettingsTemplates.Directory != ".claude/settings-templates" {
+			t.Errorf("SettingsTemplates.Directory = %q, want %q", policy.SettingsTemplates.Directory, ".claude/settings-templates")
+		}
+		if len(policy.SettingsTemplates.CopyMappings) != 2 {
+			t.Fatalf("SettingsTemplates.CopyMappings = %d, want 2", len(policy.SettingsTemplates.CopyMappings))
+		}
+		m := policy.SettingsTemplates.CopyMappings[0]
+		if m.Template != "autonomous.json" {
+			t.Errorf("CopyMappings[0].Template = %q, want %q", m.Template, "autonomous.json")
+		}
+		if m.Destination != ".claude/settings.json" {
+			t.Errorf("CopyMappings[0].Destination = %q, want %q", m.Destination, ".claude/settings.json")
+		}
+		if m.Purpose != "Main settings" {
+			t.Errorf("CopyMappings[0].Purpose = %q, want %q", m.Purpose, "Main settings")
+		}
+	})
+
 	t.Run("missing file", func(t *testing.T) {
 		t.Parallel()
 		_, err := ReadEnforcementPolicy(t.TempDir())

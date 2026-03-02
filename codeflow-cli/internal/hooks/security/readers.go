@@ -32,6 +32,21 @@ type EnforcementPolicy struct {
 		StateFolder      string   `json:"state_folder"`
 	} `json:"managed_tmp"`
 
+	SettingsTemplates SettingsTemplates `json:"settings_templates"`
+}
+
+// SettingsTemplates represents the settings_templates section of
+// enforcement-policy.json, exposing copy_mappings for validation.
+type SettingsTemplates struct {
+	Directory    string              `json:"directory"`
+	CopyMappings []SettingsCopyMapping `json:"copy_mappings"`
+}
+
+// SettingsCopyMapping represents a single template-to-destination mapping.
+type SettingsCopyMapping struct {
+	Template    string `json:"template"`
+	Destination string `json:"destination"`
+	Purpose     string `json:"purpose"`
 }
 
 // AllProtectedPaths returns all protected paths (critical + high + moderate).

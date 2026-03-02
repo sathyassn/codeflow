@@ -51,6 +51,9 @@ func TestNewPreToolUseCmd(t *testing.T) {
 	if !names["security"] {
 		t.Error("newPreToolUseCmd() missing subcommand 'security'")
 	}
+	if !names["protection-guard"] {
+		t.Error("newPreToolUseCmd() missing subcommand 'protection-guard'")
+	}
 }
 
 func TestNewSecurityCmd(t *testing.T) {
@@ -1156,7 +1159,7 @@ func TestNewPostToolUseCmd(t *testing.T) {
 	for _, sub := range subs {
 		names[sub.Name()] = true
 	}
-	expected := []string{"sentinel-write", "checkpoint-register"}
+	expected := []string{"sentinel-write", "checkpoint-register", "settings-validate"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("newPostToolUseCmd() missing subcommand %q", name)
@@ -2025,3 +2028,84 @@ func TestHooksCmd_HasSessionEnd(t *testing.T) {
 		t.Error("newHooksCmd() missing subcommand 'session-start'")
 	}
 }
+
+// --- Protection guard command tests ---
+
+func TestNewProtectionGuardCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newProtectionGuardCmd()
+	if cmd.Use != "protection-guard" {
+		t.Errorf("newProtectionGuardCmd().Use = %q, want %q", cmd.Use, "protection-guard")
+	}
+	if cmd.Short == "" {
+		t.Error("newProtectionGuardCmd() has empty Short description")
+	}
+}
+
+func TestRunProtectionGuard_NonEditTool(t *testing.T) {
+	t.Parallel()
+
+	// Non-Edit/Write tool should pass through silently.
+	cmd := newProtectionGuardCmd()
+	cmd.SetIn(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`))
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SilenceUsage = true
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("protection-guard should allow non-Edit tool, got error: %v", err)
+	}
+}
+
+func TestRunProtectionGuard_UnprotectedFile(t *testing.T) {
+	t.Parallel()
+
+	// Edit to a file not in any protection tier should pass.
+	// Use an absolute temp path to avoid matching any protection pattern.
+	cmd := newProtectionGuardCmd()
+	cmd.SetIn(strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"/tmp/some-unprotected-file.go"}}`))
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SilenceUsage = true
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("protection-guard should allow unprotected file, got error: %v", err)
+	}
+}
+
+// --- Settings-validate hook command tests ---
+
+func TestNewSettingsValidateHookCmd(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSettingsValidateHookCmd()
+	if cmd.Use != "settings-validate" {
+		t.Errorf("newSettingsValidateHookCmd().Use = %q, want %q", cmd.Use, "settings-validate")
+	}
+	if cmd.Short == "" {
+		t.Error("newSettingsValidateHookCmd() has empty Short description")
+	}
+}
+
+func TestRunSettingsValidateHook_NonTemplateEdit(t *testing.T) {
+	t.Parallel()
+
+	// Non-settings-template edit should be silently ignored (advisory hook).
+	cmd := newSettingsValidateHookCmd()
+	cmd.SetIn(strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"src/main.go"}}`))
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SilenceUsage = true
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Errorf("settings-validate should be advisory (exit 0), got error: %v", err)
+	}
+}
+

@@ -11,6 +11,7 @@ import (
 
 	"github.com/codeflow/codeflow-cli/internal/hooks/gate"
 	"github.com/codeflow/codeflow-cli/internal/hooks/ghpr"
+	"github.com/codeflow/codeflow-cli/internal/hooks/resource"
 	"github.com/codeflow/codeflow-cli/internal/hooks/security"
 	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 	"github.com/codeflow/codeflow-cli/internal/hooks/session"
@@ -54,6 +55,7 @@ func newPreToolUseCmd() *cobra.Command {
 	cmd.AddCommand(newGHPRGuardCmd())
 	cmd.AddCommand(newWebFetchGuardCmd())
 	cmd.AddCommand(newTeamGuardCmd())
+	cmd.AddCommand(newProtectionGuardCmd())
 	return cmd
 }
 
@@ -558,6 +560,7 @@ func newPostToolUseCmd() *cobra.Command {
 
 	cmd.AddCommand(newSentinelWriteCmd())
 	cmd.AddCommand(newHookCheckpointRegisterCmd())
+	cmd.AddCommand(newSettingsValidateHookCmd())
 	return cmd
 }
 
@@ -746,6 +749,77 @@ Exit codes:
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSessionEndCleanup(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+}
+
+// newProtectionGuardCmd creates the "protection-guard" subcommand that checks
+// file paths against protection tiers and handles auto-staging.
+func newProtectionGuardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "protection-guard",
+		Short: "Check file protection tier and auto-stage if protected",
+		Long: `Check whether an Edit/Write operation targets a protected resource.
+
+Reads Claude Code PreToolUse hook JSON from stdin, checks the target file
+against protection tiers (critical/high/moderate) per enforcement-policy.json.
+
+If protected (critical/high): auto-stages to staging area and provides
+structured feedback with tier info and next steps. Exits 2 (block).
+
+If moderate: allows through with a warning. Exits 0.
+If unprotected: allows through silently. Exits 0.
+
+Stdin format:
+  {"tool_name":"Edit","tool_input":{"file_path":".claude/settings.json"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runProtectionGuard(cmd)
+		},
+	}
+}
+
+// runProtectionGuard implements the protection guard logic.
+func runProtectionGuard(cmd *cobra.Command) error {
+	projectDir := detectProjectDir()
+	guard := resource.NewProtectionGuard(projectDir)
+
+	verdict, err := guard.Check(cmd.InOrStdin())
+	if err != nil {
+		// Errors are not security violations — allow through.
+		return nil
+	}
+
+	if !verdict.Allow {
+		fmt.Fprint(cmd.ErrOrStderr(), verdict.Message)
+		return &exitError{code: ExitHookBlock, err: fmt.Errorf("protection-guard: %s tier, path: %s", verdict.Tier, verdict.Path)}
+	}
+
+	// Print moderate tier warnings to stderr.
+	if verdict.Tier == resource.TierModerate && verdict.Message != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), verdict.Message)
+	}
+
+	return nil
+}
+
+// newSettingsValidateHookCmd creates the "settings-validate" subcommand
+// for the PostToolUse hook entry point.
+func newSettingsValidateHookCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "settings-validate",
+		Short: "Validate settings templates after edits (hook entry point)",
+		Long: `PostToolUse hook for settings template validation.
+
+Reads Claude Code hook JSON from stdin, filters for Edit/Write operations
+targeting settings-templates/*.json files. Always exits 0 (advisory).
+Outputs hookSpecificOutput JSON with validation results.
+
+Stdin format:
+  {"tool_name":"Edit","tool_input":{"file_path":".claude/settings-templates/autonomous.json"}}`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSettingsValidateHook(cmd, detectProjectDir)
 		},
 	}
 }
