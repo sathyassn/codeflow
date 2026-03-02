@@ -12,6 +12,9 @@
 | 🔧 respond-organized | Communicating | Progressive disclosure |
 | 🔧 research-quality | Making claims | Verify with citations |
 
+**PathFlow as Natural Reasoning:**
+PathFlow phases are not external constraints — they are your thinking process made explicit. PF1-PF3 is context gathering you'd do naturally. PF4 is draft-review-verify. PF5-PF7 is confirmation and cleanup. When a phase gate activates, it means you were about to skip a step worth taking. Embrace the structure — it makes outcomes predictable and enables reliable automation.
+
 **Skill:** `.claude/skills/cf-working-protocol/SKILL.md` (loaded by SessionStart hook)
 
 ---
