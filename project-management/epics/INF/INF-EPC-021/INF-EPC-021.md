@@ -132,7 +132,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-031 | Post-cutover verification -- full lifecycle test with Go hooks | todo | high |
 | INF-TSK-021-032 | Fix replace/migrate language in INF-EPC-021 build tasks | complete | high |
 | INF-TSK-021-033 | Align INF-EPC-021 tasks with revised Go CLI migration decisions | complete | high |
-| INF-TSK-021-034 | Build Go CLI for session-start instructions hook | todo | high |
+| INF-TSK-021-034 | Build Go CLI for session-start instructions hook | complete | high |
 | INF-TSK-021-035 | Migrate git hooks to Go with thin shell wrappers | todo | normal |
 | INF-TSK-021-036 | Migrate protection management scripts to Go | todo | low |
 | INF-TSK-021-037 | Build Go CLI for pathflow transition and registration scripts | todo | high |
