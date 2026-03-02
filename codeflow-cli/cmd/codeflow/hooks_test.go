@@ -747,7 +747,20 @@ func TestLoadWebFetchChecker(t *testing.T) {
 	t.Parallel()
 
 	t.Run("loads from real project dir", func(t *testing.T) {
-		t.Parallel()
+		// Clear git hook env vars that interfere with detectProjectDir().
+		// Cannot use t.Setenv in a parallel parent (Go 1.24+), so save/restore manually.
+		origGitDir, hadGitDir := os.LookupEnv("GIT_DIR")
+		origIndexFile, hadIndexFile := os.LookupEnv("GIT_INDEX_FILE")
+		os.Unsetenv("GIT_DIR")
+		os.Unsetenv("GIT_INDEX_FILE")
+		t.Cleanup(func() {
+			if hadGitDir {
+				os.Setenv("GIT_DIR", origGitDir)
+			}
+			if hadIndexFile {
+				os.Setenv("GIT_INDEX_FILE", origIndexFile)
+			}
+		})
 		projectDir := detectProjectDir()
 		checker := loadWebFetchChecker(projectDir)
 		// The real enforcement-policy.json has blocked patterns.

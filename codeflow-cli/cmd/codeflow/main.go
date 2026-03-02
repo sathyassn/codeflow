@@ -60,6 +60,8 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newSentinelCmd())
 	rootCmd.AddCommand(newCoordinationCmd())
 	rootCmd.AddCommand(newSettingsCmd())
+	rootCmd.AddCommand(newWorktreeCmd())
+	rootCmd.AddCommand(newReportCmd())
 
 	return rootCmd
 }

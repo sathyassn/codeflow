@@ -1,6 +1,8 @@
 # Makefile for codeflow CLI
 # Build, test, and development targets
 
+SHELL := /bin/bash
+
 BINARY_NAME := codeflow
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR := bin
@@ -46,7 +48,8 @@ test-cover:
 	echo "---"; \
 	total=$$(go tool cover -func=coverage.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
 	echo "Overall coverage (all packages): $${total}%"; \
-	go test -coverprofile=business.out $${BUSINESS_PKGS} > /dev/null 2>&1; \
+	IFS=' ' read -ra BUSINESS_PKGS_ARRAY <<< "$${BUSINESS_PKGS}"; \
+	go test -coverprofile=business.out "$${BUSINESS_PKGS_ARRAY[@]}" > /dev/null 2>&1; \
 	impl=$$(go tool cover -func=business.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
 	rm -f business.out; \
 	echo "Business package coverage: $${impl}%"; \

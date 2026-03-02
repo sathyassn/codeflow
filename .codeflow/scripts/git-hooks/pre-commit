@@ -457,13 +457,15 @@ fi
 if [[ -n "$GO_FILES" ]] && [[ -f "$GO_MOD_FILE" ]] && command -v go &>/dev/null; then
     echo "Running Go CLI tests with coverage..."
 
-    GO_COVERAGE_OUT=$(mktemp "${TMPDIR:-/tmp}/go-coverage-XXXXXX.out")
+    GO_COVERAGE_OUT=$(mktemp "${TMPDIR:-/tmp}/go-coverage-XXXXXX")
     cleanup_go_coverage() { rm -f "${GO_COVERAGE_OUT}"; }
     trap cleanup_go_coverage EXIT
 
-    # shellcheck disable=SC2086  # Word splitting intentional for package list
+    IFS=' ' read -ra _go_pkgs <<< "$GO_BUSINESS_PKGS"
+    # Unset git hook env vars that interfere with Go test subprocess
+    unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
     if ! (cd "$REPO_ROOT/codeflow-cli" && go test -coverprofile="$GO_COVERAGE_OUT" \
-        $GO_BUSINESS_PKGS \
+        "${_go_pkgs[@]}" \
         -count=1 -timeout 120s) >/dev/null 2>&1; then
         echo -e "${RED}${BOLD}❌ GO CLI TESTS FAILED${NC}" >&2
         echo "" >&2

@@ -138,9 +138,9 @@ run_coverage_enforcement() {
 
     # Business package coverage (packages from test-config.json)
     local business_cov_file="$CLI_DIR/business.out"
-    # shellcheck disable=SC2086  # Word splitting intentional for package list
+    IFS=' ' read -ra _biz_pkgs <<< "$BUSINESS_PKGS"
     if (cd "$CLI_DIR" && go test -coverprofile=business.out \
-        $BUSINESS_PKGS \
+        "${_biz_pkgs[@]}" \
         > /dev/null 2>&1); then
 
         local impl
