@@ -480,3 +480,4 @@ func TestSessionCurrentCmd_ViaRootCmd(t *testing.T) {
 		t.Errorf("current = %q, want %q", got, sessionID)
 	}
 }
+

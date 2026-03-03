@@ -382,6 +382,12 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 	if updated.LeadPID != init_.PPID {
 		t.Errorf("updated lead_pid = %d, want %d", updated.LeadPID, init_.PPID)
 	}
+
+	// Verify current-session-id was NOT written (compact reuses existing session).
+	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
+	if _, err := os.Stat(csidPath); !os.IsNotExist(err) {
+		t.Error("current-session-id should NOT be written on compact (only on fresh startup)")
+	}
 }
 
 func TestStartInit_EmptyProjectDir(t *testing.T) {
@@ -721,14 +727,11 @@ func TestDBSessionStarter_Direct(t *testing.T) {
 	dbPath := filepath.Join(projectDir, ".state", "db", "codeflow.db")
 	assertFileExists(t, dbPath)
 
-	// Verify current-session-id was written.
+	// Verify current-session-id is NOT written by StartSession/session.Start
+	// (caller is responsible -- hook path or CLI path).
 	sidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	sidData, err := os.ReadFile(sidPath)
-	if err != nil {
-		t.Fatalf("reading current-session-id: %v", err)
-	}
-	if string(sidData) != sessionID {
-		t.Errorf("current-session-id = %q, want %q", string(sidData), sessionID)
+	if _, err := os.Stat(sidPath); !os.IsNotExist(err) {
+		t.Error("current-session-id should NOT be written by StartSession -- caller is responsible")
 	}
 
 	// Verify JSONL event was written.

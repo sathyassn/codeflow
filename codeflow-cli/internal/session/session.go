@@ -71,11 +71,18 @@ func resolveGitUser(claudeID string) GitUser {
 }
 
 // Start creates a new session. It generates a ULID-based session ID, inserts
-// a record into the sessions table, writes a session_start event to
-// sessions.jsonl, and writes the session ID to current-session-id.
+// a record into the sessions table, and writes a session_start event to
+// sessions.jsonl.
+//
+// The caller is responsible for writing current-session-id after Start returns.
+// In the hook path (start.go), this is guarded by source (only for "startup").
+// In the CLI path (codeflow session start), it is written unconditionally.
+// codeflow-env.sh is the single source of truth for session ID.
 //
 // The user record is created from git config (user.email and user.name).
 // The claudeID (agent UUID) is stored in the session metadata field.
+//
+// runtimeDir is retained for API compatibility but is no longer used by Start.
 func Start(ctx context.Context, d *db.DB, claudeID string, ledgerDir string, runtimeDir string) (string, error) {
 	if claudeID == "" {
 		return "", ErrEmptyClaudeID
@@ -136,10 +143,11 @@ func Start(ctx context.Context, d *db.DB, claudeID string, ledgerDir string, run
 		return "", fmt.Errorf("session: writing JSONL event: %w", err)
 	}
 
-	// Write current-session-id file.
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		return "", fmt.Errorf("session: writing current-session-id: %w", err)
-	}
+	// Note: current-session-id is NOT written here. The caller is responsible
+	// for writing it. In the hook path (start.go:StartInit), it is written only
+	// for new sessions (source=startup). In the CLI path (codeflow session start),
+	// it is written after this function returns. codeflow-env.sh is the single
+	// source of truth for session ID.
 
 	return sessionID, nil
 }

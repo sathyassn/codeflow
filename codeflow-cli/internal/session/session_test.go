@@ -98,28 +98,23 @@ func TestStartWritesJSONL(t *testing.T) {
 	}
 }
 
-func TestStartWritesCurrentSessionID(t *testing.T) {
+func TestStartDoesNotWriteCurrentSessionID(t *testing.T) {
 	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 
-	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+	_, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Verify the current-session-id file was written.
+	// Start() no longer writes current-session-id. The caller is responsible
+	// (hook path guards it by source; CLI path writes it after Start returns).
 	idFile := filepath.Join(runtimeDir, "current-session-id")
-	data, err := os.ReadFile(idFile)
-	if err != nil {
-		t.Fatalf("reading current-session-id: %v", err)
-	}
-
-	got := string(data)
-	if got != sessionID {
-		t.Errorf("current-session-id = %q, want %q", got, sessionID)
+	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
+		t.Error("current-session-id should NOT be written by Start() -- caller is responsible")
 	}
 }
 
@@ -182,6 +177,10 @@ func TestEndHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	// Write current-session-id (Start no longer writes it -- caller is responsible).
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
+	}
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -214,6 +213,9 @@ func TestEndCalculatesDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
+	}
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -242,8 +244,14 @@ func TestEndCleansUp(t *testing.T) {
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 
 	// Start a session first.
-	if _, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir); err != nil {
+	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+
+	// Manually write current-session-id (Start no longer writes it -- caller is responsible).
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writing current-session-id: %v", err)
 	}
 
 	// Verify the file exists before End.
@@ -274,6 +282,9 @@ func TestEndWritesJSONL(t *testing.T) {
 	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
 	}
 
 	// End the session.
@@ -345,6 +356,9 @@ func TestEndAlreadyEndedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
+	}
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -394,6 +408,10 @@ func TestCurrent(t *testing.T) {
 		sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 		if err != nil {
 			t.Fatalf("Start: %v", err)
+		}
+		// Write current-session-id manually (Start no longer writes it).
+		if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+			t.Fatalf("writeCurrentSessionID: %v", err)
 		}
 
 		got, err := Current(runtimeDir)
@@ -461,13 +479,12 @@ func TestStartCreatesDirectories(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Verify directories were created.
+	// Verify ledger directory was created (Start writes JSONL there).
 	if _, err := os.Stat(ledgerDir); err != nil {
 		t.Errorf("ledger directory should exist: %v", err)
 	}
-	if _, err := os.Stat(runtimeDir); err != nil {
-		t.Errorf("runtime directory should exist: %v", err)
-	}
+	// Note: runtimeDir is no longer created by Start() since it no longer
+	// writes current-session-id. The caller is responsible for creating it.
 }
 
 func TestStartEnsuresUserRow(t *testing.T) {
@@ -532,9 +549,12 @@ func TestEndOnClosedDB(t *testing.T) {
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 
-	_, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
+	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
 	}
 
 	// Close the DB to force error during End.
@@ -590,9 +610,12 @@ func TestStartWithSameClaudeIDTwice(t *testing.T) {
 	claudeID := "same-claude-id"
 
 	// First session.
-	_, err := Start(ctx, d, claudeID, ledgerDir, runtimeDir)
+	sid1, err := Start(ctx, d, claudeID, ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start 1: %v", err)
+	}
+	if err := writeCurrentSessionID(runtimeDir, sid1); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
 	}
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 1: %v", err)
@@ -607,20 +630,19 @@ func TestStartWithSameClaudeIDTwice(t *testing.T) {
 
 func TestStartWithInvalidRuntimeDir(t *testing.T) {
 	t.Parallel()
-	// Exercise the writeCurrentSessionID MkdirAll error path.
+	// Start() no longer writes current-session-id (caller is responsible),
+	// so runtimeDir is unused by Start(). Test that an invalid runtimeDir
+	// does NOT cause Start() to fail (it only needs a valid ledgerDir).
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 
-	// /dev/null is a file, not a directory — MkdirAll will fail.
+	// /dev/null is a file, not a directory — but runtimeDir is unused now.
 	runtimeDir := "/dev/null/runtime"
 
 	_, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
-	if err == nil {
-		t.Fatal("expected error for invalid runtime dir")
-	}
-	if !strings.Contains(err.Error(), "current-session-id") {
-		t.Errorf("expected error about current-session-id, got: %v", err)
+	if err != nil {
+		t.Fatalf("Start should succeed with invalid runtimeDir (no longer used): %v", err)
 	}
 }
 
@@ -636,6 +658,9 @@ func TestEndWithEmptyStartedAt(t *testing.T) {
 	sessionID, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
+		t.Fatalf("writeCurrentSessionID: %v", err)
 	}
 
 	// Manually set started_at to empty to exercise the empty-string branch.
@@ -912,6 +937,9 @@ func TestMultipleStartEndCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start 1: %v", err)
 	}
+	if err := writeCurrentSessionID(runtimeDir, id1); err != nil {
+		t.Fatalf("writeCurrentSessionID 1: %v", err)
+	}
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 1: %v", err)
 	}
@@ -919,6 +947,9 @@ func TestMultipleStartEndCycles(t *testing.T) {
 	id2, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
 	if err != nil {
 		t.Fatalf("Start 2: %v", err)
+	}
+	if err := writeCurrentSessionID(runtimeDir, id2); err != nil {
+		t.Fatalf("writeCurrentSessionID 2: %v", err)
 	}
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 2: %v", err)
