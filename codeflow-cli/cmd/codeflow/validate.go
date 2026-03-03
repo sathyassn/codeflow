@@ -89,9 +89,9 @@ func reportValidationResults(w, errW io.Writer, errs []validate.ValidationError,
 	}
 
 	if len(warns) > 0 {
-		fmt.Fprintf(w, "Validation PASSED with %d warning(s)\n", len(warns))
+		fmt.Fprintf(w, "[INFO] Validation PASSED with %d warning(s)\n", len(warns))
 	} else {
-		fmt.Fprintf(w, "Validation PASSED\n")
+		fmt.Fprintf(w, "[INFO] Validation PASSED\n")
 	}
 
 	return nil

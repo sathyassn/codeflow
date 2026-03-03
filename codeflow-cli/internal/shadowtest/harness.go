@@ -151,9 +151,12 @@ func SessionRegisterNormalizationRules() NormalizationRules {
 
 // SessionStartNormalizationRules returns rules for session-start hooks, which
 // may emit stale-session warnings to stderr that Go does not emit.
+// Go emits an {"env":{...}} JSON line to stdout that the shell does not; the
+// StripStdoutLinePrefixes entry drops that line before comparison.
 func SessionStartNormalizationRules() NormalizationRules {
 	rules := DefaultNormalizationRules()
 	rules.StderrNoisePatterns = []string{"WARNING:", "STALE SESSIONS", "stale session"}
+	rules.StripStdoutLinePrefixes = []string{"{\"env\":"}
 	return rules
 }
 

@@ -61,7 +61,7 @@ x
 x
 `,
 			filename:   "INF-TSK-001-001.md",
-			wantStdout: "Validation PASSED",
+			wantStdout: "[INFO] Validation PASSED",
 		},
 		{
 			name: "invalid status",
@@ -234,7 +234,7 @@ x
 x
 `,
 			filename:   "INF-EPC-001.md",
-			wantStdout: "Validation PASSED",
+			wantStdout: "[INFO] Validation PASSED",
 		},
 		{
 			name: "invalid epic",

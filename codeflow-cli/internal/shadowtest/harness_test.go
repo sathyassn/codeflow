@@ -476,7 +476,8 @@ PASS`
 }
 
 // TestSessionStartNormalizationRules verifies the session-start rules include
-// stderr noise patterns for stale session warnings.
+// stderr noise patterns for stale session warnings and a StripStdoutLinePrefixes
+// entry to drop the Go init {"env":{...}} JSON line.
 func TestSessionStartNormalizationRules(t *testing.T) {
 	t.Parallel()
 
@@ -493,6 +494,19 @@ func TestSessionStartNormalizationRules(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected WARNING or STALE pattern in StderrNoisePatterns, got %v", r.StderrNoisePatterns)
+	}
+
+	// Verify that the Go init {"env":{...}} JSON line is stripped so it does not
+	// diverge from the shell's empty stdout.
+	foundEnvPrefix := false
+	for _, p := range r.StripStdoutLinePrefixes {
+		if strings.Contains(p, `{"env":`) {
+			foundEnvPrefix = true
+			break
+		}
+	}
+	if !foundEnvPrefix {
+		t.Errorf(`expected {"env": prefix in StripStdoutLinePrefixes, got %v`, r.StripStdoutLinePrefixes)
 	}
 }
 
