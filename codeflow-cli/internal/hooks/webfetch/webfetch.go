@@ -16,6 +16,16 @@ type Verdict struct {
 
 	// Reason is a human-readable explanation when the URL is blocked.
 	Reason string
+
+	// AlwaysBlocked is true when the domain is on the hard-block list
+	// (localhost, private IPs, etc.) and should cause exit 2. When false
+	// and Allow is false, the domain is untrusted and the caller should
+	// ask for user approval rather than hard-blocking.
+	AlwaysBlocked bool
+
+	// Domain is the extracted domain from the URL, used by callers to
+	// construct permission-decision messages.
+	Domain string
 }
 
 // URLChecker validates URLs against trusted domain allowlists and
@@ -177,14 +187,16 @@ func (c *URLChecker) validateURL(rawURL string) *Verdict {
 	lower := strings.ToLower(rawURL)
 	if strings.HasPrefix(lower, "file://") {
 		return &Verdict{
-			Allow:  false,
-			Reason: fmt.Sprintf("BLOCKED: file:// URLs are not allowed\nURL: %s\n", rawURL),
+			Allow:         false,
+			AlwaysBlocked: true,
+			Reason:        fmt.Sprintf("BLOCKED: file:// URLs are not allowed\nURL: %s\n", rawURL),
 		}
 	}
 	if strings.HasPrefix(lower, "data:") {
 		return &Verdict{
-			Allow:  false,
-			Reason: fmt.Sprintf("BLOCKED: data: URLs are not allowed\nURL: %s\n", rawURL),
+			Allow:         false,
+			AlwaysBlocked: true,
+			Reason:        fmt.Sprintf("BLOCKED: data: URLs are not allowed\nURL: %s\n", rawURL),
 		}
 	}
 
@@ -195,29 +207,35 @@ func (c *URLChecker) validateURL(rawURL string) *Verdict {
 
 	// Trusted domains bypass block checks (matching shell behavior).
 	if c.isTrustedDomain(domain) {
-		return &Verdict{Allow: true}
+		return &Verdict{Allow: true, Domain: domain}
 	}
 
 	// Check always-blocked patterns.
 	if c.isBlockedDomain(domain) {
 		return &Verdict{
-			Allow:  false,
-			Reason: fmt.Sprintf("BLOCKED: Internal/local network access forbidden\nURL: %s\nDomain: %s\nAccess to localhost, internal networks, and private IPs is not allowed.\n", rawURL, domain),
+			Allow:         false,
+			AlwaysBlocked: true,
+			Domain:        domain,
+			Reason:        fmt.Sprintf("BLOCKED: Internal/local network access forbidden\nURL: %s\nDomain: %s\nAccess to localhost, internal networks, and private IPs is not allowed.\n", rawURL, domain),
 		}
 	}
 
 	// Check private IP ranges.
 	if c.isPrivateIP(domain) {
 		return &Verdict{
-			Allow:  false,
-			Reason: fmt.Sprintf("BLOCKED: Internal/local network access forbidden\nURL: %s\nDomain: %s\nAccess to private IP ranges is not allowed.\n", rawURL, domain),
+			Allow:         false,
+			AlwaysBlocked: true,
+			Domain:        domain,
+			Reason:        fmt.Sprintf("BLOCKED: Internal/local network access forbidden\nURL: %s\nDomain: %s\nAccess to private IP ranges is not allowed.\n", rawURL, domain),
 		}
 	}
 
-	// Not trusted and not blocked — block with untrusted message.
+	// Not trusted and not hard-blocked — untrusted domain, ask for approval.
 	return &Verdict{
-		Allow:  false,
-		Reason: fmt.Sprintf("BLOCKED: Untrusted domain\nURL: %s\nDomain: %s\nThis domain is not in the trusted allowlist.\n", rawURL, domain),
+		Allow:         false,
+		AlwaysBlocked: false,
+		Domain:        domain,
+		Reason:        fmt.Sprintf("BLOCKED: Untrusted domain\nURL: %s\nDomain: %s\nThis domain is not in the trusted allowlist.\n", rawURL, domain),
 	}
 }
 

@@ -127,7 +127,8 @@
         "claude-hooks/stop/test-cf-stop-pathflow-gate.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit.sh",
         "claude-hooks/user-prompt-submit/test-cf-user-prompt-submit-logging.sh",
-        "cli/test-go-cli.sh"
+        "cli/test-go-cli.sh",
+        "shadow/run-shadow-tests.sh"
       ]
     },
     "LOW": {

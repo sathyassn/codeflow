@@ -272,8 +272,8 @@ func TestRunPhaseTransition(t *testing.T) {
 	t.Run("records valid phase transition", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		var buf bytes.Buffer
-		err := runPhaseTransition(t.Context(), &buf, dir, "ses-test-001", "PF1-INIT", "entered")
+		var buf, errBuf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, &errBuf, dir, "ses-test-001", "PF1-INIT", "entered")
 		if err != nil {
 			t.Fatalf("runPhaseTransition() error: %v", err)
 		}
@@ -288,8 +288,8 @@ func TestRunPhaseTransition(t *testing.T) {
 	t.Run("returns error for invalid phase", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		var buf bytes.Buffer
-		err := runPhaseTransition(t.Context(), &buf, dir, "ses-test-002", "PF9-INVALID", "entered")
+		var buf, errBuf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, &errBuf, dir, "ses-test-002", "PF9-INVALID", "entered")
 		if err == nil {
 			t.Fatal("expected error for invalid phase")
 		}
@@ -297,12 +297,16 @@ func TestRunPhaseTransition(t *testing.T) {
 		if code != ExitConfigError {
 			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
 		}
+		// Verify JSON error output to stderr.
+		if !strings.Contains(errBuf.String(), `"error"`) {
+			t.Errorf("expected JSON error in stderr, got %q", errBuf.String())
+		}
 	})
 
 	t.Run("returns error for bad logs dir", func(t *testing.T) {
 		t.Parallel()
-		var buf bytes.Buffer
-		err := runPhaseTransition(t.Context(), &buf, "/dev/null/bad", "ses-test-003", "PF1-INIT", "entered")
+		var buf, errBuf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, &errBuf, "/dev/null/bad", "ses-test-003", "PF1-INIT", "entered")
 		if err == nil {
 			t.Fatal("expected error for bad logs dir")
 		}
@@ -372,8 +376,8 @@ func TestRunSessionRegister(t *testing.T) {
 	t.Run("registers session with interactive mode", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		var buf bytes.Buffer
-		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-001", "interactive")
+		var buf, errBuf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, &errBuf, dir, "ses-test-001", "interactive")
 		if err != nil {
 			t.Fatalf("runSessionRegister() error: %v", err)
 		}
@@ -391,8 +395,8 @@ func TestRunSessionRegister(t *testing.T) {
 	t.Run("registers session with autorun mode", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		var buf bytes.Buffer
-		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-002", "autorun")
+		var buf, errBuf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, &errBuf, dir, "ses-test-002", "autorun")
 		if err != nil {
 			t.Fatalf("runSessionRegister() error: %v", err)
 		}
@@ -404,8 +408,8 @@ func TestRunSessionRegister(t *testing.T) {
 	t.Run("returns error for invalid mode", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		var buf bytes.Buffer
-		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-003", "batch")
+		var buf, errBuf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, &errBuf, dir, "ses-test-003", "batch")
 		if err == nil {
 			t.Fatal("expected error for invalid mode")
 		}
@@ -413,12 +417,16 @@ func TestRunSessionRegister(t *testing.T) {
 		if code != ExitConfigError {
 			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
 		}
+		// Verify JSON error output to stderr.
+		if !strings.Contains(errBuf.String(), `"error"`) {
+			t.Errorf("expected JSON error in stderr, got %q", errBuf.String())
+		}
 	})
 
 	t.Run("returns error for bad logs dir", func(t *testing.T) {
 		t.Parallel()
-		var buf bytes.Buffer
-		err := runSessionRegister(t.Context(), &buf, "/dev/null/bad", "ses-test-004", "interactive")
+		var buf, errBuf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, &errBuf, "/dev/null/bad", "ses-test-004", "interactive")
 		if err == nil {
 			t.Fatal("expected error for bad logs dir")
 		}

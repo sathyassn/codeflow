@@ -20,7 +20,8 @@
       "./cmd/codeflow/...",
       "./cmd/autorun/...",
       "./internal/workgraph/...",
-      "./internal/githooks/..."
+      "./internal/githooks/...",
+      "./internal/shadowtest/..."
     ]
   },
   "conventions": {

@@ -53,7 +53,7 @@ func newPhaseTransitionCmd() *cobra.Command {
 		Long:  "Writes a phase_transition event to pathflow-events.jsonl.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runPhaseTransition(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, phase, status)
+			return runPhaseTransition(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), logsDir, sessionID, phase, status)
 		},
 	}
 
@@ -68,7 +68,7 @@ func newPhaseTransitionCmd() *cobra.Command {
 	return cmd
 }
 
-func runPhaseTransition(ctx context.Context, w io.Writer, logsDir, sessionID, phase, status string) error {
+func runPhaseTransition(ctx context.Context, w io.Writer, errW io.Writer, logsDir, sessionID, phase, status string) error {
 	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
 	if err != nil {
 		return &exitError{code: ExitRuntimeError, err: err}
@@ -80,6 +80,7 @@ func runPhaseTransition(ctx context.Context, w io.Writer, logsDir, sessionID, ph
 		Status:    status,
 	}
 	if err := tw.RecordPhaseTransition(params); err != nil {
+		fmt.Fprintf(errW, `{"error":%q}`+"\n", err.Error())
 		return &exitError{code: ExitConfigError, err: err}
 	}
 
@@ -156,7 +157,7 @@ func newSessionRegisterCmd() *cobra.Command {
 		Long:  "Writes two session_register events to pathflow-events.jsonl: tracking_level and interaction_mode.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSessionRegister(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, mode)
+			return runSessionRegister(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), logsDir, sessionID, mode)
 		},
 	}
 
@@ -168,7 +169,7 @@ func newSessionRegisterCmd() *cobra.Command {
 	return cmd
 }
 
-func runSessionRegister(ctx context.Context, w io.Writer, logsDir, sessionID, mode string) error {
+func runSessionRegister(ctx context.Context, w io.Writer, errW io.Writer, logsDir, sessionID, mode string) error {
 	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
 	if err != nil {
 		return &exitError{code: ExitRuntimeError, err: err}
@@ -179,6 +180,7 @@ func runSessionRegister(ctx context.Context, w io.Writer, logsDir, sessionID, mo
 		Mode:      mode,
 	}
 	if err := tw.RegisterSession(params); err != nil {
+		fmt.Fprintf(errW, `{"error":%q}`+"\n", err.Error())
 		return &exitError{code: ExitConfigError, err: err}
 	}
 

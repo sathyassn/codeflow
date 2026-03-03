@@ -131,7 +131,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | todo | normal |
 | INF-TSK-021-028 | Update test-config.json business_packages with migration packages | todo | high |
 | INF-TSK-021-029 | Align INF-EPC-021 task criteria with build-coexist-cutover strategy | complete | high |
-| INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | todo | high |
+| INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | complete | high |
 | INF-TSK-021-031 | Post-cutover verification -- full lifecycle test with Go hooks | todo | high |
 | INF-TSK-021-032 | Fix replace/migrate language in INF-EPC-021 build tasks | complete | high |
 | INF-TSK-021-033 | Align INF-EPC-021 tasks with revised Go CLI migration decisions | complete | high |

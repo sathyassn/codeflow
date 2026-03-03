@@ -591,3 +591,69 @@ func TestValidateURL_DataProtocol(t *testing.T) {
 		t.Errorf("reason should mention data:, got: %s", v.Reason)
 	}
 }
+
+func TestVerdictAlwaysBlocked_HardBlockDomains(t *testing.T) {
+	t.Parallel()
+
+	checker := defaultChecker()
+
+	// Always-blocked domains (private IPs, localhost, .local, etc.) set AlwaysBlocked=true.
+	alwaysBlockedCases := []struct {
+		name string
+		url  string
+	}{
+		{"localhost", "http://localhost:8080"},
+		{"127.0.0.1", "http://127.0.0.1:3000"},
+		{"private IP 10.x", "http://10.0.0.1/admin"},
+		{"private IP 192.168.x", "http://192.168.1.1"},
+		{".local domain", "http://myhost.local/api"},
+		{"file:// URL", "file:///etc/passwd"},
+		{"data: URL", "data:text/html,hi"},
+	}
+
+	for _, tc := range alwaysBlockedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := checker.validateURL(tc.url)
+			if v.Allow {
+				t.Errorf("expected block for %s", tc.url)
+			}
+			if !v.AlwaysBlocked {
+				t.Errorf("expected AlwaysBlocked=true for %s, got false", tc.url)
+			}
+		})
+	}
+}
+
+func TestVerdictAlwaysBlocked_UntrustedDomainNotHardBlocked(t *testing.T) {
+	t.Parallel()
+
+	checker := defaultChecker()
+
+	// Untrusted domains that are NOT on the always-block list should have AlwaysBlocked=false.
+	v := checker.validateURL("https://evil.example.com/path")
+	if v.Allow {
+		t.Error("expected untrusted domain to be blocked")
+	}
+	if v.AlwaysBlocked {
+		t.Error("expected AlwaysBlocked=false for untrusted (not hard-blocked) domain")
+	}
+	if v.Domain == "" {
+		t.Error("expected Domain to be set for untrusted domain verdict")
+	}
+}
+
+func TestVerdictDomain_TrustedDomain(t *testing.T) {
+	t.Parallel()
+
+	checker := defaultChecker()
+
+	v := checker.validateURL("https://docs.anthropic.com/api")
+	if !v.Allow {
+		t.Errorf("expected trusted domain to be allowed; reason: %s", v.Reason)
+	}
+	// Domain field is set even for allowed verdicts.
+	if v.Domain != "docs.anthropic.com" {
+		t.Errorf("expected Domain=docs.anthropic.com, got %q", v.Domain)
+	}
+}

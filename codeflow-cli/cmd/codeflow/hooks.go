@@ -353,7 +353,7 @@ Stdin format:
 }
 
 // runWebFetchGuard implements the URL validation logic.
-func runWebFetchGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
+func runWebFetchGuard(stdin io.Reader, outW io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	checker := loadWebFetchChecker(projectDir)
 
@@ -364,8 +364,15 @@ func runWebFetchGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	}
 
 	if !verdict.Allow {
-		fmt.Fprint(errW, verdict.Reason)
-		return &exitError{code: ExitHookBlock, err: fmt.Errorf("webfetch: blocked")}
+		// Hard-block: always-blocked domains (localhost, private IPs, etc.)
+		if verdict.AlwaysBlocked {
+			fmt.Fprint(errW, verdict.Reason)
+			return &exitError{code: ExitHookBlock, err: fmt.Errorf("webfetch: blocked")}
+		}
+		// Untrusted domain: ask for user approval (matching shell default behavior).
+		domain := verdict.Domain
+		fmt.Fprintf(outW, "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Domain '%s' not in standard allowlist\"}}\n", domain)
+		return nil
 	}
 
 	return nil
