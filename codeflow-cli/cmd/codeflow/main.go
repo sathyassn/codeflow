@@ -65,6 +65,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newWorkgraphCmd())
 	rootCmd.AddCommand(newGitHooksCmd())
 	rootCmd.AddCommand(newShadowTestCmd())
+	rootCmd.AddCommand(newNormalizeCmd())
 
 	return rootCmd
 }

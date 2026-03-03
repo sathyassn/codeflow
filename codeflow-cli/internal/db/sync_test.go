@@ -1321,3 +1321,198 @@ func TestApplyTaskCreated(t *testing.T) {
 		}
 	})
 }
+
+func TestSyncFromMixedSchemaJSONL(t *testing.T) {
+	t.Parallel()
+
+	// Helper to create a test DB with schema and user record.
+	setupDB := func(t *testing.T) *DB {
+		t.Helper()
+		d := newTestDB(t)
+		ctx := t.Context()
+		if err := d.InitFromSchema(ctx); err != nil {
+			t.Fatalf("InitFromSchema: %v", err)
+		}
+		_, err := d.Execute(ctx,
+			"INSERT INTO users (id, email, display_name) VALUES ('user-mix', 'mix@test.com', 'Mix User')")
+		if err != nil {
+			t.Fatalf("inserting user: %v", err)
+		}
+		return d
+	}
+
+	t.Run("sync from already-normalized JSONL", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+		ledgerDir := t.TempDir()
+
+		// All files use canonical field names.
+		wgContent := `{"event":"epic_created","id":"E-N1","format_id":"INF-EPC-N01","title":"Normal Epic","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}` + "\n" +
+			`{"event":"task_created","id":"T-N1","format_id":"INF-TSK-N01-001","epic_id":"E-N1","title":"Normal Task","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileWorkGraph), []byte(wgContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		sessContent := `{"event":"session_start","session_id":"ses-norm","user_id":"user-mix","user_host":"localhost","timestamp":"2024-01-01T00:00:00Z"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileSessions), []byte(sessContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		for _, name := range []string{FileMemoryEvents, FileConfig} {
+			if err := os.WriteFile(filepath.Join(ledgerDir, name), []byte(""), 0o644); err != nil {
+				t.Fatalf("writing %s: %v", name, err)
+			}
+		}
+
+		result, err := d.SyncFromJSONL(ctx, ledgerDir, nil)
+		if err != nil {
+			t.Fatalf("SyncFromJSONL: %v", err)
+		}
+
+		if result.EventsApplied < 3 {
+			t.Errorf("EventsApplied = %d, want >= 3", result.EventsApplied)
+		}
+
+		// Verify records exist.
+		epics, err := d.QueryToMaps(ctx, "SELECT id, title FROM epics WHERE id = 'E-N1'")
+		if err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if len(epics) != 1 {
+			t.Errorf("got %d epics, want 1", len(epics))
+		}
+	})
+
+	t.Run("sync from mixed schema (old type/ts + new event/timestamp)", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+		ledgerDir := t.TempDir()
+
+		// work-graph uses canonical format.
+		wgContent := `{"event":"epic_created","id":"E-M1","format_id":"INF-EPC-M01","title":"Mixed Epic","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}` + "\n" +
+			`{"event":"task_created","id":"T-M1","format_id":"INF-TSK-M01-001","epic_id":"E-M1","title":"Mixed Task","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileWorkGraph), []byte(wgContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		// memory-events uses OLD schema: "type" and "ts" fields.
+		memContent := `{"type":"progress","ts":"2024-01-01T00:00:00Z","id":"M-M1","event_type":"progress","domain":"development","memory_type":"episodic"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileMemoryEvents), []byte(memContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		// sessions uses shorthand format: "e" and "sid".
+		sessContent := `{"e":"session_start","sid":"ses-mix","ts":"2024-01-01T00:00:00Z","user_id":"user-mix","user_host":"localhost"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileSessions), []byte(sessContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileConfig), []byte(""), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		result, err := d.SyncFromJSONL(ctx, ledgerDir, nil)
+		if err != nil {
+			t.Fatalf("SyncFromJSONL: %v", err)
+		}
+
+		// Should handle all legacy field formats and apply successfully.
+		if result.EventsApplied < 4 {
+			t.Errorf("EventsApplied = %d, want >= 4 (2 wg + 1 mem + 1 sess)", result.EventsApplied)
+		}
+
+		// Verify memory event was synced despite old field names.
+		count, err := d.CountRows(ctx, "memory_events")
+		if err != nil {
+			t.Fatalf("CountRows: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("memory_events count = %d, want 1", count)
+		}
+
+		// Verify session was synced despite shorthand fields.
+		sessions, err := d.QueryToMaps(ctx, "SELECT id FROM sessions WHERE id = 'ses-mix'")
+		if err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Errorf("got %d sessions, want 1", len(sessions))
+		}
+	})
+
+	t.Run("sync with op+table records normalizes to semantic events", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+		ledgerDir := t.TempDir()
+
+		// work-graph with op+table format (Pattern 4).
+		wgContent := `{"op":"INSERT","table":"epics","id":"E-OP1","format_id":"INF-EPC-OP1","title":"Op Epic","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}` + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileWorkGraph), []byte(wgContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		for _, name := range []string{FileMemoryEvents, FileSessions, FileConfig} {
+			if err := os.WriteFile(filepath.Join(ledgerDir, name), []byte(""), 0o644); err != nil {
+				t.Fatalf("writing %s: %v", name, err)
+			}
+		}
+
+		result, err := d.SyncFromJSONL(ctx, ledgerDir, nil)
+		if err != nil {
+			t.Fatalf("SyncFromJSONL: %v", err)
+		}
+
+		if result.EventsApplied != 1 {
+			t.Errorf("EventsApplied = %d, want 1", result.EventsApplied)
+		}
+
+		epics, err := d.QueryToMaps(ctx, "SELECT id, title FROM epics WHERE id = 'E-OP1'")
+		if err != nil {
+			t.Fatalf("querying: %v", err)
+		}
+		if len(epics) != 1 {
+			t.Errorf("got %d epics, want 1", len(epics))
+		}
+	})
+
+	t.Run("record count verification post-sync", func(t *testing.T) {
+		d := setupDB(t)
+		ctx := t.Context()
+		ledgerDir := t.TempDir()
+
+		// Create multiple records across files.
+		wgContent := strings.Join([]string{
+			`{"event":"epic_created","id":"E-RC1","format_id":"INF-EPC-RC1","title":"RC Epic","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}`,
+			`{"event":"task_created","id":"T-RC1","format_id":"INF-TSK-RC1-001","epic_id":"E-RC1","title":"RC Task 1","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-01T00:00:00Z"}`,
+			`{"event":"task_created","id":"T-RC2","format_id":"INF-TSK-RC1-002","epic_id":"E-RC1","title":"RC Task 2","area_type":"INF","work_type":"FEAT","domain":"GENL","timestamp":"2024-01-02T00:00:00Z"}`,
+		}, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(ledgerDir, FileWorkGraph), []byte(wgContent), 0o644); err != nil {
+			t.Fatalf("writing: %v", err)
+		}
+
+		for _, name := range []string{FileMemoryEvents, FileSessions, FileConfig} {
+			if err := os.WriteFile(filepath.Join(ledgerDir, name), []byte(""), 0o644); err != nil {
+				t.Fatalf("writing %s: %v", name, err)
+			}
+		}
+
+		result, err := d.SyncFromJSONL(ctx, ledgerDir, nil)
+		if err != nil {
+			t.Fatalf("SyncFromJSONL: %v", err)
+		}
+
+		if result.EventsApplied != 3 {
+			t.Errorf("EventsApplied = %d, want 3", result.EventsApplied)
+		}
+
+		epicCount, _ := d.CountRows(ctx, "epics")
+		taskCount, _ := d.CountRows(ctx, "tasks")
+
+		if epicCount != 1 {
+			t.Errorf("epics = %d, want 1", epicCount)
+		}
+		if taskCount != 2 {
+			t.Errorf("tasks = %d, want 2", taskCount)
+		}
+	})
+}
