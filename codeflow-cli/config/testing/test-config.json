@@ -21,7 +21,14 @@
       "./cmd/autorun/...",
       "./internal/workgraph/...",
       "./internal/githooks/...",
-      "./internal/shadowtest/..."
+      "./internal/shadowtest/...",
+      "./internal/autorun/...",
+      "./internal/config/...",
+      "./internal/doctor/...",
+      "./internal/initialize/...",
+      "./internal/preflight/...",
+      "./internal/update/...",
+      "./internal/welcome/..."
     ]
   },
   "conventions": {
@@ -72,6 +79,16 @@
         "file": "cmd/codeflow/githooks.go",
         "function": "newGitHooksPrePushCmd",
         "reason": "RunE reads from os.Stdin (git push ref pipe) — cannot mock os.Stdin in unit tests without refactoring"
+      },
+      {
+        "file": "internal/initialize/wizard.go",
+        "function": "Run",
+        "reason": "Signal handling branch (SIGINT/SIGTERM via signal.Notify) — OS signal delivery untestable in unit tests"
+      },
+      {
+        "file": "internal/doctor/repair.go",
+        "function": "RepairPermissions",
+        "reason": "Calls os.Chmod on live filesystem paths — permission changes require specific OS state"
       }
     ]
   }
