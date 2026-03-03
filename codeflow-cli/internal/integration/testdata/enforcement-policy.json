@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "description": "Test enforcement policy for integration tests",
+  "protected_resources": {
+    "critical": [".claude/settings.json"],
+    "high": [".claude/CLAUDE.md"],
+    "moderate": []
+  },
+  "protected_branches": ["main", "master"],
+  "network_operations": {
+    "git_network": {
+      "patterns": ["git push", "git pull", "git fetch"]
+    },
+    "github_cli": {
+      "patterns": ["gh pr", "gh api"]
+    }
+  },
+  "managed_tmp": {
+    "protected_folders": ["/tmp/claude/"],
+    "state_folder": ".state"
+  },
+  "settings_templates": {
+    "directory": ".claude/settings-templates/",
+    "copy_mappings": []
+  },
+  "edit_write": {
+    "blocked_directories": [".git", "node_modules"],
+    "allowed_tmp_prefixes": ["/tmp/claude/", "/tmp/"],
+    "dangerous_extensions": {
+      "binary": ["exe", "dll", "so"],
+      "credential": ["pem", "key"],
+      "archive": ["zip", "tar"]
+    },
+    "warn_on_dangerous": false
+  }
+}
