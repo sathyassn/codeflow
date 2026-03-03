@@ -266,6 +266,251 @@ func TestRunCheckpointStatus(t *testing.T) {
 	})
 }
 
+func TestRunPhaseTransition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("records valid phase transition", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, dir, "ses-test-001", "PF1-INIT", "entered")
+		if err != nil {
+			t.Fatalf("runPhaseTransition() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"status":"recorded"`) {
+			t.Errorf("output = %q, want recorded status", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"phase":"PF1-INIT"`) {
+			t.Errorf("output = %q, want phase PF1-INIT", buf.String())
+		}
+	})
+
+	t.Run("returns error for invalid phase", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, dir, "ses-test-002", "PF9-INVALID", "entered")
+		if err == nil {
+			t.Fatal("expected error for invalid phase")
+		}
+		code := exitCode(err)
+		if code != ExitConfigError {
+			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
+		}
+	})
+
+	t.Run("returns error for bad logs dir", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		err := runPhaseTransition(t.Context(), &buf, "/dev/null/bad", "ses-test-003", "PF1-INIT", "entered")
+		if err == nil {
+			t.Fatal("expected error for bad logs dir")
+		}
+		code := exitCode(err)
+		if code != ExitRuntimeError {
+			t.Errorf("exit code = %d, want %d", code, ExitRuntimeError)
+		}
+	})
+}
+
+func TestRunStageTransition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("records valid stage transition without verdict", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runStageTransition(t.Context(), &buf, dir, "ses-test-001", "WS-DEV", "in_progress", 1, "")
+		if err != nil {
+			t.Fatalf("runStageTransition() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"stage":"WS-DEV"`) {
+			t.Errorf("output = %q, want stage WS-DEV", buf.String())
+		}
+	})
+
+	t.Run("records stage transition with verdict", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runStageTransition(t.Context(), &buf, dir, "ses-test-002", "WS-REV", "complete", 2, "approved")
+		if err != nil {
+			t.Fatalf("runStageTransition() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"iteration":2`) {
+			t.Errorf("output = %q, want iteration 2", buf.String())
+		}
+	})
+
+	t.Run("returns error for invalid stage", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runStageTransition(t.Context(), &buf, dir, "ses-test-003", "WS-INVALID", "in_progress", 1, "")
+		if err == nil {
+			t.Fatal("expected error for invalid stage")
+		}
+		code := exitCode(err)
+		if code != ExitConfigError {
+			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
+		}
+	})
+
+	t.Run("returns error for bad logs dir", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		err := runStageTransition(t.Context(), &buf, "/dev/null/bad", "ses-test-004", "WS-DEV", "in_progress", 1, "")
+		if err == nil {
+			t.Fatal("expected error for bad logs dir")
+		}
+	})
+}
+
+func TestRunSessionRegister(t *testing.T) {
+	t.Parallel()
+
+	t.Run("registers session with interactive mode", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-001", "interactive")
+		if err != nil {
+			t.Fatalf("runSessionRegister() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"status":"registered"`) {
+			t.Errorf("output = %q, want registered status", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"tracking_level":"pending"`) {
+			t.Errorf("output = %q, want tracking_level pending", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"interaction_mode":"interactive"`) {
+			t.Errorf("output = %q, want interaction_mode interactive", buf.String())
+		}
+	})
+
+	t.Run("registers session with autorun mode", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-002", "autorun")
+		if err != nil {
+			t.Fatalf("runSessionRegister() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"interaction_mode":"autorun"`) {
+			t.Errorf("output = %q, want interaction_mode autorun", buf.String())
+		}
+	})
+
+	t.Run("returns error for invalid mode", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, dir, "ses-test-003", "batch")
+		if err == nil {
+			t.Fatal("expected error for invalid mode")
+		}
+		code := exitCode(err)
+		if code != ExitConfigError {
+			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
+		}
+	})
+
+	t.Run("returns error for bad logs dir", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		err := runSessionRegister(t.Context(), &buf, "/dev/null/bad", "ses-test-004", "interactive")
+		if err == nil {
+			t.Fatal("expected error for bad logs dir")
+		}
+	})
+}
+
+func TestRunTaskUpdate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("records valid task update", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runTaskUpdate(t.Context(), &buf, dir, "ses-test-001", "PF3-TSK-01", "completed")
+		if err != nil {
+			t.Fatalf("runTaskUpdate() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"task_id":"PF3-TSK-01"`) {
+			t.Errorf("output = %q, want task_id PF3-TSK-01", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"task_status":"completed"`) {
+			t.Errorf("output = %q, want task_status completed", buf.String())
+		}
+	})
+
+	t.Run("returns error for invalid task_id", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runTaskUpdate(t.Context(), &buf, dir, "ses-test-002", "INVALID-ID", "completed")
+		if err == nil {
+			t.Fatal("expected error for invalid task_id")
+		}
+		code := exitCode(err)
+		if code != ExitConfigError {
+			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
+		}
+	})
+
+	t.Run("returns error for bad logs dir", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		err := runTaskUpdate(t.Context(), &buf, "/dev/null/bad", "ses-test-003", "PF3-TSK-01", "completed")
+		if err == nil {
+			t.Fatal("expected error for bad logs dir")
+		}
+	})
+}
+
+func TestRunSessionMetadata(t *testing.T) {
+	t.Parallel()
+
+	t.Run("records valid session metadata", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runSessionMetadata(t.Context(), &buf, dir, "ses-test-001", "work_type", "FEAT")
+		if err != nil {
+			t.Fatalf("runSessionMetadata() error: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"key":"work_type"`) {
+			t.Errorf("output = %q, want key work_type", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"value":"FEAT"`) {
+			t.Errorf("output = %q, want value FEAT", buf.String())
+		}
+	})
+
+	t.Run("returns error for empty key", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runSessionMetadata(t.Context(), &buf, dir, "ses-test-002", "", "FEAT")
+		if err == nil {
+			t.Fatal("expected error for empty key")
+		}
+		code := exitCode(err)
+		if code != ExitConfigError {
+			t.Errorf("exit code = %d, want %d", code, ExitConfigError)
+		}
+	})
+
+	t.Run("returns error for bad logs dir", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		err := runSessionMetadata(t.Context(), &buf, "/dev/null/bad", "ses-test-003", "key", "val")
+		if err == nil {
+			t.Fatal("expected error for bad logs dir")
+		}
+	})
+}
+
 func TestNewPathflowCmd(t *testing.T) {
 	t.Parallel()
 

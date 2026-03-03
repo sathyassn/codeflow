@@ -286,6 +286,159 @@ func TestHasField_NonStringDataValue(t *testing.T) {
 	}
 }
 
+func TestValidateEvent_PathflowEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		event   Event
+		wantErr bool
+	}{
+		{
+			name: "valid phase_transition",
+			event: Event{
+				EventType: "phase_transition",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"phase":  "PF1-INIT",
+					"status": "entered",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "phase_transition missing session_id",
+			event: Event{
+				EventType: "phase_transition",
+				Data: map[string]any{
+					"phase":  "PF1-INIT",
+					"status": "entered",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "phase_transition missing phase",
+			event: Event{
+				EventType: "phase_transition",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"status": "entered",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid stage_transition",
+			event: Event{
+				EventType: "stage_transition",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"stage":  "WS-DEV",
+					"status": "in_progress",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "stage_transition missing stage",
+			event: Event{
+				EventType: "stage_transition",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"status": "in_progress",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid session_register",
+			event: Event{
+				EventType: "session_register",
+				SessionID: "ses-001",
+			},
+			wantErr: false,
+		},
+		{
+			name: "session_register missing session_id",
+			event: Event{
+				EventType: "session_register",
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid session_metadata",
+			event: Event{
+				EventType: "session_metadata",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"key":   "work_type",
+					"value": "FEAT",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "session_metadata missing key",
+			event: Event{
+				EventType: "session_metadata",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"value": "FEAT",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid pathflow_task_update",
+			event: Event{
+				EventType: "pathflow_task_update",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"task_id":     "PF3-TSK-01",
+					"task_status": "completed",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "pathflow_task_update missing task_id",
+			event: Event{
+				EventType: "pathflow_task_update",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"task_status": "completed",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pathflow_task_update missing task_status",
+			event: Event{
+				EventType: "pathflow_task_update",
+				SessionID: "ses-001",
+				Data: map[string]any{
+					"task_id": "PF3-TSK-01",
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateEvent(tt.event)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateEvent_AllConfigEvents(t *testing.T) {
 	t.Parallel()
 

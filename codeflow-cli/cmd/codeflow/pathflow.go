@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,20 +12,276 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newPathflowCmd creates the top-level "pathflow" command with checkpoint subcommands.
+// defaultPathflowLogsDir returns the default directory for pathflow event logs.
+func defaultPathflowLogsDir() string {
+	return filepath.Join(".state", "logs")
+}
+
+// newPathflowCmd creates the top-level "pathflow" command with checkpoint and transition subcommands.
 func newPathflowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pathflow",
-		Short: "PathFlow checkpoint and sentinel operations",
-		Long:  "Manage PathFlow phase checkpoints: initialize, register, complete, skip, and query task status.",
+		Short: "PathFlow checkpoint, sentinel, and transition operations",
+		Long:  "Manage PathFlow phase checkpoints, sentinels, and lifecycle transition events.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
 
 	cmd.AddCommand(newCheckpointCmd())
+	cmd.AddCommand(newPhaseTransitionCmd())
+	cmd.AddCommand(newStageTransitionCmd())
+	cmd.AddCommand(newSessionRegisterCmd())
+	cmd.AddCommand(newTaskUpdateCmd())
+	cmd.AddCommand(newSessionMetadataCmd())
 
 	return cmd
+}
+
+// newPhaseTransitionCmd creates "pathflow phase-transition".
+func newPhaseTransitionCmd() *cobra.Command {
+	var (
+		sessionID string
+		phase     string
+		status    string
+		logsDir   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "phase-transition",
+		Short: "Record a phase transition event",
+		Long:  "Writes a phase_transition event to pathflow-events.jsonl.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runPhaseTransition(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, phase, status)
+		},
+	}
+
+	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "session ID (required)")
+	cmd.Flags().StringVarP(&phase, "phase", "p", "", "phase: PF1-INIT through PF7-END (required)")
+	cmd.Flags().StringVarP(&status, "status", "t", "", "status: entered, completed, or skipped (required)")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", defaultPathflowLogsDir(), "path to pathflow logs directory")
+	_ = cmd.MarkFlagRequired("session-id")
+	_ = cmd.MarkFlagRequired("phase")
+	_ = cmd.MarkFlagRequired("status")
+
+	return cmd
+}
+
+func runPhaseTransition(ctx context.Context, w io.Writer, logsDir, sessionID, phase, status string) error {
+	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
+	if err != nil {
+		return &exitError{code: ExitRuntimeError, err: err}
+	}
+
+	params := pathflow.PhaseTransitionParams{
+		SessionID: sessionID,
+		Phase:     phase,
+		Status:    status,
+	}
+	if err := tw.RecordPhaseTransition(params); err != nil {
+		return &exitError{code: ExitConfigError, err: err}
+	}
+
+	fmt.Fprintf(w, `{"status":"recorded","phase":%q,"transition":%q}`+"\n", phase, status)
+	return nil
+}
+
+// newStageTransitionCmd creates "pathflow stage-transition".
+func newStageTransitionCmd() *cobra.Command {
+	var (
+		sessionID string
+		stage     string
+		status    string
+		iteration int
+		verdict   string
+		logsDir   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "stage-transition",
+		Short: "Record a stage transition event",
+		Long:  "Writes a stage_transition event to pathflow-events.jsonl.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runStageTransition(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, stage, status, iteration, verdict)
+		},
+	}
+
+	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "session ID (required)")
+	cmd.Flags().StringVarP(&stage, "stage", "g", "", "stage: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA (required)")
+	cmd.Flags().StringVarP(&status, "status", "t", "", "status: pending, in_progress, complete, or failed (required)")
+	cmd.Flags().IntVarP(&iteration, "iteration", "i", 1, "iteration number (default: 1)")
+	cmd.Flags().StringVarP(&verdict, "verdict", "v", "", "verdict: pass, fail, approved, or changes_requested (optional)")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", defaultPathflowLogsDir(), "path to pathflow logs directory")
+	_ = cmd.MarkFlagRequired("session-id")
+	_ = cmd.MarkFlagRequired("stage")
+	_ = cmd.MarkFlagRequired("status")
+
+	return cmd
+}
+
+func runStageTransition(ctx context.Context, w io.Writer, logsDir, sessionID, stage, status string, iteration int, verdict string) error {
+	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
+	if err != nil {
+		return &exitError{code: ExitRuntimeError, err: err}
+	}
+
+	params := pathflow.StageTransitionParams{
+		SessionID: sessionID,
+		Stage:     stage,
+		Status:    status,
+		Iteration: iteration,
+		Verdict:   verdict,
+	}
+	if err := tw.RecordStageTransition(params); err != nil {
+		return &exitError{code: ExitConfigError, err: err}
+	}
+
+	fmt.Fprintf(w, `{"status":"recorded","stage":%q,"transition":%q,"iteration":%d}`+"\n", stage, status, iteration)
+	return nil
+}
+
+// newSessionRegisterCmd creates "pathflow session-register".
+func newSessionRegisterCmd() *cobra.Command {
+	var (
+		sessionID string
+		mode      string
+		logsDir   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "session-register",
+		Short: "Register a new PathFlow session",
+		Long:  "Writes two session_register events to pathflow-events.jsonl: tracking_level and interaction_mode.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSessionRegister(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, mode)
+		},
+	}
+
+	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "session ID (required)")
+	cmd.Flags().StringVarP(&mode, "mode", "m", "interactive", "interaction mode: interactive or autorun")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", defaultPathflowLogsDir(), "path to pathflow logs directory")
+	_ = cmd.MarkFlagRequired("session-id")
+
+	return cmd
+}
+
+func runSessionRegister(ctx context.Context, w io.Writer, logsDir, sessionID, mode string) error {
+	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
+	if err != nil {
+		return &exitError{code: ExitRuntimeError, err: err}
+	}
+
+	params := pathflow.SessionRegisterParams{
+		SessionID: sessionID,
+		Mode:      mode,
+	}
+	if err := tw.RegisterSession(params); err != nil {
+		return &exitError{code: ExitConfigError, err: err}
+	}
+
+	fmt.Fprintf(w, `{"status":"registered","session_id":%q,"tracking_level":"pending","interaction_mode":%q}`+"\n", sessionID, mode)
+	return nil
+}
+
+// newTaskUpdateCmd creates "pathflow task-update".
+func newTaskUpdateCmd() *cobra.Command {
+	var (
+		sessionID  string
+		taskID     string
+		taskStatus string
+		logsDir    string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "task-update",
+		Short: "Record a PathFlow task status update",
+		Long:  "Writes a pathflow_task_update event to pathflow-events.jsonl.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runTaskUpdate(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, taskID, taskStatus)
+		},
+	}
+
+	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "session ID (required)")
+	cmd.Flags().StringVarP(&taskID, "task-id", "k", "", "PathFlow task ID, e.g., PF3-TSK-01 (required)")
+	cmd.Flags().StringVarP(&taskStatus, "task-status", "t", "", "status: pending, in_progress, completed, skipped, or blocked (required)")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", defaultPathflowLogsDir(), "path to pathflow logs directory")
+	_ = cmd.MarkFlagRequired("session-id")
+	_ = cmd.MarkFlagRequired("task-id")
+	_ = cmd.MarkFlagRequired("task-status")
+
+	return cmd
+}
+
+func runTaskUpdate(ctx context.Context, w io.Writer, logsDir, sessionID, taskID, taskStatus string) error {
+	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
+	if err != nil {
+		return &exitError{code: ExitRuntimeError, err: err}
+	}
+
+	params := pathflow.TaskUpdateParams{
+		SessionID:  sessionID,
+		TaskID:     taskID,
+		TaskStatus: taskStatus,
+	}
+	if err := tw.RecordTaskUpdate(params); err != nil {
+		return &exitError{code: ExitConfigError, err: err}
+	}
+
+	fmt.Fprintf(w, `{"status":"recorded","task_id":%q,"task_status":%q}`+"\n", taskID, taskStatus)
+	return nil
+}
+
+// newSessionMetadataCmd creates "pathflow session-metadata".
+func newSessionMetadataCmd() *cobra.Command {
+	var (
+		sessionID string
+		key       string
+		value     string
+		logsDir   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "session-metadata",
+		Short: "Record session metadata",
+		Long:  "Writes a session_metadata event to pathflow-events.jsonl.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSessionMetadata(cmd.Context(), cmd.OutOrStdout(), logsDir, sessionID, key, value)
+		},
+	}
+
+	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "session ID (required)")
+	cmd.Flags().StringVarP(&key, "key", "k", "", "metadata key (required)")
+	cmd.Flags().StringVarP(&value, "value", "v", "", "metadata value (required)")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", defaultPathflowLogsDir(), "path to pathflow logs directory")
+	_ = cmd.MarkFlagRequired("session-id")
+	_ = cmd.MarkFlagRequired("key")
+	_ = cmd.MarkFlagRequired("value")
+
+	return cmd
+}
+
+func runSessionMetadata(ctx context.Context, w io.Writer, logsDir, sessionID, key, value string) error {
+	tw, err := pathflow.NewTransitionWriter(ctx, logsDir)
+	if err != nil {
+		return &exitError{code: ExitRuntimeError, err: err}
+	}
+
+	params := pathflow.SessionMetadataParams{
+		SessionID: sessionID,
+		Key:       key,
+		Value:     value,
+	}
+	if err := tw.RecordSessionMetadata(params); err != nil {
+		return &exitError{code: ExitConfigError, err: err}
+	}
+
+	fmt.Fprintf(w, `{"status":"recorded","key":%q,"value":%q}`+"\n", key, value)
+	return nil
 }
 
 // newCheckpointCmd creates the "pathflow checkpoint" command group.

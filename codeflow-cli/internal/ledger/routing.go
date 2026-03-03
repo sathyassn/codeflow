@@ -10,10 +10,11 @@ import (
 // identical constants for the read/sync side; a cross-package test in
 // routing_crosscheck_test.go asserts they never diverge.
 const (
-	FileWorkGraph    = "work-graph.jsonl"
-	FileMemoryEvents = "memory-events.jsonl"
-	FileSessions     = "sessions.jsonl"
-	FileConfig       = "config.jsonl"
+	FileWorkGraph      = "work-graph.jsonl"
+	FileMemoryEvents   = "memory-events.jsonl"
+	FileSessions       = "sessions.jsonl"
+	FileConfig         = "config.jsonl"
+	FilePathflowEvents = "pathflow-events.jsonl"
 )
 
 // Sentinel errors for routing validation.
@@ -59,9 +60,19 @@ var eventRoutes = map[string]string{
 	// config.jsonl
 	"config_set":     FileConfig,
 	"config_updated": FileConfig,
+
+	// pathflow-events.jsonl
+	"phase_transition":      FilePathflowEvents,
+	"stage_transition":      FilePathflowEvents,
+	"session_register":      FilePathflowEvents,
+	"session_metadata":      FilePathflowEvents,
+	"pathflow_task_update":  FilePathflowEvents,
 }
 
-// CanonicalFiles returns the list of all 4 canonical JSONL file names.
+// CanonicalFiles returns the list of the 4 standard ledger JSONL file names
+// (those synced to SQLite via db.Sync). FilePathflowEvents is excluded because
+// pathflow events live in a separate directory (.state/logs/) and are not
+// synced to the database.
 func CanonicalFiles() []string {
 	return []string{FileWorkGraph, FileMemoryEvents, FileSessions, FileConfig}
 }

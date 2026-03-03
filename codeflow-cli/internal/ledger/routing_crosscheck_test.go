@@ -60,3 +60,45 @@ func TestCanonicalFilesMatchDB(t *testing.T) {
 		}
 	}
 }
+
+// TestPathflowEventRoutesExist verifies that all 5 pathflow event types are
+// routed to FilePathflowEvents. This prevents silent removal of pathflow
+// routes from the routing table.
+func TestPathflowEventRoutesExist(t *testing.T) {
+	t.Parallel()
+
+	pathflowEvents := []string{
+		"phase_transition",
+		"stage_transition",
+		"session_register",
+		"session_metadata",
+		"pathflow_task_update",
+	}
+
+	for _, eventType := range pathflowEvents {
+		t.Run(eventType, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := ledger.RouteEvent(eventType)
+			if err != nil {
+				t.Fatalf("RouteEvent(%q) returned error: %v", eventType, err)
+			}
+			if file != ledger.FilePathflowEvents {
+				t.Errorf("RouteEvent(%q) = %q, want %q", eventType, file, ledger.FilePathflowEvents)
+			}
+		})
+	}
+}
+
+// TestFilePathflowEventsNotInCanonicalFiles verifies that FilePathflowEvents
+// is excluded from CanonicalFiles (pathflow events live in .state/logs/, not
+// .state/ledger/, and are not synced to SQLite).
+func TestFilePathflowEventsNotInCanonicalFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, f := range ledger.CanonicalFiles() {
+		if f == ledger.FilePathflowEvents {
+			t.Errorf("CanonicalFiles() should not include FilePathflowEvents (%q)", f)
+		}
+	}
+}

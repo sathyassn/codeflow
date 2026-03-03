@@ -40,6 +40,13 @@ var requiredFields = map[string][]string{
 	// config.jsonl
 	"config_set":     {},
 	"config_updated": {},
+
+	// pathflow-events.jsonl
+	"phase_transition":     {"session_id", "phase", "status"},
+	"stage_transition":     {"session_id", "stage", "status"},
+	"session_register":     {"session_id"},
+	"session_metadata":     {"session_id", "key", "value"},
+	"pathflow_task_update": {"session_id", "task_id", "task_status"},
 }
 
 // ValidateEvent checks that an event has all required fields for its type.

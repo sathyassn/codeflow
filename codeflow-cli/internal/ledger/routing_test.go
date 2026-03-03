@@ -38,6 +38,11 @@ func TestRouteEvent(t *testing.T) {
 		{"blocker", FileMemoryEvents, false},
 		{"config_set", FileConfig, false},
 		{"config_updated", FileConfig, false},
+		{"phase_transition", FilePathflowEvents, false},
+		{"stage_transition", FilePathflowEvents, false},
+		{"session_register", FilePathflowEvents, false},
+		{"session_metadata", FilePathflowEvents, false},
+		{"pathflow_task_update", FilePathflowEvents, false},
 		{"nonexistent_event", "", true},
 	}
 
@@ -141,18 +146,21 @@ func TestCanonicalFileConstants(t *testing.T) {
 	}
 }
 
-func TestRouteEvent_AllRoutesMapToCanonicalFiles(t *testing.T) {
+func TestRouteEvent_AllRoutesMapToKnownFiles(t *testing.T) {
 	t.Parallel()
 
-	canonical := make(map[string]bool)
+	// Known files = canonical files (synced to SQLite) + pathflow events
+	// (written to .state/logs/, not synced). Every route must point to one
+	// of these; an unknown target file means a routing table typo.
+	known := make(map[string]bool)
 	for _, f := range CanonicalFiles() {
-		canonical[f] = true
+		known[f] = true
 	}
+	known[FilePathflowEvents] = true
 
-	// Every event type in eventRoutes should map to a canonical file.
 	for eventType, file := range eventRoutes {
-		if !canonical[file] {
-			t.Errorf("event type %q maps to non-canonical file %q", eventType, file)
+		if !known[file] {
+			t.Errorf("event type %q maps to unknown file %q", eventType, file)
 		}
 	}
 }
