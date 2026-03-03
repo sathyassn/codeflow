@@ -442,12 +442,12 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
 | `security/protection/cf-protect-resources.sh` | 420 | Apply filesystem protection via chown/chmod | T4 | Keep shell | Requires sudo; cannot avoid |
-| `security/protection/cf-reload-protection.sh` | 246 | Reload protection rules | T3 | `codeflow protection reload` | MIGRATABLE (INF-TSK-021-036) — does not require sudo |
-| `security/protection/cf-promote-protection.sh` | 179 | Promote resource to protected status | T3 | `codeflow protection promote` | MIGRATABLE (INF-TSK-021-036) — sudo calls isolatable |
-| `security/protection/lib/cf-protection-common.sh` | 170 | Common protection utilities | T3 | `internal/protection/` | Sourced by protection scripts |
-| `security/protection/lib/cf-protection-core.sh` | 137 | Core protection logic | T3 | `internal/protection/` | Sourced by protection scripts |
-| `security/protection/lib/cf-protection-ops.sh` | 129 | Protection file operations | T3 | `internal/protection/` | Sourced by protection scripts |
-| `security/protection/lib/cf-protection-verify.sh` | 252 | Verify protection state | T3 | `internal/protection/` | Sourced by protection scripts |
+| `security/protection/cf-reload-protection.sh` | 246 | Reload protection rules | T4 | Keep shell | RETAINED — cohesive OS-level protection subsystem; INF-TSK-021-036 cancelled |
+| `security/protection/cf-promote-protection.sh` | 179 | Promote resource to protected status | T4 | Keep shell | RETAINED — cohesive OS-level protection subsystem; INF-TSK-021-036 cancelled |
+| `security/protection/lib/cf-protection-common.sh` | 170 | Common protection utilities | T4 | Keep shell | Sourced by protection scripts; entire subsystem retained |
+| `security/protection/lib/cf-protection-core.sh` | 137 | Core protection logic | T4 | Keep shell | Sourced by protection scripts; entire subsystem retained |
+| `security/protection/lib/cf-protection-ops.sh` | 129 | Protection file operations | T4 | Keep shell | Sourced by protection scripts; entire subsystem retained |
+| `security/protection/lib/cf-protection-verify.sh` | 252 | Verify protection state | T4 | Keep shell | Sourced by protection scripts; entire subsystem retained |
 
 #### 4.1.12 `security/validation/`
 
@@ -1182,10 +1182,6 @@ codeflow (Go binary — source: codeflow-cli/)
 │   ├── validate                   -- replaces cf-post-tool-use-settings-templates.sh; also callable as codeflow hooks post-tool-use settings-validate
 │   └── setup-managed              -- replaces setup-managed-settings.sh (INF-TSK-021-016)
 │
-├── protection                     -- protection management commands (INF-TSK-021-036)
-│   ├── promote                    -- replaces cf-promote-protection.sh
-│   └── reload                     -- replaces cf-reload-protection.sh
-│
 ├── git-hooks                      -- git hook logic as Go subcommands (INF-TSK-021-035)
 │   ├── pre-commit-validate        -- pure-logic checks (branch protection, sensitive files, JSON, Go test conventions, coverage)
 │   ├── commit-msg                 -- validates conventional commit format; replaces commit-msg shell hook
@@ -1307,21 +1303,21 @@ All new Go packages from this epic must integrate with `codeflow-cli/config/test
 
 Not everything migrates. The following infrastructure SURVIVES the Go CLI migration and remains as shell scripts, test files, or CI workflows.
 
-### 10.1 Shell Scripts Retained (partially revised — see below)
+### 10.1 Shell Scripts Retained
 
-**Security protection scripts — revised classification:**
+**Security protection scripts — all retained as shell:**
 
 | Script | Lines | Status | Reason |
 |--------|-------|--------|--------|
 | `.codeflow/scripts/security/protection/cf-protect-resources.sh` | 420 | RETAINED | Requires sudo/root for chown/chmod — cannot avoid privilege escalation |
-| `.codeflow/scripts/security/protection/cf-promote-protection.sh` | 179 | MIGRATABLE (INF-TSK-021-036) | Does NOT require sudo — pure text file I/O; promotes resource tier in config |
-| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | MIGRATABLE (INF-TSK-021-036) | Does NOT require sudo — reads config, builds JSON cache |
-| `.codeflow/scripts/security/protection/lib/cf-protection-common.sh` | 170 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
-| `.codeflow/scripts/security/protection/lib/cf-protection-core.sh` | 137 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
-| `.codeflow/scripts/security/protection/lib/cf-protection-ops.sh` | 129 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
-| `.codeflow/scripts/security/protection/lib/cf-protection-verify.sh` | 252 | RETAINED (sourced by cf-protect-resources.sh) | Sourced by retained protection script |
+| `.codeflow/scripts/security/protection/cf-promote-protection.sh` | 179 | RETAINED | Cohesive OS-level protection subsystem — INF-TSK-021-036 cancelled |
+| `.codeflow/scripts/security/protection/cf-reload-protection.sh` | 246 | RETAINED | Cohesive OS-level protection subsystem — INF-TSK-021-036 cancelled |
+| `.codeflow/scripts/security/protection/lib/cf-protection-common.sh` | 170 | RETAINED | Sourced by protection scripts; entire subsystem retained as shell |
+| `.codeflow/scripts/security/protection/lib/cf-protection-core.sh` | 137 | RETAINED | Sourced by protection scripts; entire subsystem retained as shell |
+| `.codeflow/scripts/security/protection/lib/cf-protection-ops.sh` | 129 | RETAINED | Sourced by protection scripts; entire subsystem retained as shell |
+| `.codeflow/scripts/security/protection/lib/cf-protection-verify.sh` | 252 | RETAINED | Sourced by protection scripts; entire subsystem retained as shell |
 
-**Original rationale for retaining cf-promote-protection.sh and cf-reload-protection.sh was incorrect.** These scripts do not call sudo. `cf-protect-resources.sh` is the only script in this group with a genuine sudo dependency. The two management scripts are now targets for INF-TSK-021-036.
+All 3 protection scripts (`cf-protect-resources.sh`, `cf-promote-protection.sh`, `cf-reload-protection.sh`) and 4 lib files form a cohesive OS-level protection subsystem and are retained as shell. INF-TSK-021-036 (planned Go migration of promote/reload) was cancelled: promote and reload have zero automated callers, the protection-cache.json has zero consumers, and splitting the subsystem across Go and shell adds complexity without benefit.
 
 **Git hooks (partially migrated — hybrid approach via INF-TSK-021-035):**
 

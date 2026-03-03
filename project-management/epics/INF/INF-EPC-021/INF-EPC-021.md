@@ -45,8 +45,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 - Claude Code wrapping/exec (Phase 7)
 - NX monorepo setup
 - Package manager distribution
-- Protection scripts requiring sudo (`cf-protect-resources.sh`) -- stays as shell (requires sudo chown/chmod)
-- `cf-promote-protection.sh` and `cf-reload-protection.sh` are now migratable to Go (see INF-TSK-021-036); they do NOT require sudo
+- Protection scripts (`cf-protect-resources.sh`, `cf-promote-protection.sh`, `cf-reload-protection.sh` and `lib/`) -- all stay as shell. They form a cohesive OS-level protection subsystem; splitting across Go and shell would complicate maintenance without meaningful benefit. INF-TSK-021-036 (planned Go migration) has been cancelled.
 - Web UI or dashboard
 - CRDT implementation in Go (Loro integration deferred)
 
@@ -138,7 +137,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-033 | Align INF-EPC-021 tasks with revised Go CLI migration decisions | complete | high |
 | INF-TSK-021-034 | Build Go CLI for session-start instructions hook | complete | high |
 | INF-TSK-021-035 | Build Go git-hooks subcommands (Go-only; cutover deferred to 022) | complete | normal |
-| INF-TSK-021-036 | Migrate protection management scripts to Go | todo | low |
+| INF-TSK-021-036 | Migrate protection management scripts to Go | cancelled | low |
 | INF-TSK-021-037 | Build Go CLI for pathflow transition and registration scripts | todo | high |
 | INF-TSK-021-038 | Update INF-EPC-021 task files: corrections and gap-filling | complete | normal |
 
@@ -160,7 +159,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 The migration follows the **Build-Coexist-Cutover** strategy (documented in `.codeflow/docs/analysis/go-cli-migration-comprehensive.md` Section 10.1) with six phases:
 
 1. **Phase A (Prerequisites)** -- INF-EPC-015 (Go CLI binary built), INF-EPC-013 (session ID bugs fixed)
-2. **Phase B (Build)** -- Tasks 001-015, 017-020, 033-036: Create all Go subcommands with full functionality and >= 85% test coverage. Shell/Python scripts remain UNCHANGED and active. No settings.json modifications. Go code is built and tested but not wired in.
+2. **Phase B (Build)** -- Tasks 001-015, 017-020, 033-035 (036 cancelled): Create all Go subcommands with full functionality and >= 85% test coverage. Shell/Python scripts remain UNCHANGED and active. No settings.json modifications. Go code is built and tested but not wired in.
 3. **Phase C (Shadow Testing)** -- Task 030: Run Go subcommands alongside shell scripts, compare output, log divergences. Validates behavioral parity before cutover.
 4. **Phase D (JSONL Normalization + Build Completion)** -- Task 026: Normalize JSONL ledger/log schema before cutover to ensure Go binary reads/writes the correct format. Task 028: Register all migration packages in test-config.json business_packages so cutover verification (`./codeflow test`) can enforce 85% coverage. Task 034: **COMPLETE** — Go session-start instructions hook built. Task 035: **COMPLETE** — Go `internal/githooks/` package built and tested (85.1% coverage); shell scripts NOT yet replaced (thin wrapper creation deferred to Phase E/Task 022). Task 037: Build Go pathflow subcommands (phase-transition, stage-transition, session-register, task-update, session-metadata) — must complete before Phase E cutover deletes cf-pathflow-*.sh scripts.
 5. **Phase E (Single-Session Cutover)** -- Tasks 022 + 021 (parallel): Task 022 handles hook wiring, script deletion, git hook cutover, and test rewriting. Task 021 handles CLAUDE.md and agent/command/skill documentation updates. Both run simultaneously. Prerequisites: 023 (integration tests pass), 026 (JSONL normalized), 028 (business_packages registered), 030 (shadow tests pass).
@@ -217,8 +216,7 @@ Target (Go):
 ### Key Constraints
 
 - No backward compatibility concerns -- optimize for best end state
-- `cf-protect-resources.sh` STAYS as shell (requires sudo chown/chmod; cannot avoid)
-- `cf-promote-protection.sh` and `cf-reload-protection.sh` are migratable to Go (INF-TSK-021-036: no sudo required; pure text file I/O)
+- All three protection scripts STAY as shell (`cf-protect-resources.sh`, `cf-promote-protection.sh`, `cf-reload-protection.sh` + `lib/`): they form a cohesive OS-level protection subsystem. INF-TSK-021-036 (planned Go migration of promote/reload) has been cancelled.
 - Dead code (`cf-hook-bypass.sh`, `shell-lib/index.sh`) is removed, not migrated
 - All hook scripts read stdin JSON -- Go binary must accept the same stdin format
 - Go binary must handle `CLAUDE_PROJECT_DIR`, `CODEFLOW_SESSION_ID`, and other env vars
@@ -240,12 +238,12 @@ Target (Go):
 
 - INF-TSK-021-034: Session-start instructions hook (`cf-session-start-instructions.sh`) now has a build task; previously omitted from Phase B
 - INF-TSK-021-035: **COMPLETE (reduced scope).** Builds Go `internal/githooks/` package (5 subcommands: commit-msg, post-commit, pre-push, prepare-commit-msg, pre-commit-validate). Shell scripts in `.codeflow/scripts/git-hooks/` are NOT modified — cutover to thin wrappers is deferred to INF-TSK-021-022 (atomic cutover). QA FAIL verdict is expected: 111/279 shell test failures are due to shell tests still asserting old shell behavior; Go tests pass at 85.1% coverage. Thin shell wrapper creation, shell test rewrites, and consistency test behavioral updates all transfer to INF-TSK-021-022.
-- INF-TSK-021-036: Protection management scripts (`cf-promote-protection.sh`, `cf-reload-protection.sh`) migrated to Go; blocked by TSK-015
+- INF-TSK-021-036: **CANCELLED.** Protection management scripts (`cf-promote-protection.sh`, `cf-reload-protection.sh`) will stay as shell. They form a cohesive OS-level protection subsystem alongside `cf-protect-resources.sh` and `lib/`; splitting promote/reload into Go while leaving protect-resources in shell would complicate maintenance without meaningful benefit.
 
 **Retained scripts count revised:**
 
 - Git hooks: previously 5 permanently retained (shell) → 1 hybrid (pre-commit: shell wrapper + Go logic) + 4 thin wrappers (minimal shell delegation)
-- Protection: previously 3 retained (all shell) → 1 retained (`cf-protect-resources.sh`, requires sudo) + 2 migrated to Go (TSK-036)
+- Protection: all 3 scripts retained as shell (`cf-protect-resources.sh`, `cf-promote-protection.sh`, `cf-reload-protection.sh` + `lib/`) — INF-TSK-021-036 cancelled
 
 ### Test Migration Strategy
 
