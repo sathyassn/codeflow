@@ -221,6 +221,16 @@ func TestRunSessionStart_CreatesSession(t *testing.T) {
 	if !strings.HasPrefix(got, "ses-") {
 		t.Errorf("session ID = %q, want prefix %q", got, "ses-")
 	}
+
+	// Verify codeflow-env.sh is written (session.WriteEnvFile is the authoritative writer).
+	envFile := filepath.Join(runtimeDir, "codeflow-env.sh")
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("codeflow-env.sh not written: %v", err)
+	}
+	if !strings.Contains(string(data), got) {
+		t.Errorf("codeflow-env.sh does not contain session ID %q", got)
+	}
 }
 
 func TestRunSessionStart_ThenCurrent(t *testing.T) {
@@ -480,4 +490,5 @@ func TestSessionCurrentCmd_ViaRootCmd(t *testing.T) {
 		t.Errorf("current = %q, want %q", got, sessionID)
 	}
 }
+
 

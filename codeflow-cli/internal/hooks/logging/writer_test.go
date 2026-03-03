@@ -56,6 +56,20 @@ func TestNewActivityWriter(t *testing.T) {
 			t.Errorf("Dir() = %q, want %q", w.Dir(), absLogDir)
 		}
 	})
+
+	t.Run("error when directory cannot be created", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// Create a file where the log directory should be so MkdirAll fails.
+		blocker := filepath.Join(dir, "logs")
+		if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+			t.Fatalf("WriteFile blocker: %v", err)
+		}
+		_, err := NewActivityWriter(dir, "logs/sessions")
+		if err == nil {
+			t.Error("NewActivityWriter() expected error, got nil")
+		}
+	})
 }
 
 func TestActivityWriter_Append(t *testing.T) {
@@ -118,6 +132,45 @@ func TestActivityWriter_Append(t *testing.T) {
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 		if len(lines) != 3 {
 			t.Errorf("got %d lines, want 3", len(lines))
+		}
+	})
+
+	t.Run("error on unmarshalable record", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		w, err := NewActivityWriter(dir, "logs")
+		if err != nil {
+			t.Fatalf("NewActivityWriter() error = %v", err)
+		}
+		w.Now = func() time.Time { return fixedTime }
+
+		// chan values are not JSON-serializable.
+		record := map[string]any{"bad": make(chan int)}
+		if err := w.Append("session", record); err == nil {
+			t.Error("Append() expected error for unmarshalable record, got nil")
+		}
+	})
+
+	t.Run("error when directory is read-only", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		logDir := filepath.Join(dir, "logs")
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		w := &ActivityWriter{
+			dir: logDir,
+			Now: func() time.Time { return fixedTime },
+		}
+		// Make log dir read-only so lock file creation fails.
+		if err := os.Chmod(logDir, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(logDir, 0o755) })
+
+		err := w.Append("session", map[string]any{"event": "test"})
+		if err == nil {
+			t.Error("Append() expected error for read-only directory, got nil")
 		}
 	})
 
@@ -191,21 +244,22 @@ func TestResolveSessionID(t *testing.T) {
 		}
 	})
 
-	t.Run("from current-session-id file", func(t *testing.T) {
+	t.Run("from codeflow-env.sh file", func(t *testing.T) {
 		dir := t.TempDir()
 		runtimeDir := filepath.Join(dir, ".state", "runtime")
 		_ = os.MkdirAll(runtimeDir, 0o755)
+		envContent := "export CODEFLOW_SESSION_ID='ses-from-envfile'\nexport CF_PROJECT_ROOT='testproject'\n"
 		_ = os.WriteFile(
-			filepath.Join(runtimeDir, "current-session-id"),
-			[]byte("ses-from-file"),
+			filepath.Join(runtimeDir, "codeflow-env.sh"),
+			[]byte(envContent),
 			0o644,
 		)
 		// Ensure env var is not set for this subtest.
 		t.Setenv("CODEFLOW_SESSION_ID", "")
 
 		got := ResolveSessionID(dir)
-		if got != "ses-from-file" {
-			t.Errorf("ResolveSessionID() = %q, want %q", got, "ses-from-file")
+		if got != "ses-from-envfile" {
+			t.Errorf("ResolveSessionID() = %q, want %q", got, "ses-from-envfile")
 		}
 	})
 

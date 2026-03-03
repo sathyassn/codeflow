@@ -91,8 +91,7 @@ func (w *ActivityWriter) Timestamp() string {
 // ResolveSessionID determines the session ID using the canonical priority:
 //  1. Parse codeflow-env.sh at .state/runtime/codeflow-env.sh
 //  2. CODEFLOW_SESSION_ID environment variable
-//  3. .state/runtime/current-session-id file
-//  4. Fallback to "unknown"
+//  3. Fallback to "unknown"
 func ResolveSessionID(projectDir string) string {
 	// Priority 1: env file.
 	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
@@ -105,14 +104,6 @@ func ResolveSessionID(projectDir string) string {
 	// Priority 2: CODEFLOW_SESSION_ID environment variable.
 	if sid := os.Getenv("CODEFLOW_SESSION_ID"); sid != "" {
 		return sid
-	}
-
-	// Priority 3: current-session-id file.
-	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	if data, err := os.ReadFile(csidPath); err == nil {
-		if sid := strings.TrimSpace(string(data)); sid != "" {
-			return sid
-		}
 	}
 
 	return "unknown"

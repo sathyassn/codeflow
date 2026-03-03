@@ -203,18 +203,18 @@ func outputPathFlowContext(w io.Writer, projectDir string) {
 }
 
 // resolveCodeflowSessionID determines the CODEFLOW_SESSION_ID.
-// Priority: CODEFLOW_SESSION_ID env var > current-session-id file.
+// Priority: CODEFLOW_SESSION_ID env var > codeflow-env.sh file.
 func resolveCodeflowSessionID(projectDir string) string {
 	// Priority 1: environment variable.
 	if sid := os.Getenv("CODEFLOW_SESSION_ID"); sid != "" {
 		return strings.TrimSpace(sid)
 	}
 
-	// Priority 2: current-session-id file.
-	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	data, err := os.ReadFile(csidPath)
+	// Priority 2: codeflow-env.sh file.
+	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+	data, err := os.ReadFile(envFilePath)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	return parseEnvFileSessionID(string(data))
 }

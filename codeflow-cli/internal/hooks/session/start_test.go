@@ -131,12 +131,10 @@ func TestStartInit_FreshSession(t *testing.T) {
 	checkpointPath := filepath.Join(projectDir, ".state", "session", result.SessionID, "pathflow", "pathflow-phase-tasks.json")
 	assertFileExists(t, checkpointPath)
 
-	// Verify current-session-id file.
+	// Verify current-session-id is NOT written (eliminated; only codeflow-env.sh is used).
 	sessionIDPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	assertFileExists(t, sessionIDPath)
-	sidData, _ := os.ReadFile(sessionIDPath)
-	if string(sidData) != result.SessionID {
-		t.Errorf("current-session-id = %q, want %q", string(sidData), result.SessionID)
+	if _, err := os.Stat(sessionIDPath); !os.IsNotExist(err) {
+		t.Error("current-session-id should NOT exist (eliminated in favor of codeflow-env.sh)")
 	}
 
 	// Verify session metadata.
@@ -675,14 +673,10 @@ func TestDBSessionStarterIntegration(t *testing.T) {
 		t.Errorf("session status = %q, want %q", status, "active")
 	}
 
-	// Verify current-session-id file was written.
+	// Verify current-session-id is NOT written (eliminated; only codeflow-env.sh is used).
 	sessionIDPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	sidData, err := os.ReadFile(sessionIDPath)
-	if err != nil {
-		t.Fatalf("reading current-session-id: %v", err)
-	}
-	if string(sidData) != result.SessionID {
-		t.Errorf("current-session-id = %q, want %q", string(sidData), result.SessionID)
+	if _, statErr := os.Stat(sessionIDPath); !os.IsNotExist(statErr) {
+		t.Error("current-session-id should NOT exist (eliminated in favor of codeflow-env.sh)")
 	}
 
 	// Verify JSONL event was written.
@@ -755,12 +749,11 @@ func TestDBSessionStarter_EmptyClaudeID(t *testing.T) {
 func TestWriteEnvFile(t *testing.T) {
 	t.Parallel()
 
-	init_ := newTestInitializer(t)
 	projectDir := t.TempDir()
 	envPath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 
 	sid := "ses-1709136000000abcdef012345"
-	err := init_.writeEnvFile(envPath, sid, projectDir)
+	err := session.WriteEnvFile(filepath.Dir(envPath), sid, projectDir)
 	if err != nil {
 		t.Fatalf("writeEnvFile() error = %v", err)
 	}
@@ -1823,14 +1816,12 @@ func TestHandleNoTeamFile_FlagExistsStartup(t *testing.T) {
 func TestWriteEnvFile_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
-	init_ := newTestInitializer(t)
-
 	t.Run("creates_dir_and_writes", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		envPath := filepath.Join(dir, "subdir", "codeflow-env.sh")
 
-		err := init_.writeEnvFile(envPath, "ses-test", dir)
+		err := session.WriteEnvFile(filepath.Dir(envPath), "ses-test", dir)
 		if err != nil {
 			t.Fatalf("writeEnvFile() error = %v", err)
 		}
@@ -1855,7 +1846,7 @@ func TestWriteEnvFile_ErrorPaths(t *testing.T) {
 		}
 		envPath := filepath.Join(blockFile, "subdir", "env.sh")
 
-		err := init_.writeEnvFile(envPath, "ses-test", dir)
+		err := session.WriteEnvFile(filepath.Dir(envPath), "ses-test", dir)
 		if err == nil {
 			t.Error("writeEnvFile() with unwritable dir should return error")
 		}

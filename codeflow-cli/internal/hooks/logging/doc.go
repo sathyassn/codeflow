@@ -17,8 +17,7 @@
 //
 //  1. Parse codeflow-env.sh at .state/runtime/codeflow-env.sh
 //  2. CODEFLOW_SESSION_ID environment variable
-//  3. .state/runtime/current-session-id file
-//  4. Fallback to "unknown"
+//  3. Fallback to "unknown"
 //
 // Usage:
 //

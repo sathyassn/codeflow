@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/codeflow/codeflow-cli/internal/ledger"
+	"github.com/codeflow/codeflow-cli/internal/session"
 )
 
 // endHookInput represents the JSON structure sent by Claude Code on stdin to
@@ -175,30 +176,15 @@ func parseEndStdin(r io.Reader) endHookInput {
 	return input
 }
 
-// resolveSessionID determines the session ID from the env file or environment.
+// resolveSessionID determines the session ID via session.Current()
+// (single authoritative resolution: env var → codeflow-env.sh).
 func (c *Cleaner) resolveSessionID(projectDir string) string {
-	// Priority 1: env file.
-	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
-	if data, err := os.ReadFile(envFilePath); err == nil {
-		if sid := parseEnvFileSessionID(string(data)); sid != "" {
-			return sid
-		}
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+	sid, err := session.Current(runtimeDir)
+	if err != nil {
+		return ""
 	}
-
-	// Priority 2: CODEFLOW_SESSION_ID environment variable.
-	if sid := os.Getenv("CODEFLOW_SESSION_ID"); sid != "" {
-		return sid
-	}
-
-	// Priority 3: current-session-id file.
-	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	if data, err := os.ReadFile(csidPath); err == nil {
-		if sid := string(data); sid != "" {
-			return sid
-		}
-	}
-
-	return ""
+	return sid
 }
 
 // shouldSkipCleanup checks the pathflow guard. Returns true if cleanup should
@@ -349,15 +335,11 @@ func (c *Cleaner) cleanSessionState(sessionStateDir, sessionID string, result *C
 	}
 }
 
-// cleanRuntimeFiles removes env file and project temp files.
+// cleanRuntimeFiles removes runtime session files via the session package
+// (single authoritative owner of session file lifecycle).
 func (c *Cleaner) cleanRuntimeFiles(projectDir string, result *CleanupResult) {
-	// Remove env file.
-	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
-	_ = os.Remove(envFile)
-
-	// Remove current-session-id.
-	csidFile := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	_ = os.Remove(csidFile)
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+	session.CleanRuntimeFiles(runtimeDir)
 }
 
 // cleanProjectTemp removes the project temp directory.

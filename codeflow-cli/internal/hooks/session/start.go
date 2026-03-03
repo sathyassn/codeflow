@@ -26,8 +26,8 @@ var sessionIDRe = regexp.MustCompile(`^ses-(?:[0-9]{13}[a-f0-9]{12}|[0-9a-z]{26}
 type SessionStarter interface {
 	// StartSession generates a ULID-based session ID and records the session in
 	// the database and ledger. Returns the generated session ID.
-	// Note: current-session-id is NOT written by StartSession. The caller
-	// (StartInit) handles it, guarded by source (only for new sessions).
+	// Note: codeflow-env.sh is NOT written by StartSession. The caller
+	// (StartInit) handles it via writeEnvFile().
 	StartSession(ctx context.Context, claudeID string, projectDir string) (string, error)
 }
 
@@ -206,7 +206,6 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 
 	// --- Section 2: Session ID generation ---
 	sessionID := existingSID
-	newSession := false // tracks whether a fresh session ID was generated
 	if sessionID == "" {
 		sessionID = os.Getenv("CODEFLOW_SESSION_ID")
 	}
@@ -225,9 +224,9 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 			result.warn("session start error: %v", startErr)
 			return nil, fmt.Errorf("session init: generating session ID: %w", startErr)
 		}
-		newSession = true
-		// Write env file atomically
-		if err := init_.writeEnvFile(envFilePath, sessionID, projectDir); err != nil {
+		// Write env file atomically via the session package (single authoritative writer).
+		runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+		if err := session.WriteEnvFile(runtimeDir, sessionID, projectDir); err != nil {
 			result.warn("env file write error: %v", err)
 		}
 	}
@@ -271,17 +270,6 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 
 	// --- Section 11: Project temp directory ---
 	init_.createProjectTempDir(projectDir, result)
-
-	// --- Write current-session-id (only for new sessions) ---
-	// On compact/resume/clear the session ID is reused from codeflow-env.sh;
-	// only write current-session-id when a fresh session was just generated.
-	// codeflow-env.sh is the single source of truth for session ID.
-	if newSession {
-		sessionIDPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-		if err := os.WriteFile(sessionIDPath, []byte(sessionID), 0o644); err != nil {
-			result.warn("current-session-id write error: %v", err)
-		}
-	}
 
 	return result, nil
 }
@@ -448,26 +436,7 @@ func parseEnvFileSessionID(content string) string {
 }
 
 
-// writeEnvFile atomically writes the codeflow-env.sh file.
-func (init_ *Initializer) writeEnvFile(envFilePath, sessionID, projectDir string) error {
-	dir := filepath.Dir(envFilePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating env file dir: %w", err)
-	}
-
-	projectName := filepath.Base(projectDir)
-	content := fmt.Sprintf("export CODEFLOW_SESSION_ID='%s'\nexport CF_PROJECT_ROOT='%s'\n", sessionID, projectName)
-
-	tmpPath := envFilePath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("writing env temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, envFilePath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("renaming env file: %w", err)
-	}
-	return nil
-}
+// writeEnvFile is removed. Use session.WriteEnvFile() instead (single authoritative writer).
 
 // createDirectories ensures all required .state/ directories exist.
 func (init_ *Initializer) createDirectories(projectDir, sessionID string) {

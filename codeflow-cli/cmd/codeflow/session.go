@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
 	"github.com/codeflow/codeflow-cli/internal/session"
@@ -88,14 +87,12 @@ func runSessionStart(w io.Writer, dbPath, claudeID, ledgerDir, runtimeDir string
 		return fmt.Errorf("starting session: %w", err)
 	}
 
-	// Write current-session-id for the CLI path. The hook path (start.go)
-	// handles this separately with source-guarding logic.
-	idFile := filepath.Join(runtimeDir, session.CurrentSessionFile)
-	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
-		return fmt.Errorf("creating runtime dir: %w", err)
-	}
-	if err := os.WriteFile(idFile, []byte(sessionID), 0o644); err != nil {
-		return fmt.Errorf("writing current-session-id: %w", err)
+	// Write codeflow-env.sh for the CLI path. The hook path (start.go)
+	// handles this separately via writeEnvFile().
+	// Derive projectDir from the runtimeDir (runtimeDir is typically .state/runtime).
+	projectDir := filepath.Dir(filepath.Dir(runtimeDir))
+	if err := session.WriteEnvFile(runtimeDir, sessionID, projectDir); err != nil {
+		return fmt.Errorf("writing codeflow-env.sh: %w", err)
 	}
 
 	fmt.Fprintf(w, "%s\n", sessionID)

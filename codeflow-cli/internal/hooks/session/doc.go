@@ -14,7 +14,7 @@
 //   - Clean up orphan sentinel directories
 //   - Create the pathflow-active flag (is-pathflow-active JSON file)
 //   - Initialize the checkpoint file for all 7 PathFlow phases
-//   - Write session metadata and current-session-id files
+//   - Write session metadata and codeflow-env.sh files
 //   - Create the project temp directory
 //
 // It returns an [InitResult] containing the session ID, environment variables,
@@ -26,14 +26,14 @@
 // single binary call:
 //
 //   - Parse stdin JSON for session metadata (Claude's per-agent UUID and transcript path)
-//   - Resolve CODEFLOW_SESSION_ID from env file, environment, or current-session-id
+//   - Resolve CODEFLOW_SESSION_ID from env file or environment variable
 //   - PathFlow guard: skip cleanup for teammate shutdowns while lead is alive
 //   - Validate PF7 completion (check for pathflow-pf-7 sentinel)
 //   - Clean up PathFlow sentinels for the session
 //   - Preserve in-progress tasks, remove completed ones
 //   - Remove team config and task list directories (backstop cleanup)
 //   - Remove session state directory
-//   - Remove runtime files (env file, current-session-id)
+//   - Remove runtime files (env file, legacy current-session-id cleanup)
 //   - Remove project temp directory
 //   - Write session_end ledger event to sessions.jsonl
 //

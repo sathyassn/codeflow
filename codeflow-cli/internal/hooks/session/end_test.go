@@ -33,16 +33,13 @@ func setupCleanupFixture(t *testing.T, sessionID string) string {
 		t.Fatal(err)
 	}
 
-	// Create runtime directory with env file and current-session-id.
+	// Create runtime directory with env file (sole source of session ID).
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	envContent := "export CODEFLOW_SESSION_ID='" + sessionID + "'\nexport CF_PROJECT_ROOT='testproject'\n"
 	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte(sessionID), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,10 +110,6 @@ func TestEndCleanup_NormalCleanup(t *testing.T) {
 	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		t.Error("env file still exists after cleanup")
-	}
-	csidFile := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	if _, err := os.Stat(csidFile); !os.IsNotExist(err) {
-		t.Error("current-session-id still exists after cleanup")
 	}
 
 	// Verify session_end event was written to ledger.
@@ -609,19 +602,16 @@ func TestEndCleanup_LedgerEventContent(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_SessionIDFromEnv(t *testing.T) {
-	t.Parallel()
+func TestEndCleanup_SessionIDFromEnvVar(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
 
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := t.TempDir()
 	cleaner := newTestCleaner(t)
 
-	// Only create runtime dir with current-session-id (no env file).
+	// No env file -- only CODEFLOW_SESSION_ID env var is set.
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte(sessionID), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -630,15 +620,42 @@ func TestEndCleanup_SessionIDFromEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
+
 	stdin := strings.NewReader(`{}`)
 	result, err := cleaner.EndCleanup(stdin, projectDir)
 	if err != nil {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should resolve session ID from current-session-id file.
+	// Should resolve session ID from CODEFLOW_SESSION_ID env var.
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
+	}
+}
+
+func TestEndCleanup_LegacyCurrentSessionIDCleanup(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	cleaner := newTestCleaner(t)
+
+	// Write a legacy current-session-id file to verify it gets cleaned up.
+	csidFile := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
+	if err := os.WriteFile(csidFile, []byte(sessionID), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdin := strings.NewReader(`{}`)
+	_, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
+	}
+
+	// Legacy current-session-id should be cleaned up.
+	if _, err := os.Stat(csidFile); !os.IsNotExist(err) {
+		t.Error("legacy current-session-id should have been removed after cleanup")
 	}
 }
 

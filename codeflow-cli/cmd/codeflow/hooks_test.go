@@ -293,7 +293,7 @@ func TestDetectProjectDirFallback(t *testing.T) {
 }
 
 func TestDetectCurrentBranchNonGit(t *testing.T) {
-	t.Parallel()
+	// NOTE: no t.Parallel -- os.Chdir is process-global and races with other tests.
 
 	// In a non-git directory, detectCurrentBranch returns empty.
 	origDir, err := os.Getwd()
@@ -305,6 +305,9 @@ func TestDetectCurrentBranchNonGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Prevent git from searching upward past tmpDir.
+	t.Setenv("GIT_CEILING_DIRECTORIES", tmpDir)
 
 	branch := detectCurrentBranch()
 	if branch != "" {
@@ -1876,16 +1879,13 @@ func TestRunSessionEndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create runtime dir with env file and current-session-id.
+	// Create runtime dir with env file (sole source of session ID).
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	envContent := "export CODEFLOW_SESSION_ID='" + sessionID + "'\nexport CF_PROJECT_ROOT='testproject'\n"
 	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte(sessionID), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

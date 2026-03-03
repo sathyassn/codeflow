@@ -73,12 +73,13 @@ func setupPathFlowActive(t *testing.T, projectDir, sessionID string, sentinels [
 		t.Fatal(err)
 	}
 
-	// Create current-session-id file.
+	// Create codeflow-env.sh (sole source of session ID for resolveCodeflowSessionID).
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte(sessionID), 0o644); err != nil {
+	envContent := "export CODEFLOW_SESSION_ID='" + sessionID + "'\nexport CF_PROJECT_ROOT='testproject'\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -617,16 +618,17 @@ func TestResolveCodeflowSessionID_EnvVar(t *testing.T) {
 
 	projectDir := t.TempDir()
 
-	// Write a current-session-id file that should be overridden by env.
+	// Write codeflow-env.sh that should be overridden by env var.
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte("ses-from-file"), 0o644); err != nil {
+	envContent := "export CODEFLOW_SESSION_ID='ses-from-envfile'\nexport CF_PROJECT_ROOT='testproject'\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Set env var.
+	// Set env var -- should take priority over codeflow-env.sh.
 	t.Setenv("CODEFLOW_SESSION_ID", "ses-from-env")
 
 	sid := resolveCodeflowSessionID(projectDir)
@@ -635,7 +637,7 @@ func TestResolveCodeflowSessionID_EnvVar(t *testing.T) {
 	}
 }
 
-func TestResolveCodeflowSessionID_File(t *testing.T) {
+func TestResolveCodeflowSessionID_EnvFile(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv.
 
 	projectDir := t.TempDir()
@@ -643,7 +645,8 @@ func TestResolveCodeflowSessionID_File(t *testing.T) {
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, "current-session-id"), []byte("ses-from-file\n"), 0o644); err != nil {
+	envContent := "export CODEFLOW_SESSION_ID='ses-from-envfile'\nexport CF_PROJECT_ROOT='testproject'\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -651,8 +654,8 @@ func TestResolveCodeflowSessionID_File(t *testing.T) {
 	t.Setenv("CODEFLOW_SESSION_ID", "")
 
 	sid := resolveCodeflowSessionID(projectDir)
-	if sid != "ses-from-file" {
-		t.Errorf("resolveCodeflowSessionID() = %q, want %q", sid, "ses-from-file")
+	if sid != "ses-from-envfile" {
+		t.Errorf("resolveCodeflowSessionID() = %q, want %q", sid, "ses-from-envfile")
 	}
 }
 

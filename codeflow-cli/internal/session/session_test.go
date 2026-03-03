@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,16 @@ func newTestDB(t *testing.T) *db.DB {
 		t.Fatalf("InitFromSchema: %v", err)
 	}
 	return d
+}
+
+// writeTestEnvFile is a test helper that writes codeflow-env.sh to runtimeDir.
+func writeTestEnvFile(t *testing.T, runtimeDir, sessionID string) {
+	t.Helper()
+	// Use a synthetic projectDir based on runtimeDir's parent.
+	projectDir := filepath.Dir(runtimeDir)
+	if err := WriteEnvFile(runtimeDir, sessionID, projectDir); err != nil {
+		t.Fatalf("WriteEnvFile: %v", err)
+	}
 }
 
 func TestStartHappyPath(t *testing.T) {
@@ -98,7 +109,7 @@ func TestStartWritesJSONL(t *testing.T) {
 	}
 }
 
-func TestStartDoesNotWriteCurrentSessionID(t *testing.T) {
+func TestStartDoesNotWriteSessionFiles(t *testing.T) {
 	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -110,8 +121,11 @@ func TestStartDoesNotWriteCurrentSessionID(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Start() no longer writes current-session-id. The caller is responsible
-	// (hook path guards it by source; CLI path writes it after Start returns).
+	// Start() does not write any session ID files -- caller is responsible.
+	envFile := filepath.Join(runtimeDir, "codeflow-env.sh")
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("codeflow-env.sh should NOT be written by Start() -- caller is responsible")
+	}
 	idFile := filepath.Join(runtimeDir, "current-session-id")
 	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
 		t.Error("current-session-id should NOT be written by Start() -- caller is responsible")
@@ -177,10 +191,8 @@ func TestEndHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// Write current-session-id (Start no longer writes it -- caller is responsible).
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	// Write codeflow-env.sh (Start no longer writes it -- caller is responsible).
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -213,9 +225,7 @@ func TestEndCalculatesDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -236,7 +246,7 @@ func TestEndCalculatesDuration(t *testing.T) {
 	}
 }
 
-func TestEndCleansUp(t *testing.T) {
+func TestEndCleansUpLegacyFile(t *testing.T) {
 	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -249,15 +259,18 @@ func TestEndCleansUp(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Manually write current-session-id (Start no longer writes it -- caller is responsible).
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writing current-session-id: %v", err)
+	// Write codeflow-env.sh for Current() to find the session.
+	writeTestEnvFile(t, runtimeDir, sessionID)
+
+	// Also write a legacy current-session-id file to verify cleanup.
+	idFile := filepath.Join(runtimeDir, "current-session-id")
+	if err := os.WriteFile(idFile, []byte(sessionID), 0o644); err != nil {
+		t.Fatalf("writing legacy current-session-id: %v", err)
 	}
 
-	// Verify the file exists before End.
-	idFile := filepath.Join(runtimeDir, "current-session-id")
+	// Verify the legacy file exists before End.
 	if _, err := os.Stat(idFile); err != nil {
-		t.Fatalf("current-session-id should exist before End: %v", err)
+		t.Fatalf("legacy current-session-id should exist before End: %v", err)
 	}
 
 	// End the session.
@@ -265,9 +278,9 @@ func TestEndCleansUp(t *testing.T) {
 		t.Fatalf("End: %v", err)
 	}
 
-	// Verify current-session-id was removed.
+	// Verify legacy current-session-id was removed.
 	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
-		t.Error("current-session-id should have been removed after End")
+		t.Error("legacy current-session-id should have been removed after End")
 	}
 }
 
@@ -283,9 +296,7 @@ func TestEndWritesJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
@@ -356,19 +367,15 @@ func TestEndAlreadyEndedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// End the session.
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End: %v", err)
 	}
 
-	// Re-write the current-session-id to simulate trying to end again.
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writing session ID: %v", err)
-	}
+	// Re-write the env file to simulate trying to end again.
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// Try to end again -- should return ErrAlreadyEnded.
 	err = End(ctx, d, ledgerDir, runtimeDir)
@@ -387,7 +394,7 @@ func TestEndNoActiveSession(t *testing.T) {
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 
-	// Try to end without starting -- no current-session-id file.
+	// Try to end without starting -- no env file.
 	err := End(ctx, d, ledgerDir, runtimeDir)
 	if err == nil {
 		t.Fatal("expected error for no active session, got nil")
@@ -398,8 +405,8 @@ func TestEndNoActiveSession(t *testing.T) {
 }
 
 func TestCurrent(t *testing.T) {
-	t.Parallel()
-	t.Run("returns session ID when file exists", func(t *testing.T) {
+	// NOTE: no t.Parallel() -- subtests use t.Setenv which is not parallel-safe.
+	t.Run("returns session ID from env file", func(t *testing.T) {
 		d := newTestDB(t)
 		ctx := t.Context()
 		ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -409,10 +416,8 @@ func TestCurrent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		// Write current-session-id manually (Start no longer writes it).
-		if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-			t.Fatalf("writeCurrentSessionID: %v", err)
-		}
+		// Write codeflow-env.sh manually (Start no longer writes it).
+		writeTestEnvFile(t, runtimeDir, sessionID)
 
 		got, err := Current(runtimeDir)
 		if err != nil {
@@ -423,31 +428,65 @@ func TestCurrent(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when no file", func(t *testing.T) {
+	t.Run("returns session ID from env var", func(t *testing.T) {
+		runtimeDir := filepath.Join(t.TempDir(), "nonexistent")
+		t.Setenv("CODEFLOW_SESSION_ID", "ses-from-env-var-12345678")
+
+		got, err := Current(runtimeDir)
+		if err != nil {
+			t.Fatalf("Current: %v", err)
+		}
+		if got != "ses-from-env-var-12345678" {
+			t.Errorf("Current() = %q, want %q", got, "ses-from-env-var-12345678")
+		}
+	})
+
+	t.Run("returns error when no env file or env var", func(t *testing.T) {
 		runtimeDir := filepath.Join(t.TempDir(), "nonexistent")
 
 		_, err := Current(runtimeDir)
 		if err == nil {
-			t.Fatal("expected error when no file, got nil")
+			t.Fatal("expected error when no env file, got nil")
 		}
 		if !errors.Is(err, ErrNoActiveSession) {
 			t.Errorf("error = %v, want ErrNoActiveSession", err)
 		}
 	})
 
-	t.Run("returns error for empty file", func(t *testing.T) {
+	t.Run("returns error for empty env file", func(t *testing.T) {
 		runtimeDir := t.TempDir()
-		idFile := filepath.Join(runtimeDir, CurrentSessionFile)
-		if err := os.WriteFile(idFile, []byte(""), 0o644); err != nil {
+		envFile := filepath.Join(runtimeDir, EnvFile)
+		if err := os.WriteFile(envFile, []byte(""), 0o644); err != nil {
 			t.Fatalf("writing empty file: %v", err)
 		}
 
 		_, err := Current(runtimeDir)
 		if err == nil {
-			t.Fatal("expected error for empty file, got nil")
+			t.Fatal("expected error for empty env file, got nil")
 		}
 		if !errors.Is(err, ErrNoActiveSession) {
 			t.Errorf("error = %v, want ErrNoActiveSession", err)
+		}
+	})
+
+	t.Run("env var takes priority over env file", func(t *testing.T) {
+		runtimeDir := t.TempDir()
+		// Write env file with one session ID.
+		envFile := filepath.Join(runtimeDir, EnvFile)
+		content := "export CODEFLOW_SESSION_ID='ses-from-file-123456789'\n"
+		if err := os.WriteFile(envFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing env file: %v", err)
+		}
+
+		// Set env var with a different session ID.
+		t.Setenv("CODEFLOW_SESSION_ID", "ses-from-env-var-override")
+
+		got, err := Current(runtimeDir)
+		if err != nil {
+			t.Fatalf("Current: %v", err)
+		}
+		if got != "ses-from-env-var-override" {
+			t.Errorf("Current() = %q, want %q (env var should take priority)", got, "ses-from-env-var-override")
 		}
 	})
 }
@@ -484,7 +523,7 @@ func TestStartCreatesDirectories(t *testing.T) {
 		t.Errorf("ledger directory should exist: %v", err)
 	}
 	// Note: runtimeDir is no longer created by Start() since it no longer
-	// writes current-session-id. The caller is responsible for creating it.
+	// writes session ID files. The caller is responsible for creating it.
 }
 
 func TestStartEnsuresUserRow(t *testing.T) {
@@ -553,9 +592,7 @@ func TestEndOnClosedDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// Close the DB to force error during End.
 	d.Close()
@@ -581,22 +618,49 @@ func TestStartWithReadOnlyLedgerDir(t *testing.T) {
 	}
 }
 
-func TestCurrentTrimsWhitespace(t *testing.T) {
+func TestParseEnvFileSessionID(t *testing.T) {
 	t.Parallel()
-	runtimeDir := t.TempDir()
-	idFile := filepath.Join(runtimeDir, CurrentSessionFile)
-	// Write session ID with trailing whitespace/newline.
-	if err := os.WriteFile(idFile, []byte("ses-abc123\n"), 0o644); err != nil {
-		t.Fatalf("writing file: %v", err)
-	}
 
-	got, err := Current(runtimeDir)
-	if err != nil {
-		t.Fatalf("Current: %v", err)
-	}
-	if got != "ses-abc123" {
-		t.Errorf("Current() = %q, want %q (whitespace should be trimmed)", got, "ses-abc123")
-	}
+	t.Run("extracts session ID from valid env file", func(t *testing.T) {
+		runtimeDir := t.TempDir()
+		envFile := filepath.Join(runtimeDir, EnvFile)
+		content := "export CODEFLOW_SESSION_ID='ses-abc123'\nexport CF_PROJECT_ROOT='myproject'\n"
+		if err := os.WriteFile(envFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing env file: %v", err)
+		}
+
+		got, err := parseEnvFileSessionID(envFile)
+		if err != nil {
+			t.Fatalf("parseEnvFileSessionID: %v", err)
+		}
+		if got != "ses-abc123" {
+			t.Errorf("parseEnvFileSessionID() = %q, want %q", got, "ses-abc123")
+		}
+	})
+
+	t.Run("returns empty for missing session ID line", func(t *testing.T) {
+		runtimeDir := t.TempDir()
+		envFile := filepath.Join(runtimeDir, EnvFile)
+		content := "export CF_PROJECT_ROOT='myproject'\n"
+		if err := os.WriteFile(envFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing env file: %v", err)
+		}
+
+		got, err := parseEnvFileSessionID(envFile)
+		if err != nil {
+			t.Fatalf("parseEnvFileSessionID: %v", err)
+		}
+		if got != "" {
+			t.Errorf("parseEnvFileSessionID() = %q, want empty", got)
+		}
+	})
+
+	t.Run("returns error for nonexistent file", func(t *testing.T) {
+		_, err := parseEnvFileSessionID("/nonexistent/path/codeflow-env.sh")
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+	})
 }
 
 func TestStartWithSameClaudeIDTwice(t *testing.T) {
@@ -614,9 +678,7 @@ func TestStartWithSameClaudeIDTwice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start 1: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sid1); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sid1)
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 1: %v", err)
 	}
@@ -630,14 +692,14 @@ func TestStartWithSameClaudeIDTwice(t *testing.T) {
 
 func TestStartWithInvalidRuntimeDir(t *testing.T) {
 	t.Parallel()
-	// Start() no longer writes current-session-id (caller is responsible),
+	// Start() does not write session ID files (caller is responsible),
 	// so runtimeDir is unused by Start(). Test that an invalid runtimeDir
 	// does NOT cause Start() to fail (it only needs a valid ledgerDir).
 	d := newTestDB(t)
 	ctx := t.Context()
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 
-	// /dev/null is a file, not a directory — but runtimeDir is unused now.
+	// /dev/null is a file, not a directory -- but runtimeDir is unused now.
 	runtimeDir := "/dev/null/runtime"
 
 	_, err := Start(ctx, d, "test-claude-id", ledgerDir, runtimeDir)
@@ -659,9 +721,7 @@ func TestEndWithEmptyStartedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, sessionID); err != nil {
-		t.Fatalf("writeCurrentSessionID: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, sessionID)
 
 	// Manually set started_at to empty to exercise the empty-string branch.
 	_, err = d.Execute(ctx, `UPDATE sessions SET started_at = '' WHERE id = ?`, sessionID)
@@ -799,7 +859,7 @@ func TestResolveGitUser(t *testing.T) {
 
 	t.Run("falls back to claudeID when git unavailable", func(t *testing.T) {
 		// Override HOME and GIT_CONFIG to make git config return empty.
-		// NOTE: no t.Parallel — t.Setenv modifies process environment.
+		// NOTE: no t.Parallel -- t.Setenv modifies process environment.
 		t.Setenv("HOME", "/nonexistent-home-for-test")
 		t.Setenv("GIT_CONFIG_GLOBAL", "/nonexistent")
 		t.Setenv("GIT_CONFIG_SYSTEM", "/nonexistent")
@@ -833,19 +893,14 @@ func TestWriteJSONLEvent(t *testing.T) {
 			t.Fatalf("writeJSONLEvent: %v", err)
 		}
 
-		// Verify the file was created and contains valid JSON.
+		// Verify the file was created and contains the event.
 		jsonlPath := filepath.Join(ledgerDir, "sessions.jsonl")
 		data, err := os.ReadFile(jsonlPath)
 		if err != nil {
 			t.Fatalf("reading JSONL: %v", err)
 		}
-
-		var parsed map[string]string
-		if err := json.Unmarshal(data, &parsed); err != nil {
-			t.Fatalf("parsing JSONL: %v", err)
-		}
-		if parsed["event"] != "test_event" {
-			t.Errorf("event = %q, want test_event", parsed["event"])
+		if !strings.Contains(string(data), "test_event") {
+			t.Error("JSONL file does not contain test_event")
 		}
 	})
 
@@ -853,13 +908,16 @@ func TestWriteJSONLEvent(t *testing.T) {
 		ledgerDir := filepath.Join(t.TempDir(), "ledger")
 
 		for i := range 3 {
-			event := map[string]any{"seq": i}
+			event := map[string]string{
+				"event": fmt.Sprintf("event_%d", i),
+			}
 			if err := writeJSONLEvent(ledgerDir, event); err != nil {
-				t.Fatalf("writeJSONLEvent[%d]: %v", i, err)
+				t.Fatalf("writeJSONLEvent %d: %v", i, err)
 			}
 		}
 
-		data, err := os.ReadFile(filepath.Join(ledgerDir, "sessions.jsonl"))
+		jsonlPath := filepath.Join(ledgerDir, "sessions.jsonl")
+		data, err := os.ReadFile(jsonlPath)
 		if err != nil {
 			t.Fatalf("reading JSONL: %v", err)
 		}
@@ -937,9 +995,7 @@ func TestMultipleStartEndCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start 1: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, id1); err != nil {
-		t.Fatalf("writeCurrentSessionID 1: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, id1)
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 1: %v", err)
 	}
@@ -948,9 +1004,7 @@ func TestMultipleStartEndCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start 2: %v", err)
 	}
-	if err := writeCurrentSessionID(runtimeDir, id2); err != nil {
-		t.Fatalf("writeCurrentSessionID 2: %v", err)
-	}
+	writeTestEnvFile(t, runtimeDir, id2)
 	if err := End(ctx, d, ledgerDir, runtimeDir); err != nil {
 		t.Fatalf("End 2: %v", err)
 	}

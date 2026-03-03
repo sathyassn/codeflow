@@ -221,12 +221,10 @@ func TestFullPathFlowLifecycle(t *testing.T) {
 	cpPath := checkpointPath(projectDir, sid)
 	assertFileExists(t, cpPath, "checkpoint file")
 
-	// Verify current-session-id written.
+	// Verify current-session-id is NOT written (eliminated; only codeflow-env.sh is used).
 	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	assertFileExists(t, csidPath, "current-session-id file")
-	csidData, _ := os.ReadFile(csidPath)
-	if string(csidData) != sid {
-		t.Errorf("current-session-id = %q, want %q", string(csidData), sid)
+	if _, err := os.Stat(csidPath); !os.IsNotExist(err) {
+		t.Error("current-session-id should NOT exist (eliminated in favor of codeflow-env.sh)")
 	}
 
 	// Verify env file written.
