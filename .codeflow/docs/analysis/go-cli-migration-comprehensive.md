@@ -6,6 +6,10 @@ updated_at: "2026-02-28"
 related_epic: "INF-EPC-021"
 ---
 
+> **Historical reference — last verified 2026-02-28. Some details may be outdated as implementation has progressed.**
+> Script counts, command listings, and package layouts reflect the state at time of analysis.
+> Authoritative current state: the codebase and task docs in INF-EPC-021.
+
 # Comprehensive Go CLI Migration Analysis
 
 ## Table of Contents
@@ -28,9 +32,9 @@ related_epic: "INF-EPC-021"
 
 ## 1. Executive Summary
 
-CodeFlow's shell and Python layer comprises **57 production scripts** (~14,609 lines) in
-`.codeflow/scripts/` plus **22 hook scripts** (~6,132 lines) in `.claude/hooks/codeflow/`.
-This totals **79 scripts and ~20,741 lines** of shell and Python code with several systemic
+CodeFlow's shell and Python layer comprises **58 production scripts** (~14,925 lines) in
+`.codeflow/scripts/` plus **22 unique hook scripts** (~6,132 lines, 23 settings.json entries — `cf-stop-pathflow-gate.sh` registered for both Stop and SubagentStop) in `.claude/hooks/codeflow/`.
+This totals **80 scripts and ~21,057 lines** of shell and Python code with several systemic
 problems: JSON written by string concatenation, `flock` unavailable on macOS, platform-specific
 `date`/`stat` divergence, and Python called as a subprocess for basic operations.
 
@@ -61,9 +65,9 @@ Verified counts via `ls .codeflow/scripts/**/*.sh | wc -l` and
 
 | Location | Count | Lines |
 |----------|-------|-------|
-| `.codeflow/scripts/**/*.sh` | 57 scripts | ~14,609 lines |
-| `.claude/hooks/codeflow/**/*.sh` | 22 scripts | ~6,132 lines |
-| **Total** | **79 scripts** | **~20,741 lines** |
+| `.codeflow/scripts/**/*.sh` | 58 scripts | ~14,925 lines |
+| `.claude/hooks/codeflow/**/*.sh` | 22 unique scripts (23 settings.json entries) | ~6,132 lines |
+| **Total** | **80 unique scripts** | **~21,057 lines** |
 
 ### 2.2 Python Script Inventory
 
@@ -473,7 +477,7 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 |---|---|---|---|---|---|
 | `codeflow` (wrapper) | 277 | Shell entry point; routes to subcommands | T3 | Go binary entry point | Becomes unnecessary once Go binary on PATH |
 
-**Production shell script count: 57** (matches `find .codeflow/scripts -name "*.sh" | wc -l`)
+**Production shell script count: 58** (matches `find .codeflow/scripts -name "*.sh" | wc -l` as of 2026-03-03; normalize-jsonl.sh added in PR #126 after initial analysis)
 
 ---
 
@@ -527,8 +531,8 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
-| `stop/cf-stop-logging.sh` | 280 | Log stop/subagent-stop events | T2 | `codeflow hooks stop-logging` | UUID session ID bug |
-| `stop/cf-stop-pathflow-gate.sh` | 107 | Enforce PathFlow gate on stop events | T2 | `codeflow hooks stop-gate` | Shared with SubagentStop event |
+| `stop/cf-stop-logging.sh` | 280 | Log stop/subagent-stop events | T2 | `codeflow hooks stop logging` | UUID session ID bug |
+| `stop/cf-stop-pathflow-gate.sh` | 107 | Phase diagnostic on stop/subagent-stop events | T2 | `codeflow hooks stop logging` | Informational-only (exit 0); registered for both Stop and SubagentStop (23rd settings.json entry); phase diagnostic folded into stop logging subcommand |
 
 #### 4.2.7 `task-completed/`
 
@@ -536,7 +540,7 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 |---|---|---|---|---|---|
 | `task-completed/cf-task-completed-phase-checkpoint.sh` | 237 | Mark phase tasks complete; create phase sentinels | T1 | `codeflow hooks checkpoint-complete` | Phase sentinel creation; critical path |
 
-**Hook script count: 22** (matches `find .claude/hooks/codeflow -name "*.sh" | wc -l`)
+**Hook script count: 22 unique** (matches `find .claude/hooks/codeflow -name "*.sh" | wc -l`). Note: 23 entries in `settings.json` because `cf-stop-pathflow-gate.sh` is registered for both Stop and SubagentStop events.
 
 ---
 
@@ -861,7 +865,7 @@ They migrate when the test framework is ported to Go's `testing` package.
 | Category | Scripts | Lines | T1 | T2 | T3 | T4 | REMOVE |
 |----------|---------|-------|----|----|----|----|----|
 | `.codeflow/scripts/state/` | 5 | 1,764 | 5 | 0 | 0 | 0 | 0 |
-| `.codeflow/scripts/db/` | 2 | 555 | 1 | 0 | 1 | 0 | 0 |
+| `.codeflow/scripts/db/` | 3 | 871 | 1 | 1 | 1 | 0 | 0 |
 | `.codeflow/scripts/validation/` | 2 | 963 | 2 | 0 | 0 | 0 | 0 |
 | `.codeflow/scripts/pathflow/` | 5 | 733 | 5 | 0 | 0 | 0 | 0 |
 | `.codeflow/scripts/settings/` | 2 | 975 | 0 | 2 | 0 | 0 | 0 |
@@ -882,14 +886,14 @@ They migrate when the test framework is ported to Go's `testing` package.
 | `.claude/hooks/` — stop | 2 | 387 | 0 | 2 | 0 | 0 | 0 |
 | `.claude/hooks/` — task-completed | 1 | 237 | 1 | 0 | 0 | 0 | 0 |
 | Python source (`.codeflow/scripts/`) | 18 | 3,443 | 2 | 16 | 0 | 0 | 0 |
-| **Production subtotal** | **97** | **23,261** | **24** | **57** | **10** | **4** | **3** |
+| **Production subtotal** | **98** | **23,577** | **24** | **58** | **10** | **4** | **3** |
 | Python test files (pytest) | 25 | 8,162 | — | — | — | — | — |
 | Shell test scripts (`.codeflow/testing/`) | 108 | 53,447 | — | — | — | — | — |
 | **TOTAL (all files)** | **230** | **84,870** | — | — | — | — | — |
 
 **Notes:**
 
-- Production subtotal (97 scripts) drives the migration priority. Test files are removed
+- Production subtotal (98 scripts) drives the migration priority. Test files are removed
   alongside the production scripts they test.
 - `cf-hook-bypass.sh` (REMOVE): dead code, no callers.
 - `shell-lib/index.sh` (T4): disappears when Go replaces sourced shell libraries;
@@ -1080,7 +1084,7 @@ changes are required.
 
 **Phase C:** Replace all remaining Tier 2 hooks (logging, settings, etc.).
 
-**Result:** All 22 hook scripts become dead code and are removed from the repository.
+**Result:** All 22 unique hook scripts become dead code and are removed from the repository (23 settings.json entries updated).
 
 ---
 
@@ -1189,6 +1193,9 @@ codeflow (Go binary — source: codeflow-cli/)
 │   ├── pre-push                   -- branch naming validation; replaces pre-push shell hook; TTY via os.Open("/dev/tty")
 │   └── prepare-commit-msg        -- commit message template; replaces prepare-commit-msg shell hook
 │
+├── normalize
+│   └── ledger                     -- normalize JSONL ledger files to canonical schema (replaces normalize-jsonl.sh; added in PR #126)
+│
 ├── ledger
 │   ├── append <event-type>        -- replaces echo-to-jsonl pattern
 │   ├── validate <file>            -- validate JSONL integrity
@@ -1246,8 +1253,7 @@ codeflow (Go binary — source: codeflow-cli/)
     │   ├── validate               -- replaces cf-user-prompt-submit.sh
     │   └── logging                -- replaces cf-user-prompt-submit-logging.sh
     ├── stop
-    │   ├── gate                   -- replaces cf-stop-pathflow-gate.sh
-    │   └── logging                -- replaces cf-stop-logging.sh
+    │   └── logging                -- replaces cf-stop-logging.sh + cf-stop-pathflow-gate.sh (phase diagnostic folded in; informational-only)
     └── task-completed
         └── checkpoint-complete    -- replaces cf-task-completed-phase-checkpoint.sh
 ```
@@ -1517,7 +1523,7 @@ step requires a git revert if rollback is needed.
 
 **Phase F: Post-cutover verification**
 
-Run the full test suite (`./codeflow test --mode standard`) and verify all acceptance
+Run the full test suite (`bash .codeflow/testing/run-all-tests.sh --mode standard`) and verify all acceptance
 criteria from INF-EPC-021 tasks. Run `codeflow doctor` to confirm all hook subcommands
 respond correctly. Monitor one full session under Go hooks before declaring the migration
 complete.
@@ -1637,7 +1643,7 @@ Phase A (data integrity)
 
 The migration is complete when:
 
-- All 22 hook scripts are deleted from `.claude/hooks/codeflow/`
+- All 22 unique hook scripts are deleted from `.claude/hooks/codeflow/` (23 settings.json entries updated)
 - All 18 Python source files are deleted from `.codeflow/scripts/`
 - All 20 pytest test files are deleted from `.codeflow/testing/`
 - `settings.json` hook commands reference `codeflow hooks <name>` exclusively
