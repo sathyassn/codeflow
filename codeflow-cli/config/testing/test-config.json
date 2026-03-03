@@ -19,7 +19,8 @@
       "./internal/report/...",
       "./cmd/codeflow/...",
       "./cmd/autorun/...",
-      "./internal/workgraph/..."
+      "./internal/workgraph/...",
+      "./internal/githooks/..."
     ]
   },
   "conventions": {
@@ -45,6 +46,31 @@
       {
         "file": "internal/settings/sudo.go",
         "reason": "Thin wrappers around sudo exec.Command calls — requires root privileges to test"
+      },
+      {
+        "file": "internal/githooks/prepush.go",
+        "function": "tryTTYOverride",
+        "reason": "Opens /dev/tty for interactive input — untestable in CI/automated environments"
+      },
+      {
+        "file": "internal/githooks/precommitvalidate.go",
+        "function": "RunPreCommitValidate",
+        "reason": "Orchestrator calling git commands (branch --show-current, diff --cached) — requires live git repo with staged files"
+      },
+      {
+        "file": "internal/githooks/precommitvalidate.go",
+        "function": "getStagedFiles",
+        "reason": "Calls git diff --cached — requires live git repo with staged files"
+      },
+      {
+        "file": "internal/githooks/postcommit.go",
+        "function": "RunPostCommit",
+        "reason": "Orchestrator calling git commands (rev-parse HEAD, log, branch) — requires live git repo with commits"
+      },
+      {
+        "file": "cmd/codeflow/githooks.go",
+        "function": "newGitHooksPrePushCmd",
+        "reason": "RunE reads from os.Stdin (git push ref pipe) — cannot mock os.Stdin in unit tests without refactoring"
       }
     ]
   }

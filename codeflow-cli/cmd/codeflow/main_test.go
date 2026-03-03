@@ -668,21 +668,29 @@ func TestUninstallCmd_HelpOutput(t *testing.T) {
 func TestUninstallCmd_ViaRootCmd(t *testing.T) {
 	t.Parallel()
 
-	// Test uninstall through the root command with --force on a nonexistent path.
+	// Verify uninstall is registered as a subcommand of root.
+	// Behavioral testing is done via runUninstall with temp paths
+	// (TestRunUninstall_PromptMessage, etc.) to avoid touching real
+	// filesystem paths like ~/.local/bin/codeflow.
 	cmd := newRootCmd()
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"uninstall", "--force"})
-
-	err := cmd.Execute()
-	if err != nil {
-		t.Fatalf("uninstall --force via root cmd returned error: %v", err)
+	subcommands := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		subcommands[sub.Use] = true
+	}
+	if !subcommands["uninstall"] {
+		t.Error("root command should have 'uninstall' subcommand")
 	}
 
-	// Binary likely doesn't exist at default path in test env.
-	got := buf.String()
-	if !strings.Contains(got, "not found") && !strings.Contains(got, "removed") {
-		t.Errorf("output missing 'not found' or 'removed': %q", got)
+	// Verify flags are wired.
+	uninstallCmd, _, err := cmd.Find([]string{"uninstall"})
+	if err != nil {
+		t.Fatalf("finding uninstall subcommand: %v", err)
+	}
+	if uninstallCmd.Flags().Lookup("force") == nil {
+		t.Error("uninstall should have --force flag")
+	}
+	if uninstallCmd.Flags().Lookup("keep-config") == nil {
+		t.Error("uninstall should have --keep-config flag")
 	}
 }
 

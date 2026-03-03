@@ -425,6 +425,17 @@
     "release/*",
     "production"
   ],
+  "sensitive_file_patterns": [
+    "\\.env$",
+    "\\.env\\.",
+    "credentials",
+    "\\.pem$",
+    "\\.key$",
+    "id_rsa",
+    "id_ed25519",
+    "\\.secret",
+    "password"
+  ],
   "git_format": {
     "commit_types": [
       "feat",

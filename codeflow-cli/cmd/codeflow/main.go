@@ -63,6 +63,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newWorktreeCmd())
 	rootCmd.AddCommand(newReportCmd())
 	rootCmd.AddCommand(newWorkgraphCmd())
+	rootCmd.AddCommand(newGitHooksCmd())
 
 	return rootCmd
 }
