@@ -156,11 +156,6 @@
           "pattern": ".codeflow/scripts/security/validation/*",
           "tested_by": "scripts/security/validation/test-cf-*.sh",
           "reason": "Validation scripts have dedicated tests in validation subdirectory"
-        },
-        {
-          "pattern": ".codeflow/scripts/validation/*",
-          "tested_by": "Go CLI validate command (codeflow validate task/epic)",
-          "reason": "Task/epic validation migrated to Go CLI"
         }
       ]
     },
