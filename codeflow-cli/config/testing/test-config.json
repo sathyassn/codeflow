@@ -28,7 +28,8 @@
       "./internal/initialize/...",
       "./internal/preflight/...",
       "./internal/update/...",
-      "./internal/welcome/..."
+      "./internal/welcome/...",
+      "./internal/verification/..."
     ]
   },
   "conventions": {

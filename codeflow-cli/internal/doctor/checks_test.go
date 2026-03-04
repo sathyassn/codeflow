@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,6 +235,9 @@ func TestCheckPython_Available(t *testing.T) {
 	if result.Status != StatusPass {
 		t.Errorf("expected pass, got %s: %s", result.Status, result.Message)
 	}
+	if !strings.Contains(result.Message, "optional") {
+		t.Errorf("message should mention 'optional', got %q", result.Message)
+	}
 }
 
 func TestCheckPython_Missing(t *testing.T) {
@@ -245,9 +249,13 @@ func TestCheckPython_Missing(t *testing.T) {
 	}
 	opts.applyDefaults()
 
+	// Post-cutover: python3 missing is pass (informational), not warn.
 	result := checkPython(ctx, opts)
-	if result.Status != StatusWarn {
-		t.Errorf("expected warn, got %s: %s", result.Status, result.Message)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass (python3 optional post-cutover), got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "optional") {
+		t.Errorf("message should mention 'optional', got %q", result.Message)
 	}
 }
 
@@ -255,61 +263,63 @@ func TestCheckHooks_Pass(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	projectDir := t.TempDir()
-	hooksDir := filepath.Join(projectDir, ".claude", "hooks", "codeflow", "pre-tool-use")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
+	// All hook subcommands respond to --help.
+	opts := &Options{
+		LookPath: fakeLookPath("codeflow"),
+		ExecCommand: func(_ string, _ ...string) ([]byte, error) {
+			return []byte("Usage: codeflow hooks ...\n"), nil
+		},
 	}
-
-	scriptPath := filepath.Join(hooksDir, "test-hook.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	opts := &Options{ProjectDir: projectDir}
 	opts.applyDefaults()
 
 	result := checkHooks(ctx, opts)
 	if result.Status != StatusPass {
 		t.Errorf("expected pass, got %s: %s", result.Status, result.Message)
 	}
+	if !strings.Contains(result.Message, "Go hook subcommands functional") {
+		t.Errorf("message should mention 'Go hook subcommands', got %q", result.Message)
+	}
 }
 
-func TestCheckHooks_NoDir(t *testing.T) {
+func TestCheckHooks_NoBinary(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	opts := &Options{ProjectDir: t.TempDir()}
+	opts := &Options{
+		LookPath: fakeLookPath(), // codeflow not available.
+	}
 	opts.applyDefaults()
 
 	result := checkHooks(ctx, opts)
 	if result.Status != StatusFail {
-		t.Errorf("expected fail, got %s: %s", result.Status, result.Message)
+		t.Errorf("expected fail when codeflow binary missing, got %s: %s", result.Status, result.Message)
 	}
 }
 
-func TestCheckHooks_NonExecutable(t *testing.T) {
+func TestCheckHooks_SubcommandFailing(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	projectDir := t.TempDir()
-	hooksDir := filepath.Join(projectDir, ".claude", "hooks", "codeflow", "pre-tool-use")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
+	callCount := 0
+	opts := &Options{
+		LookPath: fakeLookPath("codeflow"),
+		ExecCommand: func(_ string, args ...string) ([]byte, error) {
+			callCount++
+			// Fail the third subcommand.
+			if callCount == 3 {
+				return nil, fmt.Errorf("subcommand not found")
+			}
+			return []byte("OK\n"), nil
+		},
 	}
-
-	// Create a non-executable script.
-	scriptPath := filepath.Join(hooksDir, "test-hook.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	opts := &Options{ProjectDir: projectDir}
 	opts.applyDefaults()
 
 	result := checkHooks(ctx, opts)
-	if result.Status != StatusWarn {
-		t.Errorf("expected warn for non-executable script, got %s: %s", result.Status, result.Message)
+	if result.Status != StatusFail {
+		t.Errorf("expected fail for broken subcommand, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "not responding") {
+		t.Errorf("message should mention 'not responding', got %q", result.Message)
 	}
 }
 
@@ -493,31 +503,24 @@ func TestCheckPermissions_Pass(t *testing.T) {
 	}
 }
 
-func TestCheckPermissions_NonExecutableHooks(t *testing.T) {
+func TestCheckPermissions_NonWritableState(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
 	projectDir := t.TempDir()
 	stateDir := filepath.Join(projectDir, ".state")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
-
-	// Create hook scripts without executable permission.
-	hooksDir := filepath.Join(projectDir, ".claude", "hooks", "codeflow", "pre-tool-use")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(hooksDir, "test.sh"), []byte("#!/bin/bash\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Ensure cleanup can remove the dir.
+	t.Cleanup(func() { os.Chmod(stateDir, 0o755) })
 
 	opts := &Options{ProjectDir: projectDir, StateDir: stateDir}
 	opts.applyDefaults()
 
 	result := checkPermissions(ctx, opts)
 	if result.Status != StatusFail {
-		t.Errorf("expected fail for non-executable hooks, got %s: %s", result.Status, result.Message)
+		t.Errorf("expected fail for non-writable .state/, got %s: %s", result.Status, result.Message)
 	}
 }
 
@@ -562,23 +565,25 @@ func TestCheckCRDT_StateDirFallback(t *testing.T) {
 	}
 }
 
-func TestCheckHooks_EmptySubdirs(t *testing.T) {
+func TestCheckHooks_CountMatchesSubcommands(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	projectDir := t.TempDir()
-	hooksDir := filepath.Join(projectDir, ".claude", "hooks", "codeflow")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
+	opts := &Options{
+		LookPath: fakeLookPath("codeflow"),
+		ExecCommand: func(_ string, _ ...string) ([]byte, error) {
+			return []byte("OK\n"), nil
+		},
 	}
-	// Directory exists but no subdirectories.
-
-	opts := &Options{ProjectDir: projectDir}
 	opts.applyDefaults()
 
 	result := checkHooks(ctx, opts)
-	if result.Status != StatusFail {
-		t.Errorf("expected fail for empty hooks directory, got %s: %s", result.Status, result.Message)
+	if result.Status != StatusPass {
+		t.Errorf("expected pass, got %s: %s", result.Status, result.Message)
+	}
+	expected := fmt.Sprintf("all %d Go hook subcommands functional", len(hookSubcommands))
+	if result.Message != expected {
+		t.Errorf("message = %q, want %q", result.Message, expected)
 	}
 }
 
@@ -666,7 +671,7 @@ func TestRunAll(t *testing.T) {
 		LedgerDir:  filepath.Join(projectDir, ".state", "ledger"),
 		ProjectDir: projectDir,
 		StateDir:   filepath.Join(projectDir, ".state"),
-		LookPath:   fakeLookPath("python3", "claude"),
+		LookPath:   fakeLookPath("python3", "claude", "codeflow"),
 		ExecCommand: func(name string, args ...string) ([]byte, error) {
 			if name == "claude" {
 				return []byte("Logged in"), nil
@@ -674,7 +679,8 @@ func TestRunAll(t *testing.T) {
 			if name == "host" {
 				return []byte("github.com has address\n"), nil
 			}
-			return []byte(""), nil
+			// Handle codeflow hooks --help calls for checkHooks.
+			return []byte("OK\n"), nil
 		},
 	}
 
@@ -682,8 +688,8 @@ func TestRunAll(t *testing.T) {
 	createTestDB(t, opts.DBPath)
 
 	results := RunAll(ctx, opts)
-	if len(results) != 16 {
-		t.Fatalf("expected 16 results, got %d", len(results))
+	if len(results) != len(checkNames) {
+		t.Fatalf("expected %d results, got %d", len(checkNames), len(results))
 	}
 
 	// Verify results are in the canonical order.
@@ -1108,6 +1114,7 @@ func newTestDB(path string) (interface{ Close() error }, error) {
 }
 
 // setupFullFixture creates a complete project fixture for RunAll testing.
+// Post-cutover: no shell hook directories needed (hooks are Go subcommands).
 func setupFullFixture(t *testing.T, projectDir string) {
 	t.Helper()
 
@@ -1125,16 +1132,6 @@ func setupFullFixture(t *testing.T, projectDir string) {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	// Create hooks directory with executable script.
-	hooksDir := filepath.Join(projectDir, ".claude", "hooks", "codeflow", "pre-tool-use")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	scriptPath := filepath.Join(hooksDir, "test.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\n"), 0o755); err != nil {
-		t.Fatal(err)
 	}
 
 	// Create config directory with valid JSON.

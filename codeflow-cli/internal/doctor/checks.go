@@ -140,7 +140,7 @@ var checkRegistry = map[string]checkFunc{
 	"sentinel-drift": checkSentinelDrift,
 }
 
-// RunAll executes all 16 checks concurrently and returns results in the
+// RunAll executes all checks concurrently and returns results in the
 // canonical order. Independent checks run in parallel to stay under 2 seconds.
 func RunAll(ctx context.Context, opts *Options) []Result {
 	if opts == nil {
@@ -362,7 +362,9 @@ func checkCRDT(_ context.Context, opts *Options) Result {
 	}
 }
 
-// checkPython verifies python3 is available.
+// checkPython reports python3 availability as informational.
+// Post-cutover: python3 is no longer a production dependency.
+// It is only used by test infrastructure (.codeflow/testing/).
 func checkPython(_ context.Context, opts *Options) Result {
 	start := time.Now()
 
@@ -370,8 +372,8 @@ func checkPython(_ context.Context, opts *Options) Result {
 	if err != nil {
 		return Result{
 			Name:     "python",
-			Status:   StatusWarn,
-			Message:  "python3 not found in PATH",
+			Status:   StatusPass,
+			Message:  "python3 not found (optional -- not a production dependency)",
 			Duration: time.Since(start),
 		}
 	}
@@ -379,85 +381,54 @@ func checkPython(_ context.Context, opts *Options) Result {
 	return Result{
 		Name:     "python",
 		Status:   StatusPass,
-		Message:  "python3 available",
+		Message:  "python3 available (optional -- used by test infrastructure only)",
 		Duration: time.Since(start),
 	}
 }
 
-// checkHooks verifies .claude/hooks/codeflow/ directory exists and scripts are executable.
+// hookSubcommands lists the Go hook subcommands that must be functional.
+// Each entry is a pair: [event, subcommand].
+var hookSubcommands = [][2]string{
+	{"session-start", "init"},
+	{"pre-tool-use", "gate-check"},
+	{"pre-tool-use", "team-guard"},
+	{"post-tool-use", "sentinel-write"},
+	{"post-tool-use", "checkpoint-register"},
+	{"task-completed", "checkpoint-complete"},
+	{"session-end", "cleanup"},
+}
+
+// checkHooks verifies Go hook subcommands are functional.
+// Post-cutover: shell hooks in .claude/hooks/codeflow/ were removed.
+// Hooks now run as Go CLI subcommands (codeflow hooks <event> <subcommand>).
 func checkHooks(_ context.Context, opts *Options) Result {
 	start := time.Now()
 
-	hooksDir := filepath.Join(opts.ProjectDir, ".claude", "hooks", "codeflow")
-
-	info, err := os.Stat(hooksDir)
-	if err != nil || !info.IsDir() {
-		return Result{
-			Name:     "hooks",
-			Status:   StatusFail,
-			Message:  ".claude/hooks/codeflow/ directory not found",
-			Duration: time.Since(start),
-		}
-	}
-
-	entries, err := os.ReadDir(hooksDir)
+	// Verify the codeflow binary is available.
+	codeflowBin, err := opts.LookPath("codeflow")
 	if err != nil {
 		return Result{
 			Name:     "hooks",
 			Status:   StatusFail,
-			Message:  fmt.Sprintf("cannot read hooks directory: %v", err),
+			Message:  "codeflow binary not found in PATH",
 			Duration: time.Since(start),
 		}
 	}
 
-	// Check that subdirectories exist and contain executable scripts.
-	var subdirCount int
-	var nonExecScripts []string
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		subdirCount++
-
-		subPath := filepath.Join(hooksDir, entry.Name())
-		scripts, err := os.ReadDir(subPath)
+	// Verify each hook subcommand responds (--help as liveness check).
+	var failing []string
+	for _, sub := range hookSubcommands {
+		_, err := opts.ExecCommand(codeflowBin, "hooks", sub[0], sub[1], "--help")
 		if err != nil {
-			continue
-		}
-
-		for _, script := range scripts {
-			if script.IsDir() {
-				continue
-			}
-			if !strings.HasSuffix(script.Name(), ".sh") {
-				continue
-			}
-			scriptPath := filepath.Join(subPath, script.Name())
-			scriptInfo, err := os.Stat(scriptPath)
-			if err != nil {
-				continue
-			}
-			if scriptInfo.Mode()&0o111 == 0 {
-				nonExecScripts = append(nonExecScripts, filepath.Join(entry.Name(), script.Name()))
-			}
+			failing = append(failing, fmt.Sprintf("%s %s", sub[0], sub[1]))
 		}
 	}
 
-	if subdirCount == 0 {
+	if len(failing) > 0 {
 		return Result{
 			Name:     "hooks",
 			Status:   StatusFail,
-			Message:  "no hook subdirectories found in .claude/hooks/codeflow/",
-			Duration: time.Since(start),
-		}
-	}
-
-	if len(nonExecScripts) > 0 {
-		return Result{
-			Name:     "hooks",
-			Status:   StatusWarn,
-			Message:  fmt.Sprintf("%d non-executable hook script(s): %s", len(nonExecScripts), strings.Join(nonExecScripts, ", ")),
+			Message:  fmt.Sprintf("%d hook subcommand(s) not responding: %s", len(failing), strings.Join(failing, ", ")),
 			Duration: time.Since(start),
 		}
 	}
@@ -465,7 +436,7 @@ func checkHooks(_ context.Context, opts *Options) Result {
 	return Result{
 		Name:     "hooks",
 		Status:   StatusPass,
-		Message:  fmt.Sprintf("hooks directory valid with %d subdirectories", subdirCount),
+		Message:  fmt.Sprintf("all %d Go hook subcommands functional", len(hookSubcommands)),
 		Duration: time.Since(start),
 	}
 }
@@ -621,6 +592,7 @@ func checkVector(_ context.Context, _ *Options) Result {
 }
 
 // checkPermissions verifies key files and directories have correct permissions.
+// Post-cutover: shell hook permission checks removed (hooks are Go subcommands now).
 func checkPermissions(_ context.Context, opts *Options) Result {
 	start := time.Now()
 
@@ -635,31 +607,6 @@ func checkPermissions(_ context.Context, opts *Options) Result {
 	if info, err := os.Stat(stateDir); err == nil {
 		if info.Mode()&0o200 == 0 {
 			issues = append(issues, ".state/ is not writable")
-		}
-	}
-
-	// Check hooks are executable.
-	hooksDir := filepath.Join(opts.ProjectDir, ".claude", "hooks", "codeflow")
-	if _, err := os.Stat(hooksDir); err == nil {
-		err := filepath.WalkDir(hooksDir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			if !strings.HasSuffix(d.Name(), ".sh") {
-				return nil
-			}
-			info, err := os.Stat(path)
-			if err != nil {
-				return nil
-			}
-			if info.Mode()&0o111 == 0 {
-				rel, _ := filepath.Rel(opts.ProjectDir, path)
-				issues = append(issues, fmt.Sprintf("%s is not executable", rel))
-			}
-			return nil
-		})
-		if err != nil {
-			issues = append(issues, fmt.Sprintf("error scanning hooks: %v", err))
 		}
 	}
 

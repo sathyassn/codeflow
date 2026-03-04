@@ -28,7 +28,7 @@ func newDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run infrastructure health checks",
-		Long:  "Runs 13 health checks against the CodeFlow infrastructure and reports results. Supports repair actions for common issues.",
+		Long:  "Runs 16 health checks against the CodeFlow infrastructure and reports results. Supports repair actions for common issues.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDoctor(cmd, check, asJSON, reset, repair, yes)

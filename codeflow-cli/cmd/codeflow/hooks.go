@@ -665,6 +665,10 @@ Stdin format:
 }
 
 // runSentinelWrite implements the stage sentinel creation logic.
+// It handles three event types:
+//   - SendMessage with STAGE-COMPLETE pattern -> creates stage sentinels
+//   - TeamCreate -> creates pathflow-team.json
+//   - Task (teammate spawn) -> updates pathflow-team.json
 func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	sessionID := resolveSessionID(projectDir)
@@ -673,8 +677,26 @@ func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 		return nil
 	}
 
+	// Read stdin once — multiple handlers need the data.
+	data, err := io.ReadAll(stdin)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
-	verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentinelDir)
+	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+
+	// Dispatch: stage sentinel (SendMessage), team create, or teammate spawn.
+	verdict := sentinel.CheckAndCreateStageSentinelFromData(data, sentinelDir)
+	if verdict.Allow {
+		// Also try TeamCreate and Task handlers (only one will match).
+		v := sentinel.HandleTeamCreate(data, sessionDir, sessionID)
+		if v.Allow {
+			v = sentinel.HandleTeammateSpawn(data, sessionDir)
+		}
+		// Team handlers never block — ignore their verdicts for blocking.
+		_ = v
+	}
 
 	if !verdict.Allow {
 		fmt.Fprint(errW, verdict.Reason)

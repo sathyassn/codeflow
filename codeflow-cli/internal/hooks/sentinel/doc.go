@@ -1,12 +1,18 @@
 // Package sentinel provides PathFlow sentinel pipeline management for CodeFlow hooks.
 //
-// It implements three hook handlers that manage PathFlow stage and phase progression:
+// It implements five hook handlers that manage PathFlow stage and phase progression:
 //
 //   - CheckAndCreateStageSentinel: PostToolUse handler that pattern-matches
 //     "STAGE-COMPLETE: WS-{STAGE}" in SendMessage content and creates stage
 //     sentinel files (pathflow-ws-dev, pathflow-ws-rev, etc.). Enforces stage
 //     ordering: ws-rev requires a prior primary stage, ws-qa requires ws-dev
 //     or ws-test.
+//
+//   - HandleTeamCreate: PostToolUse handler that creates pathflow-team.json
+//     in the session pathflow directory when a TeamCreate event fires.
+//
+//   - HandleTeammateSpawn: PostToolUse handler that updates pathflow-team.json
+//     with teammate_spawned=true and last_spawn_name when a Task event fires.
 //
 //   - RegisterCheckpointTask: PostToolUse handler that registers PF{N}-TSK-{NN}
 //     tasks in the checkpoint file when TaskCreate fires. Blocks cross-phase
@@ -19,6 +25,8 @@
 //
 // Sentinel files are created in {projectDir}/.state/sentinels/pathflow/{sessionID}/
 // and named "pathflow-{name}" (e.g., "pathflow-ws-dev", "pathflow-pf-3").
+//
+// Team state is stored in {projectDir}/.state/session/{sessionID}/pathflow/pathflow-team.json.
 //
 // Checkpoint state is stored in {projectDir}/.state/session/{sessionID}/pathflow/pathflow-phase-tasks.json.
 package sentinel

@@ -1,9 +1,11 @@
 package sentinel
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -271,4 +273,348 @@ func TestCollapseWhitespace(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckAndCreateStageSentinelFromData(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates sentinel from pre-read data", func(t *testing.T) {
+		t.Parallel()
+		sentinelDir := t.TempDir()
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+
+		verdict := CheckAndCreateStageSentinelFromData(data, sentinelDir)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false, want true; reason: %s", verdict.Reason)
+		}
+		path := filepath.Join(sentinelDir, "pathflow-ws-dev")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Error("expected pathflow-ws-dev sentinel not created")
+		}
+	})
+
+	t.Run("empty data allows", func(t *testing.T) {
+		t.Parallel()
+		verdict := CheckAndCreateStageSentinelFromData(nil, t.TempDir())
+		if !verdict.Allow {
+			t.Errorf("Allow = false for nil data, want true")
+		}
+	})
+}
+
+func TestHandleTeamCreate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates pathflow-team.json on TeamCreate", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := filepath.Join(t.TempDir(), "pathflow")
+		sessionID := "ses-1234567890123abcdef012345"
+
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"my-team","description":"A test team"}}`)
+		verdict := HandleTeamCreate(data, sessionDir, sessionID)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false, want true; reason: %s", verdict.Reason)
+		}
+
+		teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+		content, err := os.ReadFile(teamFilePath)
+		if err != nil {
+			t.Fatalf("read pathflow-team.json: %v", err)
+		}
+
+		var team PathflowTeam
+		if err := json.Unmarshal(content, &team); err != nil {
+			t.Fatalf("unmarshal pathflow-team.json: %v", err)
+		}
+
+		if team.TeamName != "my-team" {
+			t.Errorf("TeamName = %q, want %q", team.TeamName, "my-team")
+		}
+		if team.CodeflowSessionID != sessionID {
+			t.Errorf("CodeflowSessionID = %q, want %q", team.CodeflowSessionID, sessionID)
+		}
+		if team.TeammateSpawned {
+			t.Error("TeammateSpawned = true, want false")
+		}
+		if team.LastSpawnName != nil {
+			t.Errorf("LastSpawnName = %v, want nil", team.LastSpawnName)
+		}
+		if team.LeadPID <= 0 {
+			t.Errorf("LeadPID = %d, want > 0", team.LeadPID)
+		}
+		if team.CreatedAt == "" {
+			t.Error("CreatedAt is empty, want ISO8601 timestamp")
+		}
+	})
+
+	t.Run("creates session dir if missing", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := filepath.Join(t.TempDir(), "nested", "pathflow")
+		sessionID := "ses-test"
+
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"test-team"}}`)
+		verdict := HandleTeamCreate(data, sessionDir, sessionID)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false, want true")
+		}
+
+		teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+		if _, err := os.Stat(teamFilePath); os.IsNotExist(err) {
+			t.Error("pathflow-team.json not created in nested dir")
+		}
+	})
+
+	t.Run("skips non-TeamCreate events", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"hello"}}`)
+
+		verdict := HandleTeamCreate(data, sessionDir, "ses-test")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for non-TeamCreate")
+		}
+		teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+		if _, err := os.Stat(teamFilePath); !os.IsNotExist(err) {
+			t.Error("pathflow-team.json should not be created for non-TeamCreate")
+		}
+	})
+
+	t.Run("skips with empty session ID", func(t *testing.T) {
+		t.Parallel()
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"my-team"}}`)
+
+		verdict := HandleTeamCreate(data, t.TempDir(), "")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for empty session ID")
+		}
+	})
+
+	t.Run("skips with empty session dir", func(t *testing.T) {
+		t.Parallel()
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"my-team"}}`)
+
+		verdict := HandleTeamCreate(data, "", "ses-test")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for empty session dir")
+		}
+	})
+
+	t.Run("handles invalid JSON gracefully", func(t *testing.T) {
+		t.Parallel()
+		verdict := HandleTeamCreate([]byte("not json"), t.TempDir(), "ses-test")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for invalid JSON")
+		}
+	})
+
+	t.Run("handles invalid tool_input gracefully", func(t *testing.T) {
+		t.Parallel()
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":"not-object"}`)
+
+		verdict := HandleTeamCreate(data, t.TempDir(), "ses-test")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for invalid tool_input")
+		}
+	})
+}
+
+func TestHandleTeammateSpawn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("updates pathflow-team.json on Task spawn", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+
+		// Pre-create pathflow-team.json.
+		team := PathflowTeam{
+			TeamName:          "test-team",
+			LeadPID:           12345,
+			CodeflowSessionID: "ses-test",
+			TeammateSpawned:   false,
+			CreatedAt:         "2024-01-01T00:00:00Z",
+			LastSpawnName:     nil,
+		}
+		teamJSON, _ := json.Marshal(team)
+		teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+		if err := os.WriteFile(teamFilePath, teamJSON, 0o644); err != nil {
+			t.Fatalf("write initial team json: %v", err)
+		}
+
+		data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-security","description":"spawn sec"}}`)
+		verdict := HandleTeammateSpawn(data, sessionDir)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false, want true; reason: %s", verdict.Reason)
+		}
+
+		content, err := os.ReadFile(teamFilePath)
+		if err != nil {
+			t.Fatalf("read updated team json: %v", err)
+		}
+
+		var updated PathflowTeam
+		if err := json.Unmarshal(content, &updated); err != nil {
+			t.Fatalf("unmarshal updated team json: %v", err)
+		}
+
+		if !updated.TeammateSpawned {
+			t.Error("TeammateSpawned = false, want true")
+		}
+		if updated.LastSpawnName == nil || *updated.LastSpawnName != "cf-security" {
+			t.Errorf("LastSpawnName = %v, want 'cf-security'", updated.LastSpawnName)
+		}
+		// Original fields preserved.
+		if updated.TeamName != "test-team" {
+			t.Errorf("TeamName = %q, want 'test-team'", updated.TeamName)
+		}
+		if updated.LeadPID != 12345 {
+			t.Errorf("LeadPID = %d, want 12345", updated.LeadPID)
+		}
+	})
+
+	t.Run("skips when pathflow-team.json does not exist", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+		data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-dev"}}`)
+
+		verdict := HandleTeammateSpawn(data, sessionDir)
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false when team json missing")
+		}
+	})
+
+	t.Run("skips non-Task events", func(t *testing.T) {
+		t.Parallel()
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"hello"}}`)
+
+		verdict := HandleTeammateSpawn(data, t.TempDir())
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for non-Task event")
+		}
+	})
+
+	t.Run("skips with empty session dir", func(t *testing.T) {
+		t.Parallel()
+		data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-dev"}}`)
+
+		verdict := HandleTeammateSpawn(data, "")
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for empty session dir")
+		}
+	})
+
+	t.Run("handles invalid JSON gracefully", func(t *testing.T) {
+		t.Parallel()
+		verdict := HandleTeammateSpawn([]byte("bad json"), t.TempDir())
+
+		if !verdict.Allow {
+			t.Fatal("Allow = false for invalid JSON")
+		}
+	})
+
+	t.Run("updates last_spawn_name on subsequent spawns", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+
+		// Pre-create pathflow-team.json with an existing spawn.
+		name1 := "cf-security"
+		team := PathflowTeam{
+			TeamName:          "test-team",
+			LeadPID:           12345,
+			CodeflowSessionID: "ses-test",
+			TeammateSpawned:   true,
+			CreatedAt:         "2024-01-01T00:00:00Z",
+			LastSpawnName:     &name1,
+		}
+		teamJSON, _ := json.Marshal(team)
+		if err := os.WriteFile(filepath.Join(sessionDir, "pathflow-team.json"), teamJSON, 0o644); err != nil {
+			t.Fatalf("write initial team json: %v", err)
+		}
+
+		// Spawn second teammate.
+		data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-knowledge-layer"}}`)
+		verdict := HandleTeammateSpawn(data, sessionDir)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false; reason: %s", verdict.Reason)
+		}
+
+		content, err := os.ReadFile(filepath.Join(sessionDir, "pathflow-team.json"))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+
+		var updated PathflowTeam
+		if err := json.Unmarshal(content, &updated); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+
+		if updated.LastSpawnName == nil || *updated.LastSpawnName != "cf-knowledge-layer" {
+			t.Errorf("LastSpawnName = %v, want 'cf-knowledge-layer'", updated.LastSpawnName)
+		}
+	})
+}
+
+func TestAtomicWriteFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writes file atomically", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "test-file.json")
+
+		if err := atomicWriteFile(path, []byte(`{"key":"value"}`), 0o644); err != nil {
+			t.Fatalf("atomicWriteFile() error: %v", err)
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if string(content) != `{"key":"value"}` {
+			t.Errorf("content = %q, want %q", string(content), `{"key":"value"}`)
+		}
+
+		// Verify no .tmp file remains.
+		if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+			t.Error("tmp file should not remain after successful write")
+		}
+	})
+
+	t.Run("concurrent writes do not corrupt", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "concurrent.json")
+
+		var wg sync.WaitGroup
+		for i := range 10 {
+			wg.Add(1)
+			go func(n int) {
+				defer wg.Done()
+				data := []byte(`{"n":` + strings.Repeat("x", n) + `}`)
+				_ = atomicWriteFile(path, data, 0o644)
+			}(i)
+		}
+		wg.Wait()
+
+		// File should exist and be readable (not corrupted).
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read after concurrent writes: %v", err)
+		}
+		if len(content) == 0 {
+			t.Error("file is empty after concurrent writes")
+		}
+	})
 }
