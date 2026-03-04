@@ -126,7 +126,7 @@ When Go CLI (`codeflow`) is not available (pre-Phase 7), use these fallbacks:
 Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
 
 All DB operations execute via: `codeflow db exec` (writes) or `codeflow db query` (reads).
-Schema defined in: `.codeflow/scripts/db/schema.sql`
+Schema defined in: `codeflow-cli/internal/db/schema.sql`
 
 ---
 
@@ -172,7 +172,7 @@ Schema defined in: `.codeflow/scripts/db/schema.sql`
 
 1. Validate task exists in tasks table and is actionable (status = 'todo')
 2. Validate no unresolved blocking dependencies — if blocked, report `"KNOWLEDGE: begin-work BLOCKED - unresolved dependencies: {blockers}"` and STOP
-3. Generate work_id: `work-{ulid}` via `python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py`
+3. Generate work_id: `work-{ulid}` via `codeflow internal ulid --prefix work`
 4. INSERT into active_work table: id=work_id, task_id, topic, status='in_progress', branch, scope, session_id
 5. UPDATE tasks table: `SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
 6. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"task_status_changed","task_id":"{task_id}","old_status":"todo","new_status":"in_progress","timestamp":"{ISO8601}"}`
@@ -201,7 +201,7 @@ Event types:
 **CHECKLIST (all required unless marked CONDITIONAL):**
 
 1. Determine event_type from the update received
-2. Generate entry_id: `memory-{ulid}` via `python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py`
+2. Generate entry_id: `memory-{ulid}` via `codeflow internal ulid --prefix memory`
 3. Build JSON payload for data field (include summary, files_affected, rationale as applicable)
 4. INSERT into memory_events table: id, event_type, domain, work_id, data, memory_type, created_at
 5. INSERT into extraction_queue table: id, event_id, status='pending'
@@ -233,7 +233,7 @@ Event types:
     a. UPDATE epics table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
     b. Edit epic markdown frontmatter: set `status: complete`
     c. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`
-    d. Run `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+    d. Run `codeflow validate epic {epic_markdown_path}`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: complete-work - {work_id} finalized"`
 
@@ -368,10 +368,11 @@ Dual-ID system:
 **ULID Generation:** Generate ULIDs for the `id` field using:
 
 ```bash
-python3 .codeflow/scripts/codeflow_py_lib/ulid_generator.py
+codeflow internal ulid --prefix epic
+codeflow internal ulid --prefix task
 ```
 
-The script requires no external dependencies (pure Python, stdlib only). For multiple IDs: `--count N`. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic. This is a bridge solution until the Go CLI handles ULID generation natively.
+The Go CLI generates a Crockford base32 ULID with the given prefix. For multiple IDs: run the command multiple times. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic.
 
 **CHECKLIST (all required unless marked CONDITIONAL):**
 
@@ -393,8 +394,8 @@ Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF
 **CHECKLIST (all required unless marked CONDITIONAL):**
 
 1. Determine task markdown path from tasks table (`markdown_path` field, or derive from epic_id + task_id)
-2. Run task validation: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
-3. **CONDITIONAL (task has parent epic):** Run epic validation: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+2. Run task validation: `codeflow validate task {task_markdown_path}`
+3. **CONDITIONAL (task has parent epic):** Run epic validation: `codeflow validate epic {epic_markdown_path}`
 4. Parse script output — classify as errors (BLOCK) or warnings (proceed)
 5. If errors found: BLOCK the calling operation and report errors
 6. **CONDITIONAL (validation scripts not found):** Report SKIPPED with warning and proceed
@@ -514,7 +515,7 @@ Internal operations called by Parts 1 and 2.
 
 ### Part 4: PathFlow Event Recording
 
-**Scripts location:** `.codeflow/scripts/pathflow/`
+**CLI:** `codeflow pathflow <subcommand>`
 
 #### Record Phase Transition
 
@@ -523,7 +524,7 @@ Internal operations called by Parts 1 and 2.
 **CHECKLIST (all required):**
 
 1. Read session ID from `.state/runtime/current-session-id`
-2. Run transition script: `bash .codeflow/scripts/pathflow/cf-pathflow-phase-transition.sh -s $SID -p $PHASE -t $STATUS`
+2. Run: `codeflow pathflow phase-transition -s $SID -p $PHASE -t $STATUS`
 3. Valid phases: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
 4. Valid statuses: entered, completed, skipped
 
@@ -536,7 +537,7 @@ Internal operations called by Parts 1 and 2.
 **CHECKLIST (all required):**
 
 1. Read session ID from `.state/runtime/current-session-id`
-2. Run transition script: `bash .codeflow/scripts/pathflow/cf-pathflow-stage-transition.sh -s $SID -g $STAGE -t $STATUS [-i $ITERATION] [-v $VERDICT]`
+2. Run: `codeflow pathflow stage-transition -s $SID -g $STAGE -t $STATUS [-i $ITERATION] [-v $VERDICT]`
 3. Valid stages: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
 4. Valid statuses: pending, in_progress, complete, failed
 5. Valid verdicts (for complete status only): pass, fail, approved, changes_requested
@@ -549,8 +550,8 @@ Internal operations called by Parts 1 and 2.
 
 **CHECKLIST (all required):**
 
-1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-register.sh -s $SID [-m interactive|autorun]`
-2. Verify script wrote two events: tracking_level=pending and interaction_mode
+1. Run: `codeflow pathflow session-register -s $SID [-m interactive|autorun]`
+2. Verify command wrote two events: tracking_level=pending and interaction_mode
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: register-pathflow-session - Session $SID registered"`
 
@@ -560,7 +561,7 @@ Internal operations called by Parts 1 and 2.
 
 **CHECKLIST (all required):**
 
-1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-session-metadata.sh -s $SID -k $KEY -v $VALUE`
+1. Run: `codeflow pathflow session-metadata -s $SID -k $KEY -v $VALUE`
 2. Known keys: work_type, area_type, tracking_level, branch, task_id, interaction_mode
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-session-metadata - $KEY=$VALUE recorded"`
@@ -571,7 +572,7 @@ Internal operations called by Parts 1 and 2.
 
 **CHECKLIST (all required):**
 
-1. Run: `bash .codeflow/scripts/pathflow/cf-pathflow-task-update.sh -s $SID -k $TASK_ID -t $STATUS`
+1. Run: `codeflow pathflow task-update -s $SID -k $TASK_ID -t $STATUS`
 2. Task ID format: PFn-TSK-nn (e.g., PF3-TSK-01)
 3. Valid statuses: pending, in_progress, completed, skipped, blocked
 
@@ -694,8 +695,8 @@ Before marking any operation complete, verify:
 | Resource | Path | Purpose |
 |----------|------|---------|
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| DB Schema | `.codeflow/scripts/db/schema.sql` | Table definitions and constraints |
-| PathFlow Scripts | `.codeflow/scripts/pathflow/` | Phase/stage transition scripts |
+| DB Schema | `codeflow-cli/internal/db/schema.sql` | Table definitions and constraints |
+| PathFlow CLI | `codeflow pathflow <subcommand>` | Phase/stage transition commands |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Epic Directory | `project-management/epics/` | Tier 2 work item markdown files |

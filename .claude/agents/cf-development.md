@@ -68,8 +68,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 🔒 **MUST:**
 
 - Write tests alongside implementation code
-- Follow script standards for all `.sh` and `.py` files (see Execution Steps)
-- Use shared libraries where applicable (`.codeflow/scripts/shell-lib/`, `codeflow_py_lib/`)
+- Follow script standards for all `.sh` files (see Execution Steps)
 - Delegate git operations (commit, push, branch) to cf-git-operations via SendMessage
 - Request work registration through cf-knowledge-layer before starting implementation
 - Self-test all changes before requesting commit
@@ -131,7 +130,7 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 ### Step 4: Write Tests
 
-🔒 **TEST REQUIREMENT: For EVERY `.sh` or `.py` file you create or modify, you MUST create/update the corresponding test file following the project naming convention (`test-{name}.sh` for bash, `test_{name}.py` for python). This is NOT optional — missing tests will be rejected at review.**
+🔒 **TEST REQUIREMENT: For EVERY `.sh` file you create or modify, you MUST create/update the corresponding test file following the project naming convention (`test-{name}.sh` for bash). This is NOT optional — missing tests will be rejected at review.**
 
 🔒 **ONE-TO-ONE TEST FILE MAPPING: Tests MUST go in the test file that corresponds to the code file being modified. When modifying multiple code files, add tests to EACH corresponding test file — do NOT create a single monolithic test file for all changes. For example, if you modify 3 hook scripts (team-guard.sh, pathflow-sentinel.sh, session-end-cleanup.sh), you MUST add tests to 3 separate test files (test-cf-pre-tool-use-team-guard.sh, test-cf-post-tool-use-pathflow-sentinel.sh, test-cf-session-end-cleanup.sh). Clubbing tests for different code files into one test file is a PROTOCOL VIOLATION that will be rejected at review.**
 
@@ -146,7 +145,6 @@ Create or update unit tests for all new/changed logic.
 | `.codeflow/scripts/{area}/*.sh` | `test-{name}.sh` | `.codeflow/testing/scripts/{area}/` | `Glob(".codeflow/testing/scripts/{area}/test-*.sh")` |
 | `.claude/hooks/codeflow/{event}/*.sh` | `test-cf-{event}-{name}.sh` | `.codeflow/testing/claude-hooks/{event}/` | `Glob(".codeflow/testing/claude-hooks/{event}/test-*.sh")` |
 | `.codeflow/config/**/*.json` | `test-{feature}.sh` | `.codeflow/testing/consistency/` | `Glob(".codeflow/testing/consistency/test-*.sh")` |
-| `codeflow_py_lib/*.py` | `test_{module}.py` | `.codeflow/testing/scripts/codeflow_py_lib/` | `Glob(".codeflow/testing/scripts/codeflow_py_lib/test_*.py")` |
 
 Each test file: minimum one positive case, one negative/error case, one edge case.
 
@@ -156,8 +154,7 @@ Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": 
 
 Run the test suite to verify no regressions:
 
-- Shell: `bash .codeflow/testing/run-all-tests.sh essential`
-- Python: `pytest`
+- Shell: `codeflow test`
 
 ### Step 6: Request Commit
 
@@ -351,9 +348,6 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 | Shell tests | `test-{name}.sh` | `Glob(".codeflow/testing/scripts/{area}/test-*.sh")` to see siblings |
 | Claude hook scripts | `cf-{event}-{name}.sh` | `Glob(".claude/hooks/codeflow/{event}/*.sh")` to see siblings |
 | Claude hook tests | `test-cf-{event}-{name}.sh` | `Glob(".codeflow/testing/claude-hooks/{event}/test-*.sh")` to see siblings |
-| Python scripts | `snake_case.py` with `cf_` or `cf-` prefix | `Glob(".codeflow/scripts/{area}/*.py")` to see siblings |
-| Python tests | `test_{name}.py` | `Glob(".codeflow/testing/scripts/{area}/test_*.py")` to see siblings |
-| Python lib tests | `test_{module}.py` | `Glob(".codeflow/testing/scripts/codeflow_py_lib/test_*.py")` to see siblings |
 
 **Directory placement rules:**
 
@@ -363,8 +357,6 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 | Shell tests | `.codeflow/testing/scripts/{area}/` | `.codeflow/scripts/` (that's for source) |
 | Claude hook scripts | `.claude/hooks/codeflow/{event}/` | `.codeflow/scripts/` |
 | Claude hook tests | `.codeflow/testing/claude-hooks/{event}/` | `.codeflow/testing/scripts/` (wrong parent) |
-| Python shared lib | `codeflow_py_lib/` | `.codeflow/scripts/codeflow_py_lib/` |
-| Python shared lib tests | `.codeflow/testing/scripts/codeflow_py_lib/` | `codeflow_py_lib/tests/` |
 | Security scripts | `.codeflow/scripts/security/{subarea}/` | `.codeflow/scripts/{subarea}/` |
 | Security tests | `.codeflow/testing/scripts/security/{subarea}/` | `.codeflow/testing/scripts/{subarea}/` |
 
@@ -397,7 +389,7 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 | Config schema | "test-config.json has a `tests` array" | `Read` the actual config file — it uses `priorities.{LEVEL}.files` |
 | Source path in test | "`source ../../lib/test-helpers.sh`" | Count directory levels from test file to lib — verify with `ls` |
 | Variable name | "The variable is called `SESSION_ID`" | `Grep` for the actual variable name in the source file |
-| Import path | "`from codeflow_py_lib import utils`" | `Glob("codeflow_py_lib/utils.py")` — does the module exist? |
+| Import path | "`import github.com/codeflow/codeflow-cli/internal/utils`" | `Glob("codeflow-cli/internal/utils/*.go")` — does the package exist? |
 
 **Verification rule:** For every file path, function name, variable name, config key, or directory structure you reference in code, verify it exists using Glob, Grep, or Read. Never write code that references something you haven't confirmed exists.
 
@@ -473,10 +465,10 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
 - [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
-- [ ] **Tests pass:** `bash .codeflow/testing/run-all-tests.sh essential` passes with zero failures (actual output captured)
-- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; ruff/flake8 zero errors on all `.py` files
+- [ ] **Tests pass:** `codeflow test` passes with zero failures (actual output captured)
+- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; golangci-lint zero errors on all `.go` files
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
-- [ ] **Shared lib usage:** Used existing utilities from `.codeflow/scripts/shell-lib/` or `codeflow_py_lib/` where applicable
+- [ ] **Shared lib usage:** Used existing shared utilities where applicable (check `.codeflow/scripts/security/protection/lib/` for protection-related functions)
 - [ ] **Source paths verified:** Every `source` or `import` statement resolves to an existing file
 - [ ] **Executable permissions:** All new shell scripts and test files are executable
 - [ ] **Scope compliance:** No files modified outside the assigned scope
@@ -489,13 +481,11 @@ Before requesting commit, do a "would I accept this in review?" pass:
 |----------|------|---------|
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
 | Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Shell script template, ShellCheck rules |
-| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Python template, ruff/flake8 rules |
 | Go Standards | `.claude/skills/cf-go-standards/SKILL.md` | Go package structure, golangci-lint rules |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |
-| Test Runner | `.codeflow/testing/run-all-tests.sh` | Test execution (`essential`, `standard`, `full` modes) |
+| Test Runner | `codeflow test` | Test execution (runs `codeflow test --mode standard` or `--mode full`) |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell test assertion library (40+ `assert_*` functions) |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
-| Shared Shell Lib | `.codeflow/scripts/shell-lib/` | Reusable shell functions |
-| Python Lib | `codeflow_py_lib/` | Reusable Python modules |
+| Protection Lib | `.codeflow/scripts/security/protection/lib/` | Reusable shell protection functions |

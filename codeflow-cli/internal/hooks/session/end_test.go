@@ -634,17 +634,17 @@ func TestEndCleanup_SessionIDFromEnvVar(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_LegacyCurrentSessionIDCleanup(t *testing.T) {
+func TestEndCleanup_EnvFileCleanup(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Write a legacy current-session-id file to verify it gets cleaned up.
-	csidFile := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	if err := os.WriteFile(csidFile, []byte(sessionID), 0o644); err != nil {
-		t.Fatal(err)
+	// Verify the env file exists before cleanup.
+	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+	if _, err := os.Stat(envFile); err != nil {
+		t.Fatalf("codeflow-env.sh should exist before cleanup: %v", err)
 	}
 
 	stdin := strings.NewReader(`{}`)
@@ -653,9 +653,9 @@ func TestEndCleanup_LegacyCurrentSessionIDCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Legacy current-session-id should be cleaned up.
-	if _, err := os.Stat(csidFile); !os.IsNotExist(err) {
-		t.Error("legacy current-session-id should have been removed after cleanup")
+	// codeflow-env.sh should be cleaned up.
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("codeflow-env.sh should have been removed after cleanup")
 	}
 }
 

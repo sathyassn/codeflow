@@ -400,8 +400,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 **Check 3 — Test file location:** For every test file, verify it is in the correct directory under `.codeflow/testing/`:
 
 - Source in `.codeflow/scripts/{area}/` → Test in `.codeflow/testing/scripts/{area}/`
-- Source in `.claude/hooks/codeflow/{event}/` → Test in `.codeflow/testing/claude-hooks/{event}/`
-- Source in `codeflow_py_lib/` → Test in `.codeflow/testing/scripts/codeflow_py_lib/`
+- Go source in `codeflow-cli/internal/{pkg}/` or `codeflow-cli/cmd/{cmd}/` → Test in same package as `{name}_test.go`
 - If test is in wrong directory: **FAIL** — "Test file `{test}` should be in `{correct_dir}`, not `{current_dir}`"
 
 **Check 4 — test-config.json registration:** Read `.codeflow/testing/test-config.json`. For every new test file:

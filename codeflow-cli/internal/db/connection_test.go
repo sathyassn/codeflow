@@ -450,6 +450,107 @@ func TestMigrate(t *testing.T) {
 	})
 }
 
+func TestInitFromSchema_ExistingDBWithoutFormatID(t *testing.T) {
+	t.Parallel()
+
+	// Simulate the exact production crash scenario:
+	// 1. DB has all tables (created by the full schema at some point)
+	// 2. user_version=0 (migrations were never tracked)
+	// 3. epics table lacks format_id column
+	// 4. schema.sql has CREATE INDEX ... ON epics(format_id) → crash
+	//
+	// Strategy: create a valid DB from schema.sql, then rebuild the epics
+	// table WITHOUT format_id and reset user_version to 0.
+	path := filepath.Join(t.TempDir(), "old.db")
+	d, err := newDB(path)
+	if err != nil {
+		t.Fatalf("newDB: %v", err)
+	}
+	ctx := t.Context()
+
+	// Create complete schema (gives us all tables including domains).
+	if _, err := d.db.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("initial schema: %v", err)
+	}
+
+	// Rebuild epics WITHOUT format_id to simulate pre-migration state.
+	// Drop indexes first, then recreate the table without the column.
+	stmts := []string{
+		`DROP INDEX IF EXISTS idx_epics_format_id`,
+		`DROP INDEX IF EXISTS idx_epics_status`,
+		`DROP INDEX IF EXISTS idx_epics_area`,
+		`DROP INDEX IF EXISTS idx_epics_work_type`,
+		`DROP INDEX IF EXISTS idx_epics_domain`,
+		`DROP INDEX IF EXISTS idx_epics_ongoing`,
+		`DROP INDEX IF EXISTS idx_epics_active`,
+		`DROP TABLE epics`,
+		`CREATE TABLE epics (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			summary TEXT,
+			status TEXT DEFAULT 'draft'
+				CHECK(status IN ('draft', 'planning', 'in_progress', 'blocked', 'complete', 'archived')),
+			area_type TEXT NOT NULL,
+			work_type TEXT NOT NULL,
+			domain TEXT NOT NULL,
+			is_ongoing BOOLEAN DEFAULT FALSE,
+			file_scope TEXT,
+			priority TEXT DEFAULT 'normal'
+				CHECK(priority IN ('low', 'normal', 'high', 'critical')),
+			pr_number INTEGER,
+			external_id TEXT,
+			external_url TEXT,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (area_type) REFERENCES area_types(code),
+			FOREIGN KEY (work_type) REFERENCES work_types(code),
+			FOREIGN KEY (domain) REFERENCES domains(code)
+		)`,
+		`PRAGMA user_version = 0`,
+	}
+	for _, stmt := range stmts {
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("simulating old DB: %v\nstmt: %s", err, stmt)
+		}
+	}
+
+	// Verify format_id does NOT exist.
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('epics') WHERE name='format_id'",
+	).Scan(&count); err != nil {
+		t.Fatalf("checking format_id: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("epics.format_id should not exist before InitFromSchema")
+	}
+
+	// Close and reopen to simulate a fresh process opening an existing DB.
+	d.Close()
+	d, err = newDB(path)
+	if err != nil {
+		t.Fatalf("reopening DB: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	// InitFromSchema must NOT crash — it should detect existing tables,
+	// run migrations first (adding format_id), then apply schema.
+	if err := d.InitFromSchema(ctx); err != nil {
+		t.Fatalf("InitFromSchema on existing DB without format_id: %v", err)
+	}
+
+	// Verify user_version is now at the latest migration.
+	ver, err := d.GetUserVersion(ctx)
+	if err != nil {
+		t.Fatalf("GetUserVersion: %v", err)
+	}
+	migrations, _ := LoadMigrationsFromEmbed(EmbeddedMigrations())
+	latest := migrations[len(migrations)-1].Version
+	if ver != latest {
+		t.Errorf("user_version = %d, want %d (latest migration)", ver, latest)
+	}
+}
+
 func TestNewDBInvalidPath(t *testing.T) {
 	t.Parallel()
 	// Attempting to open a directory as a DB should fail at PRAGMA execution time

@@ -34,9 +34,6 @@ const (
 	DefaultRuntimeDir = ".state/runtime"
 	// EnvFile is the canonical session ID file (codeflow-env.sh).
 	EnvFile = "codeflow-env.sh"
-	// CurrentSessionFile is retained for legacy cleanup only.
-	// New code MUST use codeflow-env.sh via Current() instead.
-	CurrentSessionFile = "current-session-id"
 )
 
 // generateID creates a new session ID in the format "ses-{ulid}".
@@ -155,8 +152,7 @@ func Start(ctx context.Context, d *db.DB, claudeID string, ledgerDir string, run
 // End completes the current active session. It reads the current session ID
 // from codeflow-env.sh (or CODEFLOW_SESSION_ID env var), updates the session
 // record with ended_at, duration_seconds, and status=completed, writes a
-// session_end event to sessions.jsonl, and performs legacy cleanup of
-// current-session-id if present.
+// session_end event to sessions.jsonl, and removes runtime session files.
 func End(ctx context.Context, d *db.DB, ledgerDir string, runtimeDir string) error {
 	sessionID, err := Current(runtimeDir)
 	if err != nil {
@@ -221,10 +217,6 @@ func CleanRuntimeFiles(runtimeDir string) {
 	// Remove codeflow-env.sh so Current() no longer resolves this session.
 	envFile := filepath.Join(runtimeDir, EnvFile)
 	_ = os.Remove(envFile)
-
-	// Legacy cleanup: remove stale current-session-id from older versions.
-	idFile := filepath.Join(runtimeDir, CurrentSessionFile)
-	_ = os.Remove(idFile)
 }
 
 // Current reads and returns the current session ID.

@@ -410,9 +410,8 @@ func (w *Wizard) stepCodeFlowSetup(ctx context.Context) error {
 	if err := d.InitFromSchema(ctx); err != nil {
 		return fmt.Errorf("%w: initializing schema: %s", ErrSetupFailed, err)
 	}
-
-	if err := d.SetUserVersion(ctx, 1); err != nil {
-		return fmt.Errorf("%w: setting database version: %s", ErrSetupFailed, err)
+	if _, err := d.Migrate(ctx); err != nil {
+		return fmt.Errorf("%w: applying migrations: %s", ErrSetupFailed, err)
 	}
 
 	fmt.Fprintln(w.Out, "  Database initialized")

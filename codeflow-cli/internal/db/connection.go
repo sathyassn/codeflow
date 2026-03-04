@@ -215,12 +215,147 @@ func (d *DB) CheckIntegrity(ctx context.Context) error {
 	return nil
 }
 
-// InitFromSchema creates all tables by executing the embedded schema.sql file.
+// InitFromSchema creates all tables by executing the embedded schema.sql file
+// and ensures all migrations are applied.
+//
+// Strategy:
+//   - Fresh DB (no tables exist): run schema.sql which includes all migrated
+//     changes, then set user_version to the latest migration.
+//   - Existing DB (tables already exist): run Migrate() FIRST to evolve the
+//     schema (e.g. add format_id columns), THEN run schema.sql for any new
+//     tables/indexes that CREATE IF NOT EXISTS handles idempotently.
+//
+// The discriminator is whether tables exist, not user_version, because an
+// existing DB may have user_version=0 if it was created before migration
+// tracking was introduced.
 func (d *DB) InitFromSchema(ctx context.Context) error {
+	existing, err := d.hasExistingTables(ctx)
+	if err != nil {
+		return fmt.Errorf("db: checking for existing tables: %w", err)
+	}
+
+	if existing {
+		// Sync user_version to actual schema state. This handles databases
+		// created before migration tracking (user_version=0 but migrations
+		// partially applied). Without this, Migrate() would re-apply
+		// already-applied migrations and fail on duplicate columns.
+		if err := d.syncUserVersionToSchema(ctx); err != nil {
+			return fmt.Errorf("db: syncing schema version: %w", err)
+		}
+		// Temporarily disable FK enforcement during migrations. Migrations
+		// rebuild tables (DROP + CREATE + INSERT ... SELECT) and the copied
+		// data may contain orphan FK references from historical use. SQLite
+		// docs recommend disabling FKs during schema alterations.
+		// Note: PRAGMA foreign_keys cannot run inside a transaction, and
+		// migration SQL files contain their own BEGIN/COMMIT blocks.
+		if _, err := d.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("db: disabling foreign keys for migration: %w", err)
+		}
+		// Apply pending migrations FIRST so that schema.sql index/constraint
+		// statements find the columns they reference (e.g. format_id must
+		// exist before CREATE INDEX ... ON epics(format_id)).
+		_, migrateErr := d.Migrate(ctx)
+		// Re-enable FK enforcement regardless of migration outcome.
+		if _, err := d.db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+			return fmt.Errorf("db: re-enabling foreign keys after migration: %w", err)
+		}
+		if migrateErr != nil {
+			return fmt.Errorf("db: applying migrations before schema sync: %w", migrateErr)
+		}
+	}
+
 	if _, err := d.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("db: executing schema: %w", err)
 	}
+
+	if !existing {
+		// Fresh DB: schema.sql already includes all migrated changes, so set
+		// user_version to the latest migration to prevent re-application.
+		migrations, loadErr := LoadMigrationsFromEmbed(EmbeddedMigrations())
+		if loadErr != nil {
+			return fmt.Errorf("db: loading embedded migrations for version sync: %w", loadErr)
+		}
+		if len(migrations) > 0 {
+			latest := migrations[len(migrations)-1].Version
+			if err := d.SetUserVersion(ctx, latest); err != nil {
+				return fmt.Errorf("db: setting initial version: %w", err)
+			}
+		}
+	}
+
 	return nil
+}
+
+// hasExistingTables checks if the database already has application tables.
+func (d *DB) hasExistingTables(ctx context.Context) (bool, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'",
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// syncUserVersionToSchema detects the actual schema state and updates
+// user_version if it is behind. This handles databases created before migration
+// tracking was introduced (user_version=0 but migrations partially applied).
+//
+// Detection uses column markers that identify which migrations have been applied:
+//
+//	Migration 1: tasks.format_id exists
+//	Migration 2-4: tasks table rebuilt with CHECK constraints (detected via migration 1)
+//	Migration 5: epics.format_id exists AND active_work.current_stage exists
+//	Migration 6: tasks.stage CHECK includes 'done' (detected via migration 5)
+func (d *DB) syncUserVersionToSchema(ctx context.Context) error {
+	ver, err := d.GetUserVersion(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Only sync if version appears behind the actual schema state.
+	// Check highest migration marker: migration 5 adds epics.format_id.
+	if ver < 5 {
+		hasEpicsFmtID, err := d.hasColumn(ctx, "epics", "format_id")
+		if err != nil {
+			return err
+		}
+		if hasEpicsFmtID {
+			// Migration 5 (and therefore 1-4) already applied.
+			if err := d.SetUserVersion(ctx, 5); err != nil {
+				return err
+			}
+			ver = 5
+		}
+	}
+
+	if ver < 4 {
+		hasTasksFmtID, err := d.hasColumn(ctx, "tasks", "format_id")
+		if err != nil {
+			return err
+		}
+		if hasTasksFmtID {
+			// Migrations 1-4 already applied (tasks rebuilt with format_id).
+			if err := d.SetUserVersion(ctx, 4); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// hasColumn checks if a table has a specific column.
+func (d *DB) hasColumn(ctx context.Context, table, column string) (bool, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('"+table+"') WHERE name=?", column, //nolint:gosec // table is internal, not user input
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // Migrate loads embedded migrations and applies any that are pending.

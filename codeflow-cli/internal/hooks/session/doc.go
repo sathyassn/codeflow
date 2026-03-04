@@ -33,7 +33,7 @@
 //   - Preserve in-progress tasks, remove completed ones
 //   - Remove team config and task list directories (backstop cleanup)
 //   - Remove session state directory
-//   - Remove runtime files (env file, legacy current-session-id cleanup)
+//   - Remove runtime files (codeflow-env.sh)
 //   - Remove project temp directory
 //   - Write session_end ledger event to sessions.jsonl
 //

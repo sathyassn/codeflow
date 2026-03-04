@@ -775,7 +775,7 @@ tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_dead}'  # Pane-level health
 - On-demand role teammates remain active through PF4-EXECUTE, PF5-VERIFY, and PF6-COMPLETE, and are shut down at PF7-END alongside persistent teammates (→ See Deferred Shutdown above)
 - Individual teammate shutdown via `SendMessage(type="shutdown_request")` is SAFE -- does not affect team or task list
 - Team cleanup (`TeamDelete`) ONLY during PF7-END as the FINAL step, AFTER all PF7 tasks are marked completed (PostToolUse hook removes pathflow-active flag after TeamDelete succeeds)
-- A PreToolUse hook (`cf-pre-tool-use-team-guard.sh`) blocks accidental team dissolution while pathflow-active flag exists
+- A PreToolUse hook (`codeflow hooks pre-tool-use team-guard`) blocks accidental team dissolution while pathflow-active flag exists
 
 ⛔ **Dissolving the team mid-session destroys the entire PathFlow task graph -- all phase markers, work stage tracking, dependency ordering, and checkpoint state. This is unrecoverable.**
 
@@ -945,12 +945,12 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 
 | Gate | Sentinel Required | Blocks | Hook |
 |------|-------------------|--------|------|
-| Edit/Write before PF3 | `pf-3` | Edit, Write tools | `cf-pre-tool-use-pathflow-gate.sh` |
-| git commit before PF3 | `pf-3` | `Bash(git commit)` | `cf-pre-tool-use-pathflow-gate.sh` |
-| git push/PR before PF5-VERIFY + WS-REV | `pf-5` + `ws-rev` (dual gate, both required; `pf-5` transitively requires `pf-4`) | `Bash(git push)`, `Bash(gh pr)` | `cf-pre-tool-use-pathflow-gate.sh` |
-| Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `cf-pre-tool-use-pathflow-gate.sh` |
-| Stage ordering within PF4 | Primary stage sentinel (`ws-dev`/`ws-docs`/`ws-plan`/`ws-test`) must exist before WS-REV can complete and `ws-rev` before WS-QA can ship | `Bash(git push)`, `Bash(gh pr)` (via dual gate requiring `pf-5` + `ws-rev`) | `cf-pre-tool-use-pathflow-gate.sh` |
-| TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `cf-pre-tool-use-team-guard.sh` |
+| Edit/Write before PF3 | `pf-3` | Edit, Write tools | `codeflow hooks pre-tool-use gate-check` |
+| git commit before PF3 | `pf-3` | `Bash(git commit)` | `codeflow hooks pre-tool-use gate-check` |
+| git push/PR before PF5-VERIFY + WS-REV | `pf-5` + `ws-rev` (dual gate, both required; `pf-5` transitively requires `pf-4`) | `Bash(git push)`, `Bash(gh pr)` | `codeflow hooks pre-tool-use gate-check` |
+| Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `codeflow hooks pre-tool-use gate-check` |
+| Stage ordering within PF4 | Primary stage sentinel (`ws-dev`/`ws-docs`/`ws-plan`/`ws-test`) must exist before WS-REV can complete and `ws-rev` before WS-QA can ship | `Bash(git push)`, `Bash(gh pr)` (via dual gate requiring `pf-5` + `ws-rev`) | `codeflow hooks pre-tool-use gate-check` |
+| TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `codeflow hooks pre-tool-use team-guard` |
 
 **Instruction-enforced gates (not currently hook-enforced):**
 
@@ -973,13 +973,13 @@ PathFlow sentinels (`pathflow-pf-3`, `pathflow-ws-dev`, etc.) are session-scoped
 
 | Layer | Hook | Event | Purpose |
 |-------|------|-------|---------|
-| 1. Registration | `cf-post-tool-use-phase-checkpoint.sh` | PostToolUse (on TaskCreate) | Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing |
-| 2. Completion | `cf-task-completed-phase-checkpoint.sh` | TaskCompleted | Marks tasks complete; creates phase sentinel when all tasks in a phase are done/skipped |
-| 3. Gate | `cf-pre-tool-use-pathflow-gate.sh` | PreToolUse | Blocks Edit/Write until `pf-3` sentinel exists |
+| 1. Registration | `codeflow hooks post-tool-use checkpoint-register` | PostToolUse (on TaskCreate) | Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing |
+| 2. Completion | `codeflow hooks task-completed checkpoint-complete` | TaskCompleted | Marks tasks complete; creates phase sentinel when all tasks in a phase are done/skipped |
+| 3. Gate | `codeflow hooks pre-tool-use gate-check` | PreToolUse | Blocks Edit/Write until `pf-3` sentinel exists |
 
 The checkpoint file (`.state/session/{SID}/pathflow/pathflow-phase-tasks.json`) tracks expected tasks, registrations, completions, and skips per phase. All phases are pre-initialized at session start by the SessionStart hook calling `checkpoint_init_all_phases()`.
 
-**Stage sentinels** (ws-dev, ws-rev, etc.) are created by the `pathflow-sentinel` PostToolUse hook via pattern-matching on stage completion messages (e.g., `STAGE-COMPLETE: WS-DEV`).
+**Stage sentinels** (ws-dev, ws-rev, etc.) are created by the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook via pattern-matching on stage completion messages (e.g., `STAGE-COMPLETE: WS-DEV`).
 
 Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
@@ -1088,7 +1088,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 | Scenario | Behavior |
 |----------|----------|
-| `gh pr merge` targeting protected branch | BLOCKED by `cf-pre-tool-use-gh-pr.sh` hook. PR must be merged via GitHub UI. |
+| `gh pr merge` targeting protected branch | BLOCKED by `codeflow hooks pre-tool-use gh-pr-guard` hook. PR must be merged via GitHub UI. |
 | `auto_merge:true` + protected target | FORBIDDEN. Validation error at batch parsing time. |
 | Interactive session `/cf-ship` | Verifies CI, notifies user to merge via GitHub UI. Does NOT execute merge. |
 | Autorun `auto_merge:true` + non-protected target | Auto-merges via `gh pr merge --delete-branch` to integration branch. |
@@ -1165,30 +1165,30 @@ These skills provide detailed standards and can be loaded by agents as needed:
 
 **Location:** `.claude/agents/cf-*.md`
 
-### Hooks (22 scripts)
+### Hooks (21 hook entries)
 
-Hooks fire automatically at lifecycle points. Configured in `.claude/settings.json`.
+Hooks fire automatically at lifecycle points. Configured in `.claude/settings.json` as `codeflow hooks <event> <subcommand>` invocations.
 
-| Event | Count | Scripts |
-|-------|-------|---------|
+| Event | Count | Subcommands |
+|-------|-------|-------------|
 | SessionStart | 3 | init, instructions, logging |
-| UserPromptSubmit | 2 | validation, logging |
-| PreToolUse | 7 | pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch |
-| PostToolUse | 5 | logging, pathflow-sentinel, phase-checkpoint, settings-templates, tmp-workflow |
-| TaskCompleted | 1 | phase-checkpoint |
-| Stop | 2 | pathflow-gate, logging |
-| SubagentStop | 1 | pathflow-gate (shared with Stop) |
+| UserPromptSubmit | 2 | validate, logging |
+| PreToolUse | 7 | gate-check, team-guard, edit-write-guard, gh-pr-guard, protection-guard, security, webfetch-guard |
+| PostToolUse | 4 | sentinel-write, settings-validate, checkpoint-register, logging |
+| TaskCompleted | 1 | checkpoint-complete |
+| Stop | 1 | logging |
+| SubagentStop | 1 | logging (shared with Stop) |
 | SessionEnd | 2 | cleanup, logging |
 
 **Key hooks:**
 
-- **pathflow-gate**: Blocks Edit/Write before PF3-CLASSIFY. Enforces PathFlow sentinel checks.
-- **pathflow-sentinel**: PostToolUse hook that creates stage sentinels (ws-dev, ws-rev, etc.) via pattern-matching on stage completion messages.
-- **phase-checkpoint** (PostToolUse): Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing.
-- **phase-checkpoint** (TaskCompleted): Marks tasks complete in the checkpoint; creates phase sentinels (pf-1, pf-2, etc.) when all phase tasks are done/skipped.
-- **team-guard**: Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
-- **edit-write**: Scope enforcement for file operations.
-- **protected-resource**: Enforces tiered protection for critical, high, and moderate resources.
+- **gate-check** (`codeflow hooks pre-tool-use gate-check`): Blocks Edit/Write before PF3-CLASSIFY. Enforces PathFlow sentinel checks.
+- **sentinel-write** (`codeflow hooks post-tool-use sentinel-write`): Creates stage sentinels (ws-dev, ws-rev, etc.) via pattern-matching on stage completion messages.
+- **checkpoint-register** (`codeflow hooks post-tool-use checkpoint-register`): Registers PF{N}-TSK-{NN} tasks in checkpoint; blocks cross-phase registration (exit 2) if previous phase sentinel missing.
+- **checkpoint-complete** (`codeflow hooks task-completed checkpoint-complete`): Marks tasks complete in the checkpoint; creates phase sentinels (pf-1, pf-2, etc.) when all phase tasks are done/skipped.
+- **team-guard** (`codeflow hooks pre-tool-use team-guard`): Blocks TeamDelete while pathflow-active flag exists. Protects task graph.
+- **edit-write-guard** (`codeflow hooks pre-tool-use edit-write-guard`): Scope enforcement for file operations.
+- **protection-guard** (`codeflow hooks pre-tool-use protection-guard`): Enforces tiered protection for critical, high, and moderate resources.
 
 ### Commands (14)
 
@@ -1239,23 +1239,23 @@ Go tests integrate into the unified test suite via `.codeflow/testing/cli/test-g
 │   ├── cf-python-standards/          #   On-demand: Python scripting standards
 │   ├── cf-markdown-standards/        #   On-demand: markdown documentation standards
 │   └── cf-sandbox-standards/         #   On-demand: sandbox bypass rules
-├── hooks/codeflow/                   # 20 hook scripts by event type
-│   ├── session-start/                #   3 scripts (init, instructions, logging)
-│   ├── user-prompt-submit/           #   2 scripts (validation, logging)
-│   ├── pre-tool-use/                 #   7 scripts (pathflow-gate, team-guard, edit-write, gh-pr, protected-resource, security, webfetch)
-│   ├── post-tool-use/                #   4 scripts (logging, pathflow-sentinel, settings-templates, tmp-workflow)
-│   ├── stop/                         #   2 scripts (pathflow-gate, logging)
-│   └── session-end/                  #   2 scripts (cleanup, logging)
+├── hooks/                            # Hook scripts (project-specific hooks only)
+│   └── project/                      #   Project hook scripts (if any)
 ├── commands/                         # 14 slash command definitions (cf-*.md)
 ├── memory/                           # Tier 2: domain-specific work context
-└── settings.json                     # Permissions, hook config, PathFlow settings
+└── settings.json                     # Permissions, hook config (21 hook entries as Go CLI subcommands)
+
+codeflow-cli/                         # Go CLI binary source
+├── cmd/codeflow/                     # CLI entry point and hook subcommands
+│   └── hooks.go                      #   Hook event handlers (session-start, pre-tool-use, etc.)
+└── internal/                         # Business logic packages
 
 .codeflow/                            # CodeFlow infrastructure
 ├── config/
 │   ├── enforcement/                  # enforcement-policy.json
 │   └── pathflow/                     # pathflow-config.json (phases, stages, pipelines, rework limits)
 ├── scripts/
-│   └── security/                     # Security libraries (security-lib.sh, context-lib.sh)
+│   └── security/                     # Protection scripts (cf-protect-resources.sh, cf-promote-protection.sh, cf-reload-protection.sh + lib/)
 ├── testing/                          # Test suite (1,555+ tests)
 └── docs/archived/skills/             # 9 archived skills (reference only)
 
@@ -1329,7 +1329,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Problem | Solution |
 |---------|----------|
 | Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
-| Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `pathflow-sentinel` PostToolUse hook pipeline -- do not create sentinels manually. |
+| Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-active flag stale | Manually remove `.state/session/{SID}/pathflow/is-pathflow-active` via PF7 flow |
 | Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
 

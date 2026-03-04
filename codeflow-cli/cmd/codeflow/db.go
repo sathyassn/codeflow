@@ -88,10 +88,8 @@ func runDBInit(w io.Writer, dbPath string) error {
 	if err := d.InitFromSchema(ctx); err != nil {
 		return &exitError{code: ExitConfigError, err: fmt.Errorf("initializing schema: %w", err)}
 	}
-
-	// Set initial user_version to 1.
-	if err := d.SetUserVersion(ctx, 1); err != nil {
-		return &exitError{code: ExitConfigError, err: fmt.Errorf("setting initial version: %w", err)}
+	if _, err := d.Migrate(ctx); err != nil {
+		return &exitError{code: ExitConfigError, err: fmt.Errorf("applying migrations: %w", err)}
 	}
 
 	fmt.Fprintf(w, "Database initialized at %s\n", dbPath)

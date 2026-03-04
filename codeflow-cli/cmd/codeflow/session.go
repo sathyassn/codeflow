@@ -65,21 +65,12 @@ func runSessionStart(w io.Writer, dbPath, claudeID, ledgerDir, runtimeDir string
 	}
 	defer closeDB(d)
 
-	// Ensure schema is initialized.
+	// Ensure schema is initialized and migrations are applied.
 	if err := d.InitFromSchema(ctx); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
 	}
-
-	// Set user_version to 1 if the DB was just created (version 0) so that
-	// a later "db migrate" does not re-apply migration 1.
-	ver, err := d.GetUserVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("checking schema version: %w", err)
-	}
-	if ver == 0 {
-		if err := d.SetUserVersion(ctx, 1); err != nil {
-			return fmt.Errorf("setting initial version: %w", err)
-		}
+	if _, err := d.Migrate(ctx); err != nil {
+		return fmt.Errorf("applying migrations: %w", err)
 	}
 
 	sessionID, err := session.Start(ctx, d, claudeID, ledgerDir, runtimeDir)

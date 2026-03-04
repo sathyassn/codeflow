@@ -519,11 +519,10 @@ Cross-reference the file's location against project structure conventions:
 | File Type | Expected Location |
 |-----------|------------------|
 | Shell tests for `.codeflow/scripts/{area}/` | `.codeflow/testing/scripts/{area}/test-{name}.sh` |
-| Shell tests for `.claude/hooks/codeflow/{event}/` | `.codeflow/testing/claude-hooks/{event}/test-cf-{name}.sh` |
-| Python tests for `codeflow_py_lib/` | `.codeflow/testing/scripts/codeflow_py_lib/test_{name}.py` |
-| Python tests for `.codeflow/scripts/{area}/` | `.codeflow/testing/scripts/{area}/test_{name}.py` |
+| Shell tests for `.codeflow/scripts/{area}/` hook wrappers | `.codeflow/testing/claude-hooks/{event}/test-cf-{name}.sh` |
+| Go tests for `codeflow-cli/internal/{pkg}/` | `codeflow-cli/internal/{pkg}/{name}_test.go` |
 | Shell source scripts | `.codeflow/scripts/{area}/{name}.sh` |
-| Claude hook scripts | `.claude/hooks/codeflow/{event}/cf-{event}-{name}.sh` |
+| Claude hook entry points (Go CLI) | `codeflow hooks {event} {subcommand}` (invoked from `settings.json`) |
 
 If the file is in the wrong location, flag as MAJOR with the correct location.
 

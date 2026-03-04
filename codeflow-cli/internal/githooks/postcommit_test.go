@@ -4,10 +4,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mockRunCommand replaces the package-level runCommand for a single test
+// and restores the original when the test finishes.
+func mockRunCommand(t *testing.T, fn func(name string, args ...string) *exec.Cmd) {
+	t.Helper()
+	orig := runCommand
+	runCommand = fn
+	t.Cleanup(func() { runCommand = orig })
+}
 
 func TestRunPostCommit_OutputFormat(t *testing.T) {
 	t.Parallel()
@@ -294,5 +304,181 @@ func TestRunPostCommit_AppendJSONLError(t *testing.T) {
 	// Git commands will fail first in temp dir.
 	if err != nil && !strings.Contains(err.Error(), "get commit hash") {
 		t.Errorf("expected 'get commit hash' error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auto-rebuild tests
+// ---------------------------------------------------------------------------
+
+func TestAutoRebuildCLI_SkipsWithoutGoMod(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	// When codeflow-cli/go.mod does not exist (downstream project),
+	// autoRebuildCLI should return immediately without checking git diff.
+	gitDiffCalled := false
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		gitDiffCalled = true
+		return exec.Command("true")
+	})
+
+	// Temp dir has no codeflow-cli/go.mod — guard should short-circuit.
+	autoRebuildCLI(t.TempDir())
+
+	if gitDiffCalled {
+		t.Error("expected autoRebuildCLI to skip when codeflow-cli/go.mod does not exist")
+	}
+}
+
+func TestGoFilesChanged_NoChanges(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		// Simulate: git diff returns empty output (no Go files changed).
+		return exec.Command("echo", "-n", "")
+	})
+
+	if goFilesChanged() {
+		t.Error("expected goFilesChanged to return false when no Go files changed")
+	}
+}
+
+func TestGoFilesChanged_WithChanges(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		// Simulate: git diff returns Go file paths.
+		return exec.Command("echo", "codeflow-cli/cmd/codeflow/main.go")
+	})
+
+	if !goFilesChanged() {
+		t.Error("expected goFilesChanged to return true when Go files changed")
+	}
+}
+
+func TestGoFilesChanged_GitError(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		// Simulate: git command fails (e.g., initial commit with no HEAD~1).
+		return exec.Command("false")
+	})
+
+	if goFilesChanged() {
+		t.Error("expected goFilesChanged to return false on git error")
+	}
+}
+
+func TestAutoRebuildCLI_NoGoFiles(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	// When no Go files changed, autoRebuildCLI should return immediately
+	// without invoking go install.
+	goInstallCalled := false
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "go" {
+			goInstallCalled = true
+		}
+		// git diff returns empty (no changes).
+		return exec.Command("echo", "-n", "")
+	})
+
+	autoRebuildCLI(t.TempDir())
+
+	if goInstallCalled {
+		t.Error("go install should not be called when no Go files changed")
+	}
+}
+
+func TestAutoRebuildCLI_GoFilesChanged(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	// When Go files changed, autoRebuildCLI should invoke go install.
+	goInstallCalled := false
+	callCount := 0
+
+	projectDir := t.TempDir()
+	// Create codeflow-cli subdir with go.mod so the repo identity guard passes.
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		callCount++
+		if callCount == 1 {
+			// First call: git diff — returns Go file paths.
+			return exec.Command("echo", "codeflow-cli/internal/githooks/postcommit.go")
+		}
+		// Second call: go install — simulate success.
+		if name == "go" {
+			goInstallCalled = true
+		}
+		return exec.Command("true")
+	})
+
+	autoRebuildCLI(projectDir)
+
+	if !goInstallCalled {
+		t.Error("expected go install to be called when Go files changed")
+	}
+}
+
+func TestAutoRebuildCLI_RebuildFailure(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	// When go install fails, autoRebuildCLI should print a warning
+	// but not panic or propagate the error.
+	projectDir := t.TempDir()
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	callCount := 0
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		callCount++
+		if callCount == 1 {
+			// git diff — Go files changed.
+			return exec.Command("echo", "codeflow-cli/go.mod")
+		}
+		// go install — simulate failure.
+		return exec.Command("false")
+	})
+
+	// Should not panic.
+	autoRebuildCLI(projectDir)
+}
+
+func TestAutoRebuildCLI_SetsWorkingDir(t *testing.T) {
+	// NOTE: no t.Parallel — tests share package-level runCommand mock
+	// Verify that go install is invoked with Dir set to codeflow-cli/.
+	projectDir := t.TempDir()
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	callCount := 0
+	var capturedCmd *exec.Cmd
+	mockRunCommand(t, func(name string, args ...string) *exec.Cmd {
+		callCount++
+		if callCount == 1 {
+			return exec.Command("echo", "codeflow-cli/cmd/codeflow/main.go")
+		}
+		cmd := exec.Command("true")
+		capturedCmd = cmd
+		return cmd
+	})
+
+	autoRebuildCLI(projectDir)
+
+	if capturedCmd == nil {
+		t.Fatal("expected go install command to be created")
+	}
+	if capturedCmd.Dir != cliDir {
+		t.Errorf("expected Dir=%s, got Dir=%s", cliDir, capturedCmd.Dir)
 	}
 }

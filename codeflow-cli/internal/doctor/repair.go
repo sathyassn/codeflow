@@ -40,14 +40,12 @@ func RepairDatabase(ctx context.Context, opts *Options) error {
 	}
 	defer d.Close()
 
-	// Initialize the schema.
+	// Initialize the schema and apply any pending migrations.
 	if err := d.InitFromSchema(ctx); err != nil {
 		return fmt.Errorf("repair database: initializing schema: %w", err)
 	}
-
-	// Set initial user_version.
-	if err := d.SetUserVersion(ctx, 1); err != nil {
-		return fmt.Errorf("repair database: setting version: %w", err)
+	if _, err := d.Migrate(ctx); err != nil {
+		return fmt.Errorf("repair database: applying migrations: %w", err)
 	}
 
 	// Sync from JSONL.

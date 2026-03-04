@@ -109,7 +109,7 @@ Parse flags (--repair, --verbose)
 Run diagnostic checks (sequential):
     1. Directory structure
     2. Database health
-    3. Hook scripts (19 scripts)
+    3. Hook subcommands (21 entries)
     4. Settings files
     5. PathFlow state consistency
     6. Sentinel integrity
@@ -157,10 +157,10 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - Verify required directories exist:
   - `.claude/agents/` (8 agent definitions)
   - `.claude/skills/` (active skills)
-  - `.claude/hooks/codeflow/` (hook scripts by event)
+  - `.claude/settings.json` (hook configuration — 21 `codeflow hooks` entries)
   - `.claude/settings-templates/` (4 mode templates)
   - `.codeflow/config/` (enforcement and pathflow configs)
-  - `.codeflow/scripts/` (security libraries)
+  - `.codeflow/scripts/security/protection/` (resource protection scripts)
   - `.codeflow/testing/` (test suite)
   - `.state/db/` (SQLite database)
   - `.state/ledger/` (JSONL event logs)
@@ -173,11 +173,11 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - Check expected tables exist (sessions, tasks, pathflow_events)
 - Verify database is not locked or corrupted
 
-**Check 3: Hook Scripts**
+**Check 3: Hook Subcommands**
 
-- Verify all 19 hook scripts exist and are executable
-- Check each hook can be sourced without error (syntax validation)
-- Verify `security-lib.sh` and `context-lib.sh` are accessible
+- Verify all 21 hook entries in `.claude/settings.json` reference valid `codeflow hooks` subcommands
+- Check that the `codeflow` binary is on PATH and executable
+- Verify each hook subcommand responds without error (e.g., `codeflow hooks session-start init --help`)
 
 **Check 4: Settings Files**
 
@@ -245,7 +245,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | Orphaned sentinels | Remove orphaned files | `rm .state/sentinels/{orphan}` |
 | Missing runtime files | Create empty defaults | Manually initialize |
 | Database locked | Copy to backup, recreate | Rebuild from JSONL |
-| Non-executable hook | `chmod +x` the script | Manual permission fix |
+| Missing `codeflow` binary | Verify Go CLI is built and on PATH | `cd codeflow-cli && go build ./cmd/codeflow/...` |
 | Stale active-task.json | Remove file | Manual cleanup |
 
 **Repair safety:** All repairs are logged. Original files are backed up before modification. Destructive repairs (database rebuild) require explicit user confirmation even with `--repair`.
@@ -294,7 +294,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | `/tmp/claude/managed/state/is-pathflow-active` | Mode flag check |
 | `.claude/settings.json` | Settings validation |
 | `.claude/agents/cf-*.md` | Agent definition validation |
-| `.claude/hooks/codeflow/**/*.sh` | Hook script validation |
+| `.claude/settings.json` (hooks section) | Hook subcommand validation |
 
 ### Files Modified (repair mode only)
 
@@ -311,7 +311,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | Error | Cause | Recovery |
 |-------|-------|----------|
 | Database corruption | SQLite file damaged | Rebuild from JSONL (Tier 0 is authoritative) |
-| Hook syntax error | Malformed shell script | Report specific script and error; fix manually |
+| Hook subcommand error | Go CLI hook returned non-zero exit | Check `codeflow hooks <event> <subcommand>` output; verify `codeflow` binary is up to date |
 | Stale session state | Abnormal termination of previous session | Use `--repair` to clean up stale flags and sentinels |
 | Missing agent definitions | Files deleted or renamed | Restore from git: `git checkout main -- .claude/agents/` |
 | JSONL corruption | Truncated or malformed entries | Identify last valid entry; truncate at corruption point |
@@ -356,7 +356,7 @@ CodeFlow Health Check
 
   Directory structure     PASS
   Database health         PASS
-  Hook scripts            PASS  (19/19 valid)
+  Hook subcommands        PASS  (21/21 valid)
   Settings files          PASS
   PathFlow state          PASS
   Sentinel integrity      PASS
@@ -392,7 +392,7 @@ CodeFlow Health Check (repair mode)
 
   Directory structure     PASS
   Database health         PASS
-  Hook scripts            PASS
+  Hook subcommands        PASS
   Settings files          PASS
   PathFlow state          FAIL  Stale pathflow-active flag (no matching session)
   Sentinel integrity      FAIL  2 orphaned sentinels found
@@ -430,7 +430,7 @@ All 10 checks passed. Infrastructure is healthy.
 
 - [CLAUDE.md](../CLAUDE.md) -- Infrastructure overview and recovery procedures
 - [PathFlow config](../../.codeflow/config/pathflow/pathflow-config.json) -- Expected phase/stage definitions
-- [security-lib.sh](../../.codeflow/scripts/security/lib/security-lib.sh) -- Core security library
+- [Protection scripts](../../.codeflow/scripts/security/protection/) -- Resource protection shell scripts
 - [cf-security agent](../agents/cf-security.md) -- Security validation
 - [cf-knowledge-layer agent](../agents/cf-knowledge-layer.md) -- Database and JSONL operations
 - [cf-stack command](./cf-stack.md) -- Session state view

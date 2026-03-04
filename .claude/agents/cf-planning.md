@@ -50,7 +50,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
     DOCUMENT ── Apply document template, validate structure
        │
        ▼
-    VALIDATE ── Run validate-task.sh / validate-epic.sh on created files
+    VALIDATE ── Run codeflow validate task / codeflow validate epic on created files
        │
        ▼
     COMMIT ──── SendMessage to cf-git-operations
@@ -231,10 +231,10 @@ Before requesting commit, validate:
 
 Before requesting commit, run validation on all created epic and task markdown files:
 
-1. For each task markdown created: `bash .codeflow/scripts/validation/validate-task.sh {task_markdown_path}`
-2. For each epic markdown created: `bash .codeflow/scripts/validation/validate-epic.sh {epic_markdown_path}`
+1. For each task markdown created: `codeflow validate task {task_markdown_path}`
+2. For each epic markdown created: `codeflow validate epic {epic_markdown_path}`
 3. If validation errors found: fix the YAML frontmatter fields before proceeding
-4. If validation scripts are not found at `.codeflow/scripts/validation/`: skip validation with a warning and proceed
+4. If the `codeflow` binary is not available: skip validation with a warning and proceed
 
 ### Step 7: Request Commit
 
@@ -353,7 +353,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-PLAN` in your fina
 2. Every convention I reference (naming, directory, config format) has been verified against the actual codebase.
 3. Every acceptance criterion I wrote is specific and measurable — someone can write a pass/fail test for it.
 4. All sections have substantive content — no placeholders, no vague statements.
-5. YAML frontmatter validates correctly via validate-task.sh / validate-epic.sh.
+5. YAML frontmatter validates correctly via `codeflow validate task` / `codeflow validate epic`.
 
 ### 5.2 Project Convention Compliance
 
@@ -470,7 +470,7 @@ Before finalizing any design, verify feasibility across 5 dimensions:
 
 **Infrastructure Wiring:**
 - [ ] test-config.json: `priorities.MEDIUM.files` += `"claude-hooks/session-start/test-cf-session-start-pid-cleanup.sh"`
-- [ ] settings.json: `hooks.SessionStart[0].hooks` += `{ type: "command", command: "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-pid-cleanup.sh", timeout: 15 }`
+- [ ] settings.json: `hooks.SessionStart[0].hooks` += `{ type: "command", command: "codeflow hooks session-start pid-cleanup", timeout: 15 }`
 - [ ] `chmod +x` on both source and test files
 ```
 
@@ -509,7 +509,7 @@ Add a script to clean up stale sessions. Add tests.
 - [ ] **Dependencies mapped:** blocked-by and blocks relationships correctly identified
 - [ ] **Ongoing epic check done:** For PLN/DOC areas, verified whether an ongoing epic exists
 - [ ] **Effort estimates justified:** Confidence level stated with reasoning
-- [ ] **Validation scripts passed:** `validate-task.sh` / `validate-epic.sh` ran successfully on all created markdown
+- [ ] **Validation passed:** `codeflow validate task` / `codeflow validate epic` ran successfully on all created markdown
 - [ ] **Stage reporting sections present (task docs):** Every new task document includes `### Criteria Status` with correct pipeline columns and `## Stage Reports` with correct subsections for the pipeline
 - [ ] **Committed via cf-git-operations** with `plan: {description}` format
 - [ ] **Scope compliance:** Changes within scope of the assigned task

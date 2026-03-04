@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,8 +14,41 @@ import (
 // versionInfo holds structured version information for JSON output.
 type versionInfo struct {
 	CodeflowVersion   string `json:"codeflow_version"`
+	VCSRevision       string `json:"vcs_revision,omitempty"`
+	VCSTime           string `json:"vcs_time,omitempty"`
 	ClaudeCodeVersion string `json:"claude_code_version"`
 	GoVersion         string `json:"go_version"`
+}
+
+// vcsInfo holds VCS revision and build time extracted from Go build info.
+type vcsInfo struct {
+	Revision  string
+	BuildTime string
+}
+
+// readBuildVCS extracts VCS metadata from the Go binary's embedded build info.
+// Overridden in tests.
+var readBuildVCS = func() *vcsInfo {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
+	}
+	var revision, buildTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+			if len(revision) > 7 {
+				revision = revision[:7]
+			}
+		case "vcs.time":
+			buildTime = s.Value
+		}
+	}
+	if revision == "" {
+		return nil
+	}
+	return &vcsInfo{Revision: revision, BuildTime: buildTime}
 }
 
 // newVersionCmd creates the version subcommand that prints the CLI version.
@@ -47,11 +81,17 @@ func runVersion(cmd *cobra.Command, jsonOutput, check bool) error {
 		return nil
 	}
 
+	vcs := readBuildVCS()
+
 	if jsonOutput {
 		info := versionInfo{
 			CodeflowVersion:   version,
 			ClaudeCodeVersion: detectClaudeCodeVersion(),
 			GoVersion:         runtime.Version(),
+		}
+		if vcs != nil {
+			info.VCSRevision = vcs.Revision
+			info.VCSTime = vcs.BuildTime
 		}
 		data, err := json.MarshalIndent(info, "", "  ")
 		if err != nil {
@@ -61,8 +101,12 @@ func runVersion(cmd *cobra.Command, jsonOutput, check bool) error {
 		return nil
 	}
 
-	// Default: plain text output.
-	fmt.Fprintf(cmd.OutOrStdout(), "codeflow %s\n", version)
+	// Default: plain text output with optional VCS build info.
+	if vcs != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "codeflow %s (%s %s)\n", version, vcs.Revision, vcs.BuildTime)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "codeflow %s\n", version)
+	}
 	return nil
 }
 

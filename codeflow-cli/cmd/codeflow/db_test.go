@@ -316,9 +316,9 @@ func TestRunDBVersion_ReportsVersion(t *testing.T) {
 	if !strings.Contains(got, "Database version:") {
 		t.Errorf("output missing %q: %q", "Database version:", got)
 	}
-	// After init, version should be 1.
-	if !strings.Contains(got, "1") {
-		t.Errorf("output missing version 1: %q", got)
+	// After init, version matches the highest embedded migration.
+	if !strings.Contains(got, "6") {
+		t.Errorf("output missing version 6: %q", got)
 	}
 }
 
@@ -649,8 +649,8 @@ func TestRunDBVersion_ViaRootCmd(t *testing.T) {
 	}
 
 	got := buf.String()
-	if !strings.Contains(got, "Database version: 1") {
-		t.Errorf("output missing %q: %q", "Database version: 1", got)
+	if !strings.Contains(got, "Database version: 6") {
+		t.Errorf("output missing %q: %q", "Database version: 6", got)
 	}
 }
 
@@ -953,7 +953,7 @@ func TestRunDBMigrate_InvalidMigrationsFile(t *testing.T) {
 	if err := os.MkdirAll(migDir, 0o755); err != nil {
 		t.Fatalf("creating dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(migDir, "002_bad.sql"), []byte("THIS IS NOT VALID SQL;"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(migDir, "007_bad.sql"), []byte("THIS IS NOT VALID SQL;"), 0o644); err != nil {
 		t.Fatalf("writing migration: %v", err)
 	}
 
@@ -1086,13 +1086,13 @@ func TestRunDBMigrate_AppliedOutput(t *testing.T) {
 	if err := os.MkdirAll(migDir, 0o755); err != nil {
 		t.Fatalf("creating dir: %v", err)
 	}
-	// Write two migration files.
-	if err := os.WriteFile(filepath.Join(migDir, "002_add_table.sql"),
-		[]byte("CREATE TABLE IF NOT EXISTS _mig2 (id TEXT PRIMARY KEY);"), 0o644); err != nil {
+	// Write two migration files with versions above the embedded set (6).
+	if err := os.WriteFile(filepath.Join(migDir, "007_add_table.sql"),
+		[]byte("CREATE TABLE IF NOT EXISTS _mig7 (id TEXT PRIMARY KEY);"), 0o644); err != nil {
 		t.Fatalf("writing migration: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(migDir, "003_add_table2.sql"),
-		[]byte("CREATE TABLE IF NOT EXISTS _mig3 (id TEXT PRIMARY KEY);"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(migDir, "008_add_table2.sql"),
+		[]byte("CREATE TABLE IF NOT EXISTS _mig8 (id TEXT PRIMARY KEY);"), 0o644); err != nil {
 		t.Fatalf("writing migration: %v", err)
 	}
 
@@ -1106,11 +1106,11 @@ func TestRunDBMigrate_AppliedOutput(t *testing.T) {
 	if !strings.Contains(got, "Applied 2 migration(s)") {
 		t.Errorf("output missing applied count: %q", got)
 	}
-	if !strings.Contains(got, "Applied migration 2") {
-		t.Errorf("output missing 'Applied migration 2': %q", got)
+	if !strings.Contains(got, "Applied migration 7") {
+		t.Errorf("output missing 'Applied migration 7': %q", got)
 	}
-	if !strings.Contains(got, "Applied migration 3") {
-		t.Errorf("output missing 'Applied migration 3': %q", got)
+	if !strings.Contains(got, "Applied migration 8") {
+		t.Errorf("output missing 'Applied migration 8': %q", got)
 	}
 }
 

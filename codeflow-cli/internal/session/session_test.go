@@ -126,10 +126,6 @@ func TestStartDoesNotWriteSessionFiles(t *testing.T) {
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		t.Error("codeflow-env.sh should NOT be written by Start() -- caller is responsible")
 	}
-	idFile := filepath.Join(runtimeDir, "current-session-id")
-	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
-		t.Error("current-session-id should NOT be written by Start() -- caller is responsible")
-	}
 }
 
 func TestStartInsertsDBRecord(t *testing.T) {
@@ -246,7 +242,7 @@ func TestEndCalculatesDuration(t *testing.T) {
 	}
 }
 
-func TestEndCleansUpLegacyFile(t *testing.T) {
+func TestEndCleansUpEnvFile(t *testing.T) {
 	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -262,15 +258,9 @@ func TestEndCleansUpLegacyFile(t *testing.T) {
 	// Write codeflow-env.sh for Current() to find the session.
 	writeTestEnvFile(t, runtimeDir, sessionID)
 
-	// Also write a legacy current-session-id file to verify cleanup.
-	idFile := filepath.Join(runtimeDir, "current-session-id")
-	if err := os.WriteFile(idFile, []byte(sessionID), 0o644); err != nil {
-		t.Fatalf("writing legacy current-session-id: %v", err)
-	}
-
-	// Verify the legacy file exists before End.
-	if _, err := os.Stat(idFile); err != nil {
-		t.Fatalf("legacy current-session-id should exist before End: %v", err)
+	envFile := filepath.Join(runtimeDir, EnvFile)
+	if _, err := os.Stat(envFile); err != nil {
+		t.Fatalf("codeflow-env.sh should exist before End: %v", err)
 	}
 
 	// End the session.
@@ -278,9 +268,9 @@ func TestEndCleansUpLegacyFile(t *testing.T) {
 		t.Fatalf("End: %v", err)
 	}
 
-	// Verify legacy current-session-id was removed.
-	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
-		t.Error("legacy current-session-id should have been removed after End")
+	// Verify codeflow-env.sh was removed.
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("codeflow-env.sh should have been removed after End")
 	}
 }
 

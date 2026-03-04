@@ -80,9 +80,12 @@ func runStart(w io.Writer, dbPath, batchPath string, maxWorkersOverride int) err
 
 	ctx := context.Background()
 
-	// Ensure schema exists.
+	// Ensure schema exists and migrations are applied.
 	if err := d.InitFromSchema(ctx); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
+	}
+	if _, err := d.Migrate(ctx); err != nil {
+		return fmt.Errorf("applying migrations: %w", err)
 	}
 
 	// Create the runner with real tmux and Claude implementations.

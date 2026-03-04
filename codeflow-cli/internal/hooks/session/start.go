@@ -51,6 +51,13 @@ func (dbSessionStarter) StartSession(ctx context.Context, claudeID string, proje
 		return "", fmt.Errorf("initializing database schema: %w", err)
 	}
 
+	// Apply any pending migrations (e.g., adding format_id column to tasks).
+	// InitFromSchema uses CREATE TABLE IF NOT EXISTS which silently skips
+	// existing tables, so migrations are needed for schema evolution.
+	if _, err := d.Migrate(ctx); err != nil {
+		return "", fmt.Errorf("applying database migrations: %w", err)
+	}
+
 	ledgerDir := filepath.Join(projectDir, ".state", "ledger")
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 
@@ -205,11 +212,13 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 	}
 
 	// --- Section 2: Session ID generation ---
+	// Source guard: only generate a new session ID on "startup".
+	// For compact/resume/clear, reuse the existing session from codeflow-env.sh.
 	sessionID := existingSID
 	if sessionID == "" {
 		sessionID = os.Getenv("CODEFLOW_SESSION_ID")
 	}
-	if sessionID == "" {
+	if sessionID == "" && (input.Source == "startup" || input.Source == "unknown") {
 		// Generate session ID via session.Start (DB-backed, ULID format).
 		// Use the Claude agent UUID as the claudeID; fall back to "unknown" if empty.
 		claudeID := input.SessionID
@@ -228,6 +237,17 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 		runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 		if err := session.WriteEnvFile(runtimeDir, sessionID, projectDir); err != nil {
 			result.warn("env file write error: %v", err)
+		}
+	} else if sessionID == "" {
+		// Non-startup source with no existing session ID -- log warning but don't crash.
+		result.warn("source=%s but no existing session ID found in env file or environment", input.Source)
+		// Read from env file one more time as a fallback.
+		envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+		if data, readErr := os.ReadFile(envFilePath); readErr == nil {
+			sessionID = parseEnvFileSessionID(string(data))
+		}
+		if sessionID == "" {
+			return nil, fmt.Errorf("session init: source=%s requires existing session but none found", input.Source)
 		}
 	}
 	result.SessionID = sessionID
@@ -394,10 +414,9 @@ func (init_ *Initializer) cleanupStaleSession(projectDir, envFilePath, sid, team
 	// Remove sentinels.
 	_ = os.RemoveAll(filepath.Join(projectDir, ".state", "sentinels", "pathflow", sid))
 
-	// Remove env file, active task, and session ID.
+	// Remove env file and active task.
 	_ = os.Remove(envFilePath)
 	_ = os.Remove(filepath.Join(projectDir, ".state", "runtime", "active-task.json"))
-	_ = os.Remove(filepath.Join(projectDir, ".state", "runtime", "current-session-id"))
 }
 
 // updateLeadPID updates the lead_pid in pathflow-team.json for compact recovery.

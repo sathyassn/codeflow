@@ -22,9 +22,16 @@ type CommitLogEntry struct {
 	Branch    string `json:"branch"`
 }
 
+// runCommand executes an external command. Overridden in tests to avoid
+// real subprocess calls.
+var runCommand = func(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
+
 // RunPostCommit collects commit metadata, writes a JSON log entry to
-// .state/logs/git/commits-{date}.jsonl, and prints the user-visible
-// confirmation message to w.
+// .state/logs/git/commits-{date}.jsonl, prints the user-visible
+// confirmation message to w, and auto-rebuilds the Go CLI binary when
+// Go source files changed in the commit.
 func RunPostCommit(w io.Writer, projectDir string) error {
 	hash, err := gitOutput("rev-parse", "HEAD")
 	if err != nil {
@@ -81,7 +88,58 @@ func RunPostCommit(w io.Writer, projectDir string) error {
 	fmt.Fprintf(w, "  Message: %s\n", message)
 	fmt.Fprintln(w)
 
+	// Auto-rebuild: if Go CLI source files changed, rebuild the binary so
+	// the local `codeflow` command always reflects the latest committed code.
+	// Non-fatal — rebuild failures are warnings, never block the commit.
+	autoRebuildCLI(projectDir)
+
 	return nil
+}
+
+// goFilesChanged reports whether the latest commit touched Go source files
+// in the codeflow-cli directory (*.go, go.mod, go.sum).
+func goFilesChanged() bool {
+	cmd := runCommand("git", "diff", "--name-only", "HEAD~1", "HEAD", "--",
+		"codeflow-cli/*.go",
+		"codeflow-cli/**/*.go",
+		"codeflow-cli/go.mod",
+		"codeflow-cli/go.sum",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// autoRebuildCLI runs `go install ./cmd/codeflow/` from the codeflow-cli
+// subdirectory when Go source files changed. Errors are printed as warnings
+// to stderr and never propagated — post-commit must remain non-blocking.
+func autoRebuildCLI(projectDir string) {
+	// Only rebuild if this repo contains the CodeFlow CLI source.
+	modFile := filepath.Join(projectDir, "codeflow-cli", "go.mod")
+	if _, err := os.Stat(modFile); os.IsNotExist(err) {
+		return
+	}
+
+	if !goFilesChanged() {
+		return
+	}
+
+	fmt.Fprintln(os.Stderr, "[auto-rebuild] Go CLI source changed, rebuilding...")
+
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	cmd := runCommand("go", "install", "./cmd/codeflow/")
+	cmd.Dir = cliDir
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "[auto-rebuild] warning: rebuild failed: %v\n", err)
+		return
+	}
+
+	fmt.Fprintln(os.Stderr, "[auto-rebuild] rebuild complete.")
 }
 
 // appendJSONL marshals v as JSON and appends a newline-terminated line to path.
