@@ -151,7 +151,7 @@ Table-driven sentinel creation tests:
 | TeamDelete with no pathflow-active | ALLOWED |
 | TeamDelete with pathflow-active, no pf-6 | BLOCKED |
 | TeamDelete with pathflow-active AND pf-6 | ALLOWED |
-| HandlePostTeamDelete | removes pathflow-active flag |
+| HandlePostTeamDelete | cleans sentinels, removes team file, resets checkpoint; preserves pathflow-active flag |
 
 ### TestLedgerRoutingIndependent
 

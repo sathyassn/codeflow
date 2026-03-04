@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/codeflow/codeflow-cli/internal/pathflow"
 )
 
 // Verdict represents the result of a team guard check.
@@ -114,16 +117,44 @@ func CheckTeamDelete(stdin io.Reader, sessionDir, sentinelDir string) (*Verdict,
 	}, nil
 }
 
-// HandlePostTeamDelete removes the pathflow-active flag after a successful
-// TeamDelete. This is the PostToolUse counterpart to the PreToolUse guard.
+// HandlePostTeamDelete performs PathFlow cleanup after a successful TeamDelete.
+// This is the PostToolUse counterpart to the PreToolUse guard.
 //
-// sessionDir is the path to the session pathflow directory, e.g.,
-// {projectDir}/.state/session/{sessionID}/pathflow/
-func HandlePostTeamDelete(sessionDir string) error {
-	flagPath := filepath.Join(sessionDir, "is-pathflow-active")
-	if _, err := os.Stat(flagPath); err != nil {
-		// Flag does not exist — nothing to remove.
-		return nil
+// Cleanup operations (in order):
+//  1. Remove the sentinel directory (.state/sentinels/pathflow/{sessionID}/)
+//  2. Remove pathflow-team.json from the session pathflow dir
+//  3. Reset pathflow-phase-tasks.json to fresh state via ResetAllPhases
+//
+// The is-pathflow-active flag is NOT removed here — it is session-scoped
+// and handled by a different cleanup path.
+//
+// All operations are non-fatal: errors are logged but do not block TeamDelete.
+func HandlePostTeamDelete(sessionDir, projectDir, sessionID string) error {
+	logger := slog.Default()
+
+	// 1. Remove sentinel directory.
+	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+	if err := os.RemoveAll(sentinelDir); err != nil {
+		logger.Warn("post-team-delete: failed to remove sentinel directory",
+			"path", sentinelDir, "error", err)
 	}
-	return os.Remove(flagPath)
+
+	// 2. Remove pathflow-team.json.
+	teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+	if err := os.Remove(teamFilePath); err != nil && !os.IsNotExist(err) {
+		logger.Warn("post-team-delete: failed to remove pathflow-team.json",
+			"path", teamFilePath, "error", err)
+	}
+
+	// 3. Reset pathflow-phase-tasks.json to fresh state.
+	checkpointPath := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
+	configPath := filepath.Join(projectDir, ".codeflow", "config", "pathflow", "pathflow-config.json")
+
+	cp := pathflow.NewCheckpoint()
+	if err := cp.ResetAllPhases(checkpointPath, configPath); err != nil {
+		logger.Warn("post-team-delete: failed to reset checkpoint",
+			"path", checkpointPath, "error", err)
+	}
+
+	return nil
 }

@@ -750,6 +750,132 @@ func TestIsPhaseComplete(t *testing.T) {
 	})
 }
 
+func TestCheckpoint_ResetAllPhases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clears completed state", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		configPath := writeMinimalConfig(t, dir)
+		cpPath := filepath.Join(dir, "pathflow-phase-tasks.json")
+		sentDir := filepath.Join(dir, "sentinels")
+
+		cp := testCheckpoint(t)
+
+		// Init and complete PF1.
+		if err := cp.InitAllPhases(cpPath, configPath); err != nil {
+			t.Fatalf("setup InitAllPhases: %v", err)
+		}
+		for _, tid := range []string{"PF1-TSK-01", "PF1-TSK-02"} {
+			if err := cp.RegisterTask(cpPath, sentDir, tid); err != nil {
+				t.Fatalf("setup RegisterTask(%s): %v", tid, err)
+			}
+			if err := cp.CompleteTask(cpPath, sentDir, tid); err != nil {
+				t.Fatalf("setup CompleteTask(%s): %v", tid, err)
+			}
+		}
+
+		// Verify PF1 is completed before reset.
+		cf, err := readCheckpointFile(cpPath)
+		if err != nil {
+			t.Fatalf("reading checkpoint: %v", err)
+		}
+		if !cf.Phases["PF1"].SentinelCreated {
+			t.Fatal("PF1 should have SentinelCreated=true before reset")
+		}
+
+		// Reset.
+		if err := cp.ResetAllPhases(cpPath, configPath); err != nil {
+			t.Fatalf("ResetAllPhases() error: %v", err)
+		}
+
+		// Verify reset state.
+		cf, err = readCheckpointFile(cpPath)
+		if err != nil {
+			t.Fatalf("reading checkpoint after reset: %v", err)
+		}
+
+		pf1, ok := cf.Phases["PF1"]
+		if !ok {
+			t.Fatal("PF1 should exist after reset")
+		}
+		if len(pf1.Registered) != 0 {
+			t.Errorf("PF1.Registered should be empty after reset, got %d entries", len(pf1.Registered))
+		}
+		if len(pf1.Completed) != 0 {
+			t.Errorf("PF1.Completed should be empty after reset, got %d entries", len(pf1.Completed))
+		}
+		if pf1.SentinelCreated {
+			t.Error("PF1.SentinelCreated should be false after reset")
+		}
+	})
+
+	t.Run("preserves expected tasks from config", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		configPath := writeMinimalConfig(t, dir)
+		cpPath := filepath.Join(dir, "pathflow-phase-tasks.json")
+
+		cp := testCheckpoint(t)
+
+		// Init, modify, then reset.
+		if err := cp.InitAllPhases(cpPath, configPath); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := cp.ResetAllPhases(cpPath, configPath); err != nil {
+			t.Fatalf("ResetAllPhases() error: %v", err)
+		}
+
+		cf, err := readCheckpointFile(cpPath)
+		if err != nil {
+			t.Fatalf("reading checkpoint: %v", err)
+		}
+
+		// All 7 phases should be present with their expected tasks.
+		for i := 1; i <= 7; i++ {
+			phase := phaseKey(i)
+			pc, ok := cf.Phases[phase]
+			if !ok {
+				t.Errorf("phase %s not found after reset", phase)
+				continue
+			}
+			if len(pc.Expected) == 0 {
+				t.Errorf("phase %s has empty expected tasks after reset", phase)
+			}
+		}
+	})
+
+	t.Run("works when no checkpoint file exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		configPath := writeMinimalConfig(t, dir)
+		cpPath := filepath.Join(dir, "pathflow-phase-tasks.json")
+
+		cp := testCheckpoint(t)
+
+		// Reset without prior init should create fresh file.
+		if err := cp.ResetAllPhases(cpPath, configPath); err != nil {
+			t.Fatalf("ResetAllPhases() error: %v", err)
+		}
+
+		if _, err := os.Stat(cpPath); err != nil {
+			t.Errorf("checkpoint file should be created by ResetAllPhases: %v", err)
+		}
+	})
+
+	t.Run("returns error for missing config", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		cpPath := filepath.Join(dir, "pathflow-phase-tasks.json")
+
+		cp := testCheckpoint(t)
+		err := cp.ResetAllPhases(cpPath, filepath.Join(dir, "missing.json"))
+		if err == nil {
+			t.Fatal("ResetAllPhases() expected error for missing config")
+		}
+	})
+}
+
 func TestCheckpoint_FullLifecycle(t *testing.T) {
 	t.Parallel()
 

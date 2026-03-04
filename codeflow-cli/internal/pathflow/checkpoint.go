@@ -242,6 +242,81 @@ func (c *Checkpoint) SkipTask(checkpointPath, sentinelDir, taskID string) error 
 	})
 }
 
+// ResetAllPhases force-resets the checkpoint file to a fresh state by deleting
+// the existing file and re-initializing all phases from pathflow-config.json.
+// This provides an atomic reset with proper file locking, used by
+// HandlePostTeamDelete to prepare the checkpoint for the next session.
+func (c *Checkpoint) ResetAllPhases(checkpointPath, configPath string) error {
+	dir := filepath.Dir(checkpointPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("checkpoint: creating directory: %w", err)
+	}
+
+	lockPath := checkpointPath + ".lock"
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("checkpoint: opening lock file: %w", err)
+	}
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("checkpoint: acquiring lock: %w", err)
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	}()
+
+	// Delete existing checkpoint file.
+	if err := os.Remove(checkpointPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("checkpoint: removing old file: %w", err)
+	}
+
+	// Re-initialize from config (InitAllPhases uses its own lock, so we call
+	// the unlocked version directly to avoid deadlock).
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("checkpoint: reading config: %w", err)
+	}
+
+	var config struct {
+		Phases map[string]struct {
+			RequiredTasks []string `json:"required_tasks"`
+			Tasks         []struct {
+				ID        string `json:"id"`
+				Condition string `json:"condition,omitempty"`
+			} `json:"tasks"`
+		} `json:"phases"`
+	}
+	if err := json.Unmarshal(configData, &config); err != nil {
+		return fmt.Errorf("checkpoint: parsing config: %w", err)
+	}
+
+	cf := &CheckpointFile{
+		Phases: make(map[string]*PhaseCheckpoint, len(config.Phases)),
+	}
+
+	for configKey, phase := range config.Phases {
+		phaseID := strings.SplitN(configKey, "-", 2)[0]
+
+		conditions := make(map[string]string)
+		for _, t := range phase.Tasks {
+			if t.Condition != "" {
+				conditions[t.ID] = t.Condition
+			}
+		}
+
+		cf.Phases[phaseID] = &PhaseCheckpoint{
+			Expected:   phase.RequiredTasks,
+			Conditions: conditions,
+			Registered: make(map[string]string),
+			Completed:  make(map[string]string),
+			Skipped:    make(map[string]string),
+		}
+	}
+
+	return writeCheckpointFileUnlocked(checkpointPath, cf)
+}
+
 // GetStatus returns the checkpoint state for a specific phase.
 func (c *Checkpoint) GetStatus(checkpointPath, phase string) (*PhaseCheckpoint, error) {
 	cf, err := readCheckpointFile(checkpointPath)

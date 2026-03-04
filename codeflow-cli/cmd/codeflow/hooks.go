@@ -665,10 +665,11 @@ Stdin format:
 }
 
 // runSentinelWrite implements the stage sentinel creation logic.
-// It handles three event types:
+// It handles four event types:
 //   - SendMessage with STAGE-COMPLETE pattern -> creates stage sentinels
 //   - TeamCreate -> creates pathflow-team.json
 //   - Task (teammate spawn) -> updates pathflow-team.json
+//   - TeamDelete -> cleans up PathFlow state via HandlePostTeamDelete
 func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	sessionID := resolveSessionID(projectDir)
@@ -685,6 +686,13 @@ func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+
+	// Check for TeamDelete — dispatch to post-team-delete cleanup.
+	if isTeamDeleteEvent(data) {
+		// Non-fatal: errors are logged internally.
+		_ = team.HandlePostTeamDelete(sessionDir, projectDir, sessionID)
+		return nil
+	}
 
 	// Dispatch: stage sentinel (SendMessage), team create, or teammate spawn.
 	verdict := sentinel.CheckAndCreateStageSentinelFromData(data, sentinelDir)
@@ -704,6 +712,17 @@ func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	}
 
 	return nil
+}
+
+// isTeamDeleteEvent checks if the PostToolUse hook data is for a TeamDelete tool call.
+func isTeamDeleteEvent(data []byte) bool {
+	var input struct {
+		ToolName string `json:"tool_name"`
+	}
+	if err := json.Unmarshal(data, &input); err != nil {
+		return false
+	}
+	return input.ToolName == "TeamDelete"
 }
 
 // newHookCheckpointRegisterCmd creates the "checkpoint-register" subcommand that

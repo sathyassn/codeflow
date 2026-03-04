@@ -1066,7 +1066,7 @@ func TestTeamGuardIndependent(t *testing.T) {
 		}
 	})
 
-	t.Run("HandlePostTeamDelete removes pathflow-active flag", func(t *testing.T) {
+	t.Run("HandlePostTeamDelete preserves pathflow-active flag", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := t.TempDir()
@@ -1080,11 +1080,20 @@ func TestTeamGuardIndependent(t *testing.T) {
 			t.Fatalf("create pathflow-active: %v", err)
 		}
 
-		if err := team.HandlePostTeamDelete(sessDir); err != nil {
+		// Write minimal pathflow config for checkpoint reset.
+		cfgDir := filepath.Join(projectDir, ".codeflow", "config", "pathflow")
+		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+			t.Fatalf("mkdir cfgDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cfgDir, "pathflow-config.json"), []byte(`{"phases":{}}`), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+
+		if err := team.HandlePostTeamDelete(sessDir, projectDir, sid); err != nil {
 			t.Fatalf("HandlePostTeamDelete: %v", err)
 		}
-		if _, err := os.Stat(flagPath); err == nil {
-			t.Error("pathflow-active flag should be removed by HandlePostTeamDelete")
+		if _, err := os.Stat(flagPath); err != nil {
+			t.Error("pathflow-active flag should be preserved by HandlePostTeamDelete")
 		}
 	})
 }
