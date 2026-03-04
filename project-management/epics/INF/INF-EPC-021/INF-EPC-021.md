@@ -128,7 +128,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-024 | Performance benchmarking and hook latency verification | todo | high |
 | INF-TSK-021-025 | SUPERSEDED -- Remove retired shell and Python infrastructure (absorbed into INF-TSK-021-022) | cancelled | high |
 | INF-TSK-021-026 | Normalize JSONL schema and rebuild SQLite | complete | high |
-| INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | todo | normal |
+| INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | complete | normal |
 | INF-TSK-021-028 | Update test-config.json business_packages with migration packages | complete | high |
 | INF-TSK-021-029 | Align INF-EPC-021 task criteria with build-coexist-cutover strategy | complete | high |
 | INF-TSK-021-030 | Shadow testing -- run Go alongside shell and verify output parity | complete | high |

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -157,6 +158,10 @@ type Initializer struct {
 	// SessionStarter generates session IDs and registers sessions in the database.
 	SessionStarter SessionStarter
 
+	// ReadBuildInfo returns the short VCS revision of the running binary.
+	// Override in tests for deterministic output.
+	ReadBuildInfo func() string
+
 	// PPID is the parent process ID for pathflow-team.json updates.
 	PPID int
 
@@ -172,6 +177,7 @@ func NewInitializer() *Initializer {
 		ProcessChecker: osProcessChecker{},
 		TmuxChecker:    osTmuxChecker{},
 		SessionStarter: dbSessionStarter{},
+		ReadBuildInfo:  readBinaryVCSRevision,
 		PPID:           os.Getppid(),
 		HomeDir:        home,
 	}
@@ -290,6 +296,10 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 
 	// --- Section 11: Project temp directory ---
 	init_.createProjectTempDir(projectDir, result)
+
+	// --- Section 12: Auto-rebuild CLI binary ---
+	// Catches stale binaries after git pull/merge (post-commit hook only covers local commits).
+	init_.autoRebuildCLI(projectDir, result)
 
 	return result, nil
 }
@@ -824,6 +834,71 @@ func (init_ *Initializer) createProjectTempDir(projectDir string, result *InitRe
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		result.warn("project temp dir creation error: %v", err)
 	}
+}
+
+// readBinaryVCSRevision extracts the short VCS revision from the running binary's
+// embedded build info. Returns "" if unavailable.
+// Override via Initializer.ReadBuildInfo for testing.
+func readBinaryVCSRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			if len(s.Value) > 7 {
+				return s.Value[:7]
+			}
+			return s.Value
+		}
+	}
+	return ""
+}
+
+// autoRebuildCLI rebuilds the codeflow binary when the installed version's VCS
+// revision differs from the current git HEAD. This catches stale binaries after
+// git pull/merge — the post-commit git hook only fires for local commits.
+// Non-fatal: warnings only, never blocks session start.
+func (init_ *Initializer) autoRebuildCLI(projectDir string, result *InitResult) {
+	// Only rebuild if this repo contains the CodeFlow CLI source.
+	modFile := filepath.Join(projectDir, "codeflow-cli", "go.mod")
+	if _, err := os.Stat(modFile); os.IsNotExist(err) {
+		return
+	}
+
+	// Get current git HEAD short hash.
+	gitHead := detectGitCommit(projectDir)
+	if gitHead == "" || gitHead == "unknown" {
+		return
+	}
+
+	// Get the running binary's embedded VCS revision.
+	binaryRev := init_.ReadBuildInfo()
+	if binaryRev == "" {
+		// Binary was built without VCS info (e.g., "go install" without a git checkout).
+		// Cannot compare — skip rebuild.
+		return
+	}
+
+	// Compare: if they match, the binary is current.
+	if binaryRev == gitHead {
+		return
+	}
+
+	result.msg("[auto-rebuild] Binary version %s differs from HEAD %s, rebuilding...", binaryRev, gitHead)
+
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	cmd := exec.Command("go", "install", "./cmd/codeflow/")
+	cmd.Dir = cliDir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		result.warn("[auto-rebuild] rebuild failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
+		return
+	}
+
+	result.msg("[auto-rebuild] rebuild complete.")
 }
 
 // warn adds a warning message.

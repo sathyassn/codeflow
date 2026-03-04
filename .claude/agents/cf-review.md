@@ -141,7 +141,7 @@ Execute the checklist for the assigned review mode.
 - [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)
 - [ ] **Performance** -- No obvious inefficiencies
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
-  - [ ] Verify each `.sh`/`.py` file in the changeset has a corresponding test file in the PR (`test-{name}.sh` or `test_{name}.py`). CI check: `.codeflow/testing/ci/check-test-coverage-pairing.sh`
+  - [ ] Verify each `.sh`/`.py` file in the changeset has a corresponding test file in the PR (`test-{name}.sh` or `test_{name}.py`)
   - [ ] Verify the task's `tests` YAML field is populated with actual test file paths
   - [ ] Verify new tests are registered in `.codeflow/testing/test-config.json`
 - [ ] **Error handling** -- Failures handled gracefully, `set -euo pipefail` in shell

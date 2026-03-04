@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,7 @@ func newTestInitializer(t *testing.T) *Initializer {
 		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
 		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
 		SessionStarter: mockSessionStarter{id: testULIDSessionID},
+		ReadBuildInfo:  func() string { return "" },
 		PPID:           99999,
 		HomeDir:        t.TempDir(),
 	}
@@ -2080,5 +2082,208 @@ func assertFileExists(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("file %q does not exist: %v", path, err)
+	}
+}
+
+// initGitRepo creates a minimal git repo in dir with one commit and returns
+// the short commit hash.
+func initGitRepo(t *testing.T, dir string) string {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	// Create a file and commit.
+	if err := os.WriteFile(filepath.Join(dir, "dummy.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add", "dummy.txt"},
+		{"commit", "-m", "init"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--short", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse failed: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestAutoRebuildCLI_SkipNoGoMod(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	init_ := newTestInitializer(t)
+	init_.ReadBuildInfo = func() string { return "abc1234" }
+	result := &InitResult{EnvVars: map[string]string{}}
+
+	// No codeflow-cli/go.mod exists.
+	init_.autoRebuildCLI(projectDir, result)
+
+	// Should produce no messages (silently skipped).
+	if len(result.Messages) > 0 {
+		t.Errorf("expected no messages, got %v", result.Messages)
+	}
+	if len(result.Warnings) > 0 {
+		t.Errorf("expected no warnings, got %v", result.Warnings)
+	}
+}
+
+func TestAutoRebuildCLI_SkipMatchingRevision(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	commitHash := initGitRepo(t, projectDir)
+
+	// Create codeflow-cli/go.mod.
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	init_ := newTestInitializer(t)
+	// ReadBuildInfo returns the same hash as git HEAD.
+	init_.ReadBuildInfo = func() string { return commitHash }
+	result := &InitResult{EnvVars: map[string]string{}}
+
+	init_.autoRebuildCLI(projectDir, result)
+
+	// Should produce no messages (revisions match).
+	if len(result.Messages) > 0 {
+		t.Errorf("expected no messages when revisions match, got %v", result.Messages)
+	}
+}
+
+func TestAutoRebuildCLI_SkipNoBuildInfo(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	_ = initGitRepo(t, projectDir)
+
+	// Create codeflow-cli/go.mod.
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	init_ := newTestInitializer(t)
+	// ReadBuildInfo returns empty (no VCS info embedded).
+	init_.ReadBuildInfo = func() string { return "" }
+	result := &InitResult{EnvVars: map[string]string{}}
+
+	init_.autoRebuildCLI(projectDir, result)
+
+	// Should produce no messages (cannot compare without build info).
+	if len(result.Messages) > 0 {
+		t.Errorf("expected no messages when no build info, got %v", result.Messages)
+	}
+}
+
+func TestAutoRebuildCLI_TriggersOnMismatch(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	_ = initGitRepo(t, projectDir)
+
+	// Create codeflow-cli/go.mod.
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	init_ := newTestInitializer(t)
+	// ReadBuildInfo returns a different hash from git HEAD.
+	init_.ReadBuildInfo = func() string { return "old1234" }
+	result := &InitResult{EnvVars: map[string]string{}}
+
+	init_.autoRebuildCLI(projectDir, result)
+
+	// Should emit a rebuild message (even though go install will fail in test env,
+	// the mismatch detection message should be present).
+	foundRebuildMsg := false
+	for _, msg := range result.Messages {
+		if strings.Contains(msg, "[auto-rebuild]") && strings.Contains(msg, "differs from HEAD") {
+			foundRebuildMsg = true
+			break
+		}
+	}
+	if !foundRebuildMsg {
+		t.Errorf("expected [auto-rebuild] mismatch message, got messages: %v", result.Messages)
+	}
+
+	// The go install will fail (no real Go project), so we should also see a warning.
+	foundWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "[auto-rebuild]") && strings.Contains(w, "rebuild failed") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected [auto-rebuild] rebuild failed warning, got warnings: %v", result.Warnings)
+	}
+}
+
+func TestAutoRebuildCLI_NonFatal(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	_ = initGitRepo(t, projectDir)
+
+	// Create codeflow-cli/go.mod but no actual Go source (go install will fail).
+	cliDir := filepath.Join(projectDir, "codeflow-cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	init_ := newTestInitializer(t)
+	init_.ReadBuildInfo = func() string { return "stale99" }
+
+	// Run full StartInit to verify auto-rebuild failure doesn't block session start.
+	setupPathflowConfig(t, projectDir)
+	stdin := strings.NewReader(`{"session_id":"abc","source":"startup"}`)
+	result, err := init_.StartInit(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("StartInit() should not fail due to auto-rebuild error, got: %v", err)
+	}
+
+	// Session should still be initialized successfully.
+	if result.SessionID == "" {
+		t.Error("SessionID should not be empty")
+	}
+
+	// Verify auto-rebuild was attempted but didn't block.
+	foundRebuildAttempt := false
+	for _, msg := range result.Messages {
+		if strings.Contains(msg, "[auto-rebuild]") {
+			foundRebuildAttempt = true
+			break
+		}
+	}
+	if !foundRebuildAttempt {
+		t.Error("expected auto-rebuild attempt message")
 	}
 }

@@ -70,6 +70,10 @@ jobs:
           cache: true
           cache-dependency-path: codeflow-cli/go.sum
 
+      - name: Build codeflow binary
+        working-directory: codeflow-cli
+        run: make build
+
       - name: Run Go tests with coverage
         working-directory: codeflow-cli
         run: make test-cover
