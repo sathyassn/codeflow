@@ -277,8 +277,8 @@
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-init.sh",
-            "timeout": 15
+            "command": "codeflow hooks session-start init",
+            "timeout": 5
           }
         ]
       },
@@ -287,13 +287,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-instructions.sh",
-            "timeout": 2
+            "command": "codeflow hooks session-start instructions",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-start/cf-session-start-logging.sh",
-            "timeout": 2
+            "command": "codeflow hooks session-start logging",
+            "timeout": 5
           }
         ]
       }
@@ -304,13 +304,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit.sh",
-            "timeout": 2
+            "command": "codeflow hooks user-prompt-submit validate",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/user-prompt-submit/cf-user-prompt-submit-logging.sh",
-            "timeout": 2
+            "command": "codeflow hooks user-prompt-submit logging",
+            "timeout": 5
           }
         ]
       }
@@ -321,13 +321,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-gh-pr.sh",
-            "timeout": 3
+            "command": "codeflow hooks pre-tool-use gh-pr-guard",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh",
-            "timeout": 3
+            "command": "codeflow hooks pre-tool-use security",
+            "timeout": 5
           }
         ]
       },
@@ -336,13 +336,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-edit-write.sh",
-            "timeout": 1
+            "command": "codeflow hooks pre-tool-use edit-write-guard",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-protected-resource.sh",
-            "timeout": 2
+            "command": "codeflow hooks pre-tool-use protection-guard",
+            "timeout": 5
           }
         ]
       },
@@ -351,8 +351,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-webfetch.sh",
-            "timeout": 2
+            "command": "codeflow hooks pre-tool-use webfetch-guard",
+            "timeout": 5
           }
         ]
       },
@@ -361,8 +361,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-pathflow-gate.sh",
-            "timeout": 2
+            "command": "codeflow hooks pre-tool-use gate-check",
+            "timeout": 5
           }
         ]
       },
@@ -371,8 +371,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh",
-            "timeout": 2
+            "command": "codeflow hooks pre-tool-use team-guard",
+            "timeout": 5
           }
         ]
       }
@@ -383,8 +383,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-pathflow-sentinel.sh",
-            "timeout": 2
+            "command": "codeflow hooks post-tool-use sentinel-write",
+            "timeout": 5
           }
         ]
       },
@@ -393,18 +393,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-settings-templates.sh",
-            "timeout": 1
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-tmp-workflow.sh",
-            "timeout": 1
+            "command": "codeflow hooks post-tool-use settings-validate",
+            "timeout": 5
           }
         ]
       },
@@ -413,8 +403,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-phase-checkpoint.sh",
-            "timeout": 2
+            "command": "codeflow hooks post-tool-use checkpoint-register",
+            "timeout": 5
           }
         ]
       },
@@ -423,8 +413,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh",
-            "timeout": 2
+            "command": "codeflow hooks post-tool-use logging",
+            "timeout": 5
           }
         ]
       }
@@ -434,13 +424,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-pathflow-gate.sh",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-logging.sh",
-            "timeout": 2
+            "command": "codeflow hooks stop logging",
+            "timeout": 5
           }
         ]
       }
@@ -450,8 +435,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/stop/cf-stop-pathflow-gate.sh",
-            "timeout": 3
+            "command": "codeflow hooks stop logging",
+            "timeout": 5
           }
         ]
       }
@@ -461,8 +446,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/task-completed/cf-task-completed-phase-checkpoint.sh",
-            "timeout": 3
+            "command": "codeflow hooks task-completed checkpoint-complete",
+            "timeout": 5
           }
         ]
       }
@@ -473,13 +458,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-end/cf-session-end-cleanup.sh",
-            "timeout": 3
+            "command": "codeflow hooks session-end cleanup",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codeflow/session-end/cf-session-end-logging.sh",
-            "timeout": 2
+            "command": "codeflow hooks session-end logging",
+            "timeout": 5
           }
         ]
       }

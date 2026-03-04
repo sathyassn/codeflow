@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,52 @@ import (
 
 	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 )
+
+// overrideEnvFileSessionID writes a test session ID to .state/runtime/codeflow-env.sh
+// so that resolveSessionID returns the test value instead of any real session.
+// It backs up and restores the original file on cleanup.
+// Must be called from a non-parallel test (modifies shared filesystem state).
+func overrideEnvFileSessionID(t *testing.T, projectDir, sessionID string) {
+	t.Helper()
+	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+
+	// Back up existing file if present.
+	origData, origErr := os.ReadFile(envFilePath)
+	t.Cleanup(func() {
+		if origErr == nil {
+			_ = os.WriteFile(envFilePath, origData, 0o600)
+		} else {
+			_ = os.Remove(envFilePath)
+		}
+	})
+
+	// Write the test session ID.
+	if err := os.MkdirAll(filepath.Dir(envFilePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := fmt.Sprintf("export CODEFLOW_SESSION_ID='%s'\nexport CF_PROJECT_ROOT='codeflow'\n", sessionID)
+	if err := os.WriteFile(envFilePath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// removeEnvFileSessionID temporarily removes .state/runtime/codeflow-env.sh so that
+// resolveSessionID falls back to os.Getenv. Restores the file on cleanup.
+// Must be called from a non-parallel test.
+func removeEnvFileSessionID(t *testing.T, projectDir string) {
+	t.Helper()
+	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+
+	origData, origErr := os.ReadFile(envFilePath)
+	if origErr != nil {
+		// No file to remove.
+		return
+	}
+	_ = os.Remove(envFilePath)
+	t.Cleanup(func() {
+		_ = os.WriteFile(envFilePath, origData, 0o600)
+	})
+}
 
 func TestNewHooksCmd(t *testing.T) {
 	t.Parallel()
@@ -452,6 +499,9 @@ func TestRunGateCheckWithPathFlow(t *testing.T) {
 	projectDir := detectProjectDir()
 	sessionID := "ses-test-gate-check-" + t.Name()
 
+	// Override env file so resolveSessionID returns the test session ID.
+	overrideEnvFileSessionID(t, projectDir, sessionID)
+
 	// Create pathflow-active flag at the real project dir.
 	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
 	if err := os.MkdirAll(flagDir, 0o755); err != nil {
@@ -470,7 +520,7 @@ func TestRunGateCheckWithPathFlow(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(sentinelDir) })
 
-	// Set CODEFLOW_SESSION_ID for detectPathFlowActive.
+	// Set CODEFLOW_SESSION_ID as fallback for resolveSessionID.
 	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
 
 	t.Run("Edit blocked without pf-3", func(t *testing.T) {
@@ -549,6 +599,9 @@ func TestRunGateCheckUnknownSession(t *testing.T) {
 
 	projectDir := detectProjectDir()
 	sessionID := "unknown"
+
+	// Override env file so resolveSessionID returns "unknown".
+	overrideEnvFileSessionID(t, projectDir, sessionID)
 
 	// Create pathflow-active flag for "unknown" session.
 	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
@@ -905,12 +958,14 @@ func TestPreToolUseCmdHasTeamGuard(t *testing.T) {
 }
 
 func TestRunTeamGuard(t *testing.T) {
-	t.Parallel()
+	// NOTE: no t.Parallel -- "allows when no session ID" subtest removes the env file.
 
 	t.Run("allows when no session ID", func(t *testing.T) {
-		t.Parallel()
+		// Remove env file so resolveSessionID returns "" (no env var set either).
+		projectDir := detectProjectDir()
+		removeEnvFileSessionID(t, projectDir)
+		t.Setenv("CODEFLOW_SESSION_ID", "")
 
-		// CODEFLOW_SESSION_ID not set → allow through.
 		stdin := strings.NewReader(`{"tool_name":"TeamDelete","tool_input":{}}`)
 		var stdout, stderr bytes.Buffer
 		err := runTeamGuard(stdin, &stdout, &stderr)
@@ -920,8 +975,6 @@ func TestRunTeamGuard(t *testing.T) {
 	})
 
 	t.Run("allows non-TeamDelete tool", func(t *testing.T) {
-		t.Parallel()
-
 		stdin := strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}`)
 		var stdout, stderr bytes.Buffer
 		err := runTeamGuard(stdin, &stdout, &stderr)
@@ -931,8 +984,6 @@ func TestRunTeamGuard(t *testing.T) {
 	})
 
 	t.Run("allows empty stdin", func(t *testing.T) {
-		t.Parallel()
-
 		stdin := strings.NewReader("")
 		var stdout, stderr bytes.Buffer
 		err := runTeamGuard(stdin, &stdout, &stderr)
@@ -942,8 +993,6 @@ func TestRunTeamGuard(t *testing.T) {
 	})
 
 	t.Run("allows invalid JSON (graceful degradation)", func(t *testing.T) {
-		t.Parallel()
-
 		stdin := strings.NewReader("not json")
 		var stdout, stderr bytes.Buffer
 		err := runTeamGuard(stdin, &stdout, &stderr)
@@ -958,6 +1007,9 @@ func TestRunTeamGuardWithPathFlow(t *testing.T) {
 
 	projectDir := detectProjectDir()
 	sessionID := "ses-test-team-guard-" + t.Name()
+
+	// Override env file so resolveSessionID returns the test session ID.
+	overrideEnvFileSessionID(t, projectDir, sessionID)
 
 	// Create pathflow-active flag.
 	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
@@ -1020,7 +1072,11 @@ func TestRunTeamGuardWithPathFlow(t *testing.T) {
 }
 
 func TestTeamGuardCmdViaRoot(t *testing.T) {
-	t.Parallel()
+	// NOTE: no t.Parallel -- removes env file to ensure no session ID.
+
+	projectDir := detectProjectDir()
+	removeEnvFileSessionID(t, projectDir)
+	t.Setenv("CODEFLOW_SESSION_ID", "")
 
 	// Execute the full command path: hooks pre-tool-use team-guard
 	// No CODEFLOW_SESSION_ID → should allow.
@@ -2310,4 +2366,150 @@ func TestSessionStartInstructionsCmdViaRoot(t *testing.T) {
 	}
 }
 
+func TestResolveSessionID(t *testing.T) {
+	// NOTE: no t.Parallel -- subtests use os.Setenv which modifies process-wide env state.
 
+	t.Run("env file present, env var empty", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeDir := filepath.Join(dir, ".state", "runtime")
+		if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		envContent := "export CODEFLOW_SESSION_ID='ses-1234567890123abcdef012345'\n"
+		if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		orig, hadOrig := os.LookupEnv("CODEFLOW_SESSION_ID")
+		os.Setenv("CODEFLOW_SESSION_ID", "")
+		defer func() {
+			if hadOrig {
+				os.Setenv("CODEFLOW_SESSION_ID", orig)
+			} else {
+				os.Unsetenv("CODEFLOW_SESSION_ID")
+			}
+		}()
+
+		got := resolveSessionID(dir)
+		if got != "ses-1234567890123abcdef012345" {
+			t.Errorf("resolveSessionID() = %q, want %q", got, "ses-1234567890123abcdef012345")
+		}
+	})
+
+	t.Run("env file missing, env var set", func(t *testing.T) {
+		dir := t.TempDir() // No .state/runtime/codeflow-env.sh
+		orig, hadOrig := os.LookupEnv("CODEFLOW_SESSION_ID")
+		os.Setenv("CODEFLOW_SESSION_ID", "ses-fromenvvar00000abcdef000")
+		defer func() {
+			if hadOrig {
+				os.Setenv("CODEFLOW_SESSION_ID", orig)
+			} else {
+				os.Unsetenv("CODEFLOW_SESSION_ID")
+			}
+		}()
+
+		got := resolveSessionID(dir)
+		if got != "ses-fromenvvar00000abcdef000" {
+			t.Errorf("resolveSessionID() = %q, want %q", got, "ses-fromenvvar00000abcdef000")
+		}
+	})
+
+	t.Run("env file preferred over env var", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeDir := filepath.Join(dir, ".state", "runtime")
+		if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		envContent := "export CODEFLOW_SESSION_ID='ses-fromfile0000000000000000'\n"
+		if err := os.WriteFile(filepath.Join(runtimeDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		orig, hadOrig := os.LookupEnv("CODEFLOW_SESSION_ID")
+		os.Setenv("CODEFLOW_SESSION_ID", "ses-fromenvvar00000000000000")
+		defer func() {
+			if hadOrig {
+				os.Setenv("CODEFLOW_SESSION_ID", orig)
+			} else {
+				os.Unsetenv("CODEFLOW_SESSION_ID")
+			}
+		}()
+
+		got := resolveSessionID(dir)
+		if got != "ses-fromfile0000000000000000" {
+			t.Errorf("resolveSessionID() = %q, want %q (env file should be preferred)", got, "ses-fromfile0000000000000000")
+		}
+	})
+
+	t.Run("neither source returns empty string", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, hadOrig := os.LookupEnv("CODEFLOW_SESSION_ID")
+		os.Setenv("CODEFLOW_SESSION_ID", "")
+		defer func() {
+			if hadOrig {
+				os.Setenv("CODEFLOW_SESSION_ID", orig)
+			} else {
+				os.Unsetenv("CODEFLOW_SESSION_ID")
+			}
+		}()
+
+		got := resolveSessionID(dir)
+		if got != "" {
+			t.Errorf("resolveSessionID() = %q, want empty string", got)
+		}
+	})
+}
+
+func TestParseEnvFileSessionID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "single-quoted value",
+			content: "export CODEFLOW_SESSION_ID='ses-abc123'\n",
+			want:    "ses-abc123",
+		},
+		{
+			name:    "double-quoted value",
+			content: "export CODEFLOW_SESSION_ID=\"ses-abc123\"\n",
+			want:    "ses-abc123",
+		},
+		{
+			name:    "unquoted value",
+			content: "export CODEFLOW_SESSION_ID=ses-abc123\n",
+			want:    "ses-abc123",
+		},
+		{
+			name:    "with other exports",
+			content: "export CF_PROJECT_ROOT='codeflow'\nexport CODEFLOW_SESSION_ID='ses-target'\nexport OTHER='val'\n",
+			want:    "ses-target",
+		},
+		{
+			name:    "empty file",
+			content: "",
+			want:    "",
+		},
+		{
+			name:    "no session ID line",
+			content: "export CF_PROJECT_ROOT='codeflow'\n",
+			want:    "",
+		},
+		{
+			name:    "whitespace around line",
+			content: "  export CODEFLOW_SESSION_ID='ses-trimmed'  \n",
+			want:    "ses-trimmed",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseEnvFileSessionID(tc.content)
+			if got != tc.want {
+				t.Errorf("parseEnvFileSessionID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

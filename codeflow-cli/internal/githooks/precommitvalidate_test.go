@@ -79,6 +79,19 @@ func TestCheckBranchName(t *testing.T) {
 	}
 }
 
+func TestCheckBranchName_DetachedHead(t *testing.T) {
+	t.Parallel()
+
+	policy := testPolicy()
+	errs := &PreCommitErrors{}
+	w := &bytes.Buffer{}
+	// Empty branch (detached HEAD in CI) should skip validation.
+	checkBranchName(w, "", policy, errs)
+	if len(errs.Errors) > 0 {
+		t.Errorf("expected no error for empty branch (detached HEAD), got: %v", errs.Errors)
+	}
+}
+
 func TestCheckBranchName_RegexCompileError(t *testing.T) {
 	t.Parallel()
 

@@ -209,7 +209,7 @@ Target (Go):
 ```json
 {
   "type": "command",
-  "command": "\"$CLAUDE_PROJECT_DIR\"/codeflow-cli/bin/codeflow hooks pre-tool-use gate-check",
+  "command": "codeflow hooks pre-tool-use gate-check",
   "timeout": 5000
 }
 ```

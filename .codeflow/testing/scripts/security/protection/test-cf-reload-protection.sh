@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test: Protection - cf-reload-protection.sh
-# Location: .codeflow/testing/scripts/security/test-cf-reload-protection.sh
+# Location: .codeflow/testing/scripts/security/protection/test-cf-reload-protection.sh
 #
 # Tests the protection list reload functionality
 
@@ -8,7 +8,7 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$TEST_DIR/../../../../.." && pwd)"
 SCRIPT="$REPO_ROOT/.codeflow/scripts/security/protection/cf-reload-protection.sh"
 
 # Test counter

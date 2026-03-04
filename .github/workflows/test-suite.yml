@@ -23,30 +23,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
+          go-version-file: codeflow-cli/go.mod
+          cache: true
+          cache-dependency-path: codeflow-cli/go.sum
 
-      - name: Create test venv with dependencies
-        run: |
-          python -m venv .codeflow/testing/.venv
-          .codeflow/testing/.venv/bin/pip install --upgrade pip
-          .codeflow/testing/.venv/bin/pip install pytest pytest-cov ruff
+      - name: Install codeflow binary
+        working-directory: codeflow-cli
+        run: go install ./cmd/codeflow/
 
       - name: Run structural integrity check
         run: |
           source .codeflow/testing/lib/test-coverage.sh
           validate_structural_integrity
 
-      - name: Run test suite with coverage
-        run: |
-          chmod +x ./codeflow
-          ./codeflow test --coverage
+      - name: Run test suite
+        run: bash .codeflow/testing/run-all-tests.sh --mode full
 
       - name: Tests passed
         if: success()
-        run: echo "All tests passed with structural integrity and coverage enforcement"
+        run: echo "All tests passed with structural integrity enforcement"
 
       - name: Tests failed
         if: failure()
@@ -54,8 +52,7 @@ jobs:
           echo "Test suite failed"
           echo ""
           echo "To reproduce locally:"
-          echo "  bash .codeflow/testing/run-all-tests.sh --mode full  # Full suite + structural"
-          echo "  ./codeflow test --coverage                           # Per-file coverage"
+          echo "  bash .codeflow/testing/run-all-tests.sh --mode full"
           exit 1
 
   test-go:

@@ -1,525 +1,147 @@
 #!/usr/bin/env bash
-# Test: Git pre-push hook
+# Test: Git pre-push hook (thin wrapper -> Go binary)
 # Location: .codeflow/testing/scripts/git-hooks/test-pre-push.sh
 #
-# Tests the pre-push hook functionality:
-#   - Pattern checks (grep-based, existing)
-#   - Behavioral tests (actually runs the hook)
+# Tests the pre-push thin wrapper and Go binary behavior.
 
 set -euo pipefail
 
 # Setup
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../lib/test-helpers.sh
+source "$TEST_DIR/../../lib/test-helpers.sh"
+
 HOOK="$REPO_ROOT/.codeflow/scripts/git-hooks/pre-push"
+GO_BIN="codeflow"
 
-# Test counter
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-# Test helper
-check_pattern() {
-    local pattern="$1"
-    local description="$2"
-
-    if grep -qE "$pattern" "$HOOK"; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    else
-        echo "FAIL: $description"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
-}
-
-echo "=== Testing Git Pre-Push Hook ==="
+echo ""
+echo "=== Testing Git Pre-Push Hook (Thin Wrapper) ==="
 echo ""
 
 # ============================================================================
-# Test 1: Hook exists and is executable
+# Test 1: Wrapper structure
 # ============================================================================
-echo "--- Basic checks ---"
+echo "--- Wrapper structure ---"
+
+assert_file_exists "$HOOK" "Hook file exists"
 
 if [[ -x "$HOOK" ]]; then
-    echo "PASS: Hook is executable"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Hook is executable"
 else
-    echo "FAIL: Hook is not executable"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Hook is executable"
+fi
+
+assert_file_contains "$HOOK" "set -euo pipefail" "Has strict mode"
+assert_file_contains "$HOOK" "exec codeflow git-hooks" "Delegates to Go binary via exec"
+assert_file_contains "$HOOK" "git-hooks pre-push" "Uses correct subcommand"
+assert_file_contains "$HOOK" 'exec ' "Uses exec for delegation"
+assert_file_contains "$HOOK" '"$@"' "Passes all args"
+
+# Verify it's a thin wrapper (under 15 lines)
+LINE_COUNT=$(wc -l < "$HOOK" | tr -d ' ')
+if [[ $LINE_COUNT -le 15 ]]; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Is a thin wrapper ($LINE_COUNT lines)"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Is a thin wrapper (got $LINE_COUNT lines, expected <=15)"
 fi
 
 # ============================================================================
-# Test 2: Shellcheck passes
+# Test 2: Shellcheck
 # ============================================================================
+echo ""
+echo "--- Shellcheck ---"
+
 if command -v shellcheck &>/dev/null; then
-    if shellcheck -e SC1091 "$HOOK" 2>/dev/null; then
-        echo "PASS: Hook passes shellcheck"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
+    if shellcheck -x -s bash "$HOOK" 2>/dev/null; then
+        ((TEST_TOTAL_COUNT++)) || true
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} Passes shellcheck"
     else
-        echo "FAIL: Hook fails shellcheck"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
+        ((TEST_TOTAL_COUNT++)) || true
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} Passes shellcheck"
     fi
 else
-    echo "SKIP: shellcheck not available"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_SKIP_COUNT++)) || true
+    echo -e "  ${YELLOW}-${NC} shellcheck not available (skipped)"
 fi
 
 # ============================================================================
-# Test 3: Protected branches defined
+# Test 3: Go binary exists and subcommand responds
 # ============================================================================
 echo ""
-echo "--- Protected branch checks ---"
+echo "--- Go binary ---"
 
-check_pattern "main" "Should protect main branch"
-check_pattern "master" "Should protect master branch"
-check_pattern "production" "Should protect production branch"
-
-# ============================================================================
-# Test 4: Force push detection
-# ============================================================================
-echo ""
-echo "--- Force push detection ---"
-
-check_pattern "merge-base.*ancestor" "Should check ancestry for force push"
-check_pattern "Force push" "Should have force push warning message"
-
-# ============================================================================
-# Test 5: Valid branch prefixes defined
-# ============================================================================
-echo ""
-echo "--- Branch naming validation ---"
-
-check_pattern "feat/" "Should recognize feat/ prefix"
-check_pattern "fix/" "Should recognize fix/ prefix"
-check_pattern "docs/" "Should recognize docs/ prefix"
-check_pattern "refactor/" "Should recognize refactor/ prefix"
-check_pattern "test/" "Should recognize test/ prefix"
-check_pattern "chore/" "Should recognize chore/ prefix"
-
-# ============================================================================
-# Test 6: Proper argument handling
-# ============================================================================
-echo ""
-echo "--- Argument handling ---"
-
-# shellcheck disable=SC2016  # Single quotes intentional to match literal pattern
-check_pattern 'REMOTE="\$1"' "Should capture remote argument"
-# shellcheck disable=SC2016  # Single quotes intentional to match literal pattern
-check_pattern 'URL="\$2"' "Should capture URL argument"
-
-# ============================================================================
-# Test 7: Proper exit codes
-# ============================================================================
-echo ""
-echo "--- Exit code handling ---"
-
-if grep -q "exit 0" "$HOOK" && grep -q "exit 1" "$HOOK"; then
-    echo "PASS: Proper exit codes used"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+if command -v codeflow &>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Go binary on PATH"
 else
-    echo "FAIL: Missing proper exit codes"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Go binary on PATH"
+fi
+
+if "$GO_BIN" git-hooks pre-push --help &>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Go subcommand responds to --help"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Go subcommand responds to --help"
 fi
 
 # ============================================================================
-# Test 8: Config-driven pattern checks
+# Test 4: Pre-push with safe remote (functional)
 # ============================================================================
 echo ""
-echo "--- Config-driven checks ---"
+echo "--- Functional tests ---"
 
-check_pattern "CONFIG_FILE" "Should reference config file"
-check_pattern "enforcement-policy.json" "Should use enforcement-policy.json"
-check_pattern "jq" "Should use jq for config parsing"
-check_pattern "DEFAULT_PROTECTED_BRANCHES" "Should have fallback protected branches"
-check_pattern "DEFAULT_VALID_PREFIXES" "Should have fallback valid prefixes"
+# Pre-push reads refs from stdin. With empty stdin and a safe branch,
+# the Go binary should pass (nothing to push = nothing to block).
+EXIT_CODE=0
+echo "" | "$GO_BIN" git-hooks pre-push "origin" "https://github.com/test/repo.git" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "Allows push with empty refs (nothing to push)"
 
-# ############################################################################
-#
-# BEHAVIORAL TESTS - Actually run the hook and verify exit codes/output
-#
-# ############################################################################
-
+# ============================================================================
+# Test 5: Wrapper does not contain old shell logic
+# ============================================================================
 echo ""
-echo "========================================="
-echo "=== Behavioral Tests (hook execution) ==="
-echo "========================================="
+echo "--- No old shell logic ---"
 
-# Setup for behavioral tests
-BEHAV_TEST_DIR="/tmp/claude/test-prepush-$$"
-mkdir -p "$BEHAV_TEST_DIR/mock-bin"
-
-# Cleanup on exit
-cleanup_behavioral() {
-    rm -rf "$BEHAV_TEST_DIR"
-}
-trap cleanup_behavioral EXIT
-
-# --------------------------------------------------------------------------
-# Helper: create a mock git script with specified behavior
-#
-# Arguments:
-#   $1 - mock git behavior: "ancestor", "not-ancestor", "passthrough"
-#   $2 - mock branch name for `git branch --show-current`
-# --------------------------------------------------------------------------
-create_mock_git() {
-    local mock_mode="$1"
-    local mock_branch="$2"
-
-    cat > "$BEHAV_TEST_DIR/mock-bin/git" << MOCKEOF
-#!/bin/bash
-if [[ "\$1" == "rev-parse" && "\$2" == "--show-toplevel" ]]; then
-    echo "$REPO_ROOT"
-    exit 0
+if ! grep -q "PROTECTED_BRANCHES" "$HOOK" 2>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} No PROTECTED_BRANCHES variable in wrapper"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} No PROTECTED_BRANCHES variable in wrapper"
 fi
-if [[ "\$1" == "branch" && "\$2" == "--show-current" ]]; then
-    echo "$mock_branch"
-    exit 0
+
+if ! grep -q "force push" "$HOOK" 2>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} No force push logic in wrapper"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} No force push logic in wrapper"
 fi
-if [[ "\$1" == "merge-base" && "\$2" == "--is-ancestor" ]]; then
-    if [[ "$mock_mode" == "ancestor" ]]; then
-        exit 0
-    elif [[ "$mock_mode" == "not-ancestor" ]]; then
-        exit 1
-    fi
-fi
-/usr/bin/git "\$@"
-MOCKEOF
-    chmod +x "$BEHAV_TEST_DIR/mock-bin/git"
-}
-
-# Helper to test hook and check result
-test_prepush() {
-    local description="$1"
-    local expected_exit="$2"
-    local stdin_line="$3"
-    local remote_name="${4:-origin}"
-    local remote_url="${5:-https://github.com/test/repo.git}"
-    local mock_mode="${6:-passthrough}"
-    local mock_branch="${7:-feat/test-branch}"
-
-    create_mock_git "$mock_mode" "$mock_branch"
-
-    local actual_exit=0
-    local output=""
-    output=$(echo "$stdin_line" | PATH="$BEHAV_TEST_DIR/mock-bin:$PATH" bash "$HOOK" "$remote_name" "$remote_url" 2>&1) || actual_exit=$?
-
-    if [[ "$actual_exit" -eq "$expected_exit" ]]; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    else
-        echo "FAIL: $description (expected exit $expected_exit, got $actual_exit)"
-        echo "  Output: $output"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
-}
-
-# Helper to test hook and check both result and output content
-test_prepush_with_output() {
-    local description="$1"
-    local expected_exit="$2"
-    local expected_output="$3"
-    local stdin_line="$4"
-    local remote_name="${5:-origin}"
-    local remote_url="${6:-https://github.com/test/repo.git}"
-    local mock_mode="${7:-passthrough}"
-    local mock_branch="${8:-feat/test-branch}"
-
-    create_mock_git "$mock_mode" "$mock_branch"
-
-    local actual_exit=0
-    local output=""
-    output=$(echo "$stdin_line" | PATH="$BEHAV_TEST_DIR/mock-bin:$PATH" bash "$HOOK" "$remote_name" "$remote_url" 2>&1) || actual_exit=$?
-
-    if [[ "$actual_exit" -eq "$expected_exit" ]] && echo "$output" | grep -qi "$expected_output"; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    elif [[ "$actual_exit" -ne "$expected_exit" ]]; then
-        echo "FAIL: $description (expected exit $expected_exit, got $actual_exit)"
-        echo "  Output: $output"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    else
-        echo "FAIL: $description (output missing: $expected_output)"
-        echo "  Output: $output"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
-}
-
-# Common SHA values for tests
-ZERO_SHA="0000000000000000000000000000000000000000"
-FAKE_LOCAL="abc1234567890abc1234567890abc1234567890ab"
-FAKE_REMOTE="def4567890abc1234567890abc1234567890abcde"
-
-# ============================================================================
-# Behavioral Test 1: Force push to protected branch "main" (should BLOCK)
-# ============================================================================
-echo ""
-echo "--- Force push detection (behavioral) ---"
-
-test_prepush_with_output \
-    "Should block force push to main" \
-    1 \
-    "Force push" \
-    "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "not-ancestor" \
-    "main"
-
-# ============================================================================
-# Behavioral Test 2: Force push to "master" (should BLOCK)
-# ============================================================================
-test_prepush_with_output \
-    "Should block force push to master" \
-    1 \
-    "Force push" \
-    "refs/heads/master $FAKE_LOCAL refs/heads/master $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "not-ancestor" \
-    "master"
-
-# ============================================================================
-# Behavioral Test 3: Force push to "production" (should BLOCK)
-# ============================================================================
-test_prepush_with_output \
-    "Should block force push to production" \
-    1 \
-    "Force push" \
-    "refs/heads/production $FAKE_LOCAL refs/heads/production $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "not-ancestor" \
-    "production"
-
-# ============================================================================
-# Behavioral Test 4: Normal push to feature branch (should ALLOW)
-# ============================================================================
-echo ""
-echo "--- Normal push (behavioral) ---"
-
-test_prepush \
-    "Should allow normal push to feat/my-feature" \
-    0 \
-    "refs/heads/feat/my-feature $FAKE_LOCAL refs/heads/feat/my-feature $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "feat/my-feature"
-
-# ============================================================================
-# Behavioral Test 5: Normal push to fix branch (should ALLOW)
-# ============================================================================
-test_prepush \
-    "Should allow normal push to fix/bug-123" \
-    0 \
-    "refs/heads/fix/bug-123 $FAKE_LOCAL refs/heads/fix/bug-123 $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "fix/bug-123"
-
-# ============================================================================
-# Behavioral Test 6: Branch delete (all-zero local SHA) should skip checks
-# ============================================================================
-echo ""
-echo "--- Branch delete (behavioral) ---"
-
-test_prepush \
-    "Should allow branch delete (zero SHA skips checks)" \
-    0 \
-    "refs/heads/feat/old-branch $ZERO_SHA refs/heads/feat/old-branch $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "passthrough" \
-    "feat/test-branch"
-
-# ============================================================================
-# Behavioral Test 7: Non-standard branch name (should warn but ALLOW)
-# ============================================================================
-echo ""
-echo "--- Non-standard branch name (behavioral) ---"
-
-test_prepush_with_output \
-    "Should warn on non-standard branch name but allow" \
-    0 \
-    "naming convention" \
-    "refs/heads/my-random-branch $FAKE_LOCAL refs/heads/my-random-branch $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "my-random-branch"
-
-# ============================================================================
-# Behavioral Test 8: Normal push to protected branch (not force, should BLOCK)
-# ============================================================================
-echo ""
-echo "--- Direct push to protected branch (behavioral) ---"
-
-test_prepush_with_output \
-    "Should block direct push to main (non-force)" \
-    1 \
-    "Direct push" \
-    "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "main"
-
-# ============================================================================
-# Behavioral Test 9: New branch push (remote SHA is all zeros)
-# ============================================================================
-echo ""
-echo "--- New branch push (behavioral) ---"
-
-test_prepush \
-    "Should allow push of new branch to remote" \
-    0 \
-    "refs/heads/feat/new-branch $FAKE_LOCAL refs/heads/feat/new-branch $ZERO_SHA" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "passthrough" \
-    "feat/new-branch"
-
-# ============================================================================
-# Behavioral Test 10: Push from main to main (should BLOCK - protected branch)
-# ============================================================================
-echo ""
-echo "--- Push from main to protected branch (behavioral) ---"
-
-test_prepush_with_output \
-    "Should block push from main to main (protected)" \
-    1 \
-    "Direct push" \
-    "refs/heads/main $FAKE_LOCAL refs/heads/main $ZERO_SHA" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "passthrough" \
-    "main"
-
-# ============================================================================
-# Behavioral Test 11: Push from master to master (should BLOCK - protected branch)
-# ============================================================================
-test_prepush_with_output \
-    "Should block push from master to master (protected)" \
-    1 \
-    "Direct push" \
-    "refs/heads/master $FAKE_LOCAL refs/heads/master $ZERO_SHA" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "passthrough" \
-    "master"
-
-# ============================================================================
-# Behavioral Test 12: Valid prefix branches all pass
-# ============================================================================
-echo ""
-echo "--- Valid prefix branches (behavioral) ---"
-
-# Note: release/* is excluded - it's a protected branch pattern (glob match)
-for prefix in feat fix docs refactor test chore plan experiment hotfix bugfix feature perf style build ci revert merge wip refine; do
-    test_prepush \
-        "Should allow push to ${prefix}/something" \
-        0 \
-        "refs/heads/${prefix}/something $FAKE_LOCAL refs/heads/${prefix}/something $FAKE_REMOTE" \
-        "origin" \
-        "https://github.com/test/repo.git" \
-        "ancestor" \
-        "${prefix}/something"
-done
-
-# ============================================================================
-# Behavioral Test 13: Empty stdin (no refs pushed) should succeed
-# ============================================================================
-echo ""
-echo "--- Edge cases (behavioral) ---"
-
-test_prepush \
-    "Should allow when stdin is empty (no refs)" \
-    0 \
-    "" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "passthrough" \
-    "feat/test-branch"
-
-# ============================================================================
-# Behavioral Test 14: Force push error message content
-# ============================================================================
-echo ""
-echo "--- Error message content (behavioral) ---"
-
-test_prepush_with_output \
-    "Force push error should mention skill remediation" \
-    1 \
-    "cf-git-operations" \
-    "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "not-ancestor" \
-    "main"
-
-test_prepush_with_output \
-    "Force push error should mention rewriting history" \
-    1 \
-    "rewrite history" \
-    "refs/heads/main $FAKE_LOCAL refs/heads/main $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "not-ancestor" \
-    "main"
-
-# ============================================================================
-# Behavioral Test 15: release/* glob matching (should BLOCK as protected)
-# ============================================================================
-echo ""
-echo "--- Protected branch glob matching (behavioral) ---"
-
-test_prepush_with_output \
-    "Should block push to release/v1.0 (glob match)" \
-    1 \
-    "protected branch" \
-    "refs/heads/release/v1.0 $FAKE_LOCAL refs/heads/release/v1.0 $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "release/v1.0"
-
-test_prepush_with_output \
-    "Should block push to release/2.0-rc1 (glob match)" \
-    1 \
-    "protected branch" \
-    "refs/heads/release/2.0-rc1 $FAKE_LOCAL refs/heads/release/2.0-rc1 $FAKE_REMOTE" \
-    "origin" \
-    "https://github.com/test/repo.git" \
-    "ancestor" \
-    "release/2.0-rc1"
-
-# ============================================================================
-# Pattern Tests: New features
-# ============================================================================
-echo ""
-echo "--- New feature pattern checks ---"
-
-check_pattern "is_force_push" "Should have is_force_push function"
-check_pattern "log_override" "Should have log_override function"
-check_pattern "is_pathflow_active" "Should have is_pathflow_active function"
-check_pattern "REPO_ROOT.*:-" "Should have overridable REPO_ROOT"
-check_pattern ">&2" "Should output errors to stderr"
-check_pattern "Emergency Override" "Should have emergency override section"
-check_pattern "cf-git-operations" "Should mention cf-git-operations teammate for PathFlow mode"
-check_pattern "Delegate to cf-git-operations" "Should mention cf-git-operations teammate delegation for standalone mode"
-check_pattern "push-overrides.log" "Should log overrides to push-overrides.log"
 
 # ============================================================================
 # Summary
 # ============================================================================
 
-echo ""
-echo "=== Test Summary ==="
-echo "Passed: $TESTS_PASSED"
-echo "Failed: $TESTS_FAILED"
-echo ""
-
-if [[ $TESTS_FAILED -gt 0 ]]; then
-    exit 1
-fi
-exit 0
+print_test_summary
+exit "$TEST_FAIL_COUNT"

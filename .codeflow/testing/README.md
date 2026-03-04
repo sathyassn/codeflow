@@ -11,7 +11,7 @@ The CodeFlow testing framework provides **config-driven test execution** with **
   - [Priority Levels](#priority-levels)
   - [Test Categories](#test-categories)
 - [CLI Tools](#cli-tools)
-  - [./codeflow test](#codeflow-test-primary-cli)
+  - [codeflow test](#codeflow-test-primary-cli)
   - [run-all-tests.sh](#run-all-testssh-shell-runner)
   - [run-coverage.sh](#run-coveragesh-coverage-runner)
 - [Coverage Policy](#coverage-policy)
@@ -29,13 +29,13 @@ Run tests from the **project root** directory:
 
 ```bash
 # Run tests in standard mode (recommended for development)
-./codeflow test
+codeflow test
 
 # Run with coverage enforcement (85% threshold)
-./codeflow test --coverage
+codeflow test --coverage
 
 # Run full test suite before creating a PR
-./codeflow test --mode full --coverage
+codeflow test --mode full --coverage
 ```
 
 ---
@@ -48,19 +48,19 @@ All commands are run from the **project root**. This section provides a quick lo
 
 | Goal | Command |
 |------|---------|
-| Run standard tests | `./codeflow test` |
-| Run essential tests only | `./codeflow test --mode essential` |
-| Run full test suite | `./codeflow test --mode full` |
-| Run with coverage check | `./codeflow test --coverage` |
-| Full suite + coverage | `./codeflow test --mode full --coverage` |
-| Verbose output | `./codeflow test --verbose` |
+| Run standard tests | `codeflow test` |
+| Run essential tests only | `codeflow test --mode essential` |
+| Run full test suite | `codeflow test --mode full` |
+| Run with coverage check | `codeflow test --coverage` |
+| Full suite + coverage | `codeflow test --mode full --coverage` |
+| Verbose output | `codeflow test --verbose` |
 
 ### Running Specific Tests
 
 | Goal | Command |
 |------|---------|
-| Run single file | `./codeflow test scripts/db/test_schema.py` |
-| Single file + coverage | `./codeflow test scripts/db/test_schema.py -c` |
+| Run single file | `codeflow test scripts/db/test_schema.py` |
+| Single file + coverage | `codeflow test scripts/db/test_schema.py -c` |
 | Run by category | `.codeflow/testing/run-all-tests.sh --category scripts-db` |
 | Category + verbose | `.codeflow/testing/run-all-tests.sh --category scripts-security -v` |
 
@@ -78,8 +78,8 @@ All commands are run from the **project root**. This section provides a quick lo
 
 | Goal | Command |
 |------|---------|
-| List all test files | `./codeflow test --list` |
-| List files for mode | `./codeflow test --list --mode full` |
+| List all test files | `codeflow test --list` |
+| List files for mode | `codeflow test --list --mode full` |
 | Preview what would run | `.codeflow/testing/run-all-tests.sh --dry-run` |
 | Stop on first failure | `.codeflow/testing/run-all-tests.sh --stop-on-fail` |
 
@@ -112,9 +112,9 @@ Tests are organized into **modes** that determine which priority levels run. Cho
 **Examples:**
 
 ```bash
-./codeflow test --mode essential   # Fast check (~20s)
-./codeflow test                    # Standard mode (~30s with parallel)
-./codeflow test --mode full        # Comprehensive (~40s with parallel)
+codeflow test --mode essential   # Fast check (~20s)
+codeflow test                    # Standard mode (~30s with parallel)
+codeflow test --mode full        # Comprehensive (~40s with parallel)
 ```
 
 ### Parallel Execution
@@ -210,12 +210,12 @@ Tests are grouped into **22 categories** for targeted testing. Use categories wh
 
 Three CLI tools are available, each suited for different use cases.
 
-### `./codeflow test` (Primary CLI)
+### `codeflow test` (Primary CLI)
 
-The **recommended** way to run tests. This is the project's main CLI entry point, which delegates to the Python test runner.
+The **recommended** way to run tests. This is the project's main CLI entry point.
 
 ```bash
-./codeflow test [options] [file]
+codeflow test [options] [file]
 ```
 
 **Options:**
@@ -233,10 +233,10 @@ The **recommended** way to run tests. This is the project's main CLI entry point
 **Examples:**
 
 ```bash
-./codeflow test                              # Standard mode
-./codeflow test --mode full --coverage       # Full suite with coverage
-./codeflow test scripts/db/test_schema.py    # Single file
-./codeflow test --list --mode full           # List all test files
+codeflow test                              # Standard mode
+codeflow test --mode full --coverage       # Full suite with coverage
+codeflow test scripts/db/test_schema.py    # Single file
+codeflow test --list --mode full           # List all test files
 ```
 
 ### `run-all-tests.sh` (Shell Runner)
@@ -614,7 +614,7 @@ For CI pipelines, use strict mode to enforce coverage thresholds:
 
 ```bash
 # In CI pipeline
-./codeflow test --mode full --coverage
+codeflow test --mode full --coverage
 .codeflow/testing/run-coverage.sh --strict
 ```
 
@@ -639,7 +639,7 @@ To investigate coverage failures:
 
 ```bash
 # Run with verbose to see per-file coverage
-./codeflow test --coverage --verbose
+codeflow test --coverage --verbose
 
 # View detailed HTML report
 open .codeflow/testing/coverage_reports/python_html/index.html
@@ -651,7 +651,7 @@ If tests aren't being found:
 
 ```bash
 # List what the framework sees
-./codeflow test --list --mode full
+codeflow test --list --mode full
 
 # Preview execution without running
 .codeflow/testing/run-all-tests.sh --dry-run

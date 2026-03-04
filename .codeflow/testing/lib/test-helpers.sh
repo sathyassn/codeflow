@@ -2,16 +2,12 @@
 # CodeFlow Test Framework: Test Helpers
 # Location: .codeflow/testing/lib/test-helpers.sh
 
-# Requires: test-common.sh, codeflow_shell_lib
+# Requires: test-common.sh
 HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -z "${REPO_ROOT:-}" ]] && REPO_ROOT="$(cd "$HELPERS_DIR/../../.." && pwd)"
 
 # Source test-common.sh if not already loaded
 [[ -z "${TEST_FRAMEWORK_VERSION:-}" ]] && source "$HELPERS_DIR/test-common.sh"
-
-# Source codeflow_shell_lib for base utilities (logging, paths, validation)
-# shellcheck source=../../scripts/shell-lib/index.sh
-source "$REPO_ROOT/.codeflow/scripts/shell-lib/index.sh"
 
 # ============================================================================
 # EXIT CODE ASSERTIONS

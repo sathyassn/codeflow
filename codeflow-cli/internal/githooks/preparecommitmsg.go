@@ -29,10 +29,9 @@ func RunPrepareCommitMsg(msgFile, source string, policy *EnforcementPolicy) erro
 		return nil
 	}
 
-	branch, err := getCurrentBranch()
-	if err != nil {
-		return nil // Non-fatal; no template if we can't determine branch.
-	}
+	branch, _ := getCurrentBranch()
+	// Branch may be empty in detached HEAD (e.g., CI merge refs). That's fine —
+	// we still generate a generic template without type/scope prefill.
 
 	commitType, commitScope := extractTypeAndScope(branch, policy)
 

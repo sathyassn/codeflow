@@ -97,6 +97,10 @@ func checkBranchProtection(branch string, policy *EnforcementPolicy, errs *PreCo
 }
 
 func checkBranchName(w io.Writer, branch string, policy *EnforcementPolicy, errs *PreCommitErrors) {
+	// Skip branch name validation in detached HEAD (e.g., CI merge refs).
+	if branch == "" {
+		return
+	}
 	types := policy.GitFormat.BranchTypes
 	if len(types) == 0 {
 		return

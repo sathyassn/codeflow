@@ -101,14 +101,16 @@ func TestRunPrepareCommitMsg_NonexistentFile(t *testing.T) {
 	t.Parallel()
 
 	policy := testPolicy()
-	// source="" so we don't skip, but the file read will fail in getCurrentBranch
-	// (not in file read since it reads branch first). Actually, getCurrentBranch
-	// uses git symbolic-ref which will fail in test environment, returning nil.
-	// So the function returns nil early.
+	// source="" so we don't skip. getCurrentBranch may fail (empty branch) but
+	// the function continues and attempts to read the nonexistent file, which
+	// returns an error.
 	err := RunPrepareCommitMsg("/nonexistent/COMMIT_EDITMSG", "", policy)
-	// getCurrentBranch fails → returns nil (non-fatal)
-	if err != nil {
-		t.Logf("got error (may be expected): %v", err)
+	if err == nil {
+		t.Log("no error (getCurrentBranch may have provided a branch in this env)")
+		return
+	}
+	if !strings.Contains(err.Error(), "read commit message file") {
+		t.Errorf("expected file read error, got: %v", err)
 	}
 }
 
@@ -217,11 +219,11 @@ func TestRunPrepareCommitMsg_CommentOnlyContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// RunPrepareCommitMsg calls getCurrentBranch via git, which may work or fail.
+	// RunPrepareCommitMsg proceeds regardless of getCurrentBranch result.
+	// In detached HEAD or non-git env, branch is empty → generic template.
 	err := RunPrepareCommitMsg(msgFile, "", policy)
 	if err != nil {
-		t.Logf("got error (may be git env): %v", err)
-		return
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	data, err := os.ReadFile(msgFile)
@@ -229,15 +231,9 @@ func TestRunPrepareCommitMsg_CommentOnlyContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	// If getCurrentBranch succeeded, template was written (non-comment content).
-	// If it failed, the function returned nil and file was unchanged.
-	if strings.HasPrefix(content, "# comment") {
-		t.Log("getCurrentBranch failed, file unchanged (expected in some envs)")
-	} else {
-		// Template was written.
-		if !strings.Contains(content, "Conventional commit") {
-			t.Error("expected template with conventional commit guidance")
-		}
+	// Template should always be written since file had only comments.
+	if !strings.Contains(content, "Conventional commit") {
+		t.Error("expected template with conventional commit guidance")
 	}
 }
 
@@ -252,11 +248,10 @@ func TestRunPrepareCommitMsg_ExistingContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// RunPrepareCommitMsg will call getCurrentBranch which may fail in test env,
-	// returning nil. But if it did succeed, it should not overwrite existing content.
+	// Non-comment content → isEmptyOrComments returns false → no template written.
 	err := RunPrepareCommitMsg(msgFile, "", policy)
 	if err != nil {
-		t.Logf("expected nil or non-fatal, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	data, err := os.ReadFile(msgFile)

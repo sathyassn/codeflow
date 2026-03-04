@@ -511,12 +511,12 @@ Edge cases: {what to watch for, known pitfalls}
 
 ```text
 Task: Add input validation to the session-start hook
-Scope: .claude/hooks/codeflow/session-start/cf-session-start-init.sh
+Scope: codeflow-cli/cmd/codeflow/hooks.go (runSessionStartInit function)
 Acceptance:
   1. Hook validates session_id format matches "ses-{13-digit-timestamp}{12-hex-chars}"
   2. Invalid session_id triggers warning to stderr (not block)
-  3. Existing tests in test-session-start-init.sh still pass
-Tests: Add 2 new test cases to test-session-start-init.sh (valid format, invalid format)
+  3. Existing tests in hooks_test.go still pass
+Tests: Add 2 new test cases to hooks_test.go (valid format, invalid format)
 Edge cases: Empty session_id (already handled), non-ASCII characters in stdin
 ```
 
@@ -1065,7 +1065,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `./codeflow test` (1,555+ tests)
+- Test suite: run via `codeflow test` (1,555+ tests)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1201,9 +1201,9 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ### CLI
 
 ```text
-./codeflow test              # Run test suite
-./codeflow test --coverage   # Run with coverage
-./codeflow doctor            # Diagnose infrastructure (requires global CLI)
+codeflow test              # Run test suite
+codeflow test --coverage   # Run with coverage
+codeflow doctor            # Diagnose infrastructure
 ```
 
 ### Go CLI Testing

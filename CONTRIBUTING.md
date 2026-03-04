@@ -3,7 +3,7 @@
 ## Getting Started
 
 1. Clone the repository
-2. Run `./codeflow doctor` to verify setup
+2. Run `codeflow doctor` to verify setup
 3. Create a feature branch: `git checkout -b feat/your-feature`
 
 ## Development Workflow

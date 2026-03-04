@@ -16,10 +16,10 @@ CodeFlow provides structured workflows, memory management, and git enforcement f
 
 ```bash
 # Initialize CodeFlow in your project
-./codeflow init
+codeflow init
 
 # Check system health
-./codeflow doctor
+codeflow doctor
 
 # Start Claude Code
 claude

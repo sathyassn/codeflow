@@ -1,214 +1,207 @@
 #!/usr/bin/env bash
-# Test: Git prepare-commit-msg hook
+# Test: Git prepare-commit-msg hook (thin wrapper -> Go binary)
 # Location: .codeflow/testing/scripts/git-hooks/test-prepare-commit-msg.sh
 #
-# Tests the prepare-commit-msg hook functionality
+# Tests the prepare-commit-msg thin wrapper and Go binary behavior.
 
 set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
-HOOK="$REPO_ROOT/.codeflow/scripts/git-hooks/prepare-commit-msg"
-TEMP_MSG="/tmp/claude/test-prepare-commit-msg-$$"
+# shellcheck source=../../lib/test-helpers.sh
+source "$TEST_DIR/../../lib/test-helpers.sh"
 
-# Test counter
-TESTS_PASSED=0
-TESTS_FAILED=0
+HOOK="$REPO_ROOT/.codeflow/scripts/git-hooks/prepare-commit-msg"
+GO_BIN="codeflow"
+TEMP_MSG="/tmp/claude/test-prepare-commit-msg-$$"
 
 # Ensure temp directory exists
 mkdir -p /tmp/claude
 
-# Cleanup (called via trap)
-# shellcheck disable=SC2329  # Invoked indirectly via trap
+# Cleanup
+# shellcheck disable=SC2329
 cleanup() {
     rm -f "$TEMP_MSG"
 }
 trap cleanup EXIT
 
-# Test helper
-check_pattern() {
-    local pattern="$1"
-    local description="$2"
-
-    if grep -qE "$pattern" "$HOOK"; then
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    else
-        echo "FAIL: $description"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
-}
-
-# Test hook with empty message
-test_template_generation() {
-    local commit_source="$1"
-    local description="$2"
-    local should_generate="$3"
-
-    echo "" > "$TEMP_MSG"
-    bash "$HOOK" "$TEMP_MSG" "$commit_source" 2>/dev/null || true
-
-    local content
-    content=$(cat "$TEMP_MSG")
-
-    if [[ "$should_generate" == "yes" ]]; then
-        if [[ -n "$content" ]] && [[ ${#content} -gt 5 ]]; then
-            echo "PASS: $description"
-            TESTS_PASSED=$((TESTS_PASSED + 1))
-        else
-            echo "FAIL: $description (no template generated)"
-            TESTS_FAILED=$((TESTS_FAILED + 1))
-        fi
-    else
-        # For skip conditions, message should remain empty or unchanged
-        echo "PASS: $description"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-    fi
-}
-
-echo "=== Testing Git Prepare-Commit-Msg Hook ==="
+echo ""
+echo "=== Testing Git Prepare-Commit-Msg Hook (Thin Wrapper) ==="
 echo ""
 
 # ============================================================================
-# Test 1: Hook exists and is executable
+# Test 1: Wrapper structure
 # ============================================================================
-echo "--- Basic checks ---"
+echo "--- Wrapper structure ---"
+
+assert_file_exists "$HOOK" "Hook file exists"
 
 if [[ -x "$HOOK" ]]; then
-    echo "PASS: Hook is executable"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Hook is executable"
 else
-    echo "FAIL: Hook is not executable"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Hook is executable"
+fi
+
+assert_file_contains "$HOOK" "set -euo pipefail" "Has strict mode"
+assert_file_contains "$HOOK" "exec codeflow git-hooks" "Delegates to Go binary via exec"
+assert_file_contains "$HOOK" "git-hooks prepare-commit-msg" "Uses correct subcommand"
+assert_file_contains "$HOOK" 'exec ' "Uses exec for delegation"
+assert_file_contains "$HOOK" '"$@"' "Passes all args"
+
+# Verify it's a thin wrapper (under 15 lines)
+LINE_COUNT=$(wc -l < "$HOOK" | tr -d ' ')
+if [[ $LINE_COUNT -le 15 ]]; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Is a thin wrapper ($LINE_COUNT lines)"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Is a thin wrapper (got $LINE_COUNT lines, expected <=15)"
 fi
 
 # ============================================================================
-# Test 2: Shellcheck passes
+# Test 2: Shellcheck
 # ============================================================================
+echo ""
+echo "--- Shellcheck ---"
+
 if command -v shellcheck &>/dev/null; then
-    if shellcheck -e SC1091 "$HOOK" 2>/dev/null; then
-        echo "PASS: Hook passes shellcheck"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
+    if shellcheck -x -s bash "$HOOK" 2>/dev/null; then
+        ((TEST_TOTAL_COUNT++)) || true
+        ((TEST_PASS_COUNT++)) || true
+        echo -e "  ${GREEN}✓${NC} Passes shellcheck"
     else
-        echo "FAIL: Hook fails shellcheck"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
+        ((TEST_TOTAL_COUNT++)) || true
+        ((TEST_FAIL_COUNT++)) || true
+        echo -e "  ${RED}✗${NC} Passes shellcheck"
     fi
 else
-    echo "SKIP: shellcheck not available"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_SKIP_COUNT++)) || true
+    echo -e "  ${YELLOW}-${NC} shellcheck not available (skipped)"
 fi
 
 # ============================================================================
-# Test 3: Skip conditions (pattern checks)
+# Test 3: Go binary exists and subcommand responds
 # ============================================================================
 echo ""
-echo "--- Skip conditions (pattern) ---"
+echo "--- Go binary ---"
 
-check_pattern 'COMMIT_SOURCE.*message' "Should check for message source"
-check_pattern 'COMMIT_SOURCE.*merge' "Should check for merge source"
-check_pattern 'COMMIT_SOURCE.*commit' "Should check for commit source (amend)"
+if command -v codeflow &>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Go binary on PATH"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Go binary on PATH"
+fi
+
+if "$GO_BIN" git-hooks prepare-commit-msg --help &>/dev/null; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Go subcommand responds to --help"
+else
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Go subcommand responds to --help"
+fi
 
 # ============================================================================
-# Test 3b: Skip conditions (functional)
+# Test 4: Skip conditions (functional)
 # ============================================================================
 echo ""
-echo "--- Skip conditions (functional) ---"
+echo "--- Skip conditions ---"
 
-# Source "message": Should skip template generation (message already provided via -m)
+# source=message: should skip template (message already via -m)
 echo "" > "$TEMP_MSG"
-bash "$HOOK" "$TEMP_MSG" "message" 2>/dev/null || true
+EXIT_CODE=0
+"$GO_BIN" git-hooks prepare-commit-msg "$TEMP_MSG" "message" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "source=message exits successfully"
 MSG_CONTENT=$(cat "$TEMP_MSG")
 if [[ -z "$MSG_CONTENT" ]] || [[ ${#MSG_CONTENT} -le 1 ]]; then
-    echo "PASS: source=message skips template generation"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} source=message skips template generation"
 else
-    echo "FAIL: source=message should skip template generation (got: '$MSG_CONTENT')"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} source=message skips template generation (got: '$MSG_CONTENT')"
 fi
 
-# Source "merge": Should skip template generation
+# source=merge: should skip template
 echo "" > "$TEMP_MSG"
-bash "$HOOK" "$TEMP_MSG" "merge" 2>/dev/null || true
+EXIT_CODE=0
+"$GO_BIN" git-hooks prepare-commit-msg "$TEMP_MSG" "merge" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "source=merge exits successfully"
 MERGE_CONTENT=$(cat "$TEMP_MSG")
 if [[ -z "$MERGE_CONTENT" ]] || [[ ${#MERGE_CONTENT} -le 1 ]]; then
-    echo "PASS: source=merge skips template generation"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} source=merge skips template generation"
 else
-    echo "FAIL: source=merge should skip template generation (got: '$MERGE_CONTENT')"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} source=merge skips template generation (got: '$MERGE_CONTENT')"
 fi
 
-# Source "commit": Should skip template generation (amend)
+# source=commit (amend): should skip template
 echo "" > "$TEMP_MSG"
-bash "$HOOK" "$TEMP_MSG" "commit" 2>/dev/null || true
+EXIT_CODE=0
+"$GO_BIN" git-hooks prepare-commit-msg "$TEMP_MSG" "commit" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "source=commit exits successfully"
 COMMIT_CONTENT=$(cat "$TEMP_MSG")
 if [[ -z "$COMMIT_CONTENT" ]] || [[ ${#COMMIT_CONTENT} -le 1 ]]; then
-    echo "PASS: source=commit skips template generation"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} source=commit skips template generation"
 else
-    echo "FAIL: source=commit should skip template generation (got: '$COMMIT_CONTENT')"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} source=commit skips template generation (got: '$COMMIT_CONTENT')"
 fi
 
 # ============================================================================
-# Test 4: Branch detection
-# ============================================================================
-echo ""
-echo "--- Branch detection ---"
-
-check_pattern "git branch --show-current" "Should detect current branch"
-check_pattern "BASH_REMATCH" "Should use regex matching for branch parsing"
-
-# ============================================================================
-# Test 5: Commit type extraction
-# ============================================================================
-echo ""
-echo "--- Commit type extraction ---"
-
-check_pattern "feat|fix|docs|refactor|test|chore|perf|ci|build" "Should recognize all commit types"
-check_pattern "COMMIT_TYPE" "Should extract commit type"
-check_pattern "COMMIT_SCOPE" "Should extract commit scope"
-
-# ============================================================================
-# Test 6: Template content
-# ============================================================================
-echo ""
-echo "--- Template content ---"
-
-check_pattern "Conventional commit format" "Should include format instructions"
-check_pattern "Examples" "Should include examples"
-
-# ============================================================================
-# Test 7: Template generation tests
+# Test 5: Template generation for empty source
 # ============================================================================
 echo ""
 echo "--- Template generation ---"
 
-test_template_generation "" "Should generate template for empty source" "yes"
-test_template_generation "template" "Should generate template for template source" "yes"
-
-# ============================================================================
-# Test 8: Always succeeds
-# ============================================================================
-echo ""
-echo "--- Exit behavior ---"
-
-if grep -q "exit 0" "$HOOK" && ! grep -q "exit 1" "$HOOK"; then
-    echo "PASS: Prepare-commit-msg always succeeds"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
+echo "" > "$TEMP_MSG"
+EXIT_CODE=0
+"$GO_BIN" git-hooks prepare-commit-msg "$TEMP_MSG" "" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "Empty source exits successfully"
+TEMPLATE_CONTENT=$(cat "$TEMP_MSG")
+if [[ -n "$TEMPLATE_CONTENT" ]] && [[ ${#TEMPLATE_CONTENT} -gt 5 ]]; then
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_PASS_COUNT++)) || true
+    echo -e "  ${GREEN}✓${NC} Generates template for empty source"
 else
-    echo "FAIL: Prepare-commit-msg should never block"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
+    ((TEST_TOTAL_COUNT++)) || true
+    ((TEST_FAIL_COUNT++)) || true
+    echo -e "  ${RED}✗${NC} Generates template for empty source (got ${#TEMPLATE_CONTENT} chars)"
 fi
 
+# ============================================================================
+# Test 6: Always succeeds (non-blocking hook)
+# ============================================================================
 echo ""
-echo "=== Test Summary ==="
-echo "Passed: $TESTS_PASSED"
-echo "Failed: $TESTS_FAILED"
-echo ""
+echo "--- Non-blocking ---"
 
-if [[ $TESTS_FAILED -gt 0 ]]; then
-    exit 1
-fi
-exit 0
+# prepare-commit-msg should never block a commit
+echo "" > "$TEMP_MSG"
+EXIT_CODE=0
+"$GO_BIN" git-hooks prepare-commit-msg "$TEMP_MSG" "template" 2>/dev/null || EXIT_CODE=$?
+assert_equals "0" "$EXIT_CODE" "Always succeeds (non-blocking)"
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+print_test_summary
+exit "$TEST_FAIL_COUNT"

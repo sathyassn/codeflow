@@ -118,7 +118,7 @@ func runSecurity(stdin io.Reader, _, errW io.Writer) error {
 	currentBranch := detectCurrentBranch()
 
 	// Detect PathFlow state
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 	isPathFlowActive := detectPathFlowActive(projectDir, sessionID)
 
 	// Build check context
@@ -143,6 +143,34 @@ func runSecurity(stdin io.Reader, _, errW io.Writer) error {
 	}
 
 	return nil
+}
+
+// resolveSessionID determines the session ID using canonical priority:
+//  1. codeflow-env.sh file at .state/runtime/codeflow-env.sh
+//  2. CODEFLOW_SESSION_ID environment variable
+//
+// Returns empty string if neither source has a session ID.
+func resolveSessionID(projectDir string) string {
+	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
+	if data, err := os.ReadFile(envFilePath); err == nil {
+		if sid := parseEnvFileSessionID(string(data)); sid != "" {
+			return sid
+		}
+	}
+	return os.Getenv("CODEFLOW_SESSION_ID")
+}
+
+// parseEnvFileSessionID extracts CODEFLOW_SESSION_ID from env file content.
+func parseEnvFileSessionID(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "export CODEFLOW_SESSION_ID=") {
+			val := strings.TrimPrefix(line, "export CODEFLOW_SESSION_ID=")
+			val = strings.Trim(val, "'\"")
+			return val
+		}
+	}
+	return ""
 }
 
 // detectProjectDir returns the project root directory.
@@ -236,7 +264,7 @@ func runGateCheck(stdin io.Reader, _ io.Writer, errW io.Writer, event string) er
 
 	// Detect project directory and session ID.
 	projectDir := detectProjectDir()
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 
 	// Check if PathFlow is active.
 	if !detectPathFlowActive(projectDir, sessionID) {
@@ -460,7 +488,7 @@ Stdin format:
 // runTeamGuard implements the team guard enforcement logic.
 func runTeamGuard(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 	if sessionID == "" {
 		// No session ID — no PathFlow, allow.
 		return nil
@@ -639,7 +667,7 @@ Stdin format:
 // runSentinelWrite implements the stage sentinel creation logic.
 func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 	if sessionID == "" {
 		// No session ID — no PathFlow, allow.
 		return nil
@@ -682,7 +710,7 @@ Stdin format:
 // runHookCheckpointRegister implements the hook-based checkpoint task registration logic.
 func runHookCheckpointRegister(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 	if sessionID == "" {
 		return nil
 	}
@@ -725,7 +753,7 @@ Stdin format:
 // runHookCheckpointComplete implements the hook-based checkpoint task completion logic.
 func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
-	sessionID := os.Getenv("CODEFLOW_SESSION_ID")
+	sessionID := resolveSessionID(projectDir)
 	if sessionID == "" {
 		return nil
 	}
