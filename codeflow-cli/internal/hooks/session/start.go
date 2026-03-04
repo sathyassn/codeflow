@@ -518,22 +518,37 @@ func (init_ *Initializer) detectStaleSessions(projectDir, currentSID string) []s
 	return warnings
 }
 
-// isSessionStale checks if a session's tmux panes are dead.
+// isSessionStale checks if a session's lead process is dead.
+// It reads pathflow-team.json (in the same directory as flagPath) for team state.
+// If pathflow-team.json doesn't exist, the session has no team (considered stale).
 func (init_ *Initializer) isSessionStale(flagPath string) bool {
-	data, err := os.ReadFile(flagPath)
+	// Read pathflow-team.json from the same directory as the flag file.
+	teamFilePath := filepath.Join(filepath.Dir(flagPath), "pathflow-team.json")
+	data, err := os.ReadFile(teamFilePath)
 	if err != nil {
+		// No team file -- session has no team, considered stale.
 		return true
 	}
 
-	var flag struct {
+	var teamInfo struct {
+		LeadPID  int    `json:"lead_pid"`
 		TeamName string `json:"team_name"`
 	}
-	if err := json.Unmarshal(data, &flag); err != nil || flag.TeamName == "" {
+	if err := json.Unmarshal(data, &teamInfo); err != nil {
 		return true
 	}
 
-	// Read team config.
-	teamCfgPath := filepath.Join(init_.HomeDir, ".claude", "teams", flag.TeamName, "config.json")
+	// Check lead PID liveness first (fast path).
+	if teamInfo.LeadPID > 0 && init_.ProcessChecker.IsAlive(teamInfo.LeadPID) {
+		return false
+	}
+
+	// Lead PID dead or zero -- fall back to tmux pane check via team config.
+	if teamInfo.TeamName == "" {
+		return true
+	}
+
+	teamCfgPath := filepath.Join(init_.HomeDir, ".claude", "teams", teamInfo.TeamName, "config.json")
 	cfgData, err := os.ReadFile(teamCfgPath)
 	if err != nil {
 		return true
@@ -616,7 +631,6 @@ func (init_ *Initializer) cleanupActiveTask(projectDir string) {
 // pathflowFlag represents the is-pathflow-active JSON file.
 type pathflowFlag struct {
 	SessionID     string `json:"session_id"`
-	TeamName      string `json:"team_name"`
 	CreatedAt     string `json:"created_at"`
 	TrackingLevel string `json:"tracking_level"`
 }
@@ -639,7 +653,6 @@ func (init_ *Initializer) createPathFlowFlag(projectDir, sessionID string, resul
 
 	flag := pathflowFlag{
 		SessionID:     sessionID,
-		TeamName:      "",
 		CreatedAt:     init_.Now().Format("2006-01-02T15:04:05.000Z"),
 		TrackingLevel: "pending",
 	}

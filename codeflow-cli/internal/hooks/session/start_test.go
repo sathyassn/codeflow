@@ -167,7 +167,6 @@ func TestStartInit_ResumeDetection(t *testing.T) {
 	}
 	flag := pathflowFlag{
 		SessionID:     sid,
-		TeamName:      "test-team",
 		CreatedAt:     "2026-02-28T12:00:00.000Z",
 		TrackingLevel: "tracked",
 	}
@@ -1063,10 +1062,11 @@ func TestDetectStaleSessions(t *testing.T) {
 	if err := os.MkdirAll(staleDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flagData, _ := json.Marshal(map[string]string{"team_name": "stale-team"})
+	flagData := []byte(`{"session_id":"` + staleSID + `","tracking_level":"tracked"}`)
 	if err := os.WriteFile(filepath.Join(staleDir, "is-pathflow-active"), flagData, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// No pathflow-team.json -- isSessionStale returns true (no team file = stale).
 
 	warnings := init_.detectStaleSessions(projectDir, currentSID)
 	if len(warnings) == 0 {
@@ -1329,42 +1329,80 @@ func TestHandleNoTeamFile_NoFlagNoTeam(t *testing.T) {
 func TestIsSessionStale(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no_flag_file", func(t *testing.T) {
+	t.Run("no_team_file", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
-		if !init_.isSessionStale("/nonexistent/path") {
-			t.Error("missing flag should be detected as stale")
-		}
-	})
-
-	t.Run("invalid_json_flag", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		flagPath := filepath.Join(t.TempDir(), "flag")
-		if err := os.WriteFile(flagPath, []byte("not json"), 0o644); err != nil {
+		// Flag path in a dir with no pathflow-team.json.
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if !init_.isSessionStale(flagPath) {
-			t.Error("invalid JSON flag should be detected as stale")
+			t.Error("missing pathflow-team.json should be detected as stale")
 		}
 	})
 
-	t.Run("no_team_config", func(t *testing.T) {
+	t.Run("invalid_json_team_file", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
-		flagPath := filepath.Join(t.TempDir(), "flag")
-		flagData, _ := json.Marshal(map[string]string{"team_name": "nonexistent-team"})
-		if err := os.WriteFile(flagPath, flagData, 0o644); err != nil {
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), []byte("not json"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if !init_.isSessionStale(flagPath) {
-			t.Error("missing team config should be detected as stale")
+			t.Error("invalid JSON team file should be detected as stale")
+		}
+	})
+
+	t.Run("lead_pid_alive", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: true}}
+
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "test-team"})
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if init_.isSessionStale(flagPath) {
+			t.Error("session with alive lead PID should not be stale")
+		}
+	})
+
+	t.Run("lead_pid_dead_no_team_config", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
+
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "nonexistent-team"})
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if !init_.isSessionStale(flagPath) {
+			t.Error("dead lead PID with missing team config should be stale")
 		}
 	})
 
 	t.Run("all_panes_dead", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
 		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%1": false, "%2": false}}
 
 		// Create team config with members.
@@ -1382,9 +1420,13 @@ func TestIsSessionStale(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		flagPath := filepath.Join(t.TempDir(), "flag")
-		flagData, _ := json.Marshal(map[string]string{"team_name": "test-team"})
-		if err := os.WriteFile(flagPath, flagData, 0o644); err != nil {
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "test-team"})
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1396,6 +1438,7 @@ func TestIsSessionStale(t *testing.T) {
 	t.Run("one_pane_alive", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
 		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%1": true, "%2": false}}
 
 		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "alive-team")
@@ -1412,14 +1455,39 @@ func TestIsSessionStale(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		flagPath := filepath.Join(t.TempDir(), "flag")
-		flagData, _ := json.Marshal(map[string]string{"team_name": "alive-team"})
-		if err := os.WriteFile(flagPath, flagData, 0o644); err != nil {
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "alive-team"})
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		if init_.isSessionStale(flagPath) {
 			t.Error("session with alive pane should not be stale")
+		}
+	})
+
+	t.Run("no_team_name_in_team_file", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
+
+		flagDir := t.TempDir()
+		flagPath := filepath.Join(flagDir, "is-pathflow-active")
+		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Team file with lead_pid but no team_name.
+		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345})
+		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if !init_.isSessionStale(flagPath) {
+			t.Error("dead lead PID with empty team_name should be stale")
 		}
 	})
 }

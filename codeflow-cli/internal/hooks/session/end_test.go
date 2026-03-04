@@ -142,7 +142,6 @@ func TestEndCleanup_StalePathflowFlag(t *testing.T) {
 	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
 	flag := pathflowFlag{
 		SessionID:     sessionID,
-		TeamName:      "test-team",
 		CreatedAt:     fixedTime.Format("2006-01-02T15:04:05.000Z"),
 		TrackingLevel: "tracked",
 	}
