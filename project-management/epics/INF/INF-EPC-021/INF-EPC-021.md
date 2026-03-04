@@ -3,7 +3,7 @@ id: "epic-01KJHQCJSFC7W6MT0Q1GYEKQMH"
 format_id: "INF-EPC-021"
 title: "Go CLI Integration & Script Retirement"
 summary: "Wire the existing Go CLI binary into the live CodeFlow workflow, migrate shell/Python scripts to Go subcommands, and retire legacy infrastructure"
-status: planning
+status: complete
 area_type: "INF"
 work_type: "RFCT"
 domain: "GENL"
@@ -14,7 +14,9 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-27T00:00:00Z"
-updated_at: "2026-02-27T00:00:00Z"
+updated_at: "2026-03-04T19:30:42Z"
+completed_at: "2026-03-04T19:30:42Z"
+completion_note: "All 40 tasks complete. Go CLI migration fully delivered. Final PR #133 added performance benchmarks and team_name cleanup. Tasks 025, 036, and 041 cancelled (superseded/absorbed)."
 ---
 
 # INF-EPC-021: Go CLI Integration & Script Retirement
@@ -125,7 +127,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | complete | high |
 | INF-TSK-021-022 | Single-session cutover: wire Go hooks, retire shell/Python scripts, update settings | complete | critical |
 | INF-TSK-021-023 | Integration testing -- full PathFlow lifecycle with Go hooks | complete | critical |
-| INF-TSK-021-024 | Performance benchmarking and hook latency verification | todo | high |
+| INF-TSK-021-024 | Performance benchmarking and hook latency verification | complete | high |
 | INF-TSK-021-025 | SUPERSEDED -- Remove retired shell and Python infrastructure (absorbed into INF-TSK-021-022) | cancelled | high |
 | INF-TSK-021-026 | Normalize JSONL schema and rebuild SQLite | complete | high |
 | INF-TSK-021-027 | Update git hooks and CI workflows for post-migration compatibility | complete | normal |
