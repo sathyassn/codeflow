@@ -122,7 +122,7 @@ Wire the existing Go CLI binary (`codeflow-cli/`) into the live CodeFlow workflo
 | INF-TSK-021-018 | Build Go CLI for edit-write, protected-resource, and user-prompt-submit hooks | complete | normal |
 | INF-TSK-021-019 | Build Go CLI for worktree and report scripts | complete | normal |
 | INF-TSK-021-020 | Build Go CLI workgraph commands | complete | normal |
-| INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | todo | high |
+| INF-TSK-021-021 | Update CLAUDE.md and agent definitions for Go CLI | complete | high |
 | INF-TSK-021-022 | Single-session cutover: wire Go hooks, retire shell/Python scripts, update settings | complete | critical |
 | INF-TSK-021-023 | Integration testing -- full PathFlow lifecycle with Go hooks | complete | critical |
 | INF-TSK-021-024 | Performance benchmarking and hook latency verification | todo | high |
