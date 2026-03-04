@@ -39,6 +39,10 @@ func TestGitModule(t *testing.T) {
 		{"reset on main", "git reset HEAD~1", "main"},
 		{"checkout merge", "git checkout main && git merge feat/x", "feat/x"},
 		{"switch merge", "git switch main && git merge feat/x", "feat/x"},
+		{"checkout merge release", "git checkout release/1.0 && git merge feat/x", "feat/x"},
+		{"switch merge release", "git switch release/2.0 && git merge feat/x", "feat/x"},
+		{"checkout cherry-pick release", "git checkout release/1.0 ; git cherry-pick abc", "feat/x"},
+		{"checkout merge production pipe", "git checkout production | git merge feat/x", "feat/x"},
 	}
 
 	for _, tt := range blocked {
@@ -67,6 +71,7 @@ func TestGitModule(t *testing.T) {
 		{"git status", "git status", "main"},
 		{"git log", "git log --oneline", "main"},
 		{"git diff", "git diff", "main"},
+		{"checkout merge feature", "git checkout feat/new && git merge main", "feat/x"},
 	}
 
 	for _, tt := range allowed {

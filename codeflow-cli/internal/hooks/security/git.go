@@ -54,9 +54,9 @@ var (
 	gitRebase     = regexp.MustCompile(`^git\s+rebase(\s|$)`)
 	gitReset      = regexp.MustCompile(`^git\s+reset(\s|$)`)
 
-	// Chained checkout/switch + merge to protected branch
-	gitCheckoutMerge = regexp.MustCompile(`git\s+checkout\s+(main|master|production)\s*(&&|;|\|)\s*git\s+(merge|cherry-pick|rebase|reset)`)
-	gitSwitchMerge   = regexp.MustCompile(`git\s+switch\s+(main|master|production)\s*(&&|;|\|)\s*git\s+(merge|cherry-pick|rebase|reset)`)
+	// Chained checkout/switch + merge (captures branch name for dynamic check)
+	gitCheckoutChained = regexp.MustCompile(`git\s+checkout\s+(\S+)\s*(&&|;|\|)\s*git\s+(merge|cherry-pick|rebase|reset)`)
+	gitSwitchChained   = regexp.MustCompile(`git\s+switch\s+(\S+)\s*(&&|;|\|)\s*git\s+(merge|cherry-pick|rebase|reset)`)
 )
 
 // Check evaluates git commands for security violations.
@@ -191,12 +191,16 @@ func checkProtectedBranchOps(cmd string, ctx *CheckContext) *Verdict {
 		}
 	}
 
-	// Chained checkout/switch + merge (checks for specific branch names)
-	if gitCheckoutMerge.MatchString(cmd) {
-		return block("Protected Branch", "Chained checkout+merge to protected branch blocked", "checkout && merge")
+	// Chained checkout/switch + merge (dynamic protected branch check)
+	if matches := gitCheckoutChained.FindStringSubmatch(cmd); matches != nil {
+		if isOnProtectedBranch(matches[1], ctx.Policy) {
+			return block("Protected Branch", fmt.Sprintf("Chained checkout+merge to protected branch '%s' blocked", matches[1]), "checkout && merge")
+		}
 	}
-	if gitSwitchMerge.MatchString(cmd) {
-		return block("Protected Branch", "Chained switch+merge to protected branch blocked", "switch && merge")
+	if matches := gitSwitchChained.FindStringSubmatch(cmd); matches != nil {
+		if isOnProtectedBranch(matches[1], ctx.Policy) {
+			return block("Protected Branch", fmt.Sprintf("Chained switch+merge to protected branch '%s' blocked", matches[1]), "switch && merge")
+		}
 	}
 
 	return nil
