@@ -106,13 +106,16 @@ func TestDoctorClean(t *testing.T) {
 		t.Fatal("doctor returned zero results — check registry may be empty")
 	}
 
-	// Known runtime-dependent checks that may fail in active dev environments.
-	// These depend on live database/JSONL state, not on migration correctness.
+	// Known runtime-dependent checks that may fail in CI or active dev environments.
+	// These depend on external binaries or live database/JSONL state, not migration correctness.
 	runtimeChecks := map[string]bool{
 		"binary":    true,
 		"git-hooks": true,
 		"database":  true, // FK violations from active dev sessions
 		"jsonl":     true, // Transient JSONL parse errors during writes
+		"hooks":     true, // Requires codeflow binary in PATH
+		"claude":    true, // Requires Claude CLI in PATH
+		"auth":      true, // Requires Claude CLI auth
 	}
 
 	for _, r := range results {
