@@ -1,7 +1,7 @@
 ---
 title: "Parallel Work Support Analysis"
 type: analysis
-status: draft
+status: active
 author: cf-planning
 created_at: "2026-03-04"
 updated_at: "2026-03-05"
@@ -20,11 +20,13 @@ This analysis package examines what is required to enable true parallel PathFlow
 | Document | Description |
 |----------|-------------|
 | [Worktree Architecture](worktree-architecture.md) | Session-scoped state inventory, worktree isolation model, SessionStart/SessionEnd lifecycle, detached HEAD pattern |
-| [Data Layer Protection](data-layer-protection.md) | SQLite WAL, JSONL append safety, claims TOCTOU race and Loro resolution, CLI-only enforcement, SurrealDB evaluation, pure Rust CLI architecture |
+| [Data Layer Protection](data-layer-protection.md) | JSONL append safety, claims TOCTOU race and Loro resolution, CLI-only enforcement, SurrealDB evaluation (decided: SurrealDB-only), pure Rust CLI architecture, global DB architecture summary |
 | [CRDT Coordination](crdt-coordination.md) | Loro CRDT integration plan, claims migration to Loro Map, sync daemon subcommand design, multi-machine delta sync via git ref, coordination examples |
 | [Schema Standardization](schema-standardization.md) | Ledger and log audit, per-file target schemas, field name standardization, retention policies, cleanup CLI |
 | [Autorun Integration](autorun-integration.md) | Worktree-integrated autorun workers, pre-created worktree detection, worker lifecycle |
-| [Decisions](decisions.md) | All 16 analyzed recommendations with options, trade-offs, and justified decisions |
+| [Global Intelligence Layer](global-intelligence.md) | Global daemon architecture, project registration, cross-project visibility, local ONNX embeddings, SurrealDB graph queries |
+| [Product Strategy](product-strategy.md) | Pricing model, open-core analysis, competitive positioning, go-to-market approach |
+| [Decisions](decisions.md) | All 22 analyzed recommendations with options, trade-offs, and justified decisions |
 
 ## Key Findings
 
@@ -50,7 +52,11 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 11. **A pure Rust CLI redesign solves the SurrealDB, Loro, and CGo complexity gaps simultaneously.** By redesigning the Go CLI in idiomatic Rust as a prerequisite Epic 0, CodeFlow eliminates CGo FFI overhead, shared library cross-compilation, and two-language build complexity. The redesign is not a line-for-line port -- it introduces trait-based abstractions (`DataStore`, `Coordinator`, `Transport`), type system leverage (enums for states, tagged unions for events), and domain-specific error types that provide compile-time correctness guarantees. Loro and SurrealDB become direct crate dependencies (`use loro::LoroDoc;`, `use surrealdb::Surreal;`) -- native Rust, zero binding indirection. The sync daemon becomes a `codeflow sync daemon` subcommand within the single `codeflow` binary. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
 
-**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work organizes into three epics: Epic 0 (Rust CLI idiomatic redesign -- the prerequisite foundation), Epic A (parallel execution core with native Loro CRDT), and Epic B (data layer standardization with embedded SurrealDB). Loro CRDT is the sole coordination mechanism. The pure Rust CLI redesign approach is recommended because it eliminates CGo FFI entirely, provides native access to both Loro and SurrealDB embedded, produces a single `codeflow` binary, simplifies the build pipeline to one language, and leverages Rust's type system for correctness guarantees that Go cannot express.
+12. **SurrealDB replaces SQLite entirely — no hybrid mode.** The decision to use a pure Rust CLI (Epic 0) makes true embedded SurrealDB (`surrealkv://`) available as a direct crate dependency. SQLite is dropped completely. `SurrealStore` is the sole `DataStore` implementation with two connection modes: `surrealkv://` for project-local embedded operations, and `ws+unix://` for optional global daemon access. The three-tier data model is updated: Tier 0 JSONL (unchanged), Tier 1 SurrealDB embedded (replaces SQLite), Tier 1+ SurrealDB daemon (optional global), Tier 2 Markdown (unchanged). JSONL remains the rebuild authority. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
+
+13. **A global database layer enables cross-project intelligence as an optional, modular feature.** The default mode remains project-only with SurrealDB embedded — no daemon required. `codeflow global enable` starts the SurrealDB daemon inside the codeflow binary (Unix socket at `~/.codeflow/db.sock`, no external install, no Docker). Projects opt in to sharing via `.codeflow/config/project.toml` visibility config. Local ONNX embeddings (`all-MiniLM-L6-v2`, 384 dims, via the `ort` crate) enable offline semantic search across linked project memories. Graceful degradation: if the daemon is unavailable, all project-local work continues unaffected. See [Decision #18](decisions.md#18-global-database-architecture) and [Global Intelligence Layer](global-intelligence.md).
+
+**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work now organizes into six epics. Epic 0 (Rust CLI idiomatic redesign with SurrealDB-only data layer) is the universal prerequisite foundation. Epic A (parallel execution core with native Loro CRDT) and Epic B (data layer standardization) can run in parallel after Epic 0. Epic C (Global Intelligence Layer — daemon, project registry, cross-project queries, local embeddings) also runs after Epic 0. Epic D (Model Orchestrator — config-driven routing to external models) depends on Epic 0 and Epic C. Epic E (Dashboard) is deferred until the data and orchestration layers stabilize. Loro CRDT is the sole coordination mechanism. The SurrealDB-only decision simplifies the architecture by eliminating the hybrid SQLite+SurrealDB scenario that would have required data sync logic between two stores.
 
 ## V4 Specification Gap Analysis
 
@@ -77,9 +83,9 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 ## Proposed Epic Structure
 
-Given the expanded scope (Rust CLI redesign, worktree integration, Loro CRDT, SurrealDB embedded, schema redesign, autorun, data access enforcement), the work spans 67 tasks and is organized into 3 epics.
+Given the full scope (Rust CLI redesign, worktree integration, Loro CRDT, SurrealDB-only data layer, schema standardization, autorun, data access enforcement, global intelligence, model orchestration), the work spans 80+ tasks and is organized into 6 epics.
 
-**Recommendation: 3 epics.** Epic 0 (Rust CLI idiomatic redesign -- prerequisite foundation), Epic A (parallel execution core with native Loro), and Epic B (data layer standardization with embedded SurrealDB).
+**Structure: 6 epics.** Epic 0 (Rust CLI idiomatic redesign — universal prerequisite), Epic A (parallel execution core), Epic B (data layer standardization), Epic C (Global Intelligence Layer), Epic D (Model Orchestrator), Epic E (Dashboard — deferred).
 
 ### Epic 0: Rust CLI — Idiomatic Redesign
 
@@ -103,7 +109,7 @@ Everything behind this interface is fair game for redesign.
 
    | Trait | Purpose | Initial Impl | Future Impl |
    |-------|---------|-------------|-------------|
-   | `DataStore` | Database read/write operations | `SqliteStore` (rusqlite, WAL mode) | `SurrealStore` (Epic B) |
+   | `DataStore` | Database read/write operations | `SurrealStore` (embedded `surrealkv://`) | (extensible — e.g., `ws+unix://` for global daemon) |
    | `Coordinator` | CRDT coordination for parallel work | `LoroCoordinator` (Epic A) | (extensible) |
    | `Transport` | Sync delta exchange mechanism | `FileTransport` (local file) | `GitRefTransport` (Epic A) |
    | `LedgerWriter` | Append-only event logging | `JsonlWriter` (flock + append) | (extensible) |
@@ -168,12 +174,12 @@ Everything behind this interface is fair game for redesign.
 
 | # | Task | Description | Effort |
 |---|------|-------------|--------|
-| 9 | Implement `DataStore` trait and `SqliteStore` | `DataStore` trait with CRUD operations for sessions, tasks, epics, workgraph. `SqliteStore` implementation using `rusqlite` with WAL mode, retry logic, connection pooling. Port `internal/db/` query logic but redesign around trait interface. | L |
+| 9 | Implement `DataStore` trait and `SurrealStore` | `DataStore` trait with CRUD operations for sessions, tasks, epics, workgraph. `SurrealStore` implementation using the `surrealdb` crate in embedded `surrealkv://` mode. Port `internal/db/` query logic, rewriting SQL as SurrealQL. No `SqliteStore` — SurrealDB replaces SQLite from the start. | L |
 | 10 | Implement `LedgerWriter` trait and `JsonlWriter` | `LedgerWriter` trait for append-only event logging. `JsonlWriter` implementation with flock-based locking, serde serialization of `LedgerEvent` enum, schema validation at compile time via typed events. Port `internal/ledger/` logic. | M |
 | 11 | Implement session and state management | Port `internal/session/`, `internal/workstate/`, `internal/config/`. Session builder pattern. `SessionState` enum-based state machine with compile-time valid transitions. Active-task management, codeflow-env.sh read/write. | L |
 | 12 | Implement worktree manager | Port `internal/worktree/`. Git operations via `git2` crate. Registry (worktrees.yaml), shared/local symlinks, setup/cleanup. Typed worktree states. | M |
 | 13 | Implement claims system | Port `internal/claim/`. Replace state.json with direct Loro Map integration (`use loro::LoroDoc;`). Claim acquisition/release as typed operations. | L |
-| 14 | Implement workgraph operations | Port `internal/workgraph/`. Task/epic CRUD, status transitions (as enum state machines), queries. Uses `DataStore` trait — not `SqliteStore` directly. | M |
+| 14 | Implement workgraph operations | Port `internal/workgraph/`. Task/epic CRUD, status transitions (as enum state machines), queries. Uses `DataStore` trait — not `SurrealStore` directly. | M |
 
 #### Phase 0D: Hook Handlers
 
@@ -261,7 +267,7 @@ Everything behind this interface is fair game for redesign.
 
 **Scope:** Schema standardization, CLI-only enforcement, SurrealDB embedded, retention, log cleanup. All implemented in the pure Rust CLI from Epic 0.
 
-**Prerequisite for Phase F:** Epic 0 (Rust CLI redesign). `SurrealStore` implements Epic 0's `DataStore` trait alongside `SqliteStore` -- backend selection is a configuration choice, not a code change.
+**Prerequisite:** Epic 0 (Rust CLI redesign). `SurrealStore` is the sole `DataStore` implementation from Epic 0 — SQLite is not present in the Rust CLI. Epic B Phase D (schema standardization) uses SurrealQL throughout. Phase F has been removed from Epic B — SurrealDB is integral to Epic 0.
 
 #### Phase D: Schema Standardization + Enforcement
 
@@ -294,66 +300,77 @@ Everything behind this interface is fair game for redesign.
 
 #### Phase F: SurrealDB Embedded (Native Rust)
 
-SurrealDB is a direct crate dependency in the Rust CLI binary (from Epic 0). No separate shared library or FFI layer needed. The `surrealdb` crate's embedded mode (`mem://`, `surrealkv://`) works natively in Rust.
+> **Note:** SurrealDB integration is now part of Epic 0 (not Epic B). Epic 0 uses `SurrealStore` as the only `DataStore` implementation from the start — SQLite is never present in the Rust CLI. Epic B Phase F is removed. Schema standardization work (Phases D and E) is still in Epic B and uses SurrealQL rather than SQL.
 
-| # | Task | Description | Effort |
-|---|------|-------------|--------|
-| 20 | SurrealDB embedded integration | Add SurrealDB embedded initialization (`mem://` or `surrealkv://`) as a direct crate dependency. `use surrealdb::Surreal;` -- no FFI. Connect, query, execute via native Rust API. | L |
-| 21 | Vector indexing of memory/tasks | Index memory events, task descriptions, session summaries for semantic search via SurrealDB HNSW. | L |
-| 22 | Graph queries for task relationships | Epic-task-session graph traversal via SurrealQL `RELATE` and `->` graph notation. | M |
-| 23 | Agent context retrieval API | `codeflow context search --query "..." --limit 5` combining vector + graph in a single SurrealQL query. | L |
+### Epic C: Global Intelligence Layer (~12-15 tasks, 3 phases)
+
+**Scope:** Global daemon, project registration, cross-project visibility, local ONNX embeddings, cross-project SurrealQL queries. See [Global Intelligence Layer](global-intelligence.md) for the full design.
+
+**Prerequisite:** Epic 0 (Rust CLI with SurrealDB embedded).
+
+| Phase | Description |
+|-------|-------------|
+| Phase G: Daemon + Registry | `codeflow db daemon start` subcommand (SurrealDB daemon inside the binary), Unix socket at `~/.codeflow/db.sock`, `codeflow global enable/disable`, project registration schema, launchd/systemd service install |
+| Phase H: Sync Engine | Project-to-daemon sync via SurrealDB live queries, `codeflow project register/link`, visibility graph relations, graceful degradation when daemon unavailable |
+| Phase I: Local Embeddings + Search | `all-MiniLM-L6-v2` via `ort` crate (384 dims, ~50MB, offline), HNSW index on memory/task tables, `codeflow context search` combining vector + graph in single SurrealQL query |
+
+### Epic D: Model Orchestrator (~8-10 tasks, 2 phases)
+
+**Scope:** Port archived `cf-model-orchestrator` skill to Rust CLI. Config-driven model-to-stage routing. T1 (one-shot tmux) and T3 (persistent tmux) execution modes.
+
+**Prerequisites:** Epic 0 + Epic C (model routing uses global context for task selection).
+
+| Phase | Description |
+|-------|-------------|
+| Phase J: Core Orchestrator | Config schema for model-to-stage routing, T1/T3 tmux execution engine, model invocation API |
+| Phase K: Integration + Routing | Wire model routing into PathFlow work stages (WS-DEV, WS-REV, WS-QA), stage completion detection, result ingestion back into task graph |
+
+### Epic E: Dashboard (deferred, scope TBD)
+
+**Scope:** SvelteKit + Tauri desktop application. Deferred until Epics 0-D stabilize. Depends on a stable data layer (Epic 0 + B), global intelligence (Epic C), and defined API surface from the Rust CLI.
 
 ### Epic Dependencies
 
 ```text
 Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 25 tasks)
-    Phase 0A (Codebase Analysis + Tooling) -- no dependencies
-        -> Audit Go CLI for DRY violations, coupling, simplification opportunities
-        -> Define trait hierarchy (DataStore, Coordinator, Transport, LedgerWriter, HookHandler)
-        -> Create cf-rust-standards skill (parallels cf-go-standards, cf-shell-standards)
-        -> Configure Rust MCP servers (Context7 for crate docs, rust-analyzer for code intelligence)
-    Phase 0B (Foundation + Testing Infrastructure) -- depends on Phase 0A
-        -> Rust workspace: codeflow-core (library) + codeflow-cli (binary)
-        -> Core types (enums) + domain error types (thiserror)
-        -> Rust unit testing: cargo-llvm-cov (85% threshold), proptest, insta, cargo-nextest
-        -> Shell integration test bridge: ~1,555 tests pass UNCHANGED against Rust binary
-        -> CRITICAL: Test harness must be in place BEFORE Phase 0C code migration
-    Phase 0C (Core Library Crate) -- depends on Phase 0B
-        -> DataStore trait + SqliteStore, LedgerWriter trait + JsonlWriter
-        -> Session state machine, worktree, claims, workgraph modules
-    Phase 0D (Hook Handlers) -- depends on Phase 0C
-        -> HookHandler trait + per-event implementations
-        -> Frozen JSON contract: same stdin/stdout as Go hooks
-    Phase 0E (CLI Commands) -- depends on Phase 0D
-        -> Clap dispatch to codeflow-core. Same command tree as Go CLI.
-    Phase 0F (Integration Testing + Contract Conformance) -- depends on Phase 0E
-        -> Port Go unit tests to Rust #[test], property-based with proptest, snapshots with insta
-        -> Contract conformance suite: Rust binary vs Go binary, diff outputs
-        -> Full shell test suite validation against Rust binary
-    Phase 0G (CI/CD + Cutover) -- depends on Phase 0F
-        -> CI: cargo build + test + clippy + fmt + coverage + shell tests + contract conformance
-        -> After cutover: single `codeflow` Rust binary, Go CLI removed
-        -> Loro = direct crate dependency (use loro::LoroDoc;)
-        -> SurrealDB = direct crate dependency (use surrealdb::Surreal;)
-        -> Sync daemon = `codeflow sync daemon` subcommand
-
-Epic A: Parallel Execution Core (depends on Epic 0, 19 tasks)
-    Phase A (Loro CRDT) -- depends on Epic 0 (Loro is a native crate dep)
-        -> Claims use Loro Map CRDT natively via Coordinator trait
-        -> Sync daemon subcommand handles multi-machine delta sync via Transport trait
-    Phase B (Worktree + Singletons) -- depends on Phase A (claims via Loro)
-        -> Worktree isolation uses Loro-backed claims for resource coordination
-    Phase C (Autorun) -- depends on Phase B (worktrees must exist)
-
-Epic B: Data Layer Standardization (23 tasks)
-    Phase D (Schema + Enforcement) -- independent of Epic A (can run in parallel after Epic 0)
-    Phase E (Retention) -- depends on Phase D
-    Phase F (SurrealDB Embedded) -- depends on Epic 0 (SurrealDB is a native crate dep)
-        -> SurrealStore implements DataStore trait alongside SqliteStore
-        -> Direct `use surrealdb::Surreal;` -- no FFI, no shared library
+    SurrealStore is the ONLY DataStore impl (surrealkv:// embedded, no SqliteStore)
+    Phase 0A (Codebase Analysis + Tooling)
+    Phase 0B (Foundation + Testing Infrastructure — BEFORE Phase 0C code migration)
+    Phase 0C (Core Library Crate — DataStore/SurrealStore, LedgerWriter, session, worktree, claims)
+    Phase 0D (Hook Handlers)
+    Phase 0E (CLI Commands)
+    Phase 0F (Integration Testing + Contract Conformance)
+    Phase 0G (CI/CD + Cutover — Go CLI removed, single Rust binary)
+         |
+         +---> Epic A: Parallel Execution Core (19 tasks)
+         |         Phase A (Loro CRDT — LoroCoordinator via Coordinator trait)
+         |         Phase B (Worktree + Singleton Scoping)
+         |         Phase C (Autorun Integration)
+         |
+         +---> Epic B: Data Layer Standardization (~16 tasks, 2 phases)
+         |         Phase D (Schema Standardization in SurrealQL + Enforcement)
+         |         Phase E (Retention + Cleanup)
+         |         [Phase F removed — SurrealDB is in Epic 0]
+         |
+         +---> Epic C: Global Intelligence Layer (~12-15 tasks, 3 phases)
+                   Phase G (Daemon + Registry)
+                   Phase H (Sync Engine)
+                   Phase I (Local Embeddings + Cross-Project Search)
+                        |
+                        +---> Epic D: Model Orchestrator (~8-10 tasks, 2 phases)
+                                  Phase J (Core Orchestrator)
+                                  Phase K (Integration + Stage Routing)
+                                       |
+                                       +---> Epic E: Dashboard (deferred, TBD)
 ```
 
-**Key dependency:** Epic 0 is the prerequisite for both Epic A and Epic B Phase F. The Rust CLI redesign (not a line-for-line port) produces trait-based abstractions that Epic A and Epic B extend. `LoroCoordinator` implements Epic 0's `Coordinator` trait. `SurrealStore` implements Epic 0's `DataStore` trait. This is why the analysis phase (Phase 0A) is critical -- it designs the trait hierarchy that downstream epics build on. Epic B Phase D can begin after Epic 0 since it only involves schema changes within the Rust CLI.
+**Key dependency notes:**
+
+- Epic 0 is the universal prerequisite. It introduces `SurrealStore` as the only `DataStore` impl (no SQLite). All downstream epics build on Epic 0's trait hierarchy.
+- Epics A, B, and C can run in parallel after Epic 0 completes.
+- Epic B Phase D can start independently of Epic A — schema standardization in SurrealQL does not depend on parallel execution.
+- Epic D depends on Epic 0 and Epic C — model routing uses global project context for cross-project task selection.
+- Epic E is deferred until data (Epic 0 + B) and orchestration (Epic C + D) layers are stable.
 
 ## Scenarios and Use Cases
 
@@ -393,11 +410,11 @@ Epic B: Data Layer Standardization (23 tasks)
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
-| SQLite contention under heavy parallel writes | Medium | Medium | Increase busy_timeout to 15000, add jitter |
+| SurrealDB write contention under heavy parallel writes | Low | Medium | SurrealDB multi-writer architecture handles concurrent writes better than SQLite WAL. Monitor under load in Epic A Phase C. |
 | state.json TOCTOU race in claims | High (on any parallel use) | High | Replace with Loro Map CRDT (Phase A) |
 | Git worktree branch conflicts | High (if sessions modify same files) | Medium | Claims prevent overlap; FIFO merge queue |
 | Rust CLI redesign scope | Medium | High (blocks Epic A and B -- this IS the foundation) | Idiomatic redesign with codebase analysis phase. Contract conformance tests validate identical external behavior. Go and Rust binaries coexist during migration. |
-| SurrealDB embedded in Rust CLI | Low (native Rust) | Medium | Graceful degradation: if SurrealDB features are unused, fall back to SQLite-only queries. Embedded mode eliminates sidecar failure mode. |
+| SurrealDB embedded in Rust CLI | Low (native Rust) | Medium | Graceful degradation: JSONL Tier 0 is always the rebuild authority. If embedded DB is corrupted, `codeflow db rebuild` restores from JSONL. Embedded mode eliminates sidecar failure mode. |
 | Schema migration breaks consumers | Medium | Medium | Dual-write period: write both old and new formats, consumers migrate |
 | Stale cleanup destroys peer session | Low (narrow race) | High | PID check mitigates; add advisory lock |
 | Hook framework confusion with multiple sessions | Medium | Medium | Ensure all hooks resolve from worktree-local codeflow-env.sh |
@@ -407,23 +424,25 @@ Epic B: Data Layer Standardization (23 tasks)
 | Risk | Description | Mitigation |
 |------|-------------|-----------|
 | Worktree state split adds maintenance burden | Every new state file must be classified as shared or local | Document classification criteria; add CI check |
-| Two databases (SQLite + SurrealDB) | Data sync, query routing, failure modes | Clear ownership: SQLite = operational CRUD, SurrealDB = search/graph. Both accessed natively in the Rust CLI. |
+| SurrealDB-only data layer (no SQLite) | Full 37-table schema migration, all SQL rewritten in SurrealQL | SurrealDB embedded is native in Rust CLI (Epic 0). JSONL remains rebuild authority — SurrealDB state is always recoverable from Tier 0. |
 | Rust CLI redesign scope | Full Go-to-Rust idiomatic redesign, external interface frozen | Incremental migration with coexisting binaries. Contract conformance test suite validates identical external behavior. Codebase analysis phase (0A) identifies consolidation opportunities before implementation. |
 | Testing parallel scenarios | Inherently harder to test | Dedicated parallel integration tests; Loro concurrency tests |
 
 ### Incremental Rollout Strategy
 
-1. **Epic 0** (Rust CLI redesign) is the prerequisite foundation (25 tasks, 7 phases). It is an idiomatic redesign, not a line-for-line port. Phase 0A audits the Go CLI and establishes tooling (cf-rust-standards skill, MCP servers). Phase 0B sets up the workspace AND the complete testing infrastructure (unit testing with coverage, shell integration test bridge) — testing is ready BEFORE any code migration. Phases 0C-0E implement trait-based abstractions (`DataStore`, `Coordinator`, `Transport`, `LedgerWriter`, `HookHandler`). Phase 0F validates external interface conformance via contract conformance tests and the full shell test suite. Go and Rust binaries coexist during migration for incremental validation. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
+1. **Epic 0** (Rust CLI redesign) is the prerequisite foundation (25 tasks, 7 phases). It is an idiomatic redesign, not a line-for-line port. `SurrealStore` is the sole `DataStore` implementation — SurrealDB embedded (`surrealkv://`) replaces SQLite from the start. Phase 0A audits the Go CLI and establishes tooling (cf-rust-standards skill, MCP servers). Phase 0B sets up the workspace AND the complete testing infrastructure — testing is ready BEFORE any code migration. Phases 0C-0E implement trait-based abstractions (`DataStore`, `Coordinator`, `Transport`, `LedgerWriter`, `HookHandler`). Phase 0F validates external interface conformance. Go and Rust binaries coexist during migration. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
 
-2. **Epic A Phase A** (Loro CRDT foundation) is the first post-migration work. It fixes the TOCTOU race in claims and establishes the coordination layer using native Loro -- no FFI, no shared library.
+2. **Epic A Phase A** (Loro CRDT foundation) is the first post-migration work. It fixes the TOCTOU race in claims and establishes the coordination layer using native Loro.
 
-3. **Epic A Phase B** (Worktree integration + singleton scoping) builds on Phase A. Worktrees use Loro-backed claims for resource coordination from day one. Opt-in via configuration flag for parallel mode.
+3. **Epic A Phase B** (Worktree integration + singleton scoping) builds on Phase A. Worktrees use Loro-backed claims from day one. Opt-in via configuration flag for parallel mode.
 
 4. **Epic A Phase C** depends on Phase B. Autorun integration is the key parallel use case.
 
-5. **Phases D-E** (Epic B: Schema + Retention) can run after Epic 0, independently of Epic A. Schema standardization and enforcement improve quality regardless of parallel mode.
+5. **Epics B (Phases D-E)** and **C** can begin after Epic 0, running in parallel with Epic A. Epic B covers schema standardization in SurrealQL and enforcement. Epic C builds the global daemon, project registry, and local embedding search.
 
-6. **Phase F** (SurrealDB embedded) depends on Epic 0. SurrealDB is a direct crate dependency in the Rust CLI -- `use surrealdb::Surreal;`, no FFI needed.
+6. **Epic D** (Model Orchestrator) begins after Epic 0 and Epic C are complete. Config-driven model-to-stage routing uses global project context for intelligent task selection.
+
+7. **Epic E** (Dashboard) is deferred until Epics 0-D are stable. No timeline set.
 
 ## File Reference Index
 
@@ -453,6 +472,6 @@ Epic B: Data Layer Standardization (23 tasks)
 
 ## Status
 
-- **Analysis:** Complete (7 documents, 3200+ lines across package, 67 tasks across 3 epics)
-- **Review:** Pending WS-REV re-review (package decomposition + schema flesh-out added post-initial review)
+- **Analysis:** Complete (9 documents, 3800+ lines across package, 80+ tasks across 6 epics)
+- **Review:** Pending WS-REV re-review (global DB architecture + model orchestration + revised epic structure added post-initial review)
 - **Epic creation:** Pending (route through cf-knowledge-layer after review approval)

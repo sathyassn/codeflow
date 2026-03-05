@@ -1,7 +1,7 @@
 ---
 title: "Data Layer Protection"
 type: analysis
-status: draft
+status: active
 author: cf-planning
 created_at: "2026-03-04"
 updated_at: "2026-03-05"
@@ -20,6 +20,7 @@ parent: "parallel-work/README.md"
 - [4. Data Layer CLI-Only Enforcement](#4-data-layer-cli-only-enforcement)
 - [5. SurrealDB Evaluation](#5-surrealdb-evaluation)
 - [6. Pure Rust CLI Architecture](#6-pure-rust-cli-architecture)
+- [7. Global Database Architecture](#7-global-database-architecture)
 
 ---
 
@@ -175,9 +176,9 @@ With SQLite, this requires:
 
 For agentic use cases where agents need to find contextually relevant work, semantic search combined with graph traversal in a single query is a significant capability advantage.
 
-### 5.4 Go Embedded Mode Blocker
+### 5.4 Go Embedded Mode Blocker (Resolved by Epic 0)
 
-**Critical finding: Go embedded mode does NOT exist.**
+**Finding: Go embedded mode does NOT exist.**
 
 The SurrealDB Go SDK (`surrealdb.go`) returns `"embedded database not enabled"` for `mem://` and `surrealkv://` connection strings. The SDK only supports WebSocket (`ws://`) and HTTP (`http://`) connections.
 
@@ -187,11 +188,9 @@ True embedded mode exists in:
 - **Python** (via PyO3 FFI)
 - **WASM** (web assembly)
 
-This means using SurrealDB from Go requires running it as a **sidecar server process**:
-- ~50MB binary
-- Process lifecycle management (start, health check, graceful shutdown)
-- Network socket communication
-- Additional failure mode (server crash, port conflict)
+Using SurrealDB from Go would require a **sidecar server process** (~50MB binary, process lifecycle management, network socket communication, additional failure modes).
+
+**This blocker is resolved by Epic 0 (Rust CLI redesign).** By replacing the Go CLI with a pure Rust implementation, SurrealDB embedded (`surrealkv://`) becomes a direct crate dependency — `use surrealdb::Surreal;`. No sidecar, no server process, no network socket. The blocker is architectural, not a SurrealDB limitation. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform) and Section 6.
 
 ### 5.5 Performance Characteristics
 
@@ -216,13 +215,15 @@ This means using SurrealDB from Go requires running it as a **sidecar server pro
 
 ### 5.7 Options Analysis
 
-| Option | Description | Pros | Cons |
-|--------|-------------|------|------|
-| A. Full replacement (SurrealDB sidecar) | Replace SQLite with SurrealDB as sidecar server (~50MB process) | Unified multi-model queries. Better parallel writes. | BLOCKED by Go embedded gap. 37 tables to migrate. Performance penalty for simple CRUD. Sidecar process management. ~50MB binary. Cold start ~2-3s. |
-| B. Hybrid (SQLite + SurrealDB sidecar) | Keep SQLite for operational data. Add SurrealDB sidecar for agent memory/search. | Best of both worlds incrementally. SQLite handles CRUD fast. SurrealDB handles vector/graph. | Two databases + sidecar process. Data sync. Double infrastructure. |
-| C. Track and wait | Monitor Go embedded progress. Plan migration when available. | Zero risk now. Full embedded when available. | Misses vector/graph capabilities now. Unknown timeline for Go embedded. |
-| D. Rust shared library | Implement data layer in Rust. SurrealDB embedded + Loro CRDT natively in Rust. Expose to Go via C-compatible FFI. | True embedded SurrealDB (no sidecar). Native Loro. Single shared library bundles both. | Rust toolchain + cross-compilation. CGo FFI overhead (~100-200ns/call). Two-language codebase. Integration tests across FFI boundary. |
-| **E. Pure Rust CLI (RECOMMENDED)** | **Port entire CLI to Rust. SurrealDB and Loro become direct crate dependencies. No FFI, no shared library.** | **Single language. Maximum performance. No FFI overhead. No CGo complexity. One build pipeline. Single binary.** | **Large scope (full CLI port). Requires Rust expertise across team.** |
+> **Decision reached:** Option E is implemented as Epic 0. SQLite is being **replaced entirely** by SurrealDB — not supplemented. There is no hybrid mode. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
+
+| Option | Description | Pros | Cons | Status |
+|--------|-------------|------|------|--------|
+| A. Full replacement (SurrealDB sidecar) | Replace SQLite with SurrealDB as sidecar server (~50MB process) | Unified multi-model queries. Better parallel writes. | BLOCKED by Go embedded gap. 37 tables to migrate. Sidecar process management. Cold start ~2-3s. | Superseded by E |
+| B. Hybrid (SQLite + SurrealDB sidecar) | Keep SQLite for operational data. Add SurrealDB sidecar for agent memory/search. | Best of both worlds incrementally. | Two databases + sidecar process. Data sync. Double infrastructure. | Rejected — SurrealDB-only is the decision |
+| C. Track and wait | Monitor Go embedded progress. Plan migration when available. | Zero risk now. | Misses capabilities now. Unknown timeline. | Rejected |
+| D. Rust shared library | Implement data layer in Rust. Expose to Go via C-compatible FFI. | True embedded SurrealDB. Native Loro. | CGo FFI overhead. Two-language codebase. | Superseded by E |
+| **E. Pure Rust CLI (DECIDED)** | **Replace Go CLI with Rust. SurrealDB embedded (`surrealkv://`) and Loro are direct crate dependencies. `SurrealStore` is the ONLY `DataStore` impl — no `SqliteStore`.** | **Single language. No FFI. No sidecar. One build pipeline. SQLite fully retired.** | **Large redesign scope (Epic 0, 25 tasks).** | **DECIDED — Epic 0** |
 
 ---
 
@@ -230,11 +231,14 @@ This means using SurrealDB from Go requires running it as a **sidecar server pro
 
 The Rust CLI is an idiomatic redesign, not a line-for-line port of the Go CLI. Data access is abstracted behind traits, enabling swappable backends and comprehensive testing.
 
+> **Updated:** `SurrealStore` is the ONLY `DataStore` implementation. `SqliteStore` is not present in the Rust redesign — SurrealDB embedded (`surrealkv://`) replaces SQLite from the start of Epic 0. The `DataStore` trait is retained for testability (mock implementations) and future extensibility (global daemon mode via `ws+unix://`).
+
 ```text
 Rust CLI binary (codeflow) — modular crate structure
   codeflow-core (library crate):
-  ├── DataStore trait ─────────┬── SqliteStore (rusqlite, WAL mode — current backend)
-  │                            └── SurrealStore (embedded surrealdb crate — Epic B)
+  ├── DataStore trait ─────────── SurrealStore (embedded surrealkv:// for project-local;
+  │                               ws+unix:// for global daemon — Epic C)
+  │                               [SqliteStore REMOVED — SurrealDB is the sole Tier 1 store]
   ├── Coordinator trait ───────┬── LoroCoordinator (native loro crate — Epic A)
   │                            └── (extensible)
   ├── Transport trait ─────────┬── FileTransport (local file exchange)
@@ -250,7 +254,7 @@ Rust CLI binary (codeflow) — modular crate structure
 
 ### 6.1 Why Option E (Pure Rust CLI) Solves All Gaps
 
-1. **SurrealDB embedded works natively in Rust.** The `surrealdb` crate supports `mem://` (in-memory), `surrealkv://` (key-value store), and RocksDB backends -- all embedded, no server process, no network sockets. This eliminates the Go SDK gap entirely. In the trait-based design, `SurrealStore` implements the `DataStore` trait alongside `SqliteStore` -- backend selection is a configuration choice, not a code change.
+1. **SurrealDB embedded works natively in Rust, and replaces SQLite entirely.** The `surrealdb` crate supports `mem://` (in-memory) and `surrealkv://` (key-value store, persistent) embedded modes — no server process, no network sockets, no sidecar. This eliminates the Go SDK gap entirely. `SurrealStore` is the sole `DataStore` implementation: `surrealkv://` at `.state/db/codeflow/` for project-local operations; `ws+unix://~/.codeflow/db.sock` for optional global daemon access (Epic C). SQLite and `SqliteStore` are not part of the Rust CLI at all.
 
 2. **Loro CRDT is Rust-native.** The `loro` crate is the primary implementation (not a binding). Direct API calls (`use loro::LoroDoc;`), no community-maintained wrappers, no UniFFI indirection. Map, List, Text (Fugue), Tree CRDTs all available natively. `LoroCoordinator` implements the `Coordinator` trait.
 
@@ -286,6 +290,72 @@ This option solves the SurrealDB Go embedded gap (Section 5.4), the Loro integra
 **Why not Option C (Track and wait)?** The Go embedded SDK may never be prioritized. Migrating to Rust makes the question moot -- SurrealDB embedded is a native Rust feature.
 
 **Migration strategy:** Epic 0 implements the Rust CLI redesign (see [Decision #16](decisions.md#16-rust-cli-migration-strategy)). Go and Rust binaries coexist during migration. A contract conformance test suite verifies identical external behavior before cutover. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
+
+---
+
+## 7. Global Database Architecture
+
+> This section is a summary. The full design is in [global-intelligence.md](global-intelligence.md) (created as part of PLN-TSK-001-006).
+
+The global database layer is an optional extension of the project-local SurrealDB embedded instance. It enables cross-project queries, team-wide memory search, and aggregated task visibility across multiple repositories.
+
+### 7.1 Architecture Overview
+
+```text
+Project A (.state/db/codeflow/ — surrealkv://)
+    |
+    +--[codeflow global enable]--> Unix socket daemon (~/.codeflow/db.sock)
+    |                                  |
+Project B (.state/db/codeflow/)        +-- Aggregates: tasks, epics, memory
+    |                                  |   sessions, embeddings
+    +--[registered]-------------------> |
+                                        |
+Project C (.state/db/codeflow/)         |
+    |                                   |
+    +--[registered]-------------------> |
+```
+
+### 7.2 Operating Modes
+
+| Mode | Description | When to Use |
+|------|-------------|-------------|
+| Project-only (default) | SurrealDB embedded at `.state/db/codeflow/`. No daemon. All features work. | Single developer, single repo. |
+| Global-enabled | Embedded for local ops + daemon at `~/.codeflow/db.sock` for cross-project queries. | Multi-repo team or personal cross-project visibility. |
+| Global-only (future) | All state via daemon, no per-project embedded DB. | Large org with centralized coordination. |
+
+### 7.3 Daemon Lifecycle
+
+- **Binary:** Daemon runs inside the `codeflow` Rust binary. `codeflow db daemon start` launches it.
+- **Socket path:** `~/.codeflow/db.sock` — Unix domain socket, local only, no TCP exposure.
+- **Service integration:** `codeflow db install-service` registers a launchd plist (macOS) or systemd unit (Linux). `auto_start = true` in global config triggers auto-start on first use.
+- **Graceful degradation:** If the daemon is unavailable, project-local operations continue unaffected via embedded mode. Cross-project features return a `DaemonUnavailable` error with a clear message.
+
+### 7.4 Project Registration and Sync
+
+- `codeflow project register --name "{name}" --tags "{tags}"` — registers the current repo with the global daemon, assigns `project_id`.
+- `codeflow project link {project_id} --scopes memory,tasks` — establishes a visibility relation in SurrealDB.
+- Sync between project-local embedded DB and global daemon uses SurrealDB's live query and change feed capabilities, not a custom sync protocol.
+
+### 7.5 Local Embeddings
+
+Cross-project semantic search requires vector embeddings. These are generated locally:
+
+- **Model:** `all-MiniLM-L6-v2` (384 dimensions, ~50MB)
+- **Runtime:** `ort` crate (ONNX Runtime for Rust) — works offline, no API key required
+- **When:** Embeddings are generated on write when memory events sync to SurrealDB
+- **Storage:** SurrealDB HNSW vector index on memory and task tables
+- **Query:** `description <|10|> $embedding` syntax in SurrealQL for approximate nearest-neighbor search
+
+### 7.6 Three-Tier Model (Updated)
+
+| Tier | Location | Purpose | Git Tracked | Changed? |
+|------|----------|---------|-------------|----------|
+| 0 (JSONL) | `.state/ledger/*.jsonl` | Rebuild authority — immutable, append-only | Yes | No |
+| 1 (SurrealDB embedded) | `.state/db/codeflow/` | Query interface for project-local ops | No | **SQLite replaced** |
+| 1+ (SurrealDB daemon) | `~/.codeflow/db.sock` | Optional global cross-project layer | No | **New** |
+| 2 (Markdown) | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes | No |
+
+JSONL (Tier 0) remains the rebuild authority — unchanged. If the SurrealDB embedded store is lost or corrupted, it is rebuilt from JSONL. The rebuild path (`codeflow db rebuild`) uses the same event-sourcing logic as the current SQLite rebuild path.
 
 ---
 
