@@ -51,6 +51,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-003 | Plan Go CLI Epic (INF-EPC-015) | complete | normal |
 | PLN-TSK-001-004 | Plan Artifact Token Efficiency Restructuring (INF-EPC-019) | complete | normal |
 | PLN-TSK-001-005 | Update INF-EPC-021 epic docs, analysis doc, and task files | complete | high |
+| PLN-TSK-001-006 | Parallel Work Support Analysis | complete | normal |
 
 ## Dependencies
 
