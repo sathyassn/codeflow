@@ -648,7 +648,7 @@ If the daemon is stopped or unavailable:
 
 ## 13. Epic C Task Outline
 
-Epic C: Global Intelligence Layer (~13 tasks across 3 phases)
+Epic C: Global Intelligence Layer (14-18 tasks across 3 phases)
 
 **Dependency:** Epic 0 (Rust CLI redesign) must be complete. Epic C adds new subcommands and SurrealDB server-mode integration to the Rust binary.
 
@@ -679,3 +679,5 @@ Epic C: Global Intelligence Layer (~13 tasks across 3 phases)
 | 11 | Vector index | HNSW index on task/session/memory tables. DEFINE INDEX in SurrealQL. | S |
 | 12 | Context search command | `codeflow context search`. Vector + graph query in single SurrealQL statement. Cross-project visibility enforcement. Local fallback if daemon unavailable. | L |
 | 13 | Doctor global diagnostics | Extend `codeflow doctor` with global checks: daemon status, socket, registered projects, sync lag, embedding model. | M |
+
+**Note:** Tasks C-11 through C-14 (Loro KG sync, configuration system, bootstrap CLI, trigger points) are defined in [Knowledge Graph Engine Analysis, Section 5](knowledge-graph-engine.md#5-implementation-recommendations) and will be added to this outline when Epic C planning is finalized.

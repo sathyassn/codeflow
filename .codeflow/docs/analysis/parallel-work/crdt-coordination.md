@@ -166,7 +166,7 @@ let snapshot = doc.export(ExportMode::Snapshot); // Full snapshot
 
 ## 5. Integration Plan (Phase A)
 
-Phase A uses Loro CRDT as a direct crate dependency in the pure Rust CLI (from Epic 0). Loro CRDT is the sole coordination mechanism -- it is established in Phase A as the foundation for all parallel work. SurrealDB tasks are in Phase F (see [README](README.md)).
+Phase A uses Loro CRDT as a direct crate dependency in the pure Rust CLI (from Epic 0). Loro CRDT is the sole coordination mechanism -- it is established in Phase A as the foundation for all parallel work. SurrealDB integration is part of Epic 0 Phases 0A-0C (see [INF-EPC-022](../../../project-management/epics/INF/INF-EPC-022/INF-EPC-022.md)).
 
 **Prerequisite:** Epic 0 (Rust CLI redesign) must be complete. After Epic 0, `use loro::LoroDoc;` is available natively -- no FFI, no shared library, no CGo. `LoroCoordinator` implements Epic 0's `Coordinator` trait; `GitRefTransport` implements Epic 0's `Transport` trait.
 
@@ -177,6 +177,10 @@ Phase A uses Loro CRDT as a direct crate dependency in the pure Rust CLI (from E
 | Fencing token validation via Loro | Fencing tokens stored in Loro Map. PreToolUse validates token matches latest for claimed resource. | M |
 | Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Uses native Loro API directly (same binary). Started by SessionStart hook, stops when no active sessions. Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Configurable sync interval (10-30s). Retry with backoff on network partition. Peer ID stored at `.state/runtime/peer-id`. | L |
 | Clean up unused state.loro artifact | Remove current unused 483-byte `state.loro` file. Replace with real Loro-managed state. | S |
+
+### Extended Scope: Knowledge Graph Sync
+
+Per [Decision #23](decisions.md#23-knowledge-graph-synchronization), Loro's scope extends beyond claims and file ownership coordination to include knowledge graph entity/relationship synchronization across developers. Entity records and relationships are represented as LoroMap entries; embeddings are regenerated locally per machine (not synced). See [Knowledge Graph Engine Analysis, Section 8](knowledge-graph-engine.md#8-multi-user-synchronization-architecture) for the full architecture.
 
 ---
 

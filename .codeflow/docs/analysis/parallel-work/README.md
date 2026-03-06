@@ -263,7 +263,7 @@ Everything behind this interface is fair game for redesign.
 | 18 | Increase SQLite busy_timeout | Bump to 15000 for parallel mode. Add jitter to retry delay. | S |
 | 19 | pathflow-events.jsonl worktree field | Add `worktree` field to all events. Consumers filter by session_id. | S |
 
-### Epic B: Data Layer Standardization (23 tasks)
+### Epic B: Data Layer Standardization (~16 tasks, 2 phases)
 
 **Scope:** Schema standardization, CLI-only enforcement, SurrealDB embedded, retention, log cleanup. All implemented in the pure Rust CLI from Epic 0.
 
@@ -302,7 +302,7 @@ Everything behind this interface is fair game for redesign.
 
 > **Note:** SurrealDB integration is now part of Epic 0 (not Epic B). Epic 0 uses `SurrealStore` as the only `DataStore` implementation from the start — SQLite is never present in the Rust CLI. Epic B Phase F is removed. Schema standardization work (Phases D and E) is still in Epic B and uses SurrealQL rather than SQL.
 
-### Epic C: Global Intelligence Layer (~12-15 tasks, 3 phases)
+### Epic C: Global Intelligence Layer (14-18 tasks, 3 phases)
 
 **Scope:** Global daemon, project registration, cross-project visibility, local ONNX embeddings, cross-project SurrealQL queries. See [Global Intelligence Layer](global-intelligence.md) for the full design.
 
@@ -352,7 +352,7 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
          |         Phase E (Retention + Cleanup)
          |         [Phase F removed — SurrealDB is in Epic 0]
          |
-         +---> Epic C: Global Intelligence Layer (~12-15 tasks, 3 phases)
+         +---> Epic C: Global Intelligence Layer (14-18 tasks, 3 phases)
                    Phase G (Daemon + Registry)
                    Phase H (Sync Engine)
                    Phase I (Local Embeddings + Cross-Project Search)
