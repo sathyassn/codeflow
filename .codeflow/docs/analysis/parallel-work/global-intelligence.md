@@ -542,6 +542,30 @@ The global daemon is designed for developer team scale, not enterprise scale:
 
 Beyond these targets, performance degrades gracefully (slower queries, not failures). Enterprise scale is deferred to a future hosted tier.
 
+### Multi-User Sync Architecture
+
+The daemon-based architecture above (Unix socket SurrealDB) handles cross-project queries for a single developer. For multi-developer teams, a synchronization mechanism is needed to share knowledge graph entities and database state across machines.
+
+**Team Size Decision Matrix:**
+
+| Team Size | Sync Mechanism | Database | Infrastructure Cost |
+|-----------|-------------------|----------|---------------------|
+| Solo | N/A -- single embedded DB | surrealkv:// | Zero |
+| Small team (2-5) | Loro CRDT via git refs | Each dev: local surrealkv://, KG entities synced via Loro | Zero -- uses existing git |
+| Medium team (5-15) | Loro CRDT + optional daemon | Local surrealkv:// + optional daemon for shared queries | Zero to minimal |
+| Large team (15+) | SurrealDB TiKV cluster (self-hosted or cloud) | Shared TiKV-backed SurrealDB | Substantial -- 7+ servers |
+| Enterprise (50+) | SurrealDB Cloud Dedicated | Managed multi-node cluster | Cloud pricing |
+
+**Loro CRDT as primary sync (teams < 15):**
+
+For small and medium teams, the Loro CRDT infrastructure already designed for parallel execution coordination (claims, file ownership -- see [Decision #8](decisions.md#8-loro-crdt-as-foundation)) is extended to handle knowledge graph entity/relationship sync. Entities and relationships are small records (< 1KB each) mapped to LoroMap containers. Sync uses the same git ref transport (refs/coordination/loro/{peer-id}, 30s interval). Deterministic merge means no conflict resolution needed.
+
+**Embeddings are local-only.** Each developer's machine regenerates embeddings locally via ONNX (all-MiniLM-L6-v2). Same model + same text = identical embeddings. Embeddings are NOT synced -- they are too large for CRDT (1.5KB per 384-dim embedding per entity) and can be computed deterministically.
+
+**TiKV is only needed at 15+ developers.** TiKV itself is 100% free (Apache 2.0, CNCF graduated), but the infrastructure cost is substantial: minimum 7 servers (3 TiKV + 3 PD + 1 monitoring), each requiring 16+ cores, 32+ GB RAM, 200+ GB NVMe. This is impractical for CodeFlow's target audience (small dev teams, indie developers).
+
+See [Knowledge Graph Engine Analysis, Section 8](knowledge-graph-engine.md#8-multi-user-synchronization-architecture) and [Decision #23](decisions.md#23-knowledge-graph-synchronization) for the full analysis.
+
 ---
 
 ## 11. CLI Commands

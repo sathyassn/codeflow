@@ -36,6 +36,7 @@ parent: "parallel-work/README.md"
 - [20. Cross-Project Visibility Model](#20-cross-project-visibility-model)
 - [21. Multi-Model Orchestration Strategy](#21-multi-model-orchestration-strategy)
 - [22. Revised Epic Structure](#22-revised-epic-structure)
+- [23. Knowledge Graph Synchronization](#23-knowledge-graph-synchronization)
 
 ---
 
@@ -129,6 +130,8 @@ parent: "parallel-work/README.md"
 | **C. Loro from day one (RECOMMENDED)** | **One mechanism for same-machine AND multi-machine. No migration. No flock technical debt. V4 spec aligned. Native Rust.** | **Rust CLI redesign (Epic 0) is a prerequisite.** |
 
 **Recommendation: Option C (Loro from day one).** After Epic 0 (Rust CLI redesign), Loro is a direct crate dependency -- `use loro::LoroDoc;`. `LoroCoordinator` implements the `Coordinator` trait from Epic 0. No FFI, no community-maintained wrappers, no UniFFI indirection. One coordination mechanism handles both same-machine parallel sessions and multi-machine sync.
+
+**Scope update (Decision #23):** Loro's scope now extends beyond coordination (claims, file ownership) to include knowledge graph entity/relationship sync across developers. Entities and relationships are small records (< 1KB) that fit naturally into LoroMap containers. Embeddings remain local-only (regenerated per machine via ONNX). See [Decision #23: Knowledge Graph Synchronization](#23-knowledge-graph-synchronization) for the full team-size decision matrix.
 
 ---
 
@@ -361,7 +364,7 @@ This is the simplest, most natural boundary that developers already understand.
 | Epic 0 | Rust CLI — Idiomatic Redesign | Replace Go CLI with pure Rust. `SurrealStore` as the ONLY `DataStore` impl (no `SqliteStore`). 7 phases. | 25 | None — prerequisite for all |
 | Epic A | Parallel Execution Core | Loro CRDT, worktrees, singleton elimination, autorun integration. | 19 | Epic 0 |
 | Epic B | Data Layer Standardization | Schema standardization in SurrealQL (not SQL). Phase F (SurrealDB) merged into Epic 0 — REMOVED from Epic B. | ~16 | Epic 0; A, B, C can run in parallel after Epic 0 |
-| Epic C | Global Intelligence Layer | Daemon mode, project registry, sync engine, local embeddings (`all-MiniLM-L6-v2` via `ort` crate, 384 dims, ~50MB), cross-project queries. | 12-15 | Epic 0 |
+| Epic C | Global Intelligence Layer | Daemon mode, project registry, sync engine, local embeddings (`all-MiniLM-L6-v2` via `ort` crate, 384 dims, ~50MB), cross-project queries, knowledge graph extraction pipeline (INGEST/COGNIFY/MEMIFY/SEARCH), Loro CRDT KG sync for teams < 15 devs, codeflow-knowledge.toml config, extended ontology (16 entity types, 18 relationship types), bootstrap CLI command, trigger points and scheduling. | 14-18 | Epic 0 |
 | Epic D | Model Orchestrator | Port `cf-model-orchestrator` to Rust. Config-driven model-to-stage routing. T1/T3 tmux execution. | 8-10 | Epic 0 + Epic C |
 | Epic E | Dashboard | SvelteKit + Tauri. Deferred until Epics 0-D stabilize. | TBD | Stable Epic 0 + B + C |
 
@@ -396,4 +399,39 @@ Epic 0 (prerequisite — must complete first)
 
 ---
 
-[← Back to Overview](README.md)
+## 23. Knowledge Graph Synchronization
+
+**Question:** How should knowledge graph entities and relationships be synchronized across multiple developers/machines?
+
+| Option | Pros | Cons |
+|--------|------|------|
+| A. TiKV cluster (SurrealDB distributed mode) | Transparent multi-node access. Strong consistency. | Requires 7+ servers (3 TiKV + 3 PD + 1 monitoring). 16+ cores, 32+ GB RAM per node. Massive overkill for small teams. |
+| B. SurrealDB Cloud | Managed, no infrastructure. | Monthly cost. Vendor dependency. Network latency. Not offline-capable. |
+| **C. Loro CRDT for small/medium teams + TiKV for large/enterprise (DECIDED)** | **Zero infrastructure for teams < 15. Reuses existing Loro infrastructure (Decision #8). Deterministic merge. Works offline. Embeddings local-only.** | **CRDT overhead grows with team size. Not suitable for 15+ developers.** |
+
+**Decision: Option C (Loro CRDT for small/medium, TiKV for large/enterprise).**
+
+Extend the existing Loro infrastructure (already designed in Decision #8 for coordination -- claims, file ownership) to handle knowledge graph entity/relationship sync. No new infrastructure for teams < 15 developers.
+
+**Team size -> sync mechanism:**
+
+| Team Size | KG Sync Mechanism | Database |
+|-----------|-------------------|----------|
+| Solo | N/A -- single embedded DB | surrealkv:// |
+| Small team (2-5) | Loro CRDT via git refs | Each dev: local surrealkv://, KG entities synced via Loro |
+| Medium team (5-15) | Loro CRDT + optional daemon | Local surrealkv:// + optional daemon for shared queries |
+| Large team (15+) | SurrealDB TiKV cluster (self-hosted or cloud) | Shared TiKV-backed SurrealDB |
+| Enterprise (50+) | SurrealDB Cloud Dedicated | Managed multi-node cluster |
+
+**Key design choices:**
+
+- **Entities and relationships synced via Loro:** Small records (< 1KB) mapped to LoroMap containers. Delta sync via git refs (30s interval). Deterministic merge -- no conflict resolution needed.
+- **Embeddings are local-only:** Too large for CRDT (1.5KB per 384-dim embedding). Same ONNX model + same text = identical embeddings. Each machine regenerates locally.
+- **TiKV cost analysis:** TiKV is 100% free (Apache 2.0, CNCF graduated) but the infrastructure cost is substantial -- minimum 7 servers with high-end specs. Impractical for CodeFlow's target audience (small dev teams, indie developers).
+- **SurrealDB pricing:** Community edition is free for self-hosted. Cloud tiers start at $0/month (free tier, 1GB) through custom enterprise pricing.
+
+**References:** [Knowledge Graph Engine Analysis, Section 8](knowledge-graph-engine.md#8-multi-user-synchronization-architecture), [Decision #8 (Loro CRDT)](#8-loro-crdt-as-foundation), [crdt-coordination.md](crdt-coordination.md).
+
+---
+
+[<- Back to Overview](README.md)

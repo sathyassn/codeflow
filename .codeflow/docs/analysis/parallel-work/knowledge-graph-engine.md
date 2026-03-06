@@ -21,6 +21,10 @@ parent: "parallel-work/README.md"
 - [5. Implementation Recommendations](#5-implementation-recommendations)
 - [6. Research References](#6-research-references)
 - [7. Open Questions](#7-open-questions)
+- [8. Multi-User Synchronization Architecture](#8-multi-user-synchronization-architecture)
+- [9. Trigger Points and Scheduling](#9-trigger-points-and-scheduling)
+- [10. Configuration](#10-configuration)
+- [11. Bootstrap and Incremental Strategy](#11-bootstrap-and-incremental-strategy)
 
 ---
 
@@ -436,31 +440,51 @@ GLOBAL-LEVEL (Daemon SurrealDB)
 
 ### 3.2 CodeFlow Ontology
 
-#### Entity Types
+#### Entity Types (16)
 
-| Entity Type | Description | Source | Example |
-|-------------|-------------|--------|---------|
-| Concept | Abstract technical concept | LLM extraction | "event-driven architecture", "CRDT consistency" |
-| Decision | Architectural or design decision | ADR/planning docs | "chose SurrealDB over SQLite" |
-| Pattern | Recurring code/design pattern | Code analysis | "newtype wrapper pattern", "builder pattern" |
-| Component | System module or subsystem | Code structure | "PathFlow engine", "hook pipeline" |
-| Problem | Bug, issue, or challenge | Task/issue text | "session ID duplication", "context overflow" |
-| Solution | Resolution to a problem | Task completion text | "guard session creation behind source check" |
-| Technology | External tool, library, or platform | Dependencies | "SurrealDB", "Loro CRDT", "ONNX Runtime" |
-| Developer | Team member or contributor | Git history | "developer:alice" |
+| # | Entity Type | Description | Source | Example |
+|---|-------------|-------------|--------|---------|
+| 1 | Concept | Abstract technical concept | LLM extraction | "event-driven architecture", "CRDT consistency" |
+| 2 | Decision | Architectural or design decision (ADR) | Planning docs | "chose SurrealDB over SQLite" |
+| 3 | Pattern | Recurring code/design pattern | Code analysis | "newtype wrapper pattern", "builder pattern" |
+| 4 | Component | System module or subsystem | Code structure | "PathFlow engine", "hook pipeline" |
+| 5 | Problem | Bug, issue, or challenge | Task/issue text | "session ID duplication", "context overflow" |
+| 6 | Solution | Resolution to a problem | Task completion | "guard session creation behind source check" |
+| 7 | Technology | External tool, library, platform | Dependencies | "SurrealDB", "Loro CRDT", "ONNX Runtime" |
+| 8 | Developer | Team member or contributor | Git history | "developer:alice" |
+| 9 | Requirement | Business/functional requirement | Planning docs | "sub-millisecond hook latency" |
+| 10 | TestCase | Individual test or test suite | Test files | "test-cf-pre-tool-use-gate-check.sh" |
+| 11 | Deployment | Environment + deployment event | CI/CD | "v0.4.0 deployed to production" |
+| 12 | Incident | Production issue or outage | Issue tracker | "sentinel creation failure in autorun" |
+| 13 | Convention | Coding standard, naming rule | Skills/standards | "cf-shell-standards: function naming" |
+| 14 | Lesson | Post-mortem insight, learned experience | Session summaries | "context overflow causes lost teammate state" |
+| 15 | API | Endpoint, interface, or contract | Code/docs | "DataStore trait public interface" |
+| 16 | Milestone | Release, version, or project milestone | Epics/releases | "Epic 0 Phase 0C complete" |
 
-#### Relationship Types
+Sources for extended ontology: Nathan Lasnoski article on enterprise SDLC knowledge graphs (entity types and relationship types for software development lifecycle), Cognee ontology patterns (DataPoints with custom fields), Neo4j knowledge graph builder (dynamic ontology evolution).
 
-| Relationship | From | To | Meaning | Example |
-|-------------|------|-----|---------|---------|
-| relates_to | Concept | Concept | Semantic association | "CRDT" relates_to "eventual consistency" |
-| solved_by | Problem | Solution | Resolution link | "session duplication" solved_by "source guard" |
-| caused_by | Problem | Component | Root cause | "context overflow" caused_by "lead context window" |
-| uses_pattern | Component | Pattern | Implementation pattern | "type system" uses_pattern "newtype wrapper" |
-| decided_in | Decision | session | Provenance | "chose SurrealDB" decided_in session:ses_abc |
-| depends_on | task | task | Task dependency | task:009 depends_on task:006 |
-| expert_in | Developer | Technology | Expertise signal | developer:alice expert_in "SurrealDB" |
-| similar_to | any | any | Semantic similarity | pattern:A similar_to pattern:B |
+#### Relationship Types (18)
+
+| # | Relationship | From | To | Meaning | Example |
+|---|-------------|------|-----|---------|---------|
+| 1 | relates_to | Concept | Concept | Semantic association | "CRDT" relates_to "eventual consistency" |
+| 2 | solved_by | Problem | Solution | Resolution link | "session duplication" solved_by "source guard" |
+| 3 | caused_by | Problem | Component | Root cause | "context overflow" caused_by "lead context window" |
+| 4 | uses_pattern | Component | Pattern | Implementation pattern | "type system" uses_pattern "newtype wrapper" |
+| 5 | decided_in | Decision | Session | Provenance | "chose SurrealDB" decided_in session:ses_abc |
+| 6 | depends_on | Task | Task | Task dependency | task:009 depends_on task:006 |
+| 7 | expert_in | Developer | Technology | Expertise signal | developer:alice expert_in "SurrealDB" |
+| 8 | similar_to | Any | Any | Semantic similarity | pattern:A similar_to pattern:B |
+| 9 | implements | Component | Requirement | Fulfillment | "SurrealStore" implements "sub-ms latency" |
+| 10 | tested_by | Component | TestCase | Validation | "hook pipeline" tested_by "test-gate-check.sh" |
+| 11 | deployed_to | Component | Deployment | Deployment mapping | "codeflow binary" deployed_to "v0.4.0" |
+| 12 | owns | Developer | Component | Ownership | developer:alice owns "PathFlow engine" |
+| 13 | evolved_from | Decision | Decision | Superseded ADR chain | "SurrealDB-only" evolved_from "hybrid SQLite+Surreal" |
+| 14 | validates | TestCase | Requirement | Acceptance proof | "test-gate-check" validates "Edit blocked before PF3" |
+| 15 | learned_from | Lesson | Problem | Post-mortem insight | "check liveness before respawn" learned_from "zombie teammates" |
+| 16 | replaces | Component | Component | Migration/deprecation | "SurrealStore" replaces "SqliteStore" |
+| 17 | conflicts_with | Decision | Decision | Mutual exclusion | "embedded-only" conflicts_with "always-on daemon" |
+| 18 | references | Any | Any | Documentation coverage | ADR:017 references "data-layer-protection.md" |
 
 ### 3.3 Four Operations Detail
 
@@ -742,16 +766,20 @@ Recommended tasks for Epic C (Global Intelligence Layer):
 
 | # | Task | Scope | Estimate | Dependencies |
 |---|------|-------|----------|-------------|
-| C-01 | Define entity and knowledge relationship schema | DEFINE TABLE entity, DEFINE TABLE knows TYPE RELATION | S | Epic 0 complete |
+| C-01 | Define entity and knowledge relationship schema | DEFINE TABLE entity, DEFINE TABLE knows TYPE RELATION, extended ontology (16 entity types, 18 relationship types) | S | Epic 0 complete |
 | C-02 | Implement extraction queue with DEFINE EVENT | INGEST pipeline: event triggers on task/session/memory writes | S | C-01 |
-| C-03 | Build LLM entity extraction module | COGNIFY step: prompt engineering + entity parsing | M | C-01 |
+| C-03 | Build LLM entity extraction module | COGNIFY step: prompt engineering + entity parsing, hybrid ONNX + Claude CLI approach | M | C-01 |
 | C-04 | Build LLM relationship extraction module | COGNIFY step: relationship inference from text + entities | M | C-03 |
 | C-05 | Implement entity deduplication | Hash-based + embedding similarity dedup | S | C-03 |
-| C-06 | Build embedding generation pipeline | ONNX integration for entity embeddings | M | C-01 |
+| C-06 | Build embedding generation pipeline | ONNX integration for entity embeddings (local-only, 384-dim all-MiniLM-L6-v2) | M | C-01 |
 | C-07 | Implement hybrid search (GRAPH_COMPLETION) | Vector hint + graph expansion + combined ranking | M | C-04, C-06 |
 | C-08 | Build MEMIFY refinement pipeline | Edge reweighting, stale pruning, transitive inference | L | C-04, C-06 |
 | C-09 | Cross-project entity linking | Global daemon entity dedup across projects | M | C-05 |
-| C-10 | Ontology configuration system | Configurable entity/relationship types per project | S | C-03 |
+| C-10 | Ontology configuration system | Configurable entity/relationship types per project, codeflow-knowledge.toml | S | C-03 |
+| C-11 | Implement Loro CRDT knowledge graph sync | Extend Loro infrastructure for KG entity/relationship sync across developers (teams < 15) | M | C-01, Epic A Loro foundation |
+| C-12 | Build configuration system (codeflow-knowledge.toml) | Sources, pruning, steering, sync mode configuration | S | C-01 |
+| C-13 | Implement bootstrap CLI command | `codeflow knowledge bootstrap` with full/incremental/since options, 4-phase strategy | M | C-02, C-03, C-06 |
+| C-14 | Implement trigger points and scheduling | SessionEnd hook cognify, PF6-COMPLETE trigger, daemon idle processing, manual CLI | M | C-02, C-03 |
 
 ---
 
@@ -795,6 +823,18 @@ Recommended tasks for Epic C (Global Intelligence Layer):
 | Cognee Documentation: Overview | https://docs.cognee.ai/core-concepts/overview |
 | Cognee Building Blocks of Knowledge Graphs | https://www.cognee.ai/blog/fundamentals/building-blocks-of-knowledge-graphs |
 
+### Multi-User Sync
+
+| Title | URL |
+|-------|-----|
+| SurrealDB Pricing | https://surrealdb.com/pricing |
+| TiKV (Apache 2.0, CNCF Graduated) | https://tikv.org/ |
+| SurrealDB Running with TiKV | https://surrealdb.com/docs/surrealdb/installation/running/tikv |
+| TiKV GitHub Repository | https://github.com/tikv/tikv |
+| Loro CRDT | https://loro.dev/ |
+| Loro API Documentation | https://docs.rs/loro/ |
+| Loro GitHub Repository | https://github.com/loro-dev/loro |
+
 ### Academic & Industry
 
 | Title | URL |
@@ -807,15 +847,251 @@ Recommended tasks for Epic C (Global Intelligence Layer):
 
 ## 7. Open Questions
 
-The following questions remain OPEN and will be addressed in follow-up analysis:
+| # | Question | Status | Impact | Blocker For | Answer |
+|---|----------|--------|--------|-------------|--------|
+| 1 | **LLM model selection for entity extraction**: Use ONNX local model (fast, free, limited), Claude API (high quality, cost), or hybrid (ONNX for embeddings, Claude for extraction)? | **ANSWERED** | Architecture | C-03, C-04 | **Hybrid approach.** ONNX (always, free) for embedding generation (all-MiniLM-L6-v2), basic NER, and chunking. Claude/Codex CLI (idle-time, paid) for complex entity extraction, relationship inference, and ontology mapping. Configuration-driven: user chooses which LLM to use or disables paid extraction entirely. CLI tools: `claude -p "prompt"` (headless), `codex -q "prompt"` (quiet mode), `gemini -p "prompt"`. See [Section 9: Trigger Points and Scheduling](#9-trigger-points-and-scheduling). |
+| 2 | **Session hook integration points**: Where in the PathFlow pipeline should COGNIFY be triggered? After WS-DEV? After PF6-COMPLETE? On idle? | **ANSWERED** | Integration | C-02 | **Multiple trigger points.** Real-time: SurrealDB `DEFINE EVENT ASYNC` on record writes queues INGEST. Per-work-completion: `complete-work` ledger event queues extraction. Per-session: SessionEnd hook runs `codeflow hooks session-end cognify` batch. Per-tracked-session: PF6-COMPLETE triggers COGNIFY on session artifacts. Continuous: daemon idle-time polls extraction_queue. Scheduled: daemon or cron/launchd runs MEMIFY every 6-24 hours. Manual: `codeflow knowledge cognify` / `codeflow knowledge memify`. Per-commit: post-commit hook queues changed files. See [Section 9: Trigger Points and Scheduling](#9-trigger-points-and-scheduling). |
+| 3 | **Configuration-driven scope**: Should knowledge graph construction include all files/docs, or be configurable per project? What's the default? | **ANSWERED** | Scope | C-10 | **Fully configurable via `codeflow-knowledge.toml`.** Default: ledger, tasks, epics, sessions enabled. Code files configurable via glob patterns with exclude patterns. Docs configurable. Git commits/PRs configurable with time window. Agent definitions opt-in. Pruning, steering (boost/suppress entity types), and custom ontology extensions all configurable. See [Section 10: Configuration](#10-configuration). |
+| 4 | **Initial knowledge graph bootstrap**: Full project scan on first enable (expensive) vs incremental build from new sessions only? | **ANSWERED** | Migration | C-02 | **Four-phase strategy.** Phase 1: Initial bootstrap via `codeflow knowledge bootstrap [--since "2024-01-01"] [--full]` — scan git history, process all markdown, extract from code files, build initial graph, generate embeddings, run MEMIFY. 5-30 minutes depending on repo size. Phase 2: Incremental per-session — `complete-work` triggers INGEST, SessionEnd runs COGNIFY batch. Phase 3: Incremental per-commit — post-commit hook queues changed files for daemon processing. Phase 4: Periodic MEMIFY maintenance (6-24 hour schedule). See [Section 11: Bootstrap and Incremental Strategy](#11-bootstrap-and-incremental-strategy). |
+| 5 | **Multi-user multi-machine synchronization**: How does the global daemon handle multiple developers' local ledgers? CRDT compatibility? | **ANSWERED** | Scale | C-09 | **Loro CRDT for small/medium teams (< 15 devs), TiKV for large/enterprise (15+).** TiKV is free (Apache 2.0) but requires massive infrastructure (7+ servers, 16+ cores each, 32+ GB RAM, NVMe). Loro CRDT extends the already-designed coordination infrastructure (Decision #8) to handle KG entity/relationship sync. Entities and relationships are small records (< 1KB) — perfect for CRDT. Embeddings are local-only (too large for CRDT, regenerated per machine via ONNX). No new infrastructure needed for teams < 15 devs. See [Section 8: Multi-User Synchronization Architecture](#8-multi-user-synchronization-architecture). |
+| 6 | **Extended ontology for development domain**: Are the 8 entity types and 8 relationship types sufficient, or do we need domain extension points? | **ANSWERED** | Quality | C-10 | **Extended to 16 entity types and 18 relationship types.** Added: Requirement, TestCase, Deployment, Incident, Convention, Lesson, API, Milestone (entities). Added: implements, tested_by, deployed_to, owns, evolved_from, validates, learned_from, replaces, conflicts_with, references (relationships). Configuration supports `custom_entity_types` and `custom_relationship_types` for project-specific extensions. See [Section 3.2: CodeFlow Ontology](#32-codeflow-ontology). |
+| 7 | **Graph algorithm library**: Without a GDS equivalent, how do we implement community detection and PageRank-style importance ranking? | **OPEN** | MEMIFY | C-08 | -- |
+| 8 | **Cost control for LLM extraction**: At what scale does LLM entity extraction become cost-prohibitive, and when should we switch to local models? | **OPEN** | Operations | C-03 | -- |
 
-| # | Question | Impact | Blocker For |
-|---|----------|--------|-------------|
-| 1 | **LLM model selection for entity extraction**: Use ONNX local model (fast, free, limited), Claude API (high quality, cost), or hybrid (ONNX for embeddings, Claude for extraction)? | Architecture | C-03, C-04 |
-| 2 | **Session hook integration points**: Where in the PathFlow pipeline should COGNIFY be triggered? After WS-DEV? After PF6-COMPLETE? On idle? | Integration | C-02 |
-| 3 | **Configuration-driven scope**: Should knowledge graph construction include all files/docs, or be configurable per project? What's the default? | Scope | C-10 |
-| 4 | **Initial knowledge graph bootstrap**: Full project scan on first enable (expensive) vs incremental build from new sessions only? | Migration | C-02 |
-| 5 | **Multi-user multi-machine synchronization**: How does the global daemon handle multiple developers' local ledgers? CRDT compatibility? | Scale | C-09 |
-| 6 | **Extended ontology for development domain**: Are the 8 entity types and 8 relationship types sufficient, or do we need domain extension points? | Quality | C-10 |
-| 7 | **Graph algorithm library**: Without a GDS equivalent, how do we implement community detection and PageRank-style importance ranking? | MEMIFY | C-08 |
-| 8 | **Cost control for LLM extraction**: At what scale does LLM entity extraction become cost-prohibitive, and when should we switch to local models? | Operations | C-03 |
+---
+
+## 8. Multi-User Synchronization Architecture
+
+### TiKV Cost Analysis
+
+**TiKV itself is 100% free** -- Apache 2.0 license, CNCF graduated project. No licensing cost.
+
+**SurrealDB pricing tiers:**
+
+| Tier | Cost | Includes |
+|------|------|----------|
+| Community (self-hosted) | Free | All core open-source features, single-node or multi-node clusters |
+| Enterprise (self-hosted) | Custom (contact sales) | Priority security patches, audit logging, FIPS crypto, object storage, distributed live queries, SLA support |
+| Cloud Free | $0/month | 1GB storage, 0.25 vCPU, 1GB memory |
+| Cloud Start | From $0.021/hr | Single node up to 512GB storage, 16 vCPU, 64GB memory |
+| Cloud Dedicated | Custom | Multi-node, up to 1PB, 64 vCPU/node, 256GB/node |
+
+**Production TiKV infrastructure requirements:**
+
+- Minimum: 3+ TiKV nodes + 3+ PD (Placement Driver) nodes + 1 monitoring node
+- Per node: 16+ cores, 32+ GB RAM (no swap), 200+ GB NVMe/SSD, 10 Gigabit ethernet
+- Total minimum footprint: ~7 servers with high-end specs
+- **This is massive overkill for a small development team (2-5 devs)**
+
+**Key insight:** TiKV is free software but the INFRASTRUCTURE COST is substantial. For CodeFlow's target audience (small dev teams, indie developers), running a 7-node TiKV cluster is impractical and expensive.
+
+### Loro CRDT as Primary Sync Mechanism
+
+**Loro capabilities confirmed:**
+
+- 6 container types: LoroText, LoroList, LoroMap, LoroTree, LoroMovableList, LoroCounter
+- Graph-like structures via Map of Maps or Tree containers
+- Sync via export/import with delta updates and version vectors
+- Each peer maintains version vector mapping peer IDs to operation counters
+- Deterministic merge -- same operations in any order produce identical result
+- Rust-native crate (already planned for CodeFlow)
+
+**Already planned in crdt-coordination.md:**
+
+- Same-machine: shared file (state.loro symlinked into worktrees)
+- Multi-machine: git ref sync (refs/coordination/loro/{peer-id}, 10-30s interval)
+
+**Extension for Knowledge Graph Sync:**
+
+Instead of TiKV for multi-user KG sync, use the SAME Loro infrastructure already designed for coordination:
+
+| KG Component | Loro Representation | Sync Via |
+|-------------|--------------------| ---------|
+| Entity records | LoroMap entries (entity_id -> {type, name, description, hash, source_records}) | Loro delta sync |
+| Relationships | LoroMap entries (edge_id -> {from, to, relationship_type, confidence}) | Loro delta sync |
+| Entity embeddings | LOCAL ONLY -- too large for CRDT, regenerated per machine from shared entity text | Not synced |
+| Extraction queue | LoroList (pending extractions) | Loro delta sync |
+| Graph structure metadata | LoroMap (graph stats, last_memify, ontology version) | Loro delta sync |
+
+**Why this works:**
+
+1. Entities and relationships are small records (< 1KB each) -- perfect for CRDT
+2. Embeddings are derived from entity text -- each machine can regenerate locally via ONNX
+3. The Loro transport (git ref sync) is already designed and needs zero additional infrastructure
+4. Deterministic merge means no conflict resolution needed
+5. Works offline -- local edits sync when connected
+6. No TiKV cluster needed for teams < 10 devs
+
+### Team Size Decision Matrix
+
+| Team Size | KG Sync Mechanism | Database |
+|-----------|-------------------|----------|
+| Solo | N/A -- single embedded DB | surrealkv:// |
+| Small team (2-5) | Loro CRDT via git refs | Each dev: local surrealkv://, KG entities synced via Loro |
+| Medium team (5-15) | Loro CRDT + optional daemon | Local surrealkv:// + optional daemon for shared queries |
+| Large team (15+) | SurrealDB TiKV cluster (self-hosted or cloud) | Shared TiKV-backed SurrealDB |
+| Enterprise (50+) | SurrealDB Cloud Dedicated | Managed multi-node cluster |
+
+**TiKV is ONLY needed at 15+ developers.** Below that, Loro CRDT handles sync with zero infrastructure cost.
+
+### Why Embeddings Are Local-Only
+
+Embeddings are NOT synced via Loro or any other mechanism. Each machine regenerates embeddings locally:
+
+1. **Size:** A 384-dim float32 embedding is 1.5KB per entity. With thousands of entities, embedding sync would dominate CRDT bandwidth.
+2. **Determinism:** The same ONNX model (all-MiniLM-L6-v2) with the same input text produces identical embeddings. No need to sync what can be computed.
+3. **Privacy:** Embeddings can encode sensitive information about code structure. Local-only avoids transmitting them.
+4. **Regeneration cost:** ~5-10ms per entity via ONNX. Regenerating 10,000 entities takes ~50-100 seconds -- acceptable on first sync.
+
+### Architecture Diagram: Loro-Based KG Sync
+
+```text
+Developer A                          Developer B
+============                         ============
+
+surrealkv://                         surrealkv://
+  |                                    |
+  v                                    v
+Local KG                             Local KG
+(entities + relationships            (entities + relationships
+ + embeddings)                        + embeddings)
+  |                                    |
+  v                                    v
+Loro KG Doc                          Loro KG Doc
+(entities + relationships            (entities + relationships
+ -- NO embeddings)                    -- NO embeddings)
+  |                                    |
+  +--- git ref sync (30s) ------------>+
+  +<--- git ref sync (30s) -----------+
+  |                                    |
+  v                                    v
+On sync: merge Loro doc              On sync: merge Loro doc
+-> upsert new entities to local DB   -> upsert new entities to local DB
+-> regenerate embeddings for          -> regenerate embeddings for
+   new/updated entities (ONNX)           new/updated entities (ONNX)
+```
+
+---
+
+## 9. Trigger Points and Scheduling
+
+### COGNIFY/MEMIFY Trigger Matrix
+
+| Trigger Point | Mechanism | Process | When |
+|--------------|-----------|---------|------|
+| Record write | SurrealDB `DEFINE EVENT ASYNC` on task/session/memory tables | INGEST (queue for extraction) | Real-time |
+| `complete-work` event | cf-knowledge-layer writes ledger event -> triggers queue entry | INGEST | Every work completion |
+| SessionEnd hook | `codeflow hooks session-end cognify` CLI subcommand | COGNIFY batch (process pending queue) | Every session end |
+| PF6-COMPLETE | After PR merge, before PF7-END | COGNIFY (session artifacts) | Per tracked session |
+| Daemon idle time | Background daemon polls extraction_queue | COGNIFY (continuous) | When daemon idle |
+| Scheduled timer | Daemon or cron/launchd | MEMIFY (prune, reweight, infer) | Every 6-24 hours |
+| Manual CLI | `codeflow knowledge cognify` / `codeflow knowledge memify` | On-demand | User-initiated |
+| Commit hook | Post-commit -> queue changed files for extraction | INGEST | Every commit |
+
+### LLM CLI Tools for Background Entity Extraction
+
+| Tool | Command | Mode | Cost |
+|------|---------|------|------|
+| Claude Code | `claude -p "prompt"` | Headless, single prompt, exits | Per-token (API) or subscription |
+| Claude Code | `claude -p "prompt" --allowedTools Read --output-format json` | With tool access + JSON output | Same |
+| OpenAI Codex CLI | `codex -q "prompt"` | Quiet mode, no interactive UI | Per-token (API) |
+| Gemini CLI | `gemini -p "prompt"` | Same headless pattern | Per-token (API) |
+| ONNX local models | `ort` crate in Rust | In-process, no CLI needed | Free (local compute) |
+
+### Recommended Hybrid Approach
+
+- **ONNX (always, free):** Embedding generation (all-MiniLM-L6-v2), basic NER, chunking
+- **Claude/Codex CLI (idle-time, paid):** Complex entity extraction, relationship inference, ontology mapping
+- **Configuration-driven:** User chooses which LLM to use, or disables paid extraction entirely
+
+---
+
+## 10. Configuration
+
+### `codeflow-knowledge.toml`
+
+```toml
+[knowledge]
+enabled = true
+extraction_model = "onnx"  # "onnx" | "claude" | "codex" | "gemini" | "none"
+extraction_model_paid = "claude"  # For complex extraction (idle-time only)
+
+[knowledge.sources]
+ledger = true           # Always (core)
+tasks = true            # Always (core)
+epics = true            # Always (core)
+sessions = true         # Session summaries
+code_files = true       # Source code
+code_patterns = ["src/**/*.rs", "codeflow-rs/**/*.rs"]
+code_exclude = ["**/target/**", "**/node_modules/**"]
+docs = true             # Documentation markdown
+doc_patterns = ["docs/**/*.md", "*.md", ".codeflow/docs/**/*.md"]
+git_commits = true      # Commit messages
+git_prs = true          # PR descriptions (requires GitHub API)
+git_since = "6 months"  # Only commits within this window
+agent_definitions = false  # .claude/agents/*.md (opt-in)
+
+[knowledge.pruning]
+max_age_days = 365
+confidence_threshold = 0.3
+stale_check_interval = "7d"
+archive_after_days = 730  # Move to cold storage
+
+[knowledge.steering]
+boost = ["architecture_decisions", "design_patterns", "lessons_learned"]
+suppress = ["typo_fixes", "formatting_changes", "version_bumps"]
+custom_entity_types = []  # User-defined extensions to base ontology
+custom_relationship_types = []  # User-defined extensions
+
+[knowledge.sync]
+mode = "loro"  # "loro" | "tikv" | "none"
+sync_interval = "30s"
+sync_embeddings = false  # Embeddings regenerated locally
+```
+
+### Configuration Sections Explained
+
+| Section | Purpose | Default |
+|---------|---------|---------|
+| `knowledge` | Master enable/disable and model selection | enabled=true, onnx for free extraction |
+| `knowledge.sources` | What data feeds the knowledge graph | All core sources enabled, code/docs configurable via globs |
+| `knowledge.pruning` | When to prune stale entities and low-confidence edges | 365-day max age, 0.3 confidence threshold |
+| `knowledge.steering` | Boost/suppress specific entity types in extraction and search ranking | Boost architecture decisions and lessons, suppress trivial changes |
+| `knowledge.sync` | Multi-user sync mechanism selection | Loro CRDT with 30s interval, embeddings local-only |
+
+---
+
+## 11. Bootstrap and Incremental Strategy
+
+### Phase 1 -- Initial Bootstrap
+
+```bash
+codeflow knowledge bootstrap [--since "2024-01-01"] [--full]
+```
+
+1. Scan all git commits (since date or full history)
+2. Process all existing markdown (epics, tasks, analysis docs, READMEs)
+3. Extract entities from code files matching configured patterns
+4. Build initial graph with relationships
+5. Generate embeddings for all entities
+6. Run MEMIFY once to consolidate (prune duplicates, compute initial edge weights)
+7. Estimated time: 5-30 minutes depending on repository size and LLM choice
+
+### Phase 2 -- Incremental Per-Session
+
+- Each `complete-work` event triggers INGEST for the task's changed files
+- SessionEnd hook runs COGNIFY batch on accumulated queue
+- Changed files are re-extracted; entities from those files are updated (not duplicated, hash-based dedup)
+- New relationships merged with existing graph (additive, not destructive)
+
+### Phase 3 -- Incremental Per-Commit
+
+- Post-commit hook queues changed files (git diff) for extraction
+- Daemon processes queue during idle time
+- Only modified files re-processed (hash comparison)
+
+### Phase 4 -- Periodic Maintenance
+
+- MEMIFY runs on schedule (every 6-24 hours via daemon or launchd/systemd timer)
+- Prunes orphaned entities, reweights edges, runs transitive inference
+- Community detection runs weekly (expensive operation)

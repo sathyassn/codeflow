@@ -184,7 +184,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 
 - INF-EPC-023 (Epic A: Parallel Execution Core) -- requires Rust CLI with `Coordinator` trait
 - INF-EPC-024 (Epic B: Data Layer Standardization) -- requires SurrealDB-based data layer
-- INF-EPC-025 (Epic C: Global Intelligence Layer) -- requires Rust CLI for daemon mode
+- INF-EPC-025 (Epic C: Global Intelligence Layer) -- requires Rust CLI for daemon mode, knowledge graph extraction pipeline (INGEST/COGNIFY/MEMIFY/SEARCH), Loro CRDT KG sync, extended ontology (16 entity types, 18 relationship types)
 - INF-EPC-026 (Epic D: Model Orchestrator) -- requires Rust CLI + Epic C
 
 ## Technical Notes
@@ -280,4 +280,5 @@ This is an **idiomatic redesign**, not a mechanical 1:1 port. All implementation
 - Architecture: `.codeflow/docs/analysis/parallel-work/data-layer-protection.md` (Section 6)
 - Schema: `.codeflow/docs/analysis/parallel-work/schema-standardization.md` (JSONL audit)
 - CRDT: `.codeflow/docs/analysis/parallel-work/crdt-coordination.md` (module tree)
+- Knowledge Graph: `.codeflow/docs/analysis/parallel-work/knowledge-graph-engine.md` (KG engine analysis, ontology, extraction pipeline)
 - Predecessor: `INF-EPC-021` (Go CLI Integration -- completed, being replaced)
