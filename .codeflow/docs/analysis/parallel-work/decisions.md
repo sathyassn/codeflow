@@ -226,7 +226,7 @@ The Rust CLI is a redesign, not a transliteration. The Go codebase is the functi
 
 Go and Rust binaries coexist during migration. A contract conformance test suite verifies the Rust binary produces identical external behavior (stdout, exit codes, file output) to the Go binary. After all tests pass, the Go binary is removed.
 
-**Migration phases (Epic 0 — 7 phases, 25 tasks):**
+**Migration phases (Epic 0 — 7 phases, 27 tasks):**
 - Phase 0A: Codebase Analysis + Tooling (audit Go CLI, define trait hierarchy, create cf-rust-standards skill, configure Rust MCP servers)
 - Phase 0B: Foundation + Testing Infrastructure (workspace, core types, error domains, unit test harness with coverage + proptest + insta + nextest, shell integration test bridge — testing ready BEFORE code migration)
 - Phase 0C: Core Library Crate (DataStore, LedgerWriter, session, worktree, claims, workgraph)

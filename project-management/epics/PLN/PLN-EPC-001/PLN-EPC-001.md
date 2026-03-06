@@ -53,6 +53,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-005 | Update INF-EPC-021 epic docs, analysis doc, and task files | complete | high |
 | PLN-TSK-001-006 | Parallel Work Support Analysis | complete | normal |
 | PLN-TSK-001-007 | Update parallel-work analysis docs with global DB architecture decisions | complete | normal |
+| PLN-TSK-001-008 | Plan: Epic 0 — Rust CLI Idiomatic Redesign | complete | normal |
 
 ## Dependencies
 
@@ -75,3 +76,4 @@ This is an ongoing epic with no planned completion date. New planning tasks are 
 - INF-EPC-015: Go CLI (codeflow binary) (produced by PLN-TSK-001-003)
 - INF-EPC-019: Claude Artifact Token Efficiency Restructuring (produced by PLN-TSK-001-004)
 - INF-EPC-021: Go CLI Integration & Script Retirement (updated by PLN-TSK-001-005)
+- INF-EPC-022: Rust CLI Idiomatic Redesign (produced by PLN-TSK-001-008)
