@@ -57,6 +57,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-009 | Epic B: Data Layer Standardization — Epic and Task Breakdown | complete | normal |
 | PLN-TSK-001-010 | Epic C Global Intelligence Layer — Epic and Task Specification | complete | normal |
 | PLN-TSK-001-011 | Epic D+E Combined Vision - Analysis Updates & App Mockup | complete | normal |
+| PLN-TSK-001-012 | Epic D: Model Orchestration Layer Plan | complete | normal |
 
 ## Dependencies
 
