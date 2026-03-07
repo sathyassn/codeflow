@@ -1,0 +1,1599 @@
+<!-- CodeFlow App UI Mockup - Visual prototype for Epic E planning -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeFlow App</title>
+<style>
+  :root {
+    --bg-darkest: #13131e;
+    --bg-dark: #1e1e2e;
+    --bg-panel: #2d2d3d;
+    --bg-card: #353548;
+    --bg-hover: #3d3d52;
+    --bg-input: #252538;
+    --border: #3e3e55;
+    --text-primary: #e0e0ee;
+    --text-secondary: #9999b0;
+    --text-muted: #6e6e88;
+    --accent-blue: #5b8af5;
+    --accent-green: #3ddc84;
+    --accent-yellow: #f5c542;
+    --accent-red: #f55b6e;
+    --accent-purple: #b07af5;
+    --accent-teal: #3dd8c6;
+    --accent-orange: #f5943d;
+    --sidebar-width: 240px;
+    --tab-height: 42px;
+    --radius: 6px;
+    --radius-sm: 4px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
+    min-width: 900px;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .app-container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* --- Sidebar --- */
+  .sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--bg-darkest);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .sidebar-logo {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .sidebar-logo .logo-icon {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: #fff;
+  }
+
+  .sidebar-logo .logo-text {
+    font-size: 16px; font-weight: 600; letter-spacing: 0.5px;
+  }
+
+  .sidebar-section-label {
+    padding: 12px 16px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-muted);
+  }
+
+  .project-item {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .project-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .project-header:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .project-header .chevron {
+    font-size: 10px;
+    transition: transform 0.2s;
+    color: var(--text-muted);
+    width: 12px;
+    text-align: center;
+  }
+
+  .project-item.expanded > .project-header .chevron {
+    transform: rotate(90deg);
+  }
+
+  .project-header .project-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    flex-shrink: 0;
+  }
+
+  .project-header .project-dot.inactive {
+    background: var(--text-muted);
+  }
+
+  .project-sessions {
+    display: none;
+    padding-bottom: 4px;
+  }
+
+  .project-item.expanded > .project-sessions {
+    display: block;
+  }
+
+  .session-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px 6px 36px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .session-item:hover, .session-item.active {
+    background: var(--bg-panel);
+    color: var(--text-primary);
+  }
+
+  .session-item.active {
+    border-left: 2px solid var(--accent-blue);
+    padding-left: 34px;
+  }
+
+  .session-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    flex-shrink: 0;
+  }
+
+  .session-branch {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 16px;
+    flex-shrink: 0;
+  }
+
+  .badge-phase { background: rgba(91,138,245,0.2); color: var(--accent-blue); }
+  .badge-feat  { background: rgba(91,138,245,0.2); color: var(--accent-blue); }
+  .badge-fix   { background: rgba(245,91,110,0.2); color: var(--accent-red); }
+  .badge-plan  { background: rgba(176,122,245,0.2); color: var(--accent-purple); }
+  .badge-docs  { background: rgba(61,216,198,0.2); color: var(--accent-teal); }
+  .badge-rfct  { background: rgba(245,148,61,0.2); color: var(--accent-orange); }
+
+  .sidebar-separator {
+    border-top: 1px solid var(--border);
+    margin: 8px 16px;
+  }
+
+  .playground-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+  }
+
+  .playground-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .playground-item .plus {
+    color: var(--accent-green);
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .tooltip {
+    display: none;
+    position: absolute;
+    left: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .playground-item:hover .tooltip {
+    display: block;
+  }
+
+  /* --- Main panel --- */
+  .main-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .main-tabs {
+    display: flex;
+    background: var(--bg-darkest);
+    border-bottom: 1px solid var(--border);
+    height: var(--tab-height);
+    flex-shrink: 0;
+  }
+
+  .main-tab {
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .main-tab:hover {
+    color: var(--text-primary);
+  }
+
+  .main-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-blue);
+  }
+
+  .main-content {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg-dark);
+  }
+
+  .tab-panel {
+    display: none;
+    height: 100%;
+  }
+
+  .tab-panel.active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* --- Streams tab --- */
+  .stream-subtabs {
+    display: flex;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+    flex-shrink: 0;
+  }
+
+  .stream-subtab {
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .stream-subtab:hover { color: var(--text-primary); }
+
+  .stream-subtab.active {
+    color: var(--accent-green);
+    border-bottom-color: var(--accent-green);
+  }
+
+  .terminal {
+    flex: 1;
+    background: #0d0d1a;
+    padding: 16px 20px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .terminal .line-robot { color: var(--accent-blue); }
+  .terminal .line-ok    { color: var(--accent-green); }
+  .terminal .line-info  { color: var(--text-secondary); }
+  .terminal .line-file  { color: var(--accent-teal); }
+  .terminal .line-test  { color: #9cdcfe; }
+  .terminal .line-stage { color: var(--accent-green); font-weight: 600; }
+  .terminal .line-warn  { color: var(--accent-yellow); }
+
+  .substream {
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .substream-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    background: var(--bg-panel);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: background 0.15s;
+    border-left: 3px solid var(--accent-blue);
+  }
+
+  .substream-header:hover {
+    background: var(--bg-hover);
+  }
+
+  .substream-header .chevron {
+    font-size: 10px;
+    transition: transform 0.2s;
+    color: var(--text-muted);
+  }
+
+  .substream.expanded .substream-header .chevron {
+    transform: rotate(90deg);
+  }
+
+  .substream-body {
+    display: none;
+    background: #0a0a16;
+    padding: 12px 20px 12px 28px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    border-left: 3px solid var(--accent-blue);
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .substream.expanded .substream-body {
+    display: block;
+  }
+
+  /* --- Tasks tab (Kanban) --- */
+  .kanban-filter {
+    display: flex;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .kanban-filter select {
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .kanban-board {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 16px;
+    flex: 1;
+    overflow-y: auto;
+    align-content: start;
+  }
+
+  .kanban-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .kanban-col-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    padding: 4px 0;
+    border-bottom: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .kanban-col-header .col-count {
+    background: var(--bg-card);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+
+  .kanban-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .kanban-card:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+  }
+
+  .kanban-card.done {
+    opacity: 0.55;
+  }
+
+  .kanban-card .card-id {
+    font-size: 10px;
+    font-family: monospace;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .kanban-card .card-title {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    line-height: 1.3;
+  }
+
+  .kanban-card .card-meta {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .badge-sm {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 14px;
+  }
+
+  .badge-est { background: rgba(255,255,255,0.08); color: var(--text-secondary); }
+
+  /* --- Config tab --- */
+  .config-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .config-nav {
+    width: 200px;
+    min-width: 200px;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    padding: 12px 0;
+    overflow-y: auto;
+  }
+
+  .config-nav-item {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    font-family: monospace;
+  }
+
+  .config-nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .config-nav-item.active {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border-left: 2px solid var(--accent-blue);
+    padding-left: 14px;
+  }
+
+  .config-content {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+
+  .config-banner {
+    background: rgba(245,197,66,0.12);
+    border: 1px solid rgba(245,197,66,0.3);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: var(--accent-yellow);
+  }
+
+  .config-banner .btn-request {
+    background: rgba(245,197,66,0.2);
+    border: 1px solid rgba(245,197,66,0.4);
+    color: var(--accent-yellow);
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+
+  .config-banner .btn-request:hover {
+    background: rgba(245,197,66,0.3);
+  }
+
+  .config-section {
+    margin-bottom: 20px;
+  }
+
+  .config-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+  }
+
+  .config-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .config-table th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-weight: 600;
+    border: 1px solid var(--border);
+  }
+
+  .config-table td {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+  }
+
+  .config-table td.mono {
+    font-family: monospace;
+    font-size: 11px;
+  }
+
+  /* --- Search tab --- */
+  .search-layout {
+    padding: 20px;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .search-input-wrap {
+    margin-bottom: 20px;
+  }
+
+  .search-input-wrap input {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 14px;
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .search-input-wrap input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .search-input-wrap input:focus {
+    border-color: var(--accent-blue);
+  }
+
+  .search-result {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    transition: border-color 0.15s;
+    cursor: pointer;
+  }
+
+  .search-result:hover {
+    border-color: var(--accent-blue);
+  }
+
+  .search-result-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .score-badge {
+    background: rgba(61,220,132,0.15);
+    color: var(--accent-green);
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: monospace;
+  }
+
+  .score-badge.mid {
+    background: rgba(245,197,66,0.15);
+    color: var(--accent-yellow);
+  }
+
+  .search-result-id {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--accent-blue);
+  }
+
+  .search-result-project {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+
+  .search-result-title {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  .search-result-snippet {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .search-result-snippet mark {
+    background: rgba(245,197,66,0.25);
+    color: var(--accent-yellow);
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+
+  /* --- Stream header controls --- */
+  .stream-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .stream-header .model-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+  }
+
+  .stream-header .model-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+  }
+
+  .stream-header .session-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .stream-header .header-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+  }
+
+  .stream-btn {
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    position: relative;
+  }
+
+  .stream-btn:hover { opacity: 0.85; }
+
+  .stream-btn.btn-stop  { background: rgba(245,91,110,0.2); color: var(--accent-red); border-color: rgba(245,91,110,0.3); }
+  .stream-btn.btn-clear { background: rgba(255,255,255,0.06); color: var(--text-secondary); border-color: var(--border); }
+  .stream-btn.btn-restart { background: rgba(91,138,245,0.2); color: var(--accent-blue); border-color: rgba(91,138,245,0.3); }
+
+  .stream-btn .btn-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 3px 7px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--text-primary);
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .stream-btn:hover .btn-tooltip { display: block; }
+
+  /* --- Thinking indicator --- */
+  .thinking-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    background: #0d0d1a;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .thinking-dots {
+    display: flex;
+    gap: 3px;
+  }
+
+  .thinking-dots span {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    animation: pulse-dot 1.4s infinite ease-in-out;
+  }
+
+  .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes pulse-dot {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+
+  /* --- Chat input --- */
+  .chat-input-area {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .chat-input-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .chat-input-wrap textarea {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--text-primary);
+    outline: none;
+    resize: none;
+    line-height: 1.4;
+    min-height: 42px;
+    max-height: 120px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .chat-input-wrap textarea::placeholder { color: var(--text-muted); }
+
+  .chat-input-wrap textarea:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(91,138,245,0.15);
+  }
+
+  .chat-input-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding-left: 4px;
+  }
+
+  .chat-send-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+    flex-shrink: 0;
+    margin-bottom: 18px;
+  }
+
+  .chat-send-btn:hover { background: #4a7ae4; }
+  .chat-send-btn:active { transform: scale(0.95); }
+
+  .chat-send-btn svg {
+    width: 16px; height: 16px;
+    fill: #fff;
+  }
+
+  /* --- Status bar --- */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 3px 12px;
+    background: var(--bg-darkest);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    height: 22px;
+  }
+
+  .status-bar .status-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .status-bar .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+
+  .status-bar .status-dot.green { background: var(--accent-green); }
+
+  .status-bar .status-right {
+    margin-left: auto;
+    display: flex;
+    gap: 16px;
+  }
+
+  /* --- Enhanced kanban cards --- */
+  .kanban-card {
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15);
+    border-left: 3px solid var(--border);
+    padding-left: 10px;
+  }
+
+  .kanban-card:hover {
+    box-shadow: 0 3px 8px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.2);
+  }
+
+  .kanban-card.stripe-feat { border-left-color: var(--accent-blue); }
+  .kanban-card.stripe-fix  { border-left-color: var(--accent-red); }
+  .kanban-card.stripe-plan { border-left-color: var(--accent-purple); }
+  .kanban-card.stripe-docs { border-left-color: var(--accent-teal); }
+  .kanban-card.stripe-rfct { border-left-color: var(--accent-orange); }
+
+  /* --- Active tab top indicator --- */
+  .main-tab.active {
+    border-top: 2px solid var(--accent-blue);
+    margin-top: -2px;
+  }
+
+  /* --- Search filter chips --- */
+  .search-chips {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .search-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .search-chip:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .search-chip.active {
+    background: rgba(91,138,245,0.2);
+    color: var(--accent-blue);
+    border-color: rgba(91,138,245,0.4);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div class="app-container">
+<!-- ===== SIDEBAR ===== -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">CF</div>
+    <span class="logo-text">CodeFlow</span>
+  </div>
+
+  <div class="sidebar-section-label">Projects</div>
+
+  <!-- Project 1: expanded -->
+  <div class="project-item expanded" data-project="backend-api">
+    <div class="project-header" onclick="toggleProject(this)">
+      <span class="chevron">&#9654;</span>
+      <span class="project-dot"></span>
+      <span>backend-api</span>
+    </div>
+    <div class="project-sessions">
+      <div class="session-item active" onclick="selectSession(this, 'feat/auth-handler', 'PF4', 'FEAT')">
+        <span class="session-dot"></span>
+        <span class="session-branch">feat/auth-handler</span>
+        <span class="badge badge-phase">PF4</span>
+        <span class="badge badge-feat">FEAT</span>
+      </div>
+      <div class="session-item" onclick="selectSession(this, 'fix/rate-limiter', 'PF3', 'FIX')">
+        <span class="session-dot"></span>
+        <span class="session-branch">fix/rate-limiter</span>
+        <span class="badge badge-phase">PF3</span>
+        <span class="badge badge-fix">FIX</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project 2: collapsed -->
+  <div class="project-item" data-project="frontend-app">
+    <div class="project-header" onclick="toggleProject(this)">
+      <span class="chevron">&#9654;</span>
+      <span class="project-dot"></span>
+      <span>frontend-app</span>
+    </div>
+    <div class="project-sessions">
+      <div class="session-item" onclick="selectSession(this, 'feat/dashboard-ui', 'PF4', 'FEAT')">
+        <span class="session-dot"></span>
+        <span class="session-branch">feat/dashboard-ui</span>
+        <span class="badge badge-phase">PF4</span>
+        <span class="badge badge-feat">FEAT</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project 3: collapsed -->
+  <div class="project-item" data-project="docs-site">
+    <div class="project-header" onclick="toggleProject(this)">
+      <span class="chevron">&#9654;</span>
+      <span class="project-dot inactive"></span>
+      <span>docs-site</span>
+    </div>
+    <div class="project-sessions">
+      <div class="session-item" onclick="selectSession(this, 'docs/api-reference', 'PF6', 'DOCS')">
+        <span class="session-dot" style="background:var(--text-muted)"></span>
+        <span class="session-branch">docs/api-reference</span>
+        <span class="badge badge-phase">PF6</span>
+        <span class="badge badge-docs">DOCS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar-separator"></div>
+  <div class="sidebar-section-label">Playground</div>
+
+  <div class="playground-item" onclick="void(0)">
+    <span class="plus">+</span> Claude Code
+    <span class="tooltip">Launch Claude Code CLI</span>
+  </div>
+  <div class="playground-item" onclick="void(0)">
+    <span class="plus">+</span> Codex
+    <span class="tooltip">Launch Codex CLI</span>
+  </div>
+  <div class="playground-item" onclick="void(0)">
+    <span class="plus">+</span> Ollama
+    <span class="tooltip">Launch Ollama CLI</span>
+  </div>
+</aside>
+
+<!-- ===== MAIN PANEL ===== -->
+<main class="main-panel">
+  <nav class="main-tabs">
+    <div class="main-tab active" data-tab="streams" onclick="switchTab(this)">Streams</div>
+    <div class="main-tab" data-tab="tasks" onclick="switchTab(this)">Tasks</div>
+    <div class="main-tab" data-tab="config" onclick="switchTab(this)">Config</div>
+    <div class="main-tab" data-tab="search" onclick="switchTab(this)">Search</div>
+  </nav>
+
+  <div class="main-content">
+
+    <!-- ===== STREAMS TAB ===== -->
+    <div class="tab-panel active" id="tab-streams">
+      <div class="stream-subtabs">
+        <div class="stream-subtab active" onclick="switchStreamSubtab(this)">Claude Code</div>
+        <div class="stream-subtab" onclick="switchStreamSubtab(this)">Codex</div>
+      </div>
+
+      <div class="stream-header">
+        <div class="model-badge"><span class="model-dot"></span> claude-sonnet-4-6</div>
+        <div class="session-info">
+          <span>feat/auth-handler</span>
+          <span class="badge badge-phase">PF4</span>
+        </div>
+        <div class="header-actions">
+          <button class="stream-btn btn-stop">Stop<span class="btn-tooltip">Stop generation</span></button>
+          <button class="stream-btn btn-clear">Clear<span class="btn-tooltip">Clear output</span></button>
+          <button class="stream-btn btn-restart">Restart<span class="btn-tooltip">Restart session</span></button>
+        </div>
+      </div>
+
+      <div class="terminal" id="terminal-output"></div>
+
+      <div class="substream expanded" id="substream-codex">
+        <div class="substream-header" onclick="toggleSubstream(this)">
+          <span class="chevron">&#9654;</span>
+          Sub-stream: Codex WS-DEV
+        </div>
+        <div class="substream-body">
+<span style="color:var(--accent-blue)">codex&gt;</span> Implementing rate limiter middleware...
+<span style="color:var(--accent-teal)">  Created src/middleware/rate_limiter.rs (78 lines)</span>
+<span style="color:var(--accent-teal)">  Modified src/config/defaults.rs (+12 lines)</span>
+
+<span style="color:var(--text-secondary)">Running cargo test -- rate_limiter...</span>
+<span style="color:var(--accent-green)">  test middleware::rate_limiter::test_window_reset ... ok</span>
+<span style="color:var(--accent-green)">  test middleware::rate_limiter::test_limit_exceeded ... ok</span>
+
+<span style="color:var(--accent-yellow)">Awaiting review assignment...</span>
+        </div>
+      </div>
+
+      <div class="thinking-indicator">
+        <div class="thinking-dots"><span></span><span></span><span></span></div>
+        Claude is thinking...
+      </div>
+
+      <div class="chat-input-area">
+        <div class="chat-input-wrap">
+          <textarea rows="2" placeholder="Message Claude Code..."></textarea>
+          <span class="chat-input-hint">Press Enter to send, Shift+Enter for new line</span>
+        </div>
+        <button class="chat-send-btn" title="Send message">
+          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ===== TASKS TAB ===== -->
+    <div class="tab-panel" id="tab-tasks">
+      <div class="kanban-filter">
+        <select>
+          <option>All Epics</option>
+          <option>INF-EPC-021</option>
+          <option>INF-EPC-024</option>
+          <option>PLN-EPC-001</option>
+        </select>
+        <select>
+          <option>All Types</option>
+          <option>FEAT</option>
+          <option>FIX</option>
+          <option>RFCT</option>
+          <option>PLAN</option>
+          <option>DOCS</option>
+        </select>
+        <select>
+          <option>All Status</option>
+          <option>Open</option>
+          <option>In Progress</option>
+          <option>Review</option>
+          <option>Done</option>
+        </select>
+      </div>
+
+      <div class="kanban-board">
+        <!-- OPEN -->
+        <div class="kanban-col">
+          <div class="kanban-col-header">Open <span class="col-count">3</span></div>
+          <div class="kanban-card stripe-feat">
+            <div class="card-id">TSK-025-003</div>
+            <div class="card-title">Add WebSocket streaming endpoint</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-feat">FEAT</span>
+              <span class="badge-sm badge-est">L</span>
+            </div>
+          </div>
+          <div class="kanban-card stripe-feat">
+            <div class="card-id">TSK-025-007</div>
+            <div class="card-title">Config hot-reload support</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-feat">FEAT</span>
+              <span class="badge-sm badge-est">M</span>
+            </div>
+          </div>
+          <div class="kanban-card stripe-fix">
+            <div class="card-id">TSK-024-012</div>
+            <div class="card-title">Schema migration v3 rollback</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-fix">FIX</span>
+              <span class="badge-sm badge-est">S</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- IN PROGRESS -->
+        <div class="kanban-col">
+          <div class="kanban-col-header">In Progress <span class="col-count">2</span></div>
+          <div class="kanban-card stripe-feat">
+            <div class="card-id">TSK-025-001</div>
+            <div class="card-title">Implement auth handler with JWT validation</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-feat">FEAT</span>
+              <span class="badge-sm badge-est">L</span>
+            </div>
+          </div>
+          <div class="kanban-card stripe-rfct">
+            <div class="card-id">TSK-025-004</div>
+            <div class="card-title">Refactor session manager to use connection pooling</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-rfct">RFCT</span>
+              <span class="badge-sm badge-est">M</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- REVIEW -->
+        <div class="kanban-col">
+          <div class="kanban-col-header">Review <span class="col-count">1</span></div>
+          <div class="kanban-card stripe-feat">
+            <div class="card-id">TSK-025-002</div>
+            <div class="card-title">Rate limiter middleware with sliding window</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-feat">FEAT</span>
+              <span class="badge-sm badge-est">M</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DONE -->
+        <div class="kanban-col">
+          <div class="kanban-col-header">Done <span class="col-count">4</span></div>
+          <div class="kanban-card done stripe-feat">
+            <div class="card-id">TSK-024-001</div>
+            <div class="card-title">Database connection pooling setup</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-feat">FEAT</span>
+              <span class="badge-sm badge-est">M</span>
+            </div>
+          </div>
+          <div class="kanban-card done stripe-fix">
+            <div class="card-id">TSK-024-003</div>
+            <div class="card-title">Fix CORS header propagation</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-fix">FIX</span>
+              <span class="badge-sm badge-est">S</span>
+            </div>
+          </div>
+          <div class="kanban-card done stripe-docs">
+            <div class="card-id">TSK-024-005</div>
+            <div class="card-title">API documentation updates</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-docs">DOCS</span>
+              <span class="badge-sm badge-est">S</span>
+            </div>
+          </div>
+          <div class="kanban-card done stripe-plan">
+            <div class="card-id">TSK-024-008</div>
+            <div class="card-title">Epic C global intelligence plan</div>
+            <div class="card-meta">
+              <span class="badge-sm badge-plan">PLAN</span>
+              <span class="badge-sm badge-est">L</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CONFIG TAB ===== -->
+    <div class="tab-panel" id="tab-config">
+      <div class="config-layout">
+        <nav class="config-nav">
+          <div class="config-nav-item active" data-config="enforcement" onclick="switchConfig(this)">enforcement-policy.json</div>
+          <div class="config-nav-item" data-config="pathflow" onclick="switchConfig(this)">pathflow-config.json</div>
+          <div class="config-nav-item" data-config="orchestration" onclick="switchConfig(this)">orchestration.toml</div>
+          <div class="config-nav-item" data-config="project" onclick="switchConfig(this)">project.toml</div>
+        </nav>
+
+        <div class="config-content">
+          <!-- enforcement-policy.json view -->
+          <div class="config-view active" id="config-enforcement">
+            <div class="config-banner">
+              <span>Read-only view. Use 'Request Change' to modify via Claude Code.</span>
+              <button class="btn-request">Request Change</button>
+            </div>
+
+            <div class="config-section">
+              <h3>Merge Protection</h3>
+              <table class="config-table">
+                <tr><th>Branch Pattern</th><th>Policy</th><th>Auto-Merge</th></tr>
+                <tr><td class="mono">main</td><td>Protected</td><td>Blocked</td></tr>
+                <tr><td class="mono">master</td><td>Protected</td><td>Blocked</td></tr>
+                <tr><td class="mono">release/*</td><td>Protected</td><td>Blocked</td></tr>
+                <tr><td class="mono">production</td><td>Protected</td><td>Blocked</td></tr>
+              </table>
+            </div>
+
+            <div class="config-section">
+              <h3>Hook Configuration</h3>
+              <table class="config-table">
+                <tr><th>Event</th><th>Hooks</th><th>Status</th></tr>
+                <tr><td>PreToolUse</td><td class="mono">gate-check, team-guard, edit-write-guard, protection-guard</td><td style="color:var(--accent-green)">Active</td></tr>
+                <tr><td>PostToolUse</td><td class="mono">sentinel-write, checkpoint-register, settings-validate</td><td style="color:var(--accent-green)">Active</td></tr>
+                <tr><td>SessionStart</td><td class="mono">init, instructions, logging</td><td style="color:var(--accent-green)">Active</td></tr>
+                <tr><td>TaskCompleted</td><td class="mono">checkpoint-complete</td><td style="color:var(--accent-green)">Active</td></tr>
+              </table>
+            </div>
+
+            <div class="config-section">
+              <h3>Branch Access</h3>
+              <table class="config-table">
+                <tr><th>Prefix</th><th>Access</th><th>Teammates</th></tr>
+                <tr><td class="mono">feat/*</td><td>Read/Write</td><td>cf-development, cf-git-operations</td></tr>
+                <tr><td class="mono">fix/*</td><td>Read/Write</td><td>cf-development, cf-git-operations</td></tr>
+                <tr><td class="mono">plan/*</td><td>Read/Write</td><td>cf-planning, cf-git-operations</td></tr>
+                <tr><td class="mono">docs/*</td><td>Read/Write</td><td>cf-documentation, cf-git-operations</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <!-- pathflow-config.json view -->
+          <div class="config-view" id="config-pathflow" style="display:none">
+            <div class="config-banner">
+              <span>Read-only view. Use 'Request Change' to modify via Claude Code.</span>
+              <button class="btn-request">Request Change</button>
+            </div>
+            <div class="config-section">
+              <h3>Phase Definitions</h3>
+              <table class="config-table">
+                <tr><th>Phase</th><th>Name</th><th>Gate</th><th>Tasks</th></tr>
+                <tr><td class="mono">PF1</td><td>INIT</td><td>None</td><td>2</td></tr>
+                <tr><td class="mono">PF2</td><td>CONTEXT</td><td>pf-1</td><td>4</td></tr>
+                <tr><td class="mono">PF3</td><td>CLASSIFY</td><td>pf-2</td><td>3</td></tr>
+                <tr><td class="mono">PF4</td><td>EXECUTE</td><td>pf-3</td><td>7</td></tr>
+                <tr><td class="mono">PF5</td><td>VERIFY</td><td>ws-*</td><td>2</td></tr>
+                <tr><td class="mono">PF6</td><td>COMPLETE</td><td>ws-rev</td><td>9</td></tr>
+                <tr><td class="mono">PF7</td><td>END</td><td>pf-6</td><td>3</td></tr>
+              </table>
+            </div>
+            <div class="config-section">
+              <h3>Work Pipelines</h3>
+              <table class="config-table">
+                <tr><th>Type</th><th>Pipeline</th><th>Primary</th></tr>
+                <tr><td class="mono">FEAT</td><td>WS-DEV &rarr; WS-REV &rarr; WS-QA</td><td>cf-development</td></tr>
+                <tr><td class="mono">DOCS</td><td>WS-DOCS &rarr; WS-REV</td><td>cf-documentation</td></tr>
+                <tr><td class="mono">PLAN</td><td>WS-PLAN &rarr; WS-REV</td><td>cf-planning</td></tr>
+                <tr><td class="mono">TEST</td><td>WS-TEST &rarr; WS-REV &rarr; WS-QA</td><td>cf-quality-assurance</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <!-- orchestration.toml view -->
+          <div class="config-view" id="config-orchestration" style="display:none">
+            <div class="config-banner">
+              <span>Read-only view. Use 'Request Change' to modify via Claude Code.</span>
+              <button class="btn-request">Request Change</button>
+            </div>
+            <div class="config-section">
+              <h3>Model Routing</h3>
+              <table class="config-table">
+                <tr><th>Role</th><th>Default Model</th><th>Fallback</th></tr>
+                <tr><td>cf-development</td><td class="mono">claude-opus-4-6</td><td class="mono">claude-sonnet-4-6</td></tr>
+                <tr><td>cf-review</td><td class="mono">claude-opus-4-6</td><td class="mono">claude-sonnet-4-6</td></tr>
+                <tr><td>cf-planning</td><td class="mono">claude-opus-4-6</td><td class="mono">claude-sonnet-4-6</td></tr>
+                <tr><td>cf-documentation</td><td class="mono">claude-sonnet-4-6</td><td class="mono">claude-haiku-4-5</td></tr>
+              </table>
+            </div>
+            <div class="config-section">
+              <h3>Parallelism</h3>
+              <table class="config-table">
+                <tr><th>Stage</th><th>Max Parallel</th><th>Batch Size</th></tr>
+                <tr><td>WS-DEV</td><td>3</td><td>2</td></tr>
+                <tr><td>WS-DOCS</td><td>3</td><td>2</td></tr>
+                <tr><td>WS-REV</td><td>2</td><td>2</td></tr>
+                <tr><td>WS-QA</td><td>1</td><td>1</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <!-- project.toml view -->
+          <div class="config-view" id="config-project" style="display:none">
+            <div class="config-banner">
+              <span>Read-only view. Use 'Request Change' to modify via Claude Code.</span>
+              <button class="btn-request">Request Change</button>
+            </div>
+            <div class="config-section">
+              <h3>Project Metadata</h3>
+              <table class="config-table">
+                <tr><th>Field</th><th>Value</th></tr>
+                <tr><td>Name</td><td>backend-api</td></tr>
+                <tr><td>Version</td><td class="mono">0.4.0</td></tr>
+                <tr><td>Language</td><td>Rust</td></tr>
+                <tr><td>Framework</td><td>Axum</td></tr>
+                <tr><td>Test Runner</td><td class="mono">cargo test</td></tr>
+                <tr><td>CI Provider</td><td>GitHub Actions</td></tr>
+              </table>
+            </div>
+            <div class="config-section">
+              <h3>Repositories</h3>
+              <table class="config-table">
+                <tr><th>Repo</th><th>Branch</th><th>Status</th></tr>
+                <tr><td class="mono">org/backend-api</td><td class="mono">main</td><td style="color:var(--accent-green)">Active</td></tr>
+                <tr><td class="mono">org/frontend-app</td><td class="mono">main</td><td style="color:var(--accent-green)">Active</td></tr>
+                <tr><td class="mono">org/docs-site</td><td class="mono">main</td><td style="color:var(--accent-green)">Active</td></tr>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SEARCH TAB ===== -->
+    <div class="tab-panel" id="tab-search">
+      <div class="search-layout">
+        <div class="search-input-wrap">
+          <input type="text" placeholder="Search across all projects..." value="authentication handler">
+        </div>
+
+        <div class="search-chips">
+          <button class="search-chip active" onclick="toggleChip(this)">All Projects</button>
+          <button class="search-chip" onclick="toggleChip(this)">Tasks</button>
+          <button class="search-chip" onclick="toggleChip(this)">Sessions</button>
+          <button class="search-chip" onclick="toggleChip(this)">Memory</button>
+          <button class="search-chip" onclick="toggleChip(this)">Code</button>
+        </div>
+
+        <div class="search-result">
+          <div class="search-result-header">
+            <span class="score-badge">0.94</span>
+            <span class="search-result-id">TSK-025-001</span>
+            <span class="search-result-project">backend-api</span>
+          </div>
+          <div class="search-result-title">Implement auth handler with JWT validation</div>
+          <div class="search-result-snippet">
+            Create <mark>authentication handler</mark> module with JWT token validation, refresh token rotation, and session management. Integrate with existing middleware chain...
+          </div>
+        </div>
+
+        <div class="search-result">
+          <div class="search-result-header">
+            <span class="score-badge">0.87</span>
+            <span class="search-result-id">TSK-024-001</span>
+            <span class="search-result-project">backend-api</span>
+          </div>
+          <div class="search-result-title">Database connection pooling setup</div>
+          <div class="search-result-snippet">
+            Set up connection pooling for <mark>auth</mark> database with automatic retry logic. Pooling config supports per-<mark>handler</mark> connection limits and health checks...
+          </div>
+        </div>
+
+        <div class="search-result">
+          <div class="search-result-header">
+            <span class="score-badge mid">0.72</span>
+            <span class="search-result-id">TSK-025-004</span>
+            <span class="search-result-project">frontend-app</span>
+          </div>
+          <div class="search-result-title">Session manager refactor for SSO integration</div>
+          <div class="search-result-snippet">
+            Refactor session manager to support SSO <mark>authentication</mark> flows. New <mark>handler</mark> chain for OAuth2 callbacks with PKCE verification...
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+</div><!-- /app-container -->
+
+<!-- ===== STATUS BAR ===== -->
+<div class="status-bar">
+  <div class="status-item"><span class="status-dot green"></span> Connected to daemon</div>
+  <div class="status-item">backend-api</div>
+  <div class="status-right">
+    <div class="status-item">3 active sessions</div>
+  </div>
+</div>
+
+<script>
+  /* --- Terminal simulated output --- */
+  var terminalLines = [
+    { cls: 'line-robot', text: 'PF4-EXECUTE: Working on feat/auth-handler' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-info',  text: 'cf-development spawned for WS-DEV' },
+    { cls: 'line-info',  text: 'Model routing: claude-sonnet-4-6 (FEAT, complex implementation)' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-info',  text: 'Implementing authentication handler...' },
+    { cls: 'line-file',  text: '  Created src/auth/handler.rs (142 lines)' },
+    { cls: 'line-file',  text: '  Created src/auth/middleware.rs (89 lines)' },
+    { cls: 'line-file',  text: '  Modified src/auth/mod.rs (+3 lines)' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-info',  text: 'Running cargo test...' },
+    { cls: 'line-test',  text: '  test auth::handler::test_valid_token ... ok' },
+    { cls: 'line-test',  text: '  test auth::handler::test_expired_token ... ok' },
+    { cls: 'line-test',  text: '  test auth::handler::test_invalid_signature ... ok' },
+    { cls: 'line-test',  text: '  test auth::middleware::test_auth_required ... ok' },
+    { cls: 'line-test',  text: '  test auth::middleware::test_public_route ... ok' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-ok',    text: '  5 tests passed, 0 failed' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-stage', text: 'STAGE-COMPLETE: WS-DEV' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-info',  text: 'cf-review spawned for WS-REV (CODE_REVIEW)' },
+    { cls: 'line-info',  text: 'Reviewing changes on feat/auth-handler...' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-info',  text: 'Dimensional Assessment:' },
+    { cls: 'line-ok',    text: '  Functional Correctness .... PASS' },
+    { cls: 'line-ok',    text: '  Security ................. PASS' },
+    { cls: 'line-ok',    text: '  Standards Compliance ..... PASS' },
+    { cls: 'line-warn',  text: '  Scope Compliance ......... PARTIAL (mod.rs not in original scope)' },
+    { cls: 'line-info',  text: '' },
+    { cls: 'line-ok',    text: 'Verdict: APPROVED' },
+  ];
+
+  (function renderTerminal() {
+    var el = document.getElementById('terminal-output');
+    var html = '';
+    for (var i = 0; i < terminalLines.length; i++) {
+      var l = terminalLines[i];
+      if (l.text === '') {
+        html += '\n';
+      } else {
+        html += '<span class="' + l.cls + '">' + escapeHtml(l.text) + '</span>\n';
+      }
+    }
+    el.innerHTML = html;
+  })();
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /* --- Sidebar: project accordions --- */
+  function toggleProject(header) {
+    var item = header.parentElement;
+    item.classList.toggle('expanded');
+  }
+
+  /* --- Sidebar: session selection --- */
+  function selectSession(el, branch, phase, type) {
+    document.querySelectorAll('.session-item').forEach(function(s) {
+      s.classList.remove('active');
+    });
+    el.classList.add('active');
+  }
+
+  /* --- Main tabs --- */
+  function switchTab(tab) {
+    document.querySelectorAll('.main-tab').forEach(function(t) {
+      t.classList.remove('active');
+    });
+    tab.classList.add('active');
+
+    var target = tab.getAttribute('data-tab');
+    document.querySelectorAll('.tab-panel').forEach(function(p) {
+      p.classList.remove('active');
+    });
+    document.getElementById('tab-' + target).classList.add('active');
+  }
+
+  /* --- Stream sub-tabs --- */
+  function switchStreamSubtab(subtab) {
+    document.querySelectorAll('.stream-subtab').forEach(function(t) {
+      t.classList.remove('active');
+    });
+    subtab.classList.add('active');
+  }
+
+  /* --- Sub-stream toggle --- */
+  function toggleSubstream(header) {
+    header.parentElement.classList.toggle('expanded');
+  }
+
+  /* --- Search filter chips --- */
+  function toggleChip(chip) {
+    chip.classList.toggle('active');
+  }
+
+  /* --- Config sub-nav --- */
+  function switchConfig(navItem) {
+    document.querySelectorAll('.config-nav-item').forEach(function(n) {
+      n.classList.remove('active');
+    });
+    navItem.classList.add('active');
+
+    var target = navItem.getAttribute('data-config');
+    document.querySelectorAll('.config-view').forEach(function(v) {
+      v.style.display = 'none';
+      v.classList.remove('active');
+    });
+    var view = document.getElementById('config-' + target);
+    view.style.display = 'block';
+    view.classList.add('active');
+  }
+</script>
+
+</body>
+</html>

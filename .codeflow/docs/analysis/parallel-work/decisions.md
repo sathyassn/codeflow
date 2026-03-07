@@ -4,7 +4,7 @@ type: analysis
 status: active
 author: cf-planning
 created_at: "2026-03-04"
-updated_at: "2026-03-05"
+updated_at: "2026-03-07"
 parent: "parallel-work/README.md"
 ---
 
@@ -37,6 +37,7 @@ parent: "parallel-work/README.md"
 - [21. Multi-Model Orchestration Strategy](#21-multi-model-orchestration-strategy)
 - [22. Revised Epic Structure](#22-revised-epic-structure)
 - [23. Knowledge Graph Synchronization](#23-knowledge-graph-synchronization)
+- [24. Combined Epic D+E: CodeFlow App Vision](#24-combined-epic-de-codeflow-app-vision)
 
 ---
 
@@ -365,16 +366,16 @@ This is the simplest, most natural boundary that developers already understand.
 | Epic A | Parallel Execution Core | Loro CRDT, worktrees, singleton elimination, autorun integration. | 19 | Epic 0 |
 | Epic B | Data Layer Standardization | Schema standardization in SurrealQL (not SQL). Phase F (SurrealDB) merged into Epic 0 — REMOVED from Epic B. | ~16 | Epic 0; A, B, C can run in parallel after Epic 0 |
 | Epic C | Global Intelligence Layer | Daemon mode, project registry, sync engine, local embeddings (`all-MiniLM-L6-v2` via `ort` crate, 384 dims, ~50MB), cross-project queries, knowledge graph extraction pipeline (INGEST/COGNIFY/MEMIFY/SEARCH), Loro CRDT KG sync for teams < 15 devs, codeflow-knowledge.toml config, extended ontology (16 entity types, 18 relationship types), bootstrap CLI command, trigger points and scheduling. | 14-18 | Epic 0 |
-| Epic D | Model Orchestrator | Port `cf-model-orchestrator` to Rust. Config-driven model-to-stage routing. T1/T3 tmux execution. | 8-10 | Epic 0 + Epic C |
-| Epic E | Dashboard | SvelteKit + Tauri. Deferred until Epics 0-D stabilize. | TBD | Stable Epic 0 + B + C |
+| Epic D | Model Orchestrator | Config-driven model orchestration in Rust. Stage routing engine, T1/T3 execution, PTY capture, CLI commands, model session tracking, audit log, cost tracking. | 12 | Epic 0 + Epic C |
+| Epic E | CodeFlow App | Tauri v2 + SvelteKit desktop app. Streaming terminal, multi-project, config viewer, PM views, intelligence, playground mode. | 18-20 | Epic 0 + Epic C + Epic D |
 
 **Key changes from the previous 3-epic structure:**
 
 - Epic 0 is updated: `SurrealStore` is now the ONLY `DataStore` implementation. `SqliteStore` is not present in the Rust redesign — SurrealDB embedded replaces SQLite from the start.
 - Epic B is reduced: Phase F (SurrealDB) was previously in Epic B but is now integral to Epic 0 (since the Rust CLI starts with SurrealDB, not SQLite). Epic B now covers schema standardization and enforcement only (~16 tasks, 2 phases).
 - Epic C is new: Global Intelligence Layer — daemon, project registry, sync engine, local ONNX embeddings, cross-project SurrealQL queries.
-- Epic D is new: Model Orchestrator — revives and ports the archived `cf-model-orchestrator` skill.
-- Epic E is new (deferred): Dashboard — SvelteKit + Tauri, after the data and orchestration layers stabilize.
+- Epic D is updated: Model Orchestrator — 12 tasks, 3 phases (D1: Orchestration Core, D2: Execution Engine, D3: Tracking). See [Decision #24](#24-combined-epic-de-codeflow-app-vision).
+- Epic E is updated: CodeFlow App — 18-20 tasks, 5 phases (E1: App Foundation, E2: Streaming Terminal, E3: Project Management, E4: Configuration, E5: Intelligence). See [Decision #24](#24-combined-epic-de-codeflow-app-vision).
 
 **Dependency ordering:**
 
@@ -387,7 +388,7 @@ Epic 0 (prerequisite — must complete first)
               |
               +---> Epic D (model orchestrator — depends on Epic 0 + C)
                         |
-                        +---> Epic E (dashboard — depends on stable 0 + B + C)
+                        +---> Epic E (CodeFlow App — depends on Epic 0 + C + D)
 ```
 
 **Local embeddings for vector search (Epic C):**
@@ -431,6 +432,44 @@ Extend the existing Loro infrastructure (already designed in Decision #8 for coo
 - **SurrealDB pricing:** Community edition is free for self-hosted. Cloud tiers start at $0/month (free tier, 1GB) through custom enterprise pricing.
 
 **References:** [Knowledge Graph Engine Analysis, Section 8](knowledge-graph-engine.md#8-multi-user-synchronization-architecture), [Decision #8 (Loro CRDT)](#8-loro-crdt-as-foundation), [crdt-coordination.md](crdt-coordination.md).
+
+---
+
+## 24. Combined Epic D+E: CodeFlow App Vision
+
+**Question:** How should the model orchestrator (Epic D) and dashboard (Epic E) be structured given the vision of a CodeFlow desktop app as the primary AI interaction interface?
+
+**Decision: Keep D and E as separate epics with shared streaming infrastructure.**
+
+- **Epic D (12 tasks, 3 phases):** Model orchestration layer -- Rust CLI tooling. Orchestration config schema (`orchestration.toml`), stage routing engine, T1 one-shot execution (`std::process::Command`, no tmux), T3 persistent sessions (tmux with `model-{ulid}` naming), PTY-based subprocess capture (`portable-pty` crate), process lifecycle management, CLI commands (`codeflow orchestrate exec/status/kill`), model session tracking in SurrealDB, multi-model audit log, cost tracking and subscription configuration. Works headless from CLI without the app.
+
+- **Epic E (18-20 tasks, 5 phases):** CodeFlow App -- Tauri v2 + SvelteKit desktop application. Streaming terminal (xterm.js PTY bridge with multi-tab and sub-stream embedding), multi-project sidebar (project accordions with per-project session views), config viewer (read-only with "Request Change" button routing edits through PathFlow), project management views (Kanban, timeline, task detail, dependency graph), intelligence views (semantic search, cross-project task board, knowledge graph explorer, team analytics), file viewer (syntax highlighted, read-only), diff viewer (diff2html), "Open in Editor" button (auto-detect installed editors), playground mode (standalone model CLIs without PathFlow session wrapping).
+
+- **Dependency:** E depends on D (for streaming/PTY infrastructure) and C (for daemon/SurrealDB data). D is CLI-first and headless. E is the presentation layer. Different tech stacks (pure Rust vs Rust + TypeScript + Svelte). Different expertise required.
+
+- **Config editing is READ-ONLY in the app.** Changes are requested via the active Claude Code session through PathFlow. The LLM edits; the user directs. This maintains PathFlow as the single path for all modifications.
+
+- **App complements the terminal, not replaces it.** CLI works independently. App provides a unified view when used.
+
+- **Both streaming modes supported:** (A) Separate tabs -- one xterm.js per model PTY, user switches between them. (B) Sub-stream embedding -- app detects delegation markers in Claude Code's output, creates inline collapsible panel showing delegated model's stream.
+
+- **Playground mode:** Standalone model CLI access without PathFlow session wrapping. Just spawn the CLI in a PTY, no session management. Reinforces the app as the single place for all AI interactions.
+
+- **Multi-project:** Sidebar with project accordions, each expandable to show active sessions. Sessions are clickable items showing PathFlow phase, branch, work type. Cross-project search aggregates across visible projects.
+
+- **File view (read-only, syntax highlighted) + diff view (diff2html) + "Open in Editor" button** (auto-detect installed editors via `which`).
+
+- **Tech stack:** Tauri v2 + SvelteKit chosen for small binary (~50MB vs Electron ~300MB), system webview, Rust backend (imports `codeflow-core` directly), minimal frontend boilerplate. Terminal rendering uses a hybrid Rust+JS architecture (same approach as VS Code): `portable-pty` crate for cross-platform PTY abstraction (`openpty` on macOS, `/dev/ptmx` on Linux), `vte` crate (from wezterm project) for VT100/ANSI escape sequence parsing in Rust pre-processing raw PTY output, Tauri IPC to send pre-parsed structured content to the frontend, and xterm.js with WebGL renderer addon for GPU-accelerated terminal rendering in the webview. Rust handles performance-critical I/O and parsing; xterm.js handles proven rendering.
+
+- **Terminal rendering:** Start with raw mode (xterm.js, zero extra work) displaying output exactly as the terminal shows it (ASCII tables, ANSI colors, monospace layout). Add rich rendering as a Phase E2 enhancement -- detect markdown blocks in the PTY stream, render as HTML components (styled tables, syntax-highlighted code blocks, clickable links) via a markdown parser (`marked` or `markdown-it`). Toggle between "raw terminal" and "rich view" per user preference.
+
+- **UI/UX quality:** Targets Linear/Obsidian/VS Code/Warp-level polish. Tauri + SvelteKit imposes no visual ceiling (full CSS/HTML spec in system webview). Native-feeling interactions (macOS vibrancy API, native menu bar, OS keyboard conventions), dark/light mode via `prefers-color-scheme`, 60fps animations via Svelte compiled directives, micro-interactions (card animations, hover feedback, focus glow), color-coded work type badges (FEAT=blue, FIX=red, PLAN=purple, DOCS=teal), chat-style input, stream headers with model badge and action controls.
+
+- **Previous epics unaffected.** Epic C may gain minor backward-compatible daemon extensions (WebSocket upgrade path, process supervision API) but these can live in Epic D Phase D2 to avoid scope creep.
+
+- **Subscription leverage pitch:** Existing model subscriptions used more effectively through routing, not new API costs.
+
+- **Updated dependency ordering:** `Epic 0 -> {A, B, C parallel} -> D (needs 0+C) -> E (needs 0+C+D)`. Epic E phases E1, E3, E4 can start when Epic C Phase C1-C2 is stable. Phase E2 requires Epic D Phase D1-D2. Phase E5 requires Epic C Phase C3-C4.
 
 ---
 

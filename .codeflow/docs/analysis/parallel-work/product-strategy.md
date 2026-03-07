@@ -4,7 +4,7 @@ type: analysis
 status: draft
 author: cf-documentation
 created_at: "2026-03-05"
-updated_at: "2026-03-05"
+updated_at: "2026-03-07"
 parent: "parallel-work/README.md"
 ---
 
@@ -24,7 +24,7 @@ parent: "parallel-work/README.md"
 - [8. Risk Assessment](#8-risk-assessment)
 - [9. Strategic Recommendations](#9-strategic-recommendations)
 - [10. Epic D: Model Orchestrator](#10-epic-d-model-orchestrator)
-- [11. Epic E: Dashboard](#11-epic-e-dashboard)
+- [11. Epic E: CodeFlow App](#11-epic-e-codeflow-app)
 
 ---
 
@@ -442,57 +442,196 @@ Competing on automation capabilities means building a product that makes CodeFlo
 
 ## 10. Epic D: Model Orchestrator
 
-Epic D: Model Orchestrator (~9 tasks)
+Epic D: Model Orchestrator (12 tasks, 3 phases)
 
-**Purpose:** Port the cf-model-orchestrator skill to a first-class Rust implementation, enabling config-driven routing of work stages to different AI models.
+**Purpose:** Build a config-driven model orchestration layer in Rust that routes work stages to different AI models. Claude Code remains the control plane; external models (Codex CLI, Gemini CLI, Ollama, etc.) are execution workers invoked via CLI subprocesses. The team lead calls `codeflow orchestrate exec` -- the orchestrator is CLI tooling, not a teammate or daemon service.
 
 **Dependency:** Epic 0 (Rust CLI) must be complete. Epic C (global DB) provides session tracking for multi-model sessions.
 
-### Key Tasks
+### Phase D1: Orchestration Core (5 tasks)
 
 | # | Task | Description | Effort |
 |---|------|-------------|--------|
-| 1 | Orchestration config schema | `.codeflow/config/orchestration.toml`. Stage-to-model routing. Model profiles (API type, endpoint, auth). | M |
-| 2 | T1 tmux execution | Interactive tmux pane management. Model worker lifecycle. Output capture and parsing. | L |
-| 3 | T3 background execution | Non-interactive worker mode. Completion detection. Error handling. | L |
-| 4 | Model profile definitions | Built-in profiles for Claude Code (via subagent), Codex (via API), Gemini (via API), Ollama (local). Extensible profile format. | M |
-| 5 | Stage routing engine | Map work stage (WS-DEV, WS-REV, etc.) + work type + config to model profile. | M |
-| 6 | Response normalization | Parse responses from different models into CodeFlow's internal format. Stage completion detection. | L |
-| 7 | Session tracking in SurrealDB | Record which model handled each stage. Cost tracking if API usage available. | S |
-| 8 | Subscription plan configuration | Team-level config for which models are available under subscription plans vs API tokens. | S |
-| 9 | Multi-model audit log | Ledger events for model selection, stage handoffs, completion. | S |
+| D1 | Orchestration config schema | `.codeflow/config/orchestration.toml` -- stage-to-model routing tables, model profiles, precedence rules | M |
+| D2 | Model profile registry | Built-in profiles (Claude subagent, Codex CLI, Gemini CLI, Ollama local) + custom extensibility via TOML profile definitions | M |
+| D3 | Stage routing engine | Map `(work_stage, work_type)` -> `model_profile` with precedence rules: task override > work_type override > stage default > global default | M |
+| D4 | T1 one-shot execution | `std::process::Command` for quick tasks -- no tmux, direct stdout/stderr capture, timeout management, exit code handling | L |
+| D5 | T3 persistent session | tmux session management with naming convention `model-{ulid}`, multi-turn exchanges, file modification support, session cleanup | L |
 
-### The Pitch for Epic D
+### Phase D2: Execution Engine (4 tasks)
 
-"Your team pays $20/dev/month for Claude Code and $20/dev/month for Codex. CodeFlow routes planning and review to Claude (where reasoning quality matters) and routine code generation to Codex (where throughput matters). Same subscriptions. Better cost/quality ratio."
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| D6 | PTY-based subprocess stdout capture | `portable-pty` crate for cross-platform PTY allocation, raw output streaming, encoding handling | L |
+| D7 | Response normalization and completion detection | Parse model outputs into `ModelResponse` struct, detect completion markers per model profile, handle timeout/error states | L |
+| D8 | Process lifecycle management | Spawn, monitor, restart, kill model CLI subprocesses. Health checks. Graceful shutdown. Resource cleanup on session end | M |
+| D9 | CLI commands | `codeflow orchestrate exec` (run a model for a stage), `codeflow orchestrate status` (active model sessions), `codeflow orchestrate kill` (terminate a model session) | M |
+
+### Phase D3: Tracking (3 tasks)
+
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| D10 | Model session tracking in SurrealDB | Extend `active_work` table with `model_profile` and `cost` fields, record which model handled each stage | S |
+| D11 | Multi-model audit log | JSONL ledger events for `model_selected`, `stage_handoff`, `completion` -- full audit trail of model routing decisions | S |
+| D12 | Cost tracking and subscription configuration | Budget management per model profile, subscription plan config (which models are subscription vs API-token), usage aggregation and reporting | M |
+
+### Key Architectural Points
+
+- **Claude Code remains the control plane.** PathFlow orchestration, hook enforcement, task management, and team coordination are unchanged. External models are execution workers only.
+- **T1 uses `std::process::Command`, NOT tmux.** One-shot execution is more reliable without tmux overhead. Direct process spawning, stdout capture, and exit code handling.
+- **T3 uses tmux** with naming convention `model-{ulid}` for persistent multi-turn sessions that require file modification support.
+- **Config-driven routing** in `.codeflow/config/orchestration.toml` -- teams configure which model executes which stage without code changes.
+- **Subscription leverage pitch:** "Stop burning API tokens. Use your existing model subscriptions more effectively with CodeFlow routing." Teams already paying for Claude Code ($20/dev/month) and Codex can route planning/review to Claude (reasoning quality) and routine code generation to Codex (throughput). Same subscriptions, better cost/quality ratio.
 
 ---
 
-## 11. Epic E: Dashboard
+## 11. Epic E: CodeFlow App
 
-Epic E: Dashboard (deferred — ship after core stabilizes)
+Epic E: CodeFlow App (~18-20 tasks, 5 phases)
 
-**Purpose:** Visual interface for PathFlow progress, agent activity, cross-project intelligence, and team analytics.
+**Purpose:** A desktop application that serves as the unified interface for all AI-assisted development -- streaming terminal output from multiple model CLIs, project management views, configuration management, cross-project intelligence, and standalone model playground. The app complements the terminal, not replaces it. The CLI works independently; the app provides a unified view when used.
 
-**Technology:** SvelteKit (web frontend) + Tauri (native app shell, macOS/Linux). Local-first — connects to the global daemon via Unix socket, not a remote server.
+**Technology:** Tauri v2 + SvelteKit. ~50MB binary (vs Electron ~300MB). System webview (WebKit on macOS, WebKitGTK on Linux). Rust backend imports `codeflow-core` directly as a crate dependency. SvelteKit has minimal frontend boilerplate.
 
-**Dependency:** Epic C (global daemon) must be complete and stable. Dashboard is a consumer of the global daemon's SurrealQL API.
+**Dependency:** Epic 0 + Epic C (daemon + SurrealDB data). Epic D (execution engine + PTY capture) required for streaming terminal features. Phases E1, E3, E4 can start when Epic C Phase C1-C2 is stable (daemon + project registry). Phase E2 requires Epic D Phase D1-D2 (execution engine + PTY capture). Phase E5 requires Epic C Phase C3-C4 (embeddings, knowledge graph).
 
-### Key Views
+### Phase E1: App Foundation (4 tasks)
 
-| View | Description |
-|------|-------------|
-| PathFlow Visualization | Live phase/stage progress for active sessions |
-| Agent Activity Monitor | Real-time messages, stage completions, rework loops |
-| Cross-Project Task Board | All tasks across registered projects, filterable by status/type |
-| Semantic Search | Natural language search across project history |
-| Team Analytics | Session frequency, stage durations, rework rates, model usage |
-| Enforcement Timeline | Hook events, gate checks, sentinel creation history |
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| E1 | Tauri v2 + SvelteKit project setup | Workspace integration with `codeflow-core` as crate dependency, build pipeline, dev tooling | M |
+| E2 | Daemon Unix socket client | Connect to `~/.codeflow/db.sock`, SurrealQL query interface, connection health monitoring | M |
+| E3 | Multi-project selector | Sidebar with project accordion, registered projects from daemon, per-project session views with PathFlow phase/branch/work_type display, cross-project search | M |
+| E4 | App shell | Window management, menu bar, navigation, tab management, theme support | S |
 
-### Why Deferred
+### Phase E2: Streaming Terminal (5 tasks)
 
-The dashboard adds significant engineering burden (frontend + desktop app framework) without improving the core workflow. It is valuable for team leads and engineering managers, but not for the developers doing the actual AI-assisted work.
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| E5 | xterm.js terminal emulator integration | Same technology as VS Code, framework-agnostic, works in any webview | L |
+| E6 | PTY bridge | Tauri backend captures PTY output from model CLIs, streams to xterm.js via Tauri IPC events | L |
+| E7 | Multi-tab stream management | Each model CLI gets its own tab, tab lifecycle tied to model process lifecycle | M |
+| E8 | Sub-stream inline embedding | Detect delegation markers in Claude Code's output, create inline collapsible panel showing delegated model's stream | L |
+| E9 | Stream controls | Pause/resume streaming, scrollback buffer, search within stream, copy selection | M |
 
-Ship the intelligence platform (Epic C) first. Validate that teams want cross-project visibility. Then build the interface that makes that visibility actionable.
+### Phase E3: Project Management (4 tasks)
 
-**Target:** Begin Epic E after Epic C ships and at least 10 teams are actively using the global daemon.
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| E10 | Kanban board | Task cards by status columns (OPEN, IN_PROGRESS, REVIEW, DONE), drag-and-drop reordering | M |
+| E11 | Epic timeline/roadmap view | Phase progress bars, task completion tracking, dependency visualization | M |
+| E12 | Task detail view | Criteria status matrix, stage reports, PR link, acceptance criteria checklist | M |
+| E13 | Task dependency graph | Force-directed graph layout (D3.js or vis-network), interactive zoom/pan/filter | L |
+
+### Phase E4: Configuration (3 tasks)
+
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| E14 | Config file reader/writer | Tauri backend reads/writes config via filesystem + serde, watches for external changes | M |
+| E15 | Form-based config viewers | Structured viewers for `enforcement-policy.json`, `pathflow-config.json`, `orchestration.toml`, `project.toml`, `codeflow-knowledge.toml` | L |
+| E16 | READ-ONLY config with change request | All config views are read-only by default. "Request Change" button pre-fills a prompt for the active Claude Code session to handle the edit through PathFlow. Direct editing is the LLM's job. | M |
+
+### Phase E5: Intelligence (4 tasks)
+
+| # | Task | Description | Effort |
+|---|------|-------------|--------|
+| E17 | Semantic search view | Query input -> local ONNX embedding -> daemon HNSW vector query -> ranked results | M |
+| E18 | Cross-project task board | Aggregate tasks across projects with `can_access` visibility scoping, filterable by project/status/type | M |
+| E19 | Knowledge graph explorer | Interactive entity/relationship browser, expandable nodes, relationship type filtering | L |
+| E20 | Team analytics dashboard | Session frequency, stage pass rates, rework rates, model usage breakdown, API cost tracking | L |
+
+### Additional Features
+
+| Feature | Description |
+|---------|-------------|
+| File viewer | highlight.js/shiki for read-only syntax-highlighted code view |
+| Diff viewer | diff2html for git diff rendering (GitHub PR-style side-by-side and unified views) |
+| "Open in Editor" button | Auto-detect installed editors (code, zed, idea) via `which`, dropdown selection |
+| Playground mode | Sidebar section for standalone model CLIs without PathFlow -- just spawn the CLI in a PTY, no session wrapping. Reinforces the app as the single place for all AI interactions. |
+
+### Streaming Modes
+
+Two complementary streaming architectures:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| Separate tabs | One xterm.js terminal per PTY, user switches between tabs | Independent model sessions, playground mode |
+| Sub-stream embedding | App detects delegation markers in Claude Code's output, creates inline collapsible panel showing delegated model's stream in real-time | Orchestrated multi-model sessions where Claude Code delegates to external models |
+
+### Tech Stack Rationale
+
+| Choice | Rationale |
+|--------|-----------|
+| Tauri v2 | ~50MB binary (vs Electron ~300MB), system webview (WebKit macOS, WebKitGTK Linux), Rust backend imports `codeflow-core` directly |
+| SvelteKit | Minimal boilerplate, reactive UI, SSR not needed (local app), smaller bundle than React/Vue |
+| xterm.js + WebGL renderer | Battle-tested terminal emulator (VS Code uses it), framework-agnostic, GPU-accelerated rendering in any webview |
+| portable-pty | Cross-platform PTY abstraction (shared with Epic D), `openpty` on macOS, `/dev/ptmx` on Linux |
+| vte (wezterm) | VT100/ANSI escape sequence parsing in Rust, pre-processes raw PTY output before sending to frontend |
+
+### Hybrid PTY Architecture
+
+The terminal rendering uses a hybrid Rust+JS approach for optimal performance, mirroring the architecture VS Code uses (native PTY handling + xterm.js rendering):
+
+**Backend (Tauri Rust):**
+- `portable-pty` crate -- cross-platform PTY abstraction (`openpty` on macOS, `/dev/ptmx` on Linux)
+- `vte` crate (from wezterm project) -- VT100/ANSI escape sequence parsing in Rust, pre-processes raw PTY output before sending to frontend
+- Sends pre-parsed structured content to frontend via Tauri IPC
+
+**Frontend (webview):**
+- xterm.js with WebGL renderer addon -- GPU-accelerated terminal rendering in the webview
+- Receives pre-parsed content from Rust backend, reducing JS-side processing overhead
+
+Rust handles the performance-critical I/O and parsing; xterm.js handles the proven rendering in the webview.
+
+### Terminal Rendering Strategy
+
+- **Start with raw mode** (xterm.js, zero extra work) -- displays output exactly as the terminal shows it (ASCII tables, ANSI colors, monospace layout). This is the baseline for Phase E2.
+- **Add rich rendering as a Phase E2 enhancement** -- detect markdown blocks in the PTY stream, render as HTML components (styled tables, syntax-highlighted code blocks, clickable links).
+- **Toggle between "raw terminal" and "rich view"** per user preference. Raw mode is always available as fallback.
+- **Rich rendering requires a markdown parser** (e.g., `marked` or `markdown-it`) to intercept and transform markdown patterns in the stream before display.
+
+### UI/UX Design Quality
+
+The CodeFlow App targets the visual polish and interaction quality of best-in-class desktop development tools (Linear, Obsidian, VS Code). The Tauri + SvelteKit stack imposes no visual ceiling -- the app renders in a system webview (WebKit on macOS, WebKitGTK on Linux) with full CSS/HTML spec support.
+
+**Design principles:**
+- **Native-feeling interactions:** Window vibrancy/translucency via Tauri's macOS vibrancy API, native menu bar and system tray, drag-and-drop with native feel, keyboard shortcuts matching OS conventions (Cmd on macOS, Ctrl on Linux)
+- **Dark/light mode** following OS preference automatically (`prefers-color-scheme`)
+- **System font rendering** (no web font flash), component-level scoped CSS
+- **Smooth 60fps animations** using Svelte's compiled `transition`/`animate` directives
+- **Micro-interactions:** Card entrance animations, tab transitions, hover feedback, focus glow on inputs
+- **Visual hierarchy:** Box shadows for depth/elevation, color-coded work type badges (FEAT=blue, FIX=red, PLAN=purple, DOCS=teal), left-side color stripes on kanban cards
+- **Status communication:** Animated thinking indicators, connection status in status bar, phase progress badges
+- **Chat-style input** with send button, "Enter to send / Shift+Enter for newline" convention
+- **Stream header** with model badge, session info (branch + PathFlow phase), and action controls (Stop, Clear, Restart)
+
+**Reference implementations for design quality benchmarks:**
+
+| Reference | What to Study |
+|-----------|---------------|
+| Linear | Task management polish, keyboard-first UX |
+| Obsidian | Themeable, plugin-friendly, local-first |
+| VS Code | Terminal integration, multi-panel, extension ecosystem |
+| Warp | AI-native terminal, rich rendering of command output |
+
+### Impact on Previous Epics
+
+- **Epic 0:** No changes.
+- **Epic A:** No changes. Loro CRDT is independent; future app enhancement for real-time collaboration post-E.
+- **Epic B:** No changes.
+- **Epic C:** Minor -- daemon IPC server (Task 003) could extend with WebSocket upgrade path for persistent streaming. Process supervision API could extend daemon process manager (Task 002). These extensions are backward-compatible and can live in Epic D Phase D2 instead to avoid scope creep on Epic C's existing tasks.
+- **Epic D:** Shared infrastructure -- `portable-pty` crate and PTY capture code from Phase D2 is reused directly by Epic E Phase E2.
+
+### Updated Dependency Graph
+
+```text
+Epic 0 (prerequisite)
+    |
+    +---> Epic A (parallel execution)
+    +---> Epic B (data standardization)
+    +---> Epic C (global intelligence)
+              |
+              +---> Epic D (model orchestration -- depends on 0 + C)
+                        |
+                        +---> Epic E (CodeFlow App -- depends on 0 + C + D)
+```

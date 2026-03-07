@@ -4,7 +4,7 @@ type: analysis
 status: active
 author: cf-planning
 created_at: "2026-03-04"
-updated_at: "2026-03-05"
+updated_at: "2026-03-07"
 epic: "PLN-EPC-001"
 related: "V4 Specification, PathFlow Architecture, Worktree Manager"
 ---
@@ -26,7 +26,7 @@ This analysis package examines what is required to enable true parallel PathFlow
 | [Autorun Integration](autorun-integration.md) | Worktree-integrated autorun workers, pre-created worktree detection, worker lifecycle |
 | [Global Intelligence Layer](global-intelligence.md) | Global daemon architecture, project registration, cross-project visibility, local ONNX embeddings, SurrealDB graph queries |
 | [Product Strategy](product-strategy.md) | Pricing model, open-core analysis, competitive positioning, go-to-market approach |
-| [Decisions](decisions.md) | All 22 analyzed recommendations with options, trade-offs, and justified decisions |
+| [Decisions](decisions.md) | All 24 analyzed recommendations with options, trade-offs, and justified decisions |
 
 ## Key Findings
 
@@ -56,7 +56,7 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 13. **A global database layer enables cross-project intelligence as an optional, modular feature.** The default mode remains project-only with SurrealDB embedded — no daemon required. `codeflow global enable` starts the SurrealDB daemon inside the codeflow binary (Unix socket at `~/.codeflow/db.sock`, no external install, no Docker). Projects opt in to sharing via `.codeflow/config/project.toml` visibility config. Local ONNX embeddings (`all-MiniLM-L6-v2`, 384 dims, via the `ort` crate) enable offline semantic search across linked project memories. Graceful degradation: if the daemon is unavailable, all project-local work continues unaffected. See [Decision #18](decisions.md#18-global-database-architecture) and [Global Intelligence Layer](global-intelligence.md).
 
-**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work now organizes into six epics. Epic 0 (Rust CLI idiomatic redesign with SurrealDB-only data layer) is the universal prerequisite foundation. Epic A (parallel execution core with native Loro CRDT) and Epic B (data layer standardization) can run in parallel after Epic 0. Epic C (Global Intelligence Layer — daemon, project registry, cross-project queries, local embeddings) also runs after Epic 0. Epic D (Model Orchestrator — config-driven routing to external models) depends on Epic 0 and Epic C. Epic E (Dashboard) is deferred until the data and orchestration layers stabilize. Loro CRDT is the sole coordination mechanism. The SurrealDB-only decision simplifies the architecture by eliminating the hybrid SQLite+SurrealDB scenario that would have required data sync logic between two stores.
+**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work now organizes into six epics. Epic 0 (Rust CLI idiomatic redesign with SurrealDB-only data layer) is the universal prerequisite foundation. Epic A (parallel execution core with native Loro CRDT) and Epic B (data layer standardization) can run in parallel after Epic 0. Epic C (Global Intelligence Layer -- daemon, project registry, cross-project queries, local embeddings) also runs after Epic 0. Epic D (Model Orchestrator -- 12 tasks, 3 phases: orchestration core, execution engine, tracking) depends on Epic 0 and Epic C. Epic E (CodeFlow App -- 18-20 tasks, 5 phases: app foundation, streaming terminal, project management, configuration, intelligence) depends on Epics 0, C, and D, with phased entry points allowing some phases to start before all dependencies complete. Loro CRDT is the sole coordination mechanism. The SurrealDB-only decision simplifies the architecture by eliminating the hybrid SQLite+SurrealDB scenario that would have required data sync logic between two stores.
 
 ## V4 Specification Gap Analysis
 
@@ -85,7 +85,7 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 Given the full scope (Rust CLI redesign, worktree integration, Loro CRDT, SurrealDB-only data layer, schema standardization, autorun, data access enforcement, global intelligence, model orchestration), the work spans 80+ tasks and is organized into 6 epics.
 
-**Structure: 6 epics.** Epic 0 (Rust CLI idiomatic redesign — universal prerequisite), Epic A (parallel execution core), Epic B (data layer standardization), Epic C (Global Intelligence Layer), Epic D (Model Orchestrator), Epic E (Dashboard — deferred).
+**Structure: 6 epics.** Epic 0 (Rust CLI idiomatic redesign — universal prerequisite), Epic A (parallel execution core), Epic B (data layer standardization), Epic C (Global Intelligence Layer), Epic D (Model Orchestrator), Epic E (CodeFlow App).
 
 ### Epic 0: Rust CLI — Idiomatic Redesign
 
@@ -314,20 +314,31 @@ Everything behind this interface is fair game for redesign.
 | Phase H: Sync Engine | Project-to-daemon sync via SurrealDB live queries, `codeflow project register/link`, visibility graph relations, graceful degradation when daemon unavailable |
 | Phase I: Local Embeddings + Search | `all-MiniLM-L6-v2` via `ort` crate (384 dims, ~50MB, offline), HNSW index on memory/task tables, `codeflow context search` combining vector + graph in single SurrealQL query |
 
-### Epic D: Model Orchestrator (~8-10 tasks, 2 phases)
+### Epic D: Model Orchestrator (12 tasks, 3 phases)
 
-**Scope:** Port archived `cf-model-orchestrator` skill to Rust CLI. Config-driven model-to-stage routing. T1 (one-shot tmux) and T3 (persistent tmux) execution modes.
+**Scope:** Config-driven model orchestration layer in Rust. Claude Code remains control plane; external models are execution workers invoked via CLI subprocesses. T1 one-shot execution (`std::process::Command`, no tmux) for quick tasks. T3 persistent sessions (tmux with `model-{ulid}` naming) for multi-turn exchanges. PTY-based subprocess capture via `portable-pty` crate. CLI commands (`codeflow orchestrate exec/status/kill`). Model session tracking in SurrealDB. Multi-model audit log and cost tracking.
 
 **Prerequisites:** Epic 0 + Epic C (model routing uses global context for task selection).
 
-| Phase | Description |
-|-------|-------------|
-| Phase J: Core Orchestrator | Config schema for model-to-stage routing, T1/T3 tmux execution engine, model invocation API |
-| Phase K: Integration + Routing | Wire model routing into PathFlow work stages (WS-DEV, WS-REV, WS-QA), stage completion detection, result ingestion back into task graph |
+| Phase | Tasks | Description |
+|-------|-------|-------------|
+| Phase D1: Orchestration Core | 5 | Orchestration config schema (`orchestration.toml`), model profile registry, stage routing engine, T1 one-shot execution, T3 persistent sessions |
+| Phase D2: Execution Engine | 4 | PTY-based subprocess capture, response normalization + completion detection, process lifecycle management, CLI commands |
+| Phase D3: Tracking | 3 | Model session tracking in SurrealDB, multi-model audit log, cost tracking + subscription configuration |
 
-### Epic E: Dashboard (deferred, scope TBD)
+### Epic E: CodeFlow App (18-20 tasks, 5 phases)
 
-**Scope:** SvelteKit + Tauri desktop application. Deferred until Epics 0-D stabilize. Depends on a stable data layer (Epic 0 + B), global intelligence (Epic C), and defined API surface from the Rust CLI.
+**Scope:** Tauri v2 + SvelteKit desktop application (~50MB binary). Streaming terminal (xterm.js PTY bridge with multi-tab and sub-stream embedding), multi-project sidebar with session views, read-only config viewer with "Request Change" routing through PathFlow, project management views (Kanban, timeline, task detail, dependency graph), intelligence views (semantic search, cross-project task board, knowledge graph explorer, team analytics), file viewer (syntax highlighted), diff viewer (diff2html), "Open in Editor" button (auto-detect editors), playground mode (standalone model CLIs without PathFlow). App complements the terminal -- CLI works independently.
+
+**Prerequisites:** Epic 0 + Epic C (daemon + SurrealDB data) + Epic D (execution engine + PTY capture for streaming).
+
+| Phase | Tasks | Description |
+|-------|-------|-------------|
+| Phase E1: App Foundation | 4 | Tauri v2 + SvelteKit setup, daemon Unix socket client, multi-project selector, app shell |
+| Phase E2: Streaming Terminal | 5 | xterm.js integration, PTY bridge via Tauri IPC, multi-tab streams, sub-stream embedding, stream controls |
+| Phase E3: Project Management | 4 | Kanban board, epic timeline/roadmap, task detail view, task dependency graph |
+| Phase E4: Configuration | 3 | Config file reader/writer, form-based config viewers, read-only with change request routing |
+| Phase E5: Intelligence | 4 | Semantic search, cross-project task board, knowledge graph explorer, team analytics dashboard |
 
 ### Epic Dependencies
 
@@ -357,20 +368,26 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
                    Phase H (Sync Engine)
                    Phase I (Local Embeddings + Cross-Project Search)
                         |
-                        +---> Epic D: Model Orchestrator (~8-10 tasks, 2 phases)
-                                  Phase J (Core Orchestrator)
-                                  Phase K (Integration + Stage Routing)
+                        +---> Epic D: Model Orchestrator (12 tasks, 3 phases)
+                                  Phase D1 (Orchestration Core)
+                                  Phase D2 (Execution Engine)
+                                  Phase D3 (Tracking)
                                        |
-                                       +---> Epic E: Dashboard (deferred, TBD)
+                                       +---> Epic E: CodeFlow App (18-20 tasks, 5 phases)
+                                                 Phase E1 (App Foundation)
+                                                 Phase E2 (Streaming Terminal)
+                                                 Phase E3 (Project Management)
+                                                 Phase E4 (Configuration)
+                                                 Phase E5 (Intelligence)
 ```
 
 **Key dependency notes:**
 
 - Epic 0 is the universal prerequisite. It introduces `SurrealStore` as the only `DataStore` impl (no SQLite). All downstream epics build on Epic 0's trait hierarchy.
 - Epics A, B, and C can run in parallel after Epic 0 completes.
-- Epic B Phase D can start independently of Epic A — schema standardization in SurrealQL does not depend on parallel execution.
-- Epic D depends on Epic 0 and Epic C — model routing uses global project context for cross-project task selection.
-- Epic E is deferred until data (Epic 0 + B) and orchestration (Epic C + D) layers are stable.
+- Epic B Phase D can start independently of Epic A -- schema standardization in SurrealQL does not depend on parallel execution.
+- Epic D depends on Epic 0 and Epic C -- model routing uses global project context for cross-project task selection.
+- Epic E depends on Epic 0, Epic C, and Epic D. Phases E1, E3, E4 can start when Epic C Phase C1-C2 is stable (daemon + project registry). Phase E2 requires Epic D Phase D1-D2 (execution engine + PTY capture). Phase E5 requires Epic C Phase C3-C4 (embeddings, knowledge graph).
 
 ## Scenarios and Use Cases
 
@@ -442,7 +459,7 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
 
 6. **Epic D** (Model Orchestrator) begins after Epic 0 and Epic C are complete. Config-driven model-to-stage routing uses global project context for intelligent task selection.
 
-7. **Epic E** (Dashboard) is deferred until Epics 0-D are stable. No timeline set.
+7. **Epic E** (CodeFlow App) depends on Epics 0, C, and D. Phases E1, E3, E4 can start when Epic C Phase C1-C2 is stable. Phase E2 requires Epic D Phase D1-D2. Phase E5 requires Epic C Phase C3-C4.
 
 ## File Reference Index
 

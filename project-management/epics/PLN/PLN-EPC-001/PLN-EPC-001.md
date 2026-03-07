@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-18T23:00:00Z"
-updated_at: "2026-02-28T04:19:00Z"
+updated_at: "2026-03-07T08:23:32Z"
 ---
 
 # PLN-EPC-001: Ongoing Planning
@@ -56,6 +56,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-008 | Plan: Epic 0 — Rust CLI Idiomatic Redesign | complete | normal |
 | PLN-TSK-001-009 | Epic B: Data Layer Standardization — Epic and Task Breakdown | complete | normal |
 | PLN-TSK-001-010 | Epic C Global Intelligence Layer — Epic and Task Specification | complete | normal |
+| PLN-TSK-001-011 | Epic D+E Combined Vision - Analysis Updates & App Mockup | complete | normal |
 
 ## Dependencies
 
@@ -81,3 +82,5 @@ This is an ongoing epic with no planned completion date. New planning tasks are 
 - INF-EPC-022: Rust CLI Idiomatic Redesign (produced by PLN-TSK-001-008)
 - INF-EPC-024: Data Layer Standardization (produced by PLN-TSK-001-009)
 - INF-EPC-025: Global Intelligence Layer (produced by PLN-TSK-001-010)
+- INF-EPC-026: Epic D — Model Orchestration (produced by PLN-TSK-001-011)
+- INF-EPC-027: Epic E — CodeFlow App (produced by PLN-TSK-001-011)
