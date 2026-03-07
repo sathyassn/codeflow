@@ -8,7 +8,7 @@ area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
 is_ongoing: false
-file_scope: ["codeflow-cli/src/coordination/", "codeflow-cli/src/worktree/", "codeflow-cli/src/hooks/", "codeflow-cli/src/session/", "codeflow-cli/src/autorun/", "codeflow-cli/src/commands/", "codeflow-cli/src/store/", "codeflow-cli/src/transport/", "codeflow-cli/src/traits/", ".state/"]
+file_scope: ["codeflow-rs/codeflow-cli/src/coordination/", "codeflow-rs/codeflow-cli/src/worktree/", "codeflow-rs/codeflow-cli/src/hooks/", "codeflow-rs/codeflow-cli/src/session/", "codeflow-rs/codeflow-cli/src/autorun/", "codeflow-rs/codeflow-cli/src/commands/", "codeflow-rs/codeflow-cli/src/store/", "codeflow-rs/codeflow-cli/src/transport/", "codeflow-rs/codeflow-cli/src/traits/", ".state/"]
 priority: high
 pr_number: null
 external_id: null
