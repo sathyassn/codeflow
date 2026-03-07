@@ -113,7 +113,8 @@ run_smoke_tests() {
 run_unit_tests() {
     test_section "Go unit tests"
 
-    if (cd "$CLI_DIR" && go test -coverprofile=coverage.out ./... -v -count=1) 2>&1; then
+    # Test explicit subdirectory patterns to avoid root module (no Go sources at root).
+    if (cd "$CLI_DIR" && go test -coverprofile=coverage.out ./cmd/... ./internal/... -v -count=1) 2>&1; then
         test_pass "go test ./... passes"
     else
         test_fail "go test ./... failed"
