@@ -3,7 +3,7 @@ id: "epic-01kk09r9yqn9hb7v8pa1zsa4gc"
 format_id: "INF-EPC-022"
 title: "Rust CLI -- Idiomatic Redesign (Epic 0)"
 summary: "Replace the Go CLI with a pure Rust implementation using SurrealDB as the sole database, modular crate structure, and trait-based abstractions"
-status: planning
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-03-05T00:00:00Z"
-updated_at: "2026-03-05T00:00:00Z"
+updated_at: "2026-03-07T00:00:00Z"
 ---
 
 # INF-EPC-022: Rust CLI -- Idiomatic Redesign (Epic 0)
@@ -149,7 +149,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 |----|-------|--------|----------|-------|
 | INF-TSK-022-001 | Audit Go CLI for redesign opportunities | complete | high | 0A |
 | INF-TSK-022-002 | Define trait hierarchy and module map | todo | high | 0A |
-| INF-TSK-022-003 | Create cf-rust-standards skill | todo | high | 0A |
+| INF-TSK-022-003 | Create cf-rust-standards skill | complete | high | 0A |
 | INF-TSK-022-004 | Configure MCP servers and create cf-surrealdb-standards skill | todo | normal | 0A |
 | INF-TSK-022-005 | Initialize Rust workspace | todo | critical | 0B |
 | INF-TSK-022-006 | Define core types and error domains | todo | critical | 0B |
