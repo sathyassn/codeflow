@@ -58,6 +58,7 @@ Meta-work epic for planning sessions that produce ADRs, epics, and tasks for oth
 | PLN-TSK-001-010 | Epic C Global Intelligence Layer — Epic and Task Specification | complete | normal |
 | PLN-TSK-001-011 | Epic D+E Combined Vision - Analysis Updates & App Mockup | complete | normal |
 | PLN-TSK-001-012 | Epic D: Model Orchestration Layer Plan | complete | normal |
+| PLN-TSK-001-013 | Epic E: CodeFlow App (Tauri v2 + SvelteKit) Plan | complete | normal |
 
 ## Dependencies
 
