@@ -150,7 +150,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-001 | Audit Go CLI for redesign opportunities | complete | high | 0A |
 | INF-TSK-022-002 | Define trait hierarchy and module map | todo | high | 0A |
 | INF-TSK-022-003 | Create cf-rust-standards skill | complete | high | 0A |
-| INF-TSK-022-004 | Configure MCP servers and create cf-surrealdb-standards skill | todo | normal | 0A |
+| INF-TSK-022-004 | Configure MCP servers and create cf-surrealdb-standards skill | complete | normal | 0A |
 | INF-TSK-022-005 | Initialize Rust workspace | todo | critical | 0B |
 | INF-TSK-022-006 | Define core types and error domains | todo | critical | 0B |
 | INF-TSK-022-007 | Set up Rust unit testing infrastructure | todo | critical | 0B |
