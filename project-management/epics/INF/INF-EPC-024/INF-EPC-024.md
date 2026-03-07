@@ -27,7 +27,7 @@ updated_at: "2026-03-06T17:45:44Z"
 
 This epic standardizes the CodeFlow data layer: JSONL ledger schemas, schema enforcement in the Rust CLI writer, retention and rotation policies, DB-to-JSONL rebuild mapping, and three-tier consistency tooling. It addresses accumulated schema drift across four ledger files and multiple log files from shell-era vs Go-era writer differences and ad-hoc field additions by multiple agent eras.
 
-Epic B runs in parallel with Epic A (INF-EPC-023: Parallel Execution Core) after Epic 0 (INF-EPC-022: Rust CLI Idiomatic Redesign) completes. All implementation tasks target the post-Epic 0 Rust codebase (`codeflow-cli/codeflow-core/src/`), using Rust idioms: thiserror error enums, newtype wrappers (EventType, SessionId, WorktreeId), serde derive macros, proptest/insta for testing, and cargo-llvm-cov for coverage. SurrealDB replaces SQLite as Tier 1 (Decision D17).
+Epic B runs in parallel with Epic A (INF-EPC-023: Parallel Execution Core) after Epic 0 (INF-EPC-022: Rust CLI Idiomatic Redesign) completes. All implementation tasks target the post-Epic 0 Rust codebase (`codeflow-rs/codeflow-core/src/`), using Rust idioms: thiserror error enums, newtype wrappers (EventType, SessionId, WorktreeId), serde derive macros, proptest/insta for testing, and cargo-llvm-cov for coverage. SurrealDB replaces SQLite as Tier 1 (Decision D17).
 
 ## Scope
 
@@ -121,7 +121,7 @@ Epic B runs in parallel with Epic A (INF-EPC-023: Parallel Execution Core) after
 - Backward compatibility: Old JSONL entries are immutable (append-only invariant). New Rust reader code must handle both flat and `details`-nested formats via serde untagged enum. Migration is writer-side only.
 - `session_id` fix: aligns with Session ID Consolidation fix (MEMORY.md). Enforced via `SessionId(Ulid)` newtype in Rust.
 - Rust idioms: All enforcement tasks use thiserror error enums, newtype wrappers, serde derive macros. Testing uses proptest (100+ property-based cases), insta (snapshot tests), cargo-llvm-cov (>= 85% coverage), cargo clippy (-- -D warnings), cargo fmt (--check).
-- Crate structure: Implementation lives in `codeflow-cli/codeflow-core/src/` (core library) with CLI commands in `codeflow-cli/src/commands/` (clap subcommands).
+- Crate structure: Implementation lives in `codeflow-rs/codeflow-core/src/` (core library) with CLI commands in `codeflow-cli/src/commands/` (clap subcommands).
 
 **Source analysis:** `.codeflow/docs/analysis/parallel-work/schema-standardization.md`
 

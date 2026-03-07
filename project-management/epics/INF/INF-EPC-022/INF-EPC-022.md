@@ -136,6 +136,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 - [ ] All references updated (CI, test scripts, docs)
 - [ ] Final validation: all 1,555+ shell tests pass against Rust binary at final location
 - [ ] Go-specific CI jobs, Makefile targets, `.golangci.yml` removed
+- [ ] Go CLI binary (`codeflow-cli/`) retained throughout Phases 0A-0F; removal only in Phase 0G after contract conformance verification
 
 ### PII Handling Review
 
@@ -186,6 +187,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 - INF-EPC-024 (Epic B: Data Layer Standardization) -- requires SurrealDB-based data layer
 - INF-EPC-025 (Epic C: Global Intelligence Layer) -- requires Rust CLI for daemon mode, knowledge graph extraction pipeline (INGEST/COGNIFY/MEMIFY/SEARCH), Loro CRDT KG sync, extended ontology (16 entity types, 18 relationship types)
 - INF-EPC-026 (Epic D: Model Orchestrator) -- requires Rust CLI + Epic C
+- INF-EPC-027 (Epic E: CodeFlow App) -- requires Rust CLI foundation
 
 ## Technical Notes
 
@@ -261,6 +263,7 @@ codeflow-rs/                          (Rust workspace)
 6. **Rust binary builds in parallel** -- `codeflow-rs/` alongside `codeflow-cli/`
 7. **Tests in same PR as source** -- every code task includes unit tests
 8. **85% coverage threshold** -- per-file enforcement matching Go conventions
+9. **Coexistence requirement** -- both `codeflow-cli/` (Go) and `codeflow-rs/` (Rust) exist simultaneously during migration. The Go binary remains the active `codeflow` command until Phase 0G explicitly retires it after all Phase 0F contract conformance tests pass.
 
 ### Rust-Idiomatic Design Principles
 

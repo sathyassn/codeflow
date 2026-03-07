@@ -112,7 +112,7 @@ Epic D is organized into 3 phases with 12 tasks:
 
 ### Blocks
 
-- Epic E (CodeFlow App) -- depends on Epic D's PTY capture infrastructure (`portable-pty`, `vte`) and process management for streaming terminal features
+- INF-EPC-027 (Epic E: CodeFlow App) -- depends on Epic D's PTY capture infrastructure (`portable-pty`, `vte`) and process management for streaming terminal features
 
 ## Technical Notes
 

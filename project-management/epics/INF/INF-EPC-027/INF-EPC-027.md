@@ -74,7 +74,7 @@ Epic E is organized into 6 phases with 24 tasks:
 - Epic A: CRDT Coordination (INF-EPC-023 — parallel, independent)
 - Epic B: Schema Standardization (INF-EPC-024 — parallel, independent)
 - Modifying Epic C daemon or Epic D orchestration internals (consumed, not modified)
-- Cloud sync, user authentication, or multi-user collaboration
+- Cloud sync, user authentication, or multi-user collaboration (future epic -- not in current V4 roadmap)
 - Plugin/extension system for third-party integrations
 - Auto-update mechanism (future enhancement)
 
@@ -114,10 +114,10 @@ Epic E is organized into 6 phases with 24 tasks:
 | INF-TSK-027-016 | E4 | Structured Config Viewer Components | FEAT | M | 004, 015 |
 | INF-TSK-027-017 | E4 | Change Request Integration | FEAT | S | 016 |
 | INF-TSK-027-018 | E4 | File Viewer and Diff Viewer | FEAT | M | 004 |
-| INF-TSK-027-019 | E5 | Semantic Search View | FEAT | L | 003, 004, Epic C Phase C3-C4 |
+| INF-TSK-027-019 | E5 | Semantic Search View | FEAT | L | 003, 004, INF-TSK-025-015, INF-TSK-025-019 |
 | INF-TSK-027-020 | E5 | Cross-Project Task Aggregation | FEAT | M | 011, 019 |
-| INF-TSK-027-021 | E5 | Knowledge Graph Explorer | FEAT | L | 014, Epic C Phase C3-C4 |
-| INF-TSK-027-022 | E5 | Team Analytics Dashboard | FEAT | M | 003, 004, Epic C Phase C2 |
+| INF-TSK-027-021 | E5 | Knowledge Graph Explorer | FEAT | L | 014, INF-TSK-025-013, INF-TSK-025-019 |
+| INF-TSK-027-022 | E5 | Team Analytics Dashboard | FEAT | M | 003, 004, INF-TSK-025-008, INF-TSK-025-010, INF-TSK-025-011 |
 | INF-TSK-027-023 | E6 | Playground Mode | FEAT | M | 006, 007, 008 |
 | INF-TSK-027-024 | E6 | End-to-End Integration Test Suite | TEST | XL | all E1-E5 tasks |
 
@@ -173,9 +173,9 @@ codeflow-app/
 
 CSS variables define the visual theme, with dark mode as default:
 
-- Background: `--bg-primary: #1a1a2e`, `--bg-secondary: #16213e`, `--bg-tertiary: #0f3460`
-- Text: `--text-primary: #e4e4e7`, `--text-secondary: #a1a1aa`
-- Accent: `--accent-primary: #3b82f6` (blue), `--accent-success: #22c55e` (green)
+- Background: `--bg-darkest: #1e1e2e` (alias: `--bg-primary`), `--bg-dark: #16213e` (alias: `--bg-secondary`), `--bg-panel: #0f3460` (alias: `--bg-tertiary`), `--bg-card` for card/component backgrounds
+- Text: `--text-primary: #e0e0ee`, `--text-secondary: #a1a1aa`
+- Accent: `--accent-blue: #5b8af5` (alias: `--accent-primary`), `--accent-green: #3ddc84` (alias: `--accent-success`)
 - Status dots: green (active), yellow (busy), gray (inactive), red (error)
 - Work type badge colors: FEAT=blue, FIX=red, RFCT=purple, DOCS=teal, TEST=amber, PLAN=indigo
 
@@ -248,4 +248,5 @@ Phase E6: Playground & Testing
 - INF-EPC-023: Parallel Execution Core (Epic A — parallel, independent)
 - INF-EPC-024: Data Layer Standardization (Epic B — parallel, independent)
 - `.codeflow/docs/analysis/parallel-work/product-strategy.md` Section 11
-- `.codeflow/docs/analysis/parallel-work/decisions.md` — D22, D24
+- `.codeflow/docs/analysis/parallel-work/decisions.md` -- D22, D24
+- `.codeflow/docs/analysis/parallel-work/mockups/codeflow-app-mockup.html` -- Visual reference for Phases E1-E2 (Streams, Tasks, Config, Search tabs)

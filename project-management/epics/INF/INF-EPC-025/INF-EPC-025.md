@@ -134,8 +134,8 @@ Epic C is organized into 5 phases with 26 tasks total:
 
 ### Blocks
 
-- Epic D (Model Orchestrator) -- depends on Epic 0 + Epic C global infrastructure for cross-project model routing
-- Epic E (Dashboard) -- depends on stable Epic 0 + B + C data layer
+- INF-EPC-026 (Epic D: Model Orchestrator) -- depends on Epic 0 + Epic C global infrastructure for cross-project model routing
+- INF-EPC-027 (Epic E: CodeFlow App) -- depends on stable Epic 0 + B + C data layer
 
 ## Technical Notes
 
