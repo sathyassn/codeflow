@@ -1,0 +1,31 @@
+[workspace]
+members = ["codeflow-core", "codeflow-cli"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Runtime dependencies (10)
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+surrealdb = "2"
+loro = "1"
+git2 = "0.20"
+tokio = { version = "1", features = ["full"] }
+ort = "2"
+
+# Dev-only dependencies (2)
+proptest = "1"
+insta = { version = "1", features = ["json"] }
+
+# Note: cargo-nextest and cargo-llvm-cov are installed tools, NOT Cargo deps.
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
