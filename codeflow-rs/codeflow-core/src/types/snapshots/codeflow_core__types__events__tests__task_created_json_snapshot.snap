@@ -1,0 +1,16 @@
+---
+source: codeflow-core/src/types/events.rs
+expression: event
+---
+{
+  "event": "task_created",
+  "timestamp": "2026-03-07T12:00:00Z",
+  "format_id": "INF-TSK-022-007",
+  "id": "task-01abc123def456",
+  "epic_id": "epic-01xyz789",
+  "title": "Set up Rust unit testing infrastructure",
+  "status": "todo",
+  "area_type": "INF",
+  "work_type": "FEAT",
+  "priority": "critical"
+}

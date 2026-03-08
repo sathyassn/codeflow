@@ -394,6 +394,24 @@ mod tests {
     }
 
     #[test]
+    fn test_task_created_json_snapshot() {
+        let event = LedgerEvent::TaskCreated {
+            timestamp: Some("2026-03-07T12:00:00Z".to_string()),
+            data: serde_json::json!({
+                "format_id": "INF-TSK-022-007",
+                "id": "task-01abc123def456",
+                "epic_id": "epic-01xyz789",
+                "title": "Set up Rust unit testing infrastructure",
+                "status": "todo",
+                "area_type": "INF",
+                "work_type": "FEAT",
+                "priority": "critical"
+            }),
+        };
+        insta::assert_json_snapshot!(event);
+    }
+
+    #[test]
     fn test_all_event_types_unique() {
         use std::collections::HashSet;
         let types = [

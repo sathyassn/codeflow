@@ -153,7 +153,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-004 | Configure MCP servers and create cf-surrealdb-standards skill | complete | normal | 0A |
 | INF-TSK-022-005 | Initialize Rust workspace | complete | critical | 0B |
 | INF-TSK-022-006 | Define core types and error domains | complete | critical | 0B |
-| INF-TSK-022-007 | Set up Rust unit testing infrastructure | todo | critical | 0B |
+| INF-TSK-022-007 | Set up Rust unit testing infrastructure | complete | critical | 0B |
 | INF-TSK-022-008 | Set up shell integration test bridge | todo | high | 0B |
 | INF-TSK-022-009 | Implement DataStore trait and SurrealStore | todo | critical | 0C |
 | INF-TSK-022-010 | Implement LedgerWriter trait and JsonlWriter | todo | critical | 0C |
