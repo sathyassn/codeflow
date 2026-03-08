@@ -42,7 +42,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 - Rust workspace initialization (`codeflow-rs/` with `codeflow-core` lib + `codeflow-cli` bin crates)
 - MCP server configuration (Context7, rust-analyzer) for AI-assisted development
 - New skills: `cf-rust-standards` and `cf-surrealdb-standards`
-- Core domain types: enums for `SessionState`, `PathFlowPhase`, `WorkStage`, `Sentinel`, `LedgerEvent`
+- Core domain types: enums for `SessionStatus`, `PathFlowPhase`, `WorkStage`, `Sentinel`, `LedgerEvent`
 - Domain error types: `SessionError`, `DbError`, `HookError`, `LedgerError` via `thiserror`
 - Trait definitions: `DataStore`, `LedgerWriter`, `HookHandler`
 - `SurrealStore` implementation (sole `DataStore` impl, embedded `surrealkv://`)
@@ -200,7 +200,7 @@ codeflow-rs/                          (Rust workspace)
     src/
       lib.rs                          (public API surface)
       types/                          (domain types -- enums, tagged unions)
-        session.rs                    (SessionState, PathFlowPhase, WorkStage)
+        session.rs                    (SessionStatus, PathFlowPhase, WorkStage)
         events.rs                     (LedgerEvent tagged union via serde)
         sentinel.rs                   (Sentinel enum with Display impl)
       traits/                         (trait definitions)
@@ -270,7 +270,7 @@ codeflow-rs/                          (Rust workspace)
 
 This is an **idiomatic redesign**, not a mechanical 1:1 port. All implementation tasks MUST follow these principles:
 
-1. **Strong type system / no raw strings** -- Newtype wrappers for all IDs (`SessionId`, `TaskId`, `EpicId`, `FormatId`, `BranchName`). Enums for all categorical values (`WorkType`, `SessionState`, `HookEvent`, `TaskStatus`). Sum types for state machines. `From`/`TryFrom` for type conversions. Exhaustive `match` on enums (compiler-enforced completeness).
+1. **Strong type system / no raw strings** -- Newtype wrappers for all IDs (`SessionId`, `TaskId`, `EpicId`, `FormatId`, `BranchName`). Enums for all categorical values (`WorkType`, `SessionStatus`, `HookEvent`, `TaskStatus`). Sum types for state machines. `From`/`TryFrom` for type conversions. Exhaustive `match` on enums (compiler-enforced completeness).
 2. **Modular restructuring** -- Rust module tree is designed for Rust, not translated from Go's flat package layout. Nested modules, re-exports, `pub(crate)` visibility used idiomatically.
 3. **DRY principle** -- Shared traits, generic implementations, and derive macros eliminate Go's duplicated patterns (error handling boilerplate, similar struct definitions, duplicated validation).
 4. **Rust correctness patterns** -- `Result<T, E>` with domain-specific error enums via `thiserror` in `codeflow-core`; `anyhow` ONLY at CLI binary boundary. `Option<T>` instead of Go zero-value patterns. Builder pattern for complex configurations. Zero `unsafe` code. Minimize `.clone()` -- prefer borrows and lifetimes.

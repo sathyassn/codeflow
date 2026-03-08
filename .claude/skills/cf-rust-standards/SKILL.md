@@ -723,8 +723,8 @@ Coverage:
     cargo llvm-cov nextest --workspace  # Coverage + nextest in one step
 
   Target thresholds:
-    - codeflow-core: 80% line coverage for public API paths
-    - codeflow-cli: 70% line coverage (CLI integration is harder to cover)
+    - codeflow-core: 85% line coverage for business modules
+    - codeflow-cli: 85% line coverage for business modules
     - Pure computation modules: 90%+ expected
 
 Anti-Patterns (DO NOT):
@@ -791,6 +791,7 @@ Approved Crate List:
   | cargo-nextest | Testing | Test runner (installed tool, not Cargo dep) |
   | cargo-llvm-cov | Coverage | LLVM-based coverage (installed tool, not Cargo dep) |
   | ort | ML inference | ONNX Runtime bindings for model inference |
+  | fs2 | File locking | Cross-platform flock for file-level advisory locks |
 
   cargo-nextest and cargo-llvm-cov are installed tools (cargo install), NOT Cargo.toml dependencies.
   proptest and insta are dev-dependencies: under [dev-dependencies] in Cargo.toml.
