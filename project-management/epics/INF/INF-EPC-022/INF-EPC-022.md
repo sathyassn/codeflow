@@ -174,6 +174,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-025 | Cutover: Go removal and Rust installation | todo | critical | 0G |
 | INF-TSK-022-026 | Update test infrastructure references | todo | high | 0G |
 | INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
+| INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
 
 ## Dependencies
 
