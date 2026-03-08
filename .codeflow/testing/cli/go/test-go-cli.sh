@@ -9,7 +9,7 @@ readonly SCRIPT_VERSION="2.0.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-TESTING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TESTING_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly TESTING_DIR
 REPO_ROOT="$(cd "$TESTING_DIR/../.." && pwd)"
 readonly REPO_ROOT
@@ -28,9 +28,9 @@ readonly COVERAGE_THRESHOLD
 readonly BUSINESS_PKGS
 
 # Source test framework
-# shellcheck source=../lib/test-common.sh
+# shellcheck source=../../lib/test-common.sh
 source "$TESTING_DIR/lib/test-common.sh"
-# shellcheck source=../lib/test-helpers.sh
+# shellcheck source=../../lib/test-helpers.sh
 source "$TESTING_DIR/lib/test-helpers.sh"
 
 # ============================================================================

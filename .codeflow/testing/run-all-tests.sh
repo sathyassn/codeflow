@@ -101,7 +101,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --mode <mode>         Test mode: essential, standard, full (default: standard)"
+            echo "  --mode <mode>         Test mode: essential, standard, full (default: full)"
             echo "  --category <cat>      Run specific category only (sequential)"
             echo "  --jobs N              Max parallel category jobs (default: 6)"
             echo "  --sequential          Force sequential execution (no parallelism)"

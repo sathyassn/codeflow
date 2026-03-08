@@ -154,7 +154,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-005 | Initialize Rust workspace | complete | critical | 0B |
 | INF-TSK-022-006 | Define core types and error domains | complete | critical | 0B |
 | INF-TSK-022-007 | Set up Rust unit testing infrastructure | complete | critical | 0B |
-| INF-TSK-022-008 | Set up shell integration test bridge | todo | high | 0B |
+| INF-TSK-022-008 | Set up shell integration test bridge | complete | high | 0B |
 | INF-TSK-022-009 | Implement DataStore trait and SurrealStore | todo | critical | 0C |
 | INF-TSK-022-010 | Implement LedgerWriter trait and JsonlWriter | todo | critical | 0C |
 | INF-TSK-022-011 | Implement session and state management | todo | high | 0C |
@@ -168,8 +168,8 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-019 | Port Go unit tests to Rust | todo | high | 0F |
 | INF-TSK-022-020 | Build contract conformance test suite | todo | critical | 0F |
 | INF-TSK-022-021 | Validate shell test suite passes | todo | critical | 0F |
-| INF-TSK-022-022 | Set up CI pipeline for Rust binary | todo | high | 0G |
-| INF-TSK-022-023 | Coverage enforcement and lint pipeline | todo | high | 0G |
+| INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |
+| INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
 | INF-TSK-022-024 | Cross-compile release builds | todo | normal | 0G |
 | INF-TSK-022-025 | Cutover: Go removal and Rust installation | todo | critical | 0G |
 | INF-TSK-022-026 | Update test infrastructure references | todo | high | 0G |

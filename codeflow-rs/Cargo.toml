@@ -25,6 +25,12 @@ insta = { version = "1", features = ["json"] }
 
 # Note: cargo-nextest and cargo-llvm-cov are installed tools, NOT Cargo deps.
 
+[profile.ci]
+inherits = "release"
+opt-level = 2
+codegen-units = 4
+lto = false
+
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }

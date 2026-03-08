@@ -1,6 +1,7 @@
 {
   "coverage": {
     "threshold": 85,
+    "enforcement": "per_file",
     "tool": "cargo-llvm-cov",
     "business_packages": ["codeflow-core"]
   },
@@ -8,6 +9,15 @@
     "test_runner": "cargo-nextest",
     "coverage_tool": "cargo-llvm-cov",
     "property_testing": "proptest",
-    "snapshot_testing": "insta"
+    "snapshot_testing": "insta",
+    "exceptions": [
+      {
+        "crate": "codeflow-cli",
+        "reason": "TEMPORARY: Skeleton stubs with no real implementation yet. Remove each file's exception as it gets implemented — do NOT wait for full cutover.",
+        "temporary": true,
+        "remove_when": "per-file: remove exception for each file as it receives real implementation",
+        "granularity": "per_file"
+      }
+    ]
   }
 }

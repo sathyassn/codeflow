@@ -14,6 +14,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Run Test Suite
@@ -89,4 +93,81 @@ jobs:
           echo ""
           echo "To reproduce locally:"
           echo "  cd codeflow-cli && make test-cover"
+          exit 1
+
+  test-rust:
+    name: Run Rust CLI Tests
+    runs-on: ubuntu-latest
+    if: vars.SKIP_RUST_TESTS != 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: ${{ vars.SKIP_RUST_COVERAGE != 'true' && 'llvm-tools-preview' || '' }}
+          cache-shared-key: "ci"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-llvm-cov
+        if: vars.SKIP_RUST_COVERAGE != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install mold linker
+        run: sudo apt-get install -y mold
+
+      - name: Check formatting
+        working-directory: codeflow-rs
+        run: cargo fmt --check
+
+      - name: Run Clippy lints
+        working-directory: codeflow-rs
+        run: cargo clippy --workspace -- -D warnings
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+
+      - name: Build Rust binary
+        working-directory: codeflow-rs
+        run: cargo build --profile ci
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+
+      - name: Run tests with coverage enforcement
+        if: vars.SKIP_RUST_COVERAGE != 'true'
+        working-directory: codeflow-rs
+        run: cargo llvm-cov nextest --package codeflow-core --fail-under-lines 85
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+
+      - name: Run tests (coverage via WS-QA)
+        if: vars.SKIP_RUST_COVERAGE == 'true'
+        working-directory: codeflow-rs
+        run: cargo nextest run --workspace
+
+      - name: Rust tests passed
+        if: success()
+        run: echo "Rust CLI tests passed with coverage and lint enforcement"
+
+      - name: Rust tests failed
+        if: failure()
+        run: |
+          echo "Rust CLI tests failed"
+          echo ""
+          echo "To reproduce locally:"
+          echo "  cd codeflow-rs && cargo fmt --check"
+          echo "  cd codeflow-rs && cargo clippy --workspace -- -D warnings"
+          echo "  cd codeflow-rs && cargo build --profile ci"
+          echo "  cd codeflow-rs && cargo llvm-cov nextest --package codeflow-core --fail-under-lines 85"
           exit 1

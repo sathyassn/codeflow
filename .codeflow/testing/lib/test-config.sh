@@ -18,7 +18,7 @@ readonly TEST_CONFIG_FILE="${CONFIG_DIR}/../test-config.json"
 # DEFAULT CONFIGURATION (bash 3.2 compatible - no associative arrays)
 # ============================================================================
 
-_CONFIG_DEFAULT_MODE="standard"
+_CONFIG_DEFAULT_MODE="full"
 _CONFIG_ESSENTIAL_PRIORITIES="CRITICAL"
 _CONFIG_STANDARD_PRIORITIES="CRITICAL HIGH"
 _CONFIG_FULL_PRIORITIES="CRITICAL HIGH MEDIUM LOW"
@@ -33,7 +33,7 @@ load_test_config() {
     if [[ -f "$TEST_CONFIG_FILE" ]] && command -v jq &>/dev/null; then
         # Load mode configurations
         local default_mode
-        default_mode=$(jq -r '.pre_commit.default_mode // "standard"' "$TEST_CONFIG_FILE" 2>/dev/null)
+        default_mode=$(jq -r '.cli.fallback_mode // "full"' "$TEST_CONFIG_FILE" 2>/dev/null)
         [[ -n "$default_mode" && "$default_mode" != "null" ]] && _CONFIG_DEFAULT_MODE="$default_mode"
 
         # Load priority mappings
@@ -98,7 +98,7 @@ get_current_mode() {
 
     # Fall back to config default
     if [[ -z "$mode" ]]; then
-        mode=$(get_test_config "default_mode" "standard")
+        mode=$(get_test_config "default_mode" "full")
     fi
 
     echo "$mode"

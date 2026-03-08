@@ -137,6 +137,20 @@ _parse_shell_test_count() {
 run_category_tests() {
     local category="$1"
     local mode="${2:-$(get_current_mode)}"
+
+    # Skip categories marked ci_skip when running in CI
+    if [[ "${CI:-}" == "true" ]] && command -v jq &>/dev/null; then
+        local config_file="${RUNNER_DIR}/../test-config.json"
+        if [[ -f "$config_file" ]]; then
+            local ci_skip
+            ci_skip=$(jq -r --arg cat "$category" '.categories[$cat].ci_skip // false' "$config_file" 2>/dev/null)
+            if [[ "$ci_skip" == "true" ]]; then
+                echo "  [SKIP] ${category}: skipped in CI (dedicated CI job)"
+                return 0
+            fi
+        fi
+    fi
+
     local testing_root
     testing_root="$(cd "${RUNNER_DIR}/.." && pwd)"
     local category_dir
