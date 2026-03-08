@@ -75,6 +75,9 @@ build/
 .claude/plans/*
 !.claude/plans/.gitkeep
 
+# Rust
+codeflow-rs/target/
+
 # Test artifacts
 .codeflow/testing/results/
 .codeflow/testing/coverage/
