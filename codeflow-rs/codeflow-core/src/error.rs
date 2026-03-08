@@ -87,3 +87,41 @@ pub enum SessionError {
     #[error("database error")]
     Db(#[from] DbError),
 }
+
+/// Configuration loading and validation errors.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("config file not found: {0}")]
+    NotFound(String),
+
+    #[error("config parse error: {0}")]
+    Parse(String),
+
+    #[error("config validation error: {0}")]
+    Validation(String),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+/// Git worktree operation errors.
+#[derive(Debug, Error)]
+pub enum WorktreeError {
+    #[error("worktree not found: {0}")]
+    NotFound(String),
+
+    #[error("worktree already exists: {0}")]
+    AlreadyExists(String),
+
+    #[error("worktree creation failed: {0}")]
+    Creation(String),
+
+    #[error("worktree cleanup failed: {0}")]
+    Cleanup(String),
+
+    #[error("git error: {0}")]
+    Git(String),
+}

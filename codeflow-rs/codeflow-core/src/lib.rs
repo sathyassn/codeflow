@@ -11,11 +11,15 @@ pub mod store;
 pub mod types;
 
 // Re-export commonly used items at crate root.
-pub use error::{DbError, HookError, LedgerError, SessionError};
+pub use error::{ConfigError, DbError, HookError, LedgerError, SessionError, WorktreeError};
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, LedgerWriter};
 pub use store::{DataStore, SyncResult};
-pub use types::{AreaType, EpicStatus, Phase, SessionStatus, TaskStatus, WorkStage, WorkType};
+pub use types::{
+    AreaType, BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, LedgerEvent,
+    ParseEnumError, ParseIdError, ParseSentinelError, Phase, PipelineType, Sentinel, SessionId,
+    SessionStatus, TaskId, TaskStatus, WorkId, WorkStage, WorkType,
+};
 
 #[cfg(test)]
 mod tests {
@@ -73,6 +77,15 @@ mod tests {
     }
 
     #[test]
+    fn test_task_status_complete_serde() {
+        let status = TaskStatus::Complete;
+        let json = serde_json::to_string(&status).expect("serialize");
+        assert_eq!(json, "\"complete\"");
+        let parsed: TaskStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, status);
+    }
+
+    #[test]
     fn test_session_status_serde_roundtrip() {
         let status = SessionStatus::Active;
         let json = serde_json::to_string(&status).expect("serialize");
@@ -125,6 +138,21 @@ mod tests {
     }
 
     #[test]
+    fn test_config_error_display() {
+        let err = ConfigError::NotFound("pathflow-config.json".to_string());
+        assert_eq!(
+            err.to_string(),
+            "config file not found: pathflow-config.json"
+        );
+    }
+
+    #[test]
+    fn test_worktree_error_display() {
+        let err = WorktreeError::NotFound("/tmp/worktree".to_string());
+        assert_eq!(err.to_string(), "worktree not found: /tmp/worktree");
+    }
+
+    #[test]
     fn test_ledger_event_serialization() {
         let event = Event {
             event_type: "session_start".to_string(),
@@ -152,5 +180,72 @@ mod tests {
             message: "deprecated usage".to_string(),
         };
         assert!(matches!(warn, HookOutput::Warn { .. }));
+    }
+
+    #[test]
+    fn test_new_types_accessible_from_crate_root() {
+        // Verify all new types are accessible from the crate root
+        let _sid = SessionId::new_unchecked("ses-1");
+        let _tid = TaskId::new_unchecked("task-1");
+        let _eid = EpicId::new_unchecked("epic-1");
+        let _wid = WorkId::new_unchecked("work-1");
+        let _bn = BranchName::new_unchecked("feat/test");
+        let _fid = FormatId::new_unchecked("INF-TSK-001");
+        let _sentinel = Sentinel::PathflowPf1;
+        let _pipeline = PipelineType::DevRevQa;
+        let _tier = DecisionTier::Tier1;
+        let _domain = DomainType::Genl;
+        let _epic = EpicStatus::Draft;
+    }
+
+    #[test]
+    fn test_phase_transition_validation() {
+        assert!(Phase::Pf1Init.can_transition_to(Phase::Pf2Context));
+        assert!(!Phase::Pf1Init.can_transition_to(Phase::Pf7End));
+    }
+
+    #[test]
+    fn test_sentinel_from_phase() {
+        let sentinel = Sentinel::from(Phase::Pf3Classify);
+        assert_eq!(sentinel.to_string(), "pathflow-pf-3");
+    }
+
+    #[test]
+    fn test_sentinel_from_stage() {
+        let sentinel = Sentinel::from(WorkStage::WsDev);
+        assert_eq!(sentinel.to_string(), "pathflow-ws-dev");
+    }
+
+    #[test]
+    fn test_epic_status_schema_aligned() {
+        // All 6 schema values must be parseable
+        for val in &[
+            "draft",
+            "planning",
+            "in_progress",
+            "blocked",
+            "complete",
+            "archived",
+        ] {
+            let parsed: EpicStatus =
+                serde_json::from_str(&format!("\"{val}\"")).unwrap_or_else(|_| {
+                    panic!("EpicStatus should deserialize from '{val}'");
+                });
+            let json = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(json, format!("\"{val}\""));
+        }
+    }
+
+    #[test]
+    fn test_task_status_schema_aligned() {
+        // All 5 schema values must be parseable
+        for val in &["todo", "blocked", "in_progress", "complete", "cancelled"] {
+            let parsed: TaskStatus =
+                serde_json::from_str(&format!("\"{val}\"")).unwrap_or_else(|_| {
+                    panic!("TaskStatus should deserialize from '{val}'");
+                });
+            let json = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(json, format!("\"{val}\""));
+        }
     }
 }
