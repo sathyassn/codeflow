@@ -10,10 +10,12 @@ name = "codeflow_core"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 fs2 = { workspace = true }
 surrealdb = { workspace = true }
 ulid = { workspace = true }
+git2 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

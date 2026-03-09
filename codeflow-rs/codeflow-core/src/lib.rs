@@ -10,6 +10,7 @@ pub mod models;
 pub mod session;
 pub mod store;
 pub mod types;
+pub mod worktree;
 
 // Re-export commonly used items at crate root.
 pub use error::{ConfigError, DbError, HookError, LedgerError, SessionError, WorktreeError};

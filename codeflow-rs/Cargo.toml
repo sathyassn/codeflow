@@ -17,6 +17,7 @@ surrealdb = { version = "2", features = ["kv-mem", "kv-surrealkv"] }
 loro = "1"
 fs2 = "0.4"
 git2 = "0.20"
+serde_yaml = "0.9"
 ulid = "1"
 tokio = { version = "1", features = ["full"] }
 ort = "2"

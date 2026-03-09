@@ -141,7 +141,19 @@ pub enum WorktreeError {
     Cleanup(String),
 
     #[error("git error: {0}")]
-    Git(String),
+    Git(#[from] git2::Error),
+
+    #[error("cleanup blocked: PathFlow session is active, use force to override")]
+    PathFlowActive,
+
+    #[error("invalid worktree name: {0}")]
+    InvalidName(String),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("yaml error: {0}")]
+    Yaml(String),
 }
 
 #[cfg(test)]
