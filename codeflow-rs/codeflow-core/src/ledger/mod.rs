@@ -1,8 +1,14 @@
+mod jsonl;
+mod routing;
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::LedgerError;
+
+pub use jsonl::JsonlWriter;
+pub use routing::route_event_type;
 
 /// Canonical JSONL ledger file names.
 pub mod files {

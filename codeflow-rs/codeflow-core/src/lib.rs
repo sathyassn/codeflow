@@ -13,7 +13,7 @@ pub mod types;
 // Re-export commonly used items at crate root.
 pub use error::{ConfigError, DbError, HookError, LedgerError, SessionError, WorktreeError};
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
-pub use ledger::{Event, LedgerWriter};
+pub use ledger::{Event, JsonlWriter, LedgerWriter};
 pub use store::{DataStore, SyncResult};
 pub use types::{
     ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,

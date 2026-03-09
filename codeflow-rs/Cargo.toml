@@ -15,13 +15,15 @@ thiserror = "2"
 anyhow = "1"
 surrealdb = { version = "2", features = ["kv-mem", "kv-surrealkv"] }
 loro = "1"
+fs2 = "0.4"
 git2 = "0.20"
 tokio = { version = "1", features = ["full"] }
 ort = "2"
 
-# Dev-only dependencies (2)
+# Dev-only dependencies (3)
 proptest = "1"
 insta = { version = "1", features = ["json"] }
+tempfile = "3"
 
 # Note: cargo-nextest and cargo-llvm-cov are installed tools, NOT Cargo deps.
 
