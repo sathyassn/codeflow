@@ -7,6 +7,7 @@ pub mod error;
 pub mod hooks;
 pub mod ledger;
 pub mod models;
+pub mod session;
 pub mod store;
 pub mod types;
 

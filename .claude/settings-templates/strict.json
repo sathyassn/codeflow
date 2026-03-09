@@ -29,7 +29,8 @@
     "lsp_requirement": "LSP plugins require: export ENABLE_LSP_TOOL=1 in shell profile"
   },
   "enabledPlugins": {
-    "pyright-lsp@claude-plugins-official": true
+    "pyright-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true
   },
   "sandbox": {
     "enabled": true,

@@ -84,8 +84,26 @@ pub enum SessionError {
     #[error("invalid session id: {0}")]
     InvalidSessionId(String),
 
-    #[error("database error")]
-    Db(#[from] DbError),
+    #[error("invalid transition from {from} to {to}")]
+    InvalidTransition {
+        from: crate::types::SessionStatus,
+        to: crate::types::SessionStatus,
+    },
+
+    #[error("database error: {0}")]
+    Db(Box<DbError>),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+impl From<DbError> for SessionError {
+    fn from(err: DbError) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 /// Configuration loading and validation errors.
@@ -124,4 +142,31 @@ pub enum WorktreeError {
 
     #[error("git error: {0}")]
     Git(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_error_from_db_error() {
+        let db_err = DbError::NotFound {
+            table: "sessions".into(),
+            id: "ses-123".into(),
+        };
+        let session_err: SessionError = db_err.into();
+        assert!(matches!(session_err, SessionError::Db(_)));
+        assert!(session_err.to_string().contains("database error"));
+    }
+
+    #[test]
+    fn test_session_error_from_db_error_preserves_inner() {
+        let db_err = DbError::Connection("timeout".into());
+        let session_err: SessionError = db_err.into();
+        assert!(
+            session_err.to_string().contains("connection failed"),
+            "inner DbError message should be preserved: {}",
+            session_err
+        );
+    }
 }
