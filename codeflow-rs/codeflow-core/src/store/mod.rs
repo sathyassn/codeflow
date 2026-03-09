@@ -1,0 +1,834 @@
+pub mod schema;
+pub mod surreal;
+
+pub use surreal::SurrealStore;
+
+use crate::error::DbError;
+use crate::models::{
+    ActiveWork, AutorunSession, AutorunTaskRun, AutorunWorker, Epic, MemoryEvent, Session, Task,
+};
+use crate::models::{
+    AutorunSessionUpdate, AutorunTaskRunUpdate, AutorunWorkerUpdate, EpicFilter, EpicUpdate,
+    MemoryEventFilter, SessionFilter, SessionUpdate, TaskFilter, TaskUpdate,
+};
+use crate::types::FormatId;
+
+/// Result of a sync operation.
+#[derive(Debug, Default)]
+pub struct SyncResult {
+    pub events_processed: u64,
+    pub sessions_upserted: u64,
+    pub epics_upserted: u64,
+    pub tasks_upserted: u64,
+    pub memory_events_inserted: u64,
+    pub errors_skipped: u64,
+}
+
+/// `DataStore` abstracts all persistent storage operations.
+///
+/// The sole production implementation is `SurrealStore` (surrealkv:// embedded).
+/// Test implementations use `SurrealStore` backed by `Surreal<Mem>` (in-memory).
+///
+/// All methods take `&self` -- implementations handle interior mutability
+/// via `SurrealDB`'s internally reference-counted `Surreal` instance.
+pub trait DataStore: Send + Sync {
+    // -- Schema lifecycle --
+
+    /// Apply the schema (idempotent DEFINE statements). Safe to call on every startup.
+    async fn apply_schema(&self) -> Result<(), DbError>;
+
+    /// Check database integrity.
+    async fn check_integrity(&self) -> Result<(), DbError>;
+
+    // -- Session CRUD --
+
+    async fn create_session(&self, session: &Session) -> Result<(), DbError>;
+    async fn get_session(&self, id: &str) -> Result<Option<Session>, DbError>;
+    async fn update_session(&self, id: &str, update: SessionUpdate) -> Result<(), DbError>;
+    async fn list_sessions(&self, filter: SessionFilter) -> Result<Vec<Session>, DbError>;
+
+    // -- Epic CRUD --
+
+    async fn create_epic(&self, epic: &Epic) -> Result<(), DbError>;
+    async fn get_epic(&self, id: &str) -> Result<Option<Epic>, DbError>;
+    async fn get_epic_by_format_id(&self, format_id: &FormatId) -> Result<Option<Epic>, DbError>;
+    async fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), DbError>;
+    async fn list_epics(&self, filter: EpicFilter) -> Result<Vec<Epic>, DbError>;
+
+    // -- Task CRUD --
+
+    async fn create_task(&self, task: &Task) -> Result<(), DbError>;
+    async fn get_task(&self, id: &str) -> Result<Option<Task>, DbError>;
+    async fn get_task_by_format_id(&self, format_id: &FormatId) -> Result<Option<Task>, DbError>;
+    async fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), DbError>;
+    async fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, DbError>;
+
+    // -- Active work --
+
+    async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError>;
+    async fn set_active_work(&self, work: &ActiveWork) -> Result<(), DbError>;
+    async fn clear_active_work(&self, id: &str) -> Result<(), DbError>;
+
+    // -- Memory events --
+
+    async fn create_memory_event(&self, event: &MemoryEvent) -> Result<(), DbError>;
+    async fn list_memory_events(
+        &self,
+        filter: MemoryEventFilter,
+    ) -> Result<Vec<MemoryEvent>, DbError>;
+
+    // -- Autorun --
+
+    async fn create_autorun_session(&self, session: &AutorunSession) -> Result<(), DbError>;
+    async fn get_autorun_session(&self, id: &str) -> Result<Option<AutorunSession>, DbError>;
+    async fn update_autorun_session(
+        &self,
+        id: &str,
+        update: AutorunSessionUpdate,
+    ) -> Result<(), DbError>;
+
+    async fn create_autorun_worker(&self, worker: &AutorunWorker) -> Result<(), DbError>;
+    async fn update_autorun_worker(
+        &self,
+        id: &str,
+        update: AutorunWorkerUpdate,
+    ) -> Result<(), DbError>;
+
+    async fn create_autorun_task_run(&self, run: &AutorunTaskRun) -> Result<(), DbError>;
+    async fn update_autorun_task_run(
+        &self,
+        id: &str,
+        update: AutorunTaskRunUpdate,
+    ) -> Result<(), DbError>;
+
+    // -- Generic query --
+
+    /// Execute a read-only query and return results as JSON.
+    async fn query_to_json(&self, query: &str) -> Result<serde_json::Value, DbError>;
+
+    // -- Sync --
+
+    /// Rebuild database state from JSONL ledger events.
+    async fn sync_from_events(
+        &self,
+        events: impl Iterator<Item = crate::ledger::Event> + Send,
+    ) -> Result<SyncResult, DbError>;
+}
+
+// ---------------------------------------------------------------------------
+// MockStore: HashMap-based DataStore for trait-based testing
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+pub mod mock {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// In-memory `DataStore` implementation for testing trait dispatch.
+    ///
+    /// Uses `Mutex<HashMap>` for interior mutability (single-threaded test context).
+    /// Validates that the `DataStore` trait can be implemented by something other
+    /// than `SurrealStore`.
+    #[derive(Default)]
+    pub struct MockStore {
+        sessions: Mutex<HashMap<String, Session>>,
+        epics: Mutex<HashMap<String, Epic>>,
+        tasks: Mutex<HashMap<String, Task>>,
+        active_work: Mutex<Option<ActiveWork>>,
+        memory_events: Mutex<Vec<MemoryEvent>>,
+    }
+
+    impl MockStore {
+        #[must_use]
+        pub fn new() -> Self {
+            Self::default()
+        }
+    }
+
+    impl DataStore for MockStore {
+        async fn apply_schema(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn check_integrity(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn create_session(&self, session: &Session) -> Result<(), DbError> {
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(session.id.clone(), session.clone());
+            Ok(())
+        }
+
+        async fn get_session(&self, id: &str) -> Result<Option<Session>, DbError> {
+            Ok(self.sessions.lock().unwrap().get(id).cloned())
+        }
+
+        async fn update_session(&self, id: &str, update: SessionUpdate) -> Result<(), DbError> {
+            if let Some(session) = self.sessions.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    session.status = status;
+                }
+                if let Some(ended_at) = update.ended_at {
+                    session.ended_at = Some(ended_at);
+                }
+            }
+            Ok(())
+        }
+
+        async fn list_sessions(&self, _filter: SessionFilter) -> Result<Vec<Session>, DbError> {
+            Ok(self.sessions.lock().unwrap().values().cloned().collect())
+        }
+
+        async fn create_epic(&self, epic: &Epic) -> Result<(), DbError> {
+            self.epics
+                .lock()
+                .unwrap()
+                .insert(epic.id.clone(), epic.clone());
+            Ok(())
+        }
+
+        async fn get_epic(&self, id: &str) -> Result<Option<Epic>, DbError> {
+            Ok(self.epics.lock().unwrap().get(id).cloned())
+        }
+
+        async fn get_epic_by_format_id(
+            &self,
+            format_id: &FormatId,
+        ) -> Result<Option<Epic>, DbError> {
+            let fid = format_id.as_str();
+            Ok(self
+                .epics
+                .lock()
+                .unwrap()
+                .values()
+                .find(|e| e.format_id == fid)
+                .cloned())
+        }
+
+        async fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), DbError> {
+            if let Some(epic) = self.epics.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    epic.status = status;
+                }
+                if let Some(title) = update.title {
+                    epic.title = title;
+                }
+            }
+            Ok(())
+        }
+
+        async fn list_epics(&self, _filter: EpicFilter) -> Result<Vec<Epic>, DbError> {
+            Ok(self.epics.lock().unwrap().values().cloned().collect())
+        }
+
+        async fn create_task(&self, task: &Task) -> Result<(), DbError> {
+            self.tasks
+                .lock()
+                .unwrap()
+                .insert(task.id.clone(), task.clone());
+            Ok(())
+        }
+
+        async fn get_task(&self, id: &str) -> Result<Option<Task>, DbError> {
+            Ok(self.tasks.lock().unwrap().get(id).cloned())
+        }
+
+        async fn get_task_by_format_id(
+            &self,
+            format_id: &FormatId,
+        ) -> Result<Option<Task>, DbError> {
+            let fid = format_id.as_str();
+            Ok(self
+                .tasks
+                .lock()
+                .unwrap()
+                .values()
+                .find(|t| t.format_id == fid)
+                .cloned())
+        }
+
+        async fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), DbError> {
+            if let Some(task) = self.tasks.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    task.status = status;
+                }
+            }
+            Ok(())
+        }
+
+        async fn list_tasks(&self, _filter: TaskFilter) -> Result<Vec<Task>, DbError> {
+            Ok(self.tasks.lock().unwrap().values().cloned().collect())
+        }
+
+        async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError> {
+            Ok(self.active_work.lock().unwrap().clone())
+        }
+
+        async fn set_active_work(&self, work: &ActiveWork) -> Result<(), DbError> {
+            *self.active_work.lock().unwrap() = Some(work.clone());
+            Ok(())
+        }
+
+        async fn clear_active_work(&self, _id: &str) -> Result<(), DbError> {
+            *self.active_work.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn create_memory_event(&self, event: &MemoryEvent) -> Result<(), DbError> {
+            self.memory_events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+
+        async fn list_memory_events(
+            &self,
+            _filter: MemoryEventFilter,
+        ) -> Result<Vec<MemoryEvent>, DbError> {
+            Ok(self.memory_events.lock().unwrap().clone())
+        }
+
+        async fn create_autorun_session(&self, _session: &AutorunSession) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn get_autorun_session(&self, _id: &str) -> Result<Option<AutorunSession>, DbError> {
+            Ok(None)
+        }
+
+        async fn update_autorun_session(
+            &self,
+            _id: &str,
+            _update: AutorunSessionUpdate,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn create_autorun_worker(&self, _worker: &AutorunWorker) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn update_autorun_worker(
+            &self,
+            _id: &str,
+            _update: AutorunWorkerUpdate,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn create_autorun_task_run(&self, _run: &AutorunTaskRun) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn update_autorun_task_run(
+            &self,
+            _id: &str,
+            _update: AutorunTaskRunUpdate,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn query_to_json(&self, _query: &str) -> Result<serde_json::Value, DbError> {
+            Ok(serde_json::json!([]))
+        }
+
+        async fn sync_from_events(
+            &self,
+            events: impl Iterator<Item = crate::ledger::Event> + Send,
+        ) -> Result<SyncResult, DbError> {
+            let count = events.count() as u64;
+            Ok(SyncResult {
+                events_processed: count,
+                ..Default::default()
+            })
+        }
+    }
+
+    // -- MockStore tests (criterion 9) --
+
+    /// Helper: exercises DataStore trait methods via generic function.
+    async fn session_roundtrip(store: &impl DataStore) {
+        use crate::types::SessionStatus;
+
+        let session = Session {
+            id: "mock-ses-1".into(),
+            project_id: None,
+            user_id: "user-1".into(),
+            user_host: "localhost".into(),
+            machine_fingerprint: None,
+            started_at: "2026-03-08T00:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            status: SessionStatus::Active,
+            work_ids: vec![],
+            previous_session_id: None,
+            context_summary: None,
+            tool_stats: serde_json::Value::Null,
+            metadata: serde_json::Value::Null,
+        };
+
+        store.create_session(&session).await.unwrap();
+        let fetched = store.get_session("mock-ses-1").await.unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().user_id, "user-1");
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_session_roundtrip() {
+        let store = MockStore::new();
+        session_roundtrip(&store).await;
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_epic_by_format_id() {
+        use crate::types::{AreaType, EpicStatus, WorkType};
+
+        let store = MockStore::new();
+        let epic = Epic {
+            id: "epic-001".into(),
+            format_id: "INF-EPC-001".into(),
+            title: "Mock Epic".into(),
+            summary: None,
+            status: EpicStatus::Draft,
+            area_type: AreaType::Inf,
+            work_type: WorkType::Feat,
+            domain: "infrastructure".into(),
+            is_ongoing: false,
+            file_scope: vec![],
+            priority: "medium".into(),
+            pr_number: None,
+            external_id: None,
+            external_url: None,
+            created_at: "2026-03-08T00:00:00Z".into(),
+            updated_at: "2026-03-08T00:00:00Z".into(),
+        };
+
+        store.create_epic(&epic).await.unwrap();
+
+        // Lookup by FormatId newtype
+        let fmt = FormatId::new_unchecked("INF-EPC-001");
+        let found = store.get_epic_by_format_id(&fmt).await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().title, "Mock Epic");
+
+        // Non-existent format_id returns None
+        let missing_fmt = FormatId::new_unchecked("INF-EPC-999");
+        let not_found = store.get_epic_by_format_id(&missing_fmt).await.unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_session_update() {
+        use crate::types::SessionStatus;
+
+        let store = MockStore::new();
+        let session = Session {
+            id: "ses-upd".into(),
+            project_id: None,
+            user_id: "user-1".into(),
+            user_host: "localhost".into(),
+            machine_fingerprint: None,
+            started_at: "2026-03-08T00:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            status: SessionStatus::Active,
+            work_ids: vec![],
+            previous_session_id: None,
+            context_summary: None,
+            tool_stats: serde_json::Value::Null,
+            metadata: serde_json::Value::Null,
+        };
+        store.create_session(&session).await.unwrap();
+
+        // Update status and ended_at
+        store
+            .update_session(
+                "ses-upd",
+                SessionUpdate {
+                    status: Some(SessionStatus::Ended),
+                    ended_at: Some("2026-03-08T01:00:00Z".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let updated = store.get_session("ses-upd").await.unwrap().unwrap();
+        assert_eq!(updated.status, SessionStatus::Ended);
+        assert_eq!(updated.ended_at.as_deref(), Some("2026-03-08T01:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_session_update_nonexistent() {
+        let store = MockStore::new();
+        // Updating non-existent session should succeed silently
+        store
+            .update_session(
+                "no-such-id",
+                SessionUpdate {
+                    status: Some(crate::types::SessionStatus::Ended),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_session_get_nonexistent() {
+        let store = MockStore::new();
+        let result = store.get_session("no-such-id").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_list_sessions() {
+        use crate::types::SessionStatus;
+
+        let store = MockStore::new();
+        let s1 = Session {
+            id: "ses-1".into(),
+            project_id: None,
+            user_id: "u1".into(),
+            user_host: "h1".into(),
+            machine_fingerprint: None,
+            started_at: "2026-03-08T00:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            status: SessionStatus::Active,
+            work_ids: vec![],
+            previous_session_id: None,
+            context_summary: None,
+            tool_stats: serde_json::Value::Null,
+            metadata: serde_json::Value::Null,
+        };
+        let s2 = Session {
+            id: "ses-2".into(),
+            ..s1.clone()
+        };
+        store.create_session(&s1).await.unwrap();
+        store.create_session(&s2).await.unwrap();
+
+        let all = store.list_sessions(SessionFilter::default()).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_epic_crud() {
+        use crate::types::{AreaType, EpicStatus, WorkType};
+
+        let store = MockStore::new();
+        let epic = Epic {
+            id: "epic-crud".into(),
+            format_id: "INF-EPC-010".into(),
+            title: "CRUD Test Epic".into(),
+            summary: None,
+            status: EpicStatus::Draft,
+            area_type: AreaType::Inf,
+            work_type: WorkType::Feat,
+            domain: "infrastructure".into(),
+            is_ongoing: false,
+            file_scope: vec![],
+            priority: "medium".into(),
+            pr_number: None,
+            external_id: None,
+            external_url: None,
+            created_at: "2026-03-08T00:00:00Z".into(),
+            updated_at: "2026-03-08T00:00:00Z".into(),
+        };
+        store.create_epic(&epic).await.unwrap();
+
+        // Get by id
+        let fetched = store.get_epic("epic-crud").await.unwrap().unwrap();
+        assert_eq!(fetched.title, "CRUD Test Epic");
+
+        // Update
+        store
+            .update_epic(
+                "epic-crud",
+                EpicUpdate {
+                    status: Some(EpicStatus::InProgress),
+                    title: Some("Updated Epic".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let updated = store.get_epic("epic-crud").await.unwrap().unwrap();
+        assert_eq!(updated.status, EpicStatus::InProgress);
+        assert_eq!(updated.title, "Updated Epic");
+
+        // List
+        let all = store.list_epics(EpicFilter::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_epic_update_nonexistent() {
+        let store = MockStore::new();
+        store
+            .update_epic(
+                "no-epic",
+                EpicUpdate {
+                    title: Some("nope".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_task_crud() {
+        use crate::types::{AreaType, TaskStatus, WorkStage, WorkType};
+
+        let store = MockStore::new();
+        let task = Task {
+            id: "task-crud".into(),
+            format_id: "INF-TSK-010-001".into(),
+            epic_id: "epic-1".into(),
+            title: "CRUD Test Task".into(),
+            description: None,
+            status: TaskStatus::Todo,
+            area_type: AreaType::Inf,
+            work_type: WorkType::Feat,
+            domain: "infrastructure".into(),
+            origin: "adhoc".into(),
+            file_scope: vec![],
+            scope_policy: "append".into(),
+            scope_root: None,
+            estimate: None,
+            priority: "medium".into(),
+            assignee_id: None,
+            autorun_eligible: false,
+            auto_commit: false,
+            raise_pr: true,
+            auto_merge: false,
+            target_branch: None,
+            acceptance: vec![],
+            tests: vec![],
+            branch: None,
+            pr_number: None,
+            external_id: None,
+            external_url: None,
+            created_at: "2026-03-08T00:00:00Z".into(),
+            updated_at: "2026-03-08T00:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+            stage: Some(WorkStage::WsDev),
+            stage_status: Some("pending".into()),
+            stage_history: vec![],
+        };
+        store.create_task(&task).await.unwrap();
+
+        // Get by id
+        let fetched = store.get_task("task-crud").await.unwrap().unwrap();
+        assert_eq!(fetched.title, "CRUD Test Task");
+
+        // Get by format_id
+        let fmt = FormatId::new_unchecked("INF-TSK-010-001");
+        let by_fmt = store.get_task_by_format_id(&fmt).await.unwrap().unwrap();
+        assert_eq!(by_fmt.id, "task-crud");
+
+        // Missing format_id
+        let missing = FormatId::new_unchecked("ZZZ-TSK-999-999");
+        assert!(
+            store
+                .get_task_by_format_id(&missing)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Update
+        store
+            .update_task(
+                "task-crud",
+                TaskUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let updated = store.get_task("task-crud").await.unwrap().unwrap();
+        assert_eq!(updated.status, TaskStatus::InProgress);
+
+        // List
+        let all = store.list_tasks(TaskFilter::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_task_update_nonexistent() {
+        let store = MockStore::new();
+        store
+            .update_task(
+                "no-task",
+                TaskUpdate {
+                    status: Some(crate::types::TaskStatus::Complete),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_active_work() {
+        use crate::types::ActiveWorkStatus;
+
+        let store = MockStore::new();
+
+        // Initially empty
+        assert!(store.get_active_work().await.unwrap().is_none());
+
+        let work = ActiveWork {
+            id: "aw-1".into(),
+            task_id: Some("task-1".into()),
+            topic: "Test topic".into(),
+            status: ActiveWorkStatus::InProgress,
+            branch: Some("feat/test".into()),
+            scope: vec!["src/".into()],
+            deliverables: vec!["feature".into()],
+            agent: None,
+            session_id: Some("ses-1".into()),
+            current_stage: None,
+            team_name: None,
+            created_at: "2026-03-08T00:00:00Z".into(),
+            updated_at: "2026-03-08T00:00:00Z".into(),
+        };
+        store.set_active_work(&work).await.unwrap();
+
+        let fetched = store.get_active_work().await.unwrap().unwrap();
+        assert_eq!(fetched.task_id, Some("task-1".into()));
+
+        // Clear
+        store.clear_active_work("aw-1").await.unwrap();
+        assert!(store.get_active_work().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_memory_events() {
+        let store = MockStore::new();
+
+        let event = MemoryEvent {
+            id: "mem-1".into(),
+            event_type: "test".into(),
+            domain: "testing".into(),
+            work_id: None,
+            data: "some data".into(),
+            memory_type: None,
+            created_at: "2026-03-08T00:00:00Z".into(),
+        };
+        store.create_memory_event(&event).await.unwrap();
+
+        let events = store
+            .list_memory_events(MemoryEventFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].domain, "testing");
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_autorun_stubs() {
+        let store = MockStore::new();
+
+        // These are stub implementations returning Ok(()) / Ok(None)
+        store
+            .create_autorun_session(&AutorunSession {
+                id: "ar-1".into(),
+                batch_file: "batch.json".into(),
+                batch_name: None,
+                status: crate::types::AutorunSessionStatus::Pending,
+                max_session_workers: 2,
+                total_tasks: 1,
+                completed_tasks: 0,
+                failed_tasks: 0,
+                created_at: "2026-03-08T00:00:00Z".into(),
+                completed_at: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(store.get_autorun_session("ar-1").await.unwrap().is_none());
+
+        store
+            .update_autorun_session("ar-1", AutorunSessionUpdate::default())
+            .await
+            .unwrap();
+
+        store
+            .create_autorun_worker(&AutorunWorker {
+                id: "aw-1".into(),
+                session_id: "ar-1".into(),
+                worker_num: 0,
+                task_id: "t-1".into(),
+                status: crate::types::AutorunWorkerStatus::Queued,
+                tmux_session: None,
+                worktree_path: None,
+                pr_number: None,
+                started_at: None,
+                completed_at: None,
+            })
+            .await
+            .unwrap();
+
+        store
+            .update_autorun_worker("aw-1", AutorunWorkerUpdate::default())
+            .await
+            .unwrap();
+
+        store
+            .create_autorun_task_run(&AutorunTaskRun {
+                id: "atr-1".into(),
+                worker_id: "aw-1".into(),
+                task_id: "t-1".into(),
+                session_id: "ar-1".into(),
+                status: crate::types::AutorunTaskRunStatus::Pending,
+                branch_name: None,
+                worktree_path: None,
+                pr_number: None,
+                pr_url: None,
+                started_at: None,
+                completed_at: None,
+                duration_seconds: None,
+                exit_code: None,
+                error_message: None,
+                verification_result: None,
+                created_at: "2026-03-08T00:00:00Z".into(),
+            })
+            .await
+            .unwrap();
+
+        store
+            .update_autorun_task_run("atr-1", AutorunTaskRunUpdate::default())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_query_to_json() {
+        let store = MockStore::new();
+        let result = store.query_to_json("SELECT * FROM sessions").await.unwrap();
+        assert_eq!(result, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_sync_from_events() {
+        let store = MockStore::new();
+        let events = std::iter::empty::<crate::ledger::Event>();
+        let result = store.sync_from_events(events).await.unwrap();
+        assert_eq!(result.events_processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_mock_store_apply_schema_and_integrity() {
+        let store = MockStore::new();
+        store.apply_schema().await.unwrap();
+        store.check_integrity().await.unwrap();
+    }
+}

@@ -3,6 +3,7 @@ pub mod autorun;
 pub mod epic;
 pub mod filters;
 pub mod memory;
+pub mod serde_helpers;
 pub mod session;
 pub mod task;
 pub mod updates;

@@ -8,3 +8,13 @@ pub fn load_config_stub() {
     // Placeholder for generic config loading.
     // Future: pub fn load<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigError>
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_config_stub_does_not_panic() {
+        load_config_stub();
+    }
+}

@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use super::serde_helpers::{deserialize_record_id, serialize_record_id};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
+    #[serde(
+        deserialize_with = "deserialize_record_id",
+        serialize_with = "serialize_record_id"
+    )]
     pub id: String,
     pub email: String,
     pub display_name: Option<String>,
@@ -19,6 +25,10 @@ pub struct User {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
+    #[serde(
+        deserialize_with = "deserialize_record_id",
+        serialize_with = "serialize_record_id"
+    )]
     pub id: String,
     pub name: String,
     pub description: Option<String>,

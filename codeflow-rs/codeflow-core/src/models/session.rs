@@ -2,8 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::SessionStatus;
 
+use super::serde_helpers::{deserialize_record_id, serialize_record_id};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(
+        deserialize_with = "deserialize_record_id",
+        serialize_with = "serialize_record_id"
+    )]
     pub id: String,
     pub project_id: Option<String>,
     pub user_id: String,

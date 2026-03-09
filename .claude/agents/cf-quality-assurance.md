@@ -40,7 +40,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
     RECEIVE ─── Read acceptance criteria  RECEIVE ─── Read test requirements
        │                                     │
        ▼                                     ▼
-    RUN SUITE ─ run-all-tests.sh standard ANALYZE ─── Read code under test
+    RUN SUITE ─ codeflow test --mode full --coverage   ANALYZE ─── Read code under test
        │                                     │
        ▼                                     ▼
     VERIFY ──── Check each criterion      WRITE ────── Create test cases
@@ -94,29 +94,23 @@ Extract specific, testable criteria from the task assignment. List them as a che
 
 #### Step 2: Run Full Test Suite
 
-**Step 2a: Run shell/Python test suite:**
-
 ```text
-bash .codeflow/testing/run-all-tests.sh --mode full
+codeflow test --mode full --coverage
 ```
 
-Use `--mode standard` if the lead requests faster turnaround. Use `--mode essential` only for quick pre-checks.
-
-**Additional flags:** `--category {name}` (scoped), `--stop-on-fail`, `--verbose`, `--validate-coverage`, `--report`, `--dry-run`
-
-**Step 2b: Run Go test suite (mandatory):**
-
-```text
-cd codeflow-cli && make test-cover
-```
-
-This step is mandatory for every WS-QA run, not conditional on file scope. Both the shell/Python suite and Go suite must pass for WS-QA to issue a PASS verdict.
-
-`make test-cover` runs `go test ./...` with coverage profiling and enforces **85% per-file aggregate line coverage** on business packages (`./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`). Coverage is computed from the coverprofile — not `go tool cover -func`. Coverage below 85% for any file is a build failure — treat it as a FAIL finding. Threshold, business packages, and exception list are configured in `codeflow-cli/config/testing/test-config.json` (`conventions.exceptions` lists files excluded from the per-file check, such as main entry points or external process wrappers).
-
-The bridge script at `.codeflow/testing/cli/test-go-cli.sh` integrates Go test results into the shell framework's unified reporting. Go tests are registered as the `cli-go` category in `test-config.json` at MEDIUM priority.
+This is the unified CLI entry point. It routes to all test suites (shell/Python, Go, Rust) with full-mode execution and coverage enforcement. All three suites must pass for WS-QA to issue a PASS verdict. This command is mandatory for every WS-QA run, not conditional on file scope.
 
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
+
+**Internal suite details** (what `codeflow test --mode full --coverage` invokes):
+
+| Suite | Bridge Script | Coverage | Config |
+|-------|--------------|----------|--------|
+| Shell/Python | `bash .codeflow/testing/run-all-tests.sh --mode full` | Structural coverage via `test-coverage.sh` | `.codeflow/testing/test-config.json` |
+| Go | `cd codeflow-cli && make test-cover` | 85% per-file aggregate on business packages | `codeflow-cli/config/testing/test-config.json` |
+| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via cargo-llvm-cov on business packages | `codeflow-rs/config/testing/test-config.json` |
+
+Go business packages: `./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in each suite's test-config.json.
 
 #### Step 3: Run Targeted Tests
 
@@ -500,8 +494,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 - [ ] 🔒 **Structural validation passed:** All 7 checks from Section 5.2 performed BEFORE test execution
 - [ ] 🔒 **Functional testing verified:** Tests exercise real code, not mocks of code under test (Section 5.5)
-- [ ] 🔒 **Test suite executed:** `run-all-tests.sh` ran to completion with actual output captured
-- [ ] 🔒 **Go test suite executed:** `cd codeflow-cli && make test-cover` ran to completion, passed, and met 85% per-file aggregate coverage threshold for all business packages (threshold/exceptions from `codeflow-cli/config/testing/test-config.json`)
+- [ ] 🔒 **Full test suite executed:** `codeflow test --mode full --coverage` ran to completion — all three suites (shell/Python, Go, Rust) passed with coverage thresholds met
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails
@@ -529,7 +522,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Tests deterministic:** Ran twice, same results both times
 - [ ] 🔒 **Tests independent:** No ordering dependencies, proper setup/teardown, no shared mutable state
 - [ ] 🔒 **Shell tests executable:** `chmod +x` applied to all new `.sh` test files
-- [ ] 🔒 **Test suite passes:** `run-all-tests.sh essential` returns zero failures
+- [ ] 🔒 **Test suite passes:** `codeflow test --mode full --coverage` returns zero failures across all suites
 - [ ] 🔒 **Linting clean:** ShellCheck zero SC1xxx on `.sh` files; ruff zero errors on `.py` files
 - [ ] 🔒 **Commit format ready:** Conventional commit message prepared for cf-git-operations
 - [ ] 🔒 **Scope compliance:** No changes outside assigned task scope
@@ -548,3 +541,5 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
 | Go Test Bridge | `.codeflow/testing/cli/test-go-cli.sh` | Integrates Go test results into shell framework |
 | Go Makefile | `codeflow-cli/Makefile` | `make test-cover` (85% coverage threshold) |
+| Rust Test Bridge | `.codeflow/testing/cli/rust/test-rust-cli.sh` | Build verification, unit tests, coverage enforcement |
+| Rust Test Config | `codeflow-rs/config/testing/test-config.json` | Rust coverage threshold, business packages, exceptions |

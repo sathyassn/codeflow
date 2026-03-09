@@ -2,10 +2,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AreaType, TaskStatus, WorkStage, WorkType};
 
+use super::serde_helpers::{deserialize_record_id, serialize_record_id};
+
 // Bool fields mirror the existing Go/SurrealDB schema exactly.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(
+        deserialize_with = "deserialize_record_id",
+        serialize_with = "serialize_record_id"
+    )]
     pub id: String,
     pub format_id: String,
     pub epic_id: String,

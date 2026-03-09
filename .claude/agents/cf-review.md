@@ -259,8 +259,7 @@ Check every numbered criterion from the task specification point-by-point. A cri
 
 ### Step 9: Run Tests (CODE_REVIEW and TEST_REVIEW)
 
-- Shell tests: `bash .codeflow/testing/run-all-tests.sh essential`
-- Python tests: `pytest`
+- All suites: `codeflow test`
 
 ### Step 10: Cross-Reference Standards
 
@@ -656,4 +655,4 @@ Beyond code correctness, verify the structural integrity of the changeset:
 | Go Standards | `.claude/skills/cf-go-standards/SKILL.md` | golangci-lint rules, Go patterns for CODE_REVIEW |
 | Markdown Standards | `.claude/skills/cf-markdown-standards/SKILL.md` | Doc structure for DOCUMENTATION_REVIEW |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, rework limits |
-| Test Runner | `.codeflow/testing/run-all-tests.sh` | Test execution for verification |
+| Test Runner | `codeflow test` | Unified test execution for verification |

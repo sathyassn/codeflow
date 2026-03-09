@@ -155,7 +155,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-006 | Define core types and error domains | complete | critical | 0B |
 | INF-TSK-022-007 | Set up Rust unit testing infrastructure | complete | critical | 0B |
 | INF-TSK-022-008 | Set up shell integration test bridge | complete | high | 0B |
-| INF-TSK-022-009 | Implement DataStore trait and SurrealStore | todo | critical | 0C |
+| INF-TSK-022-009 | Implement DataStore trait and SurrealStore | complete | critical | 0C |
 | INF-TSK-022-010 | Implement LedgerWriter trait and JsonlWriter | todo | critical | 0C |
 | INF-TSK-022-011 | Implement session and state management | todo | high | 0C |
 | INF-TSK-022-012 | Implement worktree manager | todo | normal | 0C |
@@ -175,6 +175,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-026 | Update test infrastructure references | todo | high | 0G |
 | INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
 | INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
+| INF-TSK-022-029 | Add pre-push test hook to enforce tests + coverage before PR | cancelled | high | deferred-to-rust-hooks-epic |
 
 ## Dependencies
 

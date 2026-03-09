@@ -2,8 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AreaType, EpicStatus, WorkType};
 
+use super::serde_helpers::{deserialize_record_id, serialize_record_id};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Epic {
+    #[serde(
+        deserialize_with = "deserialize_record_id",
+        serialize_with = "serialize_record_id"
+    )]
     pub id: String,
     pub format_id: String,
     pub title: String,

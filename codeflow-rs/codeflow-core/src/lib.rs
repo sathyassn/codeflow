@@ -16,7 +16,8 @@ pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, LedgerWriter};
 pub use store::{DataStore, SyncResult};
 pub use types::{
-    AreaType, BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, LedgerEvent,
+    ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,
+    BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, LedgerEvent,
     ParseEnumError, ParseIdError, ParseSentinelError, Phase, PipelineType, Sentinel, SessionId,
     SessionStatus, TaskId, TaskStatus, WorkId, WorkStage, WorkType,
 };

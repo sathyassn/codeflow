@@ -242,6 +242,197 @@ impl FromStr for SessionStatus {
     }
 }
 
+/// Active work status values.
+///
+/// Aligned with schema CHECK constraint:
+/// `CHECK(status IN ('in_progress', 'complete', 'blocked'))`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveWorkStatus {
+    InProgress,
+    Complete,
+    Blocked,
+}
+
+impl fmt::Display for ActiveWorkStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InProgress => f.write_str("in_progress"),
+            Self::Complete => f.write_str("complete"),
+            Self::Blocked => f.write_str("blocked"),
+        }
+    }
+}
+
+impl FromStr for ActiveWorkStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "in_progress" | "active" => Ok(Self::InProgress),
+            "complete" => Ok(Self::Complete),
+            "blocked" => Ok(Self::Blocked),
+            _ => Err(ParseEnumError {
+                enum_name: "ActiveWorkStatus",
+                value: s.to_string(),
+            }),
+        }
+    }
+}
+
+/// Autorun session status values.
+///
+/// Aligned with schema CHECK constraint:
+/// `CHECK(status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled', 'timeout'))`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutorunSessionStatus {
+    Pending,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled,
+    Timeout,
+}
+
+impl fmt::Display for AutorunSessionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => f.write_str("pending"),
+            Self::Running => f.write_str("running"),
+            Self::Paused => f.write_str("paused"),
+            Self::Completed => f.write_str("completed"),
+            Self::Failed => f.write_str("failed"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Timeout => f.write_str("timeout"),
+        }
+    }
+}
+
+impl FromStr for AutorunSessionStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "paused" => Ok(Self::Paused),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "timeout" => Ok(Self::Timeout),
+            _ => Err(ParseEnumError {
+                enum_name: "AutorunSessionStatus",
+                value: s.to_string(),
+            }),
+        }
+    }
+}
+
+/// Autorun worker status values.
+///
+/// Aligned with schema CHECK constraint:
+/// `CHECK(status IN ('queued', 'starting', 'running', 'completed', 'failed', 'skipped', 'timeout', 'cancelled'))`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutorunWorkerStatus {
+    Queued,
+    Starting,
+    Running,
+    Completed,
+    Failed,
+    Skipped,
+    Timeout,
+    Cancelled,
+}
+
+impl fmt::Display for AutorunWorkerStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Queued => f.write_str("queued"),
+            Self::Starting => f.write_str("starting"),
+            Self::Running => f.write_str("running"),
+            Self::Completed => f.write_str("completed"),
+            Self::Failed => f.write_str("failed"),
+            Self::Skipped => f.write_str("skipped"),
+            Self::Timeout => f.write_str("timeout"),
+            Self::Cancelled => f.write_str("cancelled"),
+        }
+    }
+}
+
+impl FromStr for AutorunWorkerStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "queued" => Ok(Self::Queued),
+            "starting" => Ok(Self::Starting),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
+            "timeout" => Ok(Self::Timeout),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(ParseEnumError {
+                enum_name: "AutorunWorkerStatus",
+                value: s.to_string(),
+            }),
+        }
+    }
+}
+
+/// Autorun task run status values.
+///
+/// Aligned with schema CHECK constraint:
+/// `CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'timeout', 'cancelled'))`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutorunTaskRunStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Skipped,
+    Timeout,
+    Cancelled,
+}
+
+impl fmt::Display for AutorunTaskRunStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => f.write_str("pending"),
+            Self::Running => f.write_str("running"),
+            Self::Completed => f.write_str("completed"),
+            Self::Failed => f.write_str("failed"),
+            Self::Skipped => f.write_str("skipped"),
+            Self::Timeout => f.write_str("timeout"),
+            Self::Cancelled => f.write_str("cancelled"),
+        }
+    }
+}
+
+impl FromStr for AutorunTaskRunStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
+            "timeout" => Ok(Self::Timeout),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(ParseEnumError {
+                enum_name: "AutorunTaskRunStatus",
+                value: s.to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +676,313 @@ mod tests {
         assert_eq!(json, "\"active\"");
         let parsed: SessionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, ss);
+    }
+
+    // -- ActiveWorkStatus tests --
+
+    #[test]
+    fn test_active_work_status_display() {
+        assert_eq!(ActiveWorkStatus::InProgress.to_string(), "in_progress");
+        assert_eq!(ActiveWorkStatus::Complete.to_string(), "complete");
+        assert_eq!(ActiveWorkStatus::Blocked.to_string(), "blocked");
+    }
+
+    #[test]
+    fn test_active_work_status_from_str() {
+        assert_eq!(
+            "in_progress".parse::<ActiveWorkStatus>().unwrap(),
+            ActiveWorkStatus::InProgress
+        );
+        assert_eq!(
+            "complete".parse::<ActiveWorkStatus>().unwrap(),
+            ActiveWorkStatus::Complete
+        );
+        assert_eq!(
+            "blocked".parse::<ActiveWorkStatus>().unwrap(),
+            ActiveWorkStatus::Blocked
+        );
+    }
+
+    #[test]
+    fn test_active_work_status_from_str_alias() {
+        // "active" is accepted as alias for InProgress (backwards compat)
+        assert_eq!(
+            "active".parse::<ActiveWorkStatus>().unwrap(),
+            ActiveWorkStatus::InProgress
+        );
+    }
+
+    #[test]
+    fn test_active_work_status_from_str_invalid() {
+        assert!("unknown".parse::<ActiveWorkStatus>().is_err());
+        assert!("done".parse::<ActiveWorkStatus>().is_err());
+    }
+
+    #[test]
+    fn test_active_work_status_serde_roundtrip() {
+        let s = ActiveWorkStatus::Blocked;
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, "\"blocked\"");
+        let parsed: ActiveWorkStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn test_active_work_status_display_fromstr_roundtrip() {
+        for status in [
+            ActiveWorkStatus::InProgress,
+            ActiveWorkStatus::Complete,
+            ActiveWorkStatus::Blocked,
+        ] {
+            let s = status.to_string();
+            let parsed: ActiveWorkStatus = s.parse().unwrap();
+            assert_eq!(parsed, status);
+        }
+    }
+
+    #[test]
+    fn test_active_work_status_schema_alignment() {
+        let schema_values = ["in_progress", "complete", "blocked"];
+        for val in schema_values {
+            assert!(
+                val.parse::<ActiveWorkStatus>().is_ok(),
+                "schema value '{val}' not parseable"
+            );
+        }
+    }
+
+    // -- AutorunSessionStatus tests --
+
+    #[test]
+    fn test_autorun_session_status_display() {
+        assert_eq!(AutorunSessionStatus::Pending.to_string(), "pending");
+        assert_eq!(AutorunSessionStatus::Running.to_string(), "running");
+        assert_eq!(AutorunSessionStatus::Paused.to_string(), "paused");
+        assert_eq!(AutorunSessionStatus::Completed.to_string(), "completed");
+        assert_eq!(AutorunSessionStatus::Failed.to_string(), "failed");
+        assert_eq!(AutorunSessionStatus::Cancelled.to_string(), "cancelled");
+        assert_eq!(AutorunSessionStatus::Timeout.to_string(), "timeout");
+    }
+
+    #[test]
+    fn test_autorun_session_status_from_str() {
+        assert_eq!(
+            "pending".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Pending
+        );
+        assert_eq!(
+            "running".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Running
+        );
+        assert_eq!(
+            "paused".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Paused
+        );
+        assert_eq!(
+            "completed".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Completed
+        );
+        assert_eq!(
+            "failed".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Failed
+        );
+        assert_eq!(
+            "cancelled".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Cancelled
+        );
+        assert_eq!(
+            "timeout".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Timeout
+        );
+    }
+
+    #[test]
+    fn test_autorun_session_status_from_str_invalid() {
+        assert!("active".parse::<AutorunSessionStatus>().is_err());
+    }
+
+    #[test]
+    fn test_autorun_session_status_serde_roundtrip() {
+        let s = AutorunSessionStatus::Failed;
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, "\"failed\"");
+        let parsed: AutorunSessionStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn test_autorun_session_status_display_fromstr_roundtrip() {
+        for status in [
+            AutorunSessionStatus::Pending,
+            AutorunSessionStatus::Running,
+            AutorunSessionStatus::Paused,
+            AutorunSessionStatus::Completed,
+            AutorunSessionStatus::Failed,
+            AutorunSessionStatus::Cancelled,
+            AutorunSessionStatus::Timeout,
+        ] {
+            let s = status.to_string();
+            let parsed: AutorunSessionStatus = s.parse().unwrap();
+            assert_eq!(parsed, status);
+        }
+    }
+
+    // -- AutorunWorkerStatus tests --
+
+    #[test]
+    fn test_autorun_worker_status_display() {
+        assert_eq!(AutorunWorkerStatus::Queued.to_string(), "queued");
+        assert_eq!(AutorunWorkerStatus::Starting.to_string(), "starting");
+        assert_eq!(AutorunWorkerStatus::Running.to_string(), "running");
+        assert_eq!(AutorunWorkerStatus::Completed.to_string(), "completed");
+        assert_eq!(AutorunWorkerStatus::Failed.to_string(), "failed");
+        assert_eq!(AutorunWorkerStatus::Skipped.to_string(), "skipped");
+        assert_eq!(AutorunWorkerStatus::Timeout.to_string(), "timeout");
+        assert_eq!(AutorunWorkerStatus::Cancelled.to_string(), "cancelled");
+    }
+
+    #[test]
+    fn test_autorun_worker_status_from_str() {
+        assert_eq!(
+            "queued".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Queued
+        );
+        assert_eq!(
+            "starting".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Starting
+        );
+        assert_eq!(
+            "running".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Running
+        );
+        assert_eq!(
+            "completed".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Completed
+        );
+        assert_eq!(
+            "failed".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Failed
+        );
+        assert_eq!(
+            "skipped".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Skipped
+        );
+        assert_eq!(
+            "timeout".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Timeout
+        );
+        assert_eq!(
+            "cancelled".parse::<AutorunWorkerStatus>().unwrap(),
+            AutorunWorkerStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_autorun_worker_status_from_str_invalid() {
+        assert!("active".parse::<AutorunWorkerStatus>().is_err());
+    }
+
+    #[test]
+    fn test_autorun_worker_status_serde_roundtrip() {
+        let s = AutorunWorkerStatus::Skipped;
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, "\"skipped\"");
+        let parsed: AutorunWorkerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn test_autorun_worker_status_display_fromstr_roundtrip() {
+        for status in [
+            AutorunWorkerStatus::Queued,
+            AutorunWorkerStatus::Starting,
+            AutorunWorkerStatus::Running,
+            AutorunWorkerStatus::Completed,
+            AutorunWorkerStatus::Failed,
+            AutorunWorkerStatus::Skipped,
+            AutorunWorkerStatus::Timeout,
+            AutorunWorkerStatus::Cancelled,
+        ] {
+            let s = status.to_string();
+            let parsed: AutorunWorkerStatus = s.parse().unwrap();
+            assert_eq!(parsed, status);
+        }
+    }
+
+    // -- AutorunTaskRunStatus tests --
+
+    #[test]
+    fn test_autorun_task_run_status_display() {
+        assert_eq!(AutorunTaskRunStatus::Pending.to_string(), "pending");
+        assert_eq!(AutorunTaskRunStatus::Running.to_string(), "running");
+        assert_eq!(AutorunTaskRunStatus::Completed.to_string(), "completed");
+        assert_eq!(AutorunTaskRunStatus::Failed.to_string(), "failed");
+        assert_eq!(AutorunTaskRunStatus::Skipped.to_string(), "skipped");
+        assert_eq!(AutorunTaskRunStatus::Timeout.to_string(), "timeout");
+        assert_eq!(AutorunTaskRunStatus::Cancelled.to_string(), "cancelled");
+    }
+
+    #[test]
+    fn test_autorun_task_run_status_from_str() {
+        assert_eq!(
+            "pending".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Pending
+        );
+        assert_eq!(
+            "running".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Running
+        );
+        assert_eq!(
+            "completed".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Completed
+        );
+        assert_eq!(
+            "failed".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Failed
+        );
+        assert_eq!(
+            "skipped".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Skipped
+        );
+        assert_eq!(
+            "timeout".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Timeout
+        );
+        assert_eq!(
+            "cancelled".parse::<AutorunTaskRunStatus>().unwrap(),
+            AutorunTaskRunStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_autorun_task_run_status_from_str_invalid() {
+        assert!("active".parse::<AutorunTaskRunStatus>().is_err());
+    }
+
+    #[test]
+    fn test_autorun_task_run_status_serde_roundtrip() {
+        let s = AutorunTaskRunStatus::Timeout;
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, "\"timeout\"");
+        let parsed: AutorunTaskRunStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn test_autorun_task_run_status_display_fromstr_roundtrip() {
+        for status in [
+            AutorunTaskRunStatus::Pending,
+            AutorunTaskRunStatus::Running,
+            AutorunTaskRunStatus::Completed,
+            AutorunTaskRunStatus::Failed,
+            AutorunTaskRunStatus::Skipped,
+            AutorunTaskRunStatus::Timeout,
+            AutorunTaskRunStatus::Cancelled,
+        ] {
+            let s = status.to_string();
+            let parsed: AutorunTaskRunStatus = s.parse().unwrap();
+            assert_eq!(parsed, status);
+        }
     }
 }
 

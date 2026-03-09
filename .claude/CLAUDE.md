@@ -485,7 +485,7 @@ Task(
 | WS-PLAN | cf-planning | `"Read .claude/agents/cf-planning.md for your instructions, then create a design document for: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Deliverable: {ADR/brief/epic}. Write to: {path}. Before STAGE-COMPLETE, update Criteria Status and PLAN Report in the task doc."` |
 | WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Update: {files}. Follow project doc standards. Before STAGE-COMPLETE, update Criteria Status and DOCS Report in the task doc."` |
 | WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}. Before STAGE-COMPLETE, update Criteria Status REV column and REV Report in the task doc."` |
-| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: bash .codeflow/testing/run-all-tests.sh --mode full. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc."` |
+| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: codeflow test --mode full --coverage. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc."` |
 | WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Target: {coverage}. Framework: {shell/pytest}. Before STAGE-COMPLETE, update Criteria Status and TEST Report in the task doc."` |
 
 ### Task Specification Quality
@@ -1065,7 +1065,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test` (1,555+ tests)
+- Test suite: run via `codeflow test` (1,555+ tests across shell/Python, Go, Rust; WS-QA uses `--mode full --coverage` for coverage enforcement)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1201,19 +1201,12 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ### CLI
 
 ```text
-codeflow test              # Run test suite
-codeflow test --coverage   # Run with coverage
-codeflow doctor            # Diagnose infrastructure
+codeflow test                          # Run test suite (default: essential mode)
+codeflow test --mode full --coverage   # Run all suites with coverage enforcement
+codeflow doctor                        # Diagnose infrastructure
 ```
 
-### Go CLI Testing
-
-```text
-cd codeflow-cli && make test-cover   # Go tests + 85% business package coverage threshold
-cd codeflow-cli && make test-race    # Race detection (go test -race ./...)
-```
-
-Go tests integrate into the unified test suite via `.codeflow/testing/cli/test-go-cli.sh` (bridge script). CI runs this as the `test-go` job in `.github/workflows/test-suite.yml`. Business packages for coverage enforcement: `./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`.
+The unified `codeflow test` command routes to all test suites (shell/Python, Go, Rust). Use `--mode full --coverage` for WS-QA and pre-commit verification. Coverage enforces 85% per-file threshold on business packages across Go and Rust suites.
 
 → See Section 9 for project file layout and Section 10 for data model
 

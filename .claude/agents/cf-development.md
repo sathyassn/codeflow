@@ -154,7 +154,7 @@ Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": 
 
 Run the test suite to verify no regressions:
 
-- Shell: `codeflow test`
+- `codeflow test`
 
 ### Step 6: Request Commit
 
@@ -485,7 +485,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |
-| Test Runner | `codeflow test` | Test execution (runs `codeflow test --mode standard` or `--mode full`) |
+| Test Runner | `codeflow test` | Unified test execution (default mode) |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell test assertion library (40+ `assert_*` functions) |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
 | Protection Lib | `.codeflow/scripts/security/protection/lib/` | Reusable shell protection functions |

@@ -5,7 +5,7 @@ set -euo pipefail
 # Runs build verification, binary smoke tests, Rust unit tests, and coverage enforcement.
 
 readonly SCRIPT_NAME="test-rust-cli"
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.2.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -122,25 +122,105 @@ run_unit_tests() {
 run_coverage_enforcement() {
     test_section "Coverage enforcement"
 
-    if ! command -v cargo-llvm-cov &>/dev/null; then
-        echo "  SKIP: cargo-llvm-cov not found. Skipping coverage enforcement."
-        return
+    if ! cargo llvm-cov --version &>/dev/null; then
+        test_fail "cargo-llvm-cov not installed — coverage enforcement requires it"
+        return 1
     fi
 
-    # Run coverage scoped to business packages only (not --workspace)
+    # Build coverage args scoped to business packages
     local cov_args=("nextest")
     for pkg in $BUSINESS_PKGS; do
         cov_args+=("--package" "$pkg")
     done
-    cov_args+=("--fail-under-lines" "$COVERAGE_THRESHOLD")
+    # Skip cfg-based coverage instrumentation — blocked by macOS SIP (SIGKILL).
+    # LLVM source-based instrumentation still produces valid coverage data.
+    cov_args+=("--no-cfg-coverage")
 
     echo "  Business packages: $BUSINESS_PKGS"
     echo "  Threshold: ${COVERAGE_THRESHOLD}%"
 
-    if (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" 2>&1); then
-        test_pass "Coverage meets ${COVERAGE_THRESHOLD}% threshold"
+    # Run coverage and capture JSON output for per-file analysis
+    local cov_json="/tmp/codeflow-rust-cov-$$.json"
+    if ! (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" --json 2>/dev/null > "$cov_json"); then
+        test_fail "Coverage run failed"
+        rm -f "$cov_json"
+        return 1
+    fi
+
+    # Aggregate check
+    if (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" --fail-under-lines "$COVERAGE_THRESHOLD" 2>&1); then
+        test_pass "Aggregate coverage meets ${COVERAGE_THRESHOLD}% threshold"
     else
-        test_fail "Coverage below ${COVERAGE_THRESHOLD}% threshold"
+        test_fail "Aggregate coverage below ${COVERAGE_THRESHOLD}% threshold"
+    fi
+
+    # Per-file enforcement (requires jq)
+    if ! command -v jq &>/dev/null; then
+        echo "  WARN: jq not found — skipping per-file enforcement (aggregate-only)"
+        rm -f "$cov_json"
+        return 0
+    fi
+
+    if [[ ! -s "$cov_json" ]]; then
+        echo "  WARN: Empty coverage JSON — skipping per-file enforcement"
+        rm -f "$cov_json"
+        return 0
+    fi
+
+    # Load exception crates from config
+    local exception_crates=""
+    if [[ -f "$CONFIG_FILE" ]]; then
+        exception_crates=$(jq -r '.conventions.exceptions[]?.crate // empty' "$CONFIG_FILE" 2>/dev/null) || true
+    fi
+
+    # Parse per-file coverage and enforce threshold
+    local per_file_fail=false
+    local file_count=0
+    local fail_count=0
+
+    while IFS=$'\t' read -r filename pct; do
+        # Skip files outside business packages
+        local in_business=false
+        for pkg in $BUSINESS_PKGS; do
+            if [[ "$filename" == */"$pkg/"* ]]; then
+                in_business=true
+                break
+            fi
+        done
+        [[ "$in_business" == "false" ]] && continue
+
+        # Check exception list (crate-level exceptions)
+        local is_excepted=false
+        for exc in $exception_crates; do
+            if [[ "$filename" == */"$exc/"* ]]; then
+                is_excepted=true
+                break
+            fi
+        done
+        [[ "$is_excepted" == "true" ]] && continue
+
+        file_count=$((file_count + 1))
+
+        # Compare (integer truncation for threshold comparison)
+        local pct_int="${pct%.*}"
+        # Handle edge case where pct_int is empty (0% files)
+        pct_int="${pct_int:-0}"
+
+        if [[ "$pct_int" -lt "$COVERAGE_THRESHOLD" ]]; then
+            # Extract short path (crate/src/...) for readability
+            local short_name="${filename##*/codeflow-rs/}"
+            echo "  FAIL: ${short_name} — ${pct}% (below ${COVERAGE_THRESHOLD}%)"
+            per_file_fail=true
+            fail_count=$((fail_count + 1))
+        fi
+    done < <(jq -r '.data[0].files[] | "\(.filename)\t\(.summary.lines.percent)"' "$cov_json" 2>/dev/null)
+
+    rm -f "$cov_json"
+
+    if [[ "$per_file_fail" == "true" ]]; then
+        test_fail "Per-file coverage: ${fail_count}/${file_count} files below ${COVERAGE_THRESHOLD}% threshold"
+    else
+        test_pass "Per-file coverage: all ${file_count} files meet ${COVERAGE_THRESHOLD}% threshold"
     fi
 }
 

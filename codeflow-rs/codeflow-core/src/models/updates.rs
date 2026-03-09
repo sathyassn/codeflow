@@ -1,4 +1,7 @@
-use crate::types::{EpicStatus, SessionStatus, TaskStatus, WorkStage};
+use crate::types::{
+    AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus, EpicStatus, SessionStatus,
+    TaskStatus, WorkStage,
+};
 
 #[derive(Debug, Default)]
 pub struct SessionUpdate {
@@ -31,7 +34,7 @@ pub struct TaskUpdate {
 
 #[derive(Debug, Default)]
 pub struct AutorunSessionUpdate {
-    pub status: Option<String>,
+    pub status: Option<AutorunSessionStatus>,
     pub completed_tasks: Option<i32>,
     pub failed_tasks: Option<i32>,
     pub completed_at: Option<String>,
@@ -39,7 +42,7 @@ pub struct AutorunSessionUpdate {
 
 #[derive(Debug, Default)]
 pub struct AutorunWorkerUpdate {
-    pub status: Option<String>,
+    pub status: Option<AutorunWorkerStatus>,
     pub tmux_session: Option<String>,
     pub worktree_path: Option<String>,
     pub pr_number: Option<i64>,
@@ -49,7 +52,7 @@ pub struct AutorunWorkerUpdate {
 
 #[derive(Debug, Default)]
 pub struct AutorunTaskRunUpdate {
-    pub status: Option<String>,
+    pub status: Option<AutorunTaskRunStatus>,
     pub pr_number: Option<i64>,
     pub pr_url: Option<String>,
     pub completed_at: Option<String>,

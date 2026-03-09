@@ -12,4 +12,7 @@ pub use ids::{BranchName, EpicId, FormatId, ParseIdError, SessionId, TaskId, Wor
 pub use phase::Phase;
 pub use sentinel::{ParseSentinelError, Sentinel};
 pub use stage::WorkStage;
-pub use work::{AreaType, EpicStatus, SessionStatus, TaskStatus, WorkType};
+pub use work::{
+    ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,
+    EpicStatus, SessionStatus, TaskStatus, WorkType,
+};
