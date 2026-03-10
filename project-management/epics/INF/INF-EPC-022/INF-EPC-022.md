@@ -159,7 +159,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-010 | Implement LedgerWriter trait and JsonlWriter | complete | critical | 0C |
 | INF-TSK-022-011 | Implement session and state management | complete | high | 0C |
 | INF-TSK-022-012 | Implement worktree manager | complete | normal | 0C |
-| INF-TSK-022-013 | Implement workgraph operations | todo | high | 0C |
+| INF-TSK-022-013 | Implement workgraph operations | complete | high | 0C |
 | INF-TSK-022-014 | Implement config, doctor, and utility modules | todo | normal | 0C |
 | INF-TSK-022-015 | Implement HookHandler trait and session hooks | todo | critical | 0D |
 | INF-TSK-022-016 | Implement tool-use hooks | todo | critical | 0D |

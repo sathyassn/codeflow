@@ -10,10 +10,13 @@ pub mod models;
 pub mod session;
 pub mod store;
 pub mod types;
+pub mod workgraph;
 pub mod worktree;
 
 // Re-export commonly used items at crate root.
-pub use error::{ConfigError, DbError, HookError, LedgerError, SessionError, WorktreeError};
+pub use error::{
+    ConfigError, DbError, HookError, LedgerError, SessionError, WorkgraphError, WorktreeError,
+};
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, JsonlWriter, LedgerWriter};
 pub use store::{DataStore, SyncResult};

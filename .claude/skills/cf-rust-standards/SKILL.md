@@ -616,25 +616,149 @@ When: Writing or editing test files, setting coverage targets, or reviewing test
 Purpose: Apply consistent Rust testing conventions — file layout, naming, test attributes, proptest, insta, cargo-nextest
 Enforcement: ENF-L3 Advisory
 
-File Organization:
+Test Placement (codeflow-rs convention):
 
-  Unit tests: in the same file as the code under test, in a #[cfg(test)] module
-  Integration tests: in tests/ directory at crate root
-  Test helpers and fixtures: in tests/common/ or a testutil module
+  Unit tests MUST be inline in the same file as the code under test, using
+  #[cfg(test)] mod tests { } at the bottom of the file. Separate test files
+  (tests.rs, test_*.rs in the module directory) are FORBIDDEN. This matches
+  the established convention across all modules in codeflow-core and codeflow-cli.
 
-  // In source file (preferred for unit tests):
+  // Required pattern — inline at bottom of source file:
   #[cfg(test)]
   mod tests {
       use super::*;
 
-      #[test]
-      fn test_parse_session_id_valid() {
-          // ...
+      #[tokio::test]
+      async fn test_create_task() {
+          let (service, _) = new_service();
+          let task = service.create_task(default_task_input(epic_id)).await.unwrap();
+          assert!(task.id.as_str().starts_with("task-"));
+          assert_eq!(task.status, TaskStatus::Todo);
+          assert_eq!(task.title, "Test Task");  // verify specific field values
       }
   }
 
+  // FORBIDDEN — separate file in the module directory:
+  // src/workgraph/tests.rs
+  // src/workgraph/task_tests.rs
+
+Test Helpers (shared fixtures):
+
+  Shared fixtures (MockStore, MockLedger, default inputs) go in
+  #[cfg(test)] pub(crate) mod test_support in the module root (mod.rs)
+  for cross-file reuse within the module.
+
+  // Pattern from codeflow-core/src/workgraph/mod.rs:
+  #[cfg(test)]
+  pub(crate) mod test_support {
+      use crate::store::mock::MockStore;
+
+      pub struct MockLedger { ... }
+      impl LedgerWriter for MockLedger { ... }
+
+      pub fn new_service() -> (WorkgraphService<MockStore, MockLedger>, ...) { ... }
+      pub fn default_epic_input() -> CreateEpicInput { ... }
+      pub fn default_task_input(epic_id: EpicId) -> CreateTaskInput { ... }
+  }
+
+  // In submodule tests, import from parent test_support:
+  use super::super::test_support::{default_epic_input, new_service};
+
+  MockStore is defined at codeflow-core/src/store/mod.rs under #[cfg(test)] pub mod mock.
+  MockLedger is defined per-module in the module root's test_support block.
+
+File Organization:
+
+  Unit tests: in the same file as the code under test, in a #[cfg(test)] module
+  Integration tests: in tests/ directory at crate root
+  Test helpers and fixtures: in #[cfg(test)] pub(crate) mod test_support in mod.rs
+
   // Integration test file: tests/store_integration.rs
   // (has access to the crate's public API only)
+
+Test Quality (no fluff tests):
+
+  Every test MUST have at least one assertion that would FAIL if the feature
+  under test broke. Tests that only verify "doesn't panic" or check trivial
+  properties are not acceptable.
+
+  FORBIDDEN (insufficient assertions):
+    assert!(result.is_ok())                         // does not verify the value
+    assert!(!tasks.is_empty())                      // does not verify count or content
+    assert!(task.id.as_str().starts_with("task-"))  // alone is insufficient
+
+  REQUIRED (specific value assertions):
+    assert_eq!(task.status, TaskStatus::Todo);            // verify specific field
+    assert_eq!(task.format_id.as_str(), "INF-TSK-001-001"); // verify exact value
+    assert_eq!(evts[1].event_type, "task_created");        // verify event emitted
+
+  Filter and query tests MUST verify inclusion AND exclusion:
+    // FORBIDDEN — only checks one side:
+    let tasks = service.tasks_by_epic(&epic1.id).await.unwrap();
+    assert!(!tasks.is_empty());
+
+    // REQUIRED — verify correct records included, wrong records excluded:
+    let tasks = service.tasks_by_epic(&epic1.id).await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].epic_id, epic1.id);    // correct epic included
+    // verify epic2's task is NOT in the result by checking count is exactly 1
+
+  Round-trip tests MUST verify all significant fields:
+    // FORBIDDEN — only checks ID and one field:
+    assert_eq!(fetched.id, created.id);
+    assert_eq!(fetched.title, "Test Task");
+
+    // REQUIRED — also verify other significant fields:
+    assert_eq!(fetched.id, created.id);
+    assert_eq!(fetched.title, "Test Task");
+    assert_eq!(fetched.status, TaskStatus::Todo);
+    assert_eq!(fetched.epic_id, created.epic_id);
+
+Required Test Categories for CRUD Modules:
+
+  When implementing a CRUD module (task, epic, session, etc.), provide tests
+  for ALL of these categories:
+
+  Create:
+    - Happy path: all fields verified (not just id)
+    - Validation error: empty required fields return WorkgraphError::Validation
+    - Constraint violation: FK reference to nonexistent parent returns NotFound
+
+  Read:
+    - By ID: happy path, fields verified
+    - By alternative key (format_id): happy path
+    - Not found: returns WorkgraphError::NotFound
+
+  Update:
+    - Field changes: verify updated value persists on subsequent read
+    - Nonexistent entity: returns WorkgraphError::NotFound
+    - Invalid transitions: returns WorkgraphError::InvalidTransition
+
+  List:
+    - Filtered results: verify inclusion AND exclusion
+    - Empty results: filter that matches nothing returns empty vec
+    - Default filter (no criteria): returns all records
+
+  State transitions (state machine modules):
+    - All valid transitions: each valid (from, to) pair is tested
+    - All invalid transitions: representative invalid pairs tested
+    - ALL terminal states: every terminal state rejects ALL outgoing transitions
+    - ALL self-transitions: every status rejects self-transition
+
+  Example (from codeflow-core/src/workgraph/transitions.rs):
+    #[test]
+    fn test_terminal_task_states() {
+        // Complete is terminal — ALL outgoing transitions rejected
+        assert!(validate_task_transition(TaskStatus::Complete, TaskStatus::Todo).is_err());
+        assert!(validate_task_transition(TaskStatus::Complete, TaskStatus::InProgress).is_err());
+        assert!(validate_task_transition(TaskStatus::Complete, TaskStatus::Blocked).is_err());
+        assert!(validate_task_transition(TaskStatus::Complete, TaskStatus::Cancelled).is_err());
+        // Cancelled is terminal — ALL outgoing transitions rejected
+        assert!(validate_task_transition(TaskStatus::Cancelled, TaskStatus::Todo).is_err());
+        assert!(validate_task_transition(TaskStatus::Cancelled, TaskStatus::InProgress).is_err());
+        assert!(validate_task_transition(TaskStatus::Cancelled, TaskStatus::Blocked).is_err());
+        assert!(validate_task_transition(TaskStatus::Cancelled, TaskStatus::Complete).is_err());
+    }
 
 Test Function Naming:
 
@@ -738,17 +862,26 @@ Anti-Patterns (DO NOT):
   | Skipping cleanup (temp files) | Use Drop-based cleanup: tempfile::TempDir auto-cleans |
   | Testing private functions directly | Test through public API; refactor if private logic is complex |
   | Single mega-test function | Split into focused tests per scenario |
+  | Separate test files (task_tests.rs) | Inline #[cfg(test)] mod tests in the source file |
+  | assert!(!vec.is_empty()) alone | assert_eq!(vec.len(), N) + field-level assertions |
+  | Shared fixtures in a test submodule | test_support in module root (mod.rs) |
+  | Terminal state only partially tested | Test ALL outgoing transitions from each terminal state |
 
 Procedure:
-  1. Place unit tests in #[cfg(test)] mod tests in the source file
+  1. Place unit tests inline in #[cfg(test)] mod tests at bottom of the source file
+     (NEVER in a separate *_tests.rs or tests.rs file in the module directory)
   2. Use #[tokio::test] for async tests
   3. Name tests test_{function}_{scenario}
-  4. Add proptest for serialization roundtrips and parsing functions
-  5. Use insta for complex output snapshot tests
-  6. Run with cargo nextest run for faster feedback
-  7. Verify coverage meets thresholds: cargo llvm-cov nextest --workspace
+  4. For CRUD modules: cover create, read, update, list, and transition categories
+  5. For state machines: test ALL valid, invalid, terminal, and self-transitions
+  6. For filter/query tests: verify inclusion AND exclusion
+  7. Add proptest for serialization roundtrips and parsing functions
+  8. Use insta for complex output snapshot tests
+  9. Place shared fixtures in #[cfg(test)] pub(crate) mod test_support in mod.rs
+  10. Run with cargo nextest run for faster feedback
+  11. Verify coverage meets thresholds: cargo llvm-cov nextest --workspace
 
-Output: Test files following consistent naming, correct attributes, proptest for invariants, insta for snapshots, and coverage thresholds
+Output: Test files following consistent naming, correct attributes, inline placement, specific assertions, complete CRUD and transition coverage, and coverage thresholds
 ```
 
 ### validate-crate

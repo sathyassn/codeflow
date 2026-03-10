@@ -125,6 +125,38 @@ pub enum ConfigError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Workgraph operation errors.
+#[derive(Debug, Error)]
+pub enum WorkgraphError {
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("invalid transition: {entity} from {from} to {to}")]
+    InvalidTransition {
+        entity: String,
+        from: String,
+        to: String,
+    },
+
+    #[error("validation error: {0}")]
+    Validation(String),
+
+    #[error("format ID generation error: {0}")]
+    FormatIdGeneration(String),
+
+    #[error("database error: {0}")]
+    Db(Box<DbError>),
+
+    #[error("ledger error: {0}")]
+    Ledger(#[from] LedgerError),
+}
+
+impl From<DbError> for WorkgraphError {
+    fn from(err: DbError) -> Self {
+        Self::Db(Box::new(err))
+    }
+}
+
 /// Git worktree operation errors.
 #[derive(Debug, Error)]
 pub enum WorktreeError {
