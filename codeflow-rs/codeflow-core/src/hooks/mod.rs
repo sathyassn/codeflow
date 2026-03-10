@@ -4,8 +4,12 @@
 //! `HookOutput`, `HookEvent`) that all hook implementations build on.
 //! Session-specific hooks live in submodules.
 
+pub mod post_tool_use;
+pub mod pre_tool_use;
+pub mod security;
 pub mod session_end;
 pub mod session_start;
+pub mod task_completed;
 
 use serde::{Deserialize, Serialize};
 
@@ -128,7 +132,7 @@ pub trait HookHandler: Send + Sync {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError>;
 
     /// Human-readable name for this handler (for logging/diagnostics).
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 
     /// Which hook events this handler responds to.
     fn events(&self) -> &[HookEvent];

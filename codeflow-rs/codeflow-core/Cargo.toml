@@ -19,6 +19,7 @@ git2 = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 regex = "1"
+url = "2"
 sha2 = "0.10"
 tokio = { workspace = true }
 which = "7"

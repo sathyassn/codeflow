@@ -1,0 +1,333 @@
+//! Pattern matching utilities for security modules.
+//!
+//! Glob-to-regex conversion, path boundary checking, command segment
+//! splitting, and helper functions shared across security modules.
+
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+fn tmp_claude_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"/tmp/claude\S*").expect("valid"))
+}
+
+/// Convert a glob pattern to a Rust regex pattern.
+///
+/// Handles `**` (recursive), `*` (single segment), `?` (single char).
+#[must_use]
+pub fn glob_to_regex(pattern: &str) -> String {
+    let escaped = regex::escape(pattern);
+    // Order matters: handle ** before * since escape turns * to \*
+    let escaped = escaped.replace(r"\*\*", ".*");
+    let escaped = escaped.replace(r"\*", "[^/]*");
+    escaped.replace(r"\?", ".")
+}
+
+/// Strip `/tmp/claude...` path segments from a command to prevent false
+/// positives when operations target safe scratch space.
+#[must_use]
+pub fn strip_tmp_claude_paths(cmd: &str) -> String {
+    tmp_claude_re().replace_all(cmd, "").to_string()
+}
+
+/// Check if a path appears in a command with proper boundaries.
+/// Prevents `.claude` from matching `.claude-notes.md`.
+/// Also strips `/tmp/claude` paths to avoid false positives.
+#[must_use]
+pub fn is_path_targeted(cmd: &str, path: &str) -> bool {
+    if !cmd.contains(path) {
+        return false;
+    }
+
+    let cleaned = strip_tmp_claude_paths(cmd);
+    if !cleaned.contains(path) {
+        return false;
+    }
+
+    let mut idx = 0;
+    while idx < cmd.len() {
+        if let Some(pos) = cmd[idx..].find(path) {
+            let abs_pos = idx + pos;
+            let end = abs_pos + path.len();
+
+            if end >= cmd.len() {
+                return true;
+            }
+
+            let next = cmd.as_bytes()[end];
+            if next == b'/' || next == b' ' || next == b'"' || next == b'\'' {
+                return true;
+            }
+
+            idx = abs_pos + 1;
+        } else {
+            break;
+        }
+    }
+
+    false
+}
+
+/// Check if a command targets a path matching a glob pattern.
+#[must_use]
+pub fn is_glob_path_targeted(cmd: &str, pattern: &str) -> bool {
+    let cleaned = strip_tmp_claude_paths(cmd);
+    if let Ok(re) = Regex::new(&glob_to_regex(pattern)) {
+        if re.is_match(&cleaned) {
+            return true;
+        }
+    }
+
+    // For /** patterns, also match the directory itself.
+    if let Some(dir_path) = pattern.strip_suffix("/**") {
+        return is_path_targeted(cmd, dir_path);
+    }
+
+    false
+}
+
+/// Unified check for both exact paths and glob patterns.
+#[must_use]
+pub fn is_path_or_glob_targeted(cmd: &str, path: &str) -> bool {
+    if path.contains('*') || path.contains('?') {
+        is_glob_path_targeted(cmd, path)
+    } else {
+        is_path_targeted(cmd, path)
+    }
+}
+
+/// Returns `true` if the path contains glob characters.
+#[must_use]
+pub fn is_glob_pattern(path: &str) -> bool {
+    path.contains('*') || path.contains('?')
+}
+
+/// Match a path against an extended glob pattern supporting `**`.
+#[must_use]
+pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
+    let regex = glob_to_regex(pattern);
+    let full_regex = format!("^{regex}$");
+    Regex::new(&full_regex).is_ok_and(|re| re.is_match(path))
+}
+
+/// Extract the flags portion of a `git commit` command (before `-m`/`--message`)
+/// to prevent false positives from commit messages.
+#[must_use]
+pub fn get_flags_portion(cmd: &str) -> &str {
+    for sep in &[" --message=", " --message ", " -m\"", " -m'", " -m "] {
+        if let Some(idx) = cmd.find(sep) {
+            return &cmd[..idx];
+        }
+    }
+    cmd
+}
+
+/// Split a compound command into segments by `&&`, `||`, `;`, `|`
+/// while respecting quoted strings.
+#[must_use]
+pub fn split_command_segments(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut segment = String::new();
+    let bytes = cmd.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let ch = bytes[i];
+
+        // Track quote state.
+        if ch == b'\'' && !in_double {
+            in_single = !in_single;
+            segment.push(ch as char);
+            i += 1;
+            continue;
+        }
+        if ch == b'"' && !in_single {
+            in_double = !in_double;
+            segment.push(ch as char);
+            i += 1;
+            continue;
+        }
+
+        if !in_single && !in_double {
+            // Check for && or ||.
+            if i + 1 < bytes.len() {
+                if ch == b'&' && bytes[i + 1] == b'&' {
+                    segments.push(segment.clone());
+                    segment.clear();
+                    i += 2;
+                    continue;
+                }
+                if ch == b'|' && bytes[i + 1] == b'|' {
+                    segments.push(segment.clone());
+                    segment.clear();
+                    i += 2;
+                    continue;
+                }
+            }
+            // Semicolon.
+            if ch == b';' {
+                segments.push(segment.clone());
+                segment.clear();
+                i += 1;
+                continue;
+            }
+            // Single pipe (not ||).
+            if ch == b'|' {
+                segments.push(segment.clone());
+                segment.clear();
+                i += 1;
+                continue;
+            }
+        }
+
+        segment.push(ch as char);
+        i += 1;
+    }
+
+    if !segment.is_empty() {
+        segments.push(segment);
+    }
+
+    segments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_glob_to_regex_star() {
+        let re = glob_to_regex("*.json");
+        assert_eq!(re, "[^/]*\\.json");
+    }
+
+    #[test]
+    fn test_glob_to_regex_double_star() {
+        let re = glob_to_regex(".claude/**");
+        assert_eq!(re, "\\.claude/.*");
+    }
+
+    #[test]
+    fn test_glob_to_regex_question() {
+        let re = glob_to_regex("test?.sh");
+        assert_eq!(re, "test.\\.sh");
+    }
+
+    #[test]
+    fn test_strip_tmp_claude_paths() {
+        let result = strip_tmp_claude_paths("cp /tmp/claude/test .claude/settings.json");
+        assert!(result.contains(".claude/settings.json"));
+        assert!(!result.contains("/tmp/claude"));
+    }
+
+    #[test]
+    fn test_is_path_targeted_basic() {
+        assert!(is_path_targeted(
+            "rm .claude/settings.json",
+            ".claude/settings.json"
+        ));
+        assert!(!is_path_targeted("rm .claude-notes.md", ".claude"));
+    }
+
+    #[test]
+    fn test_is_path_targeted_boundary() {
+        assert!(is_path_targeted("rm .claude/foo", ".claude"));
+        assert!(is_path_targeted("rm '.claude'", ".claude"));
+        assert!(is_path_targeted("rm \".claude\"", ".claude"));
+    }
+
+    #[test]
+    fn test_is_path_targeted_tmp_claude_false_positive() {
+        // Should NOT match when only /tmp/claude contains the path.
+        assert!(!is_path_targeted(
+            "cp /tmp/claude/.claude/foo bar",
+            ".claude"
+        ));
+    }
+
+    #[test]
+    fn test_is_glob_path_targeted() {
+        assert!(is_glob_path_targeted(
+            "rm .claude/hooks/codeflow/test.sh",
+            ".claude/hooks/codeflow/**"
+        ));
+    }
+
+    #[test]
+    fn test_is_glob_path_targeted_dir_suffix() {
+        // /** patterns also match the directory itself.
+        assert!(is_glob_path_targeted(
+            "rm .claude/hooks/codeflow",
+            ".claude/hooks/codeflow/**"
+        ));
+    }
+
+    #[test]
+    fn test_is_path_or_glob_targeted() {
+        assert!(is_path_or_glob_targeted(
+            "rm .claude/settings.json",
+            ".claude/settings.json"
+        ));
+        assert!(is_path_or_glob_targeted(
+            "rm .github/workflows/ci.yml",
+            ".github/**"
+        ));
+    }
+
+    #[test]
+    fn test_is_glob_pattern() {
+        assert!(is_glob_pattern("*.json"));
+        assert!(is_glob_pattern("test/**"));
+        assert!(is_glob_pattern("test?.sh"));
+        assert!(!is_glob_pattern("test.json"));
+    }
+
+    #[test]
+    fn test_matches_extended_glob() {
+        assert!(matches_extended_glob(".claude/hooks/test.sh", ".claude/**"));
+        assert!(matches_extended_glob("test.json", "*.json"));
+        assert!(!matches_extended_glob("test.rs", "*.json"));
+    }
+
+    #[test]
+    fn test_get_flags_portion() {
+        assert_eq!(
+            get_flags_portion("git commit -n -m 'test'"),
+            "git commit -n"
+        );
+        assert_eq!(
+            get_flags_portion("git commit --message='test'"),
+            "git commit"
+        );
+        assert_eq!(
+            get_flags_portion("git commit -am 'test'"),
+            "git commit -am 'test'"
+        );
+    }
+
+    #[test]
+    fn test_split_command_segments() {
+        let segments = split_command_segments("echo a && echo b; echo c | cat");
+        assert_eq!(segments.len(), 4);
+        assert_eq!(segments[0].trim(), "echo a");
+        assert_eq!(segments[1].trim(), "echo b");
+        assert_eq!(segments[2].trim(), "echo c");
+        assert_eq!(segments[3].trim(), "cat");
+    }
+
+    #[test]
+    fn test_split_command_segments_quoted() {
+        let segments = split_command_segments("echo 'a && b' && echo c");
+        assert_eq!(segments.len(), 2);
+        assert!(segments[0].contains("a && b"));
+    }
+
+    #[test]
+    fn test_split_command_segments_or() {
+        let segments = split_command_segments("cmd1 || cmd2");
+        assert_eq!(segments.len(), 2);
+    }
+}
