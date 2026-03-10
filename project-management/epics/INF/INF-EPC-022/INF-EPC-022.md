@@ -3,7 +3,7 @@ id: "epic-01kk09r9yqn9hb7v8pa1zsa4gc"
 format_id: "INF-EPC-022"
 title: "Rust CLI -- Idiomatic Redesign (Epic 0)"
 summary: "Replace the Go CLI with a pure Rust implementation using SurrealDB as the sole database, modular crate structure, and trait-based abstractions"
-status: complete
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -161,7 +161,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-012 | Implement worktree manager | complete | normal | 0C |
 | INF-TSK-022-013 | Implement workgraph operations | complete | high | 0C |
 | INF-TSK-022-014 | Implement config, doctor, and utility modules | complete | normal | 0C |
-| INF-TSK-022-015 | Implement HookHandler trait and session hooks | todo | critical | 0D |
+| INF-TSK-022-015 | Implement HookHandler trait and session hooks | complete | critical | 0D |
 | INF-TSK-022-016 | Implement tool-use hooks | todo | critical | 0D |
 | INF-TSK-022-017 | Implement logging and autorun modules | todo | high | 0D |
 | INF-TSK-022-018 | Implement CLI command dispatch | todo | high | 0E |
