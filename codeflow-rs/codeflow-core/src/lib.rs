@@ -3,19 +3,26 @@
 #![allow(async_fn_in_trait)]
 
 pub mod config;
+pub mod doctor;
 pub mod error;
 pub mod hooks;
+pub mod idgen;
 pub mod ledger;
 pub mod models;
+pub mod pathflow;
 pub mod session;
+pub mod settings;
 pub mod store;
 pub mod types;
+pub mod util;
+pub mod validate;
 pub mod workgraph;
 pub mod worktree;
 
 // Re-export commonly used items at crate root.
 pub use error::{
-    ConfigError, DbError, HookError, LedgerError, SessionError, WorkgraphError, WorktreeError,
+    ConfigError, DbError, DoctorError, HookError, IdgenError, LedgerError, PathflowError,
+    SessionError, SettingsError, ValidateError, WorkgraphError, WorktreeError,
 };
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, JsonlWriter, LedgerWriter};

@@ -16,12 +16,17 @@ fs2 = { workspace = true }
 surrealdb = { workspace = true }
 ulid = { workspace = true }
 git2 = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+regex = "1"
+sha2 = "0.10"
+tokio = { workspace = true }
+which = "7"
 
 [dev-dependencies]
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true

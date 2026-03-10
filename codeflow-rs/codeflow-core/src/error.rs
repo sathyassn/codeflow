@@ -188,6 +188,98 @@ pub enum WorktreeError {
     Yaml(String),
 }
 
+/// Infrastructure diagnostics errors.
+#[derive(Debug, Error)]
+pub enum DoctorError {
+    #[error("check not found: {0}")]
+    CheckNotFound(String),
+
+    #[error("check failed: {name}: {reason}")]
+    CheckFailed { name: String, reason: String },
+
+    #[error("repair failed: {name}: {reason}")]
+    RepairFailed { name: String, reason: String },
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+/// Markdown validation errors.
+#[derive(Debug, Error)]
+pub enum ValidateError {
+    #[error("invalid frontmatter: {0}")]
+    InvalidFrontmatter(String),
+
+    #[error("validation failed: {field}: {message}")]
+    FieldError { field: String, message: String },
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("yaml parse error: {0}")]
+    Yaml(String),
+}
+
+/// ID generation errors.
+#[derive(Debug, Error)]
+pub enum IdgenError {
+    #[error("ULID generation failed: {0}")]
+    Generation(String),
+}
+
+/// `PathFlow` checkpoint and sentinel errors.
+#[derive(Debug, Error)]
+pub enum PathflowError {
+    #[error("phase not initialized: {0}")]
+    PhaseNotInitialized(String),
+
+    #[error("invalid task ID format: {0}")]
+    InvalidTaskId(String),
+
+    #[error("cross-phase registration blocked: {0}")]
+    CrossPhaseBlock(String),
+
+    #[error("sentinel error: {0}")]
+    Sentinel(String),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("config error: {0}")]
+    Config(#[from] ConfigError),
+
+    #[error("lock error: {0}")]
+    Lock(String),
+
+    #[error("invalid phase transition: {0}")]
+    InvalidTransition(String),
+}
+
+/// Settings validation errors.
+#[derive(Debug, Error)]
+pub enum SettingsError {
+    #[error("settings validation failed: {0}")]
+    Validation(String),
+
+    #[error("template discovery failed: {0}")]
+    TemplateDiscovery(String),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("config error: {0}")]
+    Config(#[from] ConfigError),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
