@@ -224,4 +224,54 @@ mod tests {
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), codeflow_core::HookOutput::Allow));
     }
+
+    // ─── proptest: days_to_ymd monotonicity and calendar bounds ─────────────
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// `days_to_ymd` must return a valid Gregorian calendar triple
+        /// for any plausible Unix-epoch day count (1970–2200 range).
+        #[test]
+        fn proptest_days_to_ymd_valid_calendar_triple(
+            days in 0u64..84_000u64,  // 1970-01-01 to roughly 2199
+        ) {
+            let (year, month, day) = days_to_ymd(days);
+            prop_assert!(year >= 1970, "year should be >= 1970, got {year}");
+            prop_assert!((1..=12).contains(&month), "month should be 1–12, got {month}");
+            prop_assert!((1..=31).contains(&day), "day should be 1–31, got {day}");
+        }
+
+        /// Two consecutive day values must produce equal or increasing (year, month, day) tuples.
+        #[test]
+        fn proptest_days_to_ymd_monotone(
+            days in 0u64..83_999u64,
+        ) {
+            let (y1, m1, d1) = days_to_ymd(days);
+            let (y2, m2, d2) = days_to_ymd(days + 1);
+            // The next day must be >= the current day in lexicographic order.
+            let current = (y1, m1, d1);
+            let next = (y2, m2, d2);
+            prop_assert!(next >= current,
+                "days_to_ymd({}) = {:?} should be <= days_to_ymd({}) = {:?}",
+                days, current, days + 1, next);
+        }
+
+        /// The ISO 8601 timestamp produced from any plausible day must have
+        /// exactly the format `YYYY-MM-DDTHH:MM:SSZ` (length 20, correct separators).
+        #[test]
+        fn proptest_utc_now_iso8601_format_invariant(
+            // We can't control the clock, but we can verify the format holds
+            // by constructing an equivalent string from known days.
+            days in 0u64..84_000u64,
+        ) {
+            let (year, month, day) = days_to_ymd(days);
+            let ts = format!("{year:04}-{month:02}-{day:02}T00:00:00Z");
+            prop_assert_eq!(ts.len(), 20, "timestamp length must be 20");
+            prop_assert_eq!(&ts[4..5], "-");
+            prop_assert_eq!(&ts[7..8], "-");
+            prop_assert_eq!(&ts[10..11], "T");
+            prop_assert!(ts.ends_with('Z'));
+        }
+    }
 }

@@ -165,7 +165,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-016 | Implement tool-use hooks | complete | critical | 0D |
 | INF-TSK-022-017 | Implement logging and autorun modules | complete | high | 0D |
 | INF-TSK-022-018 | Implement CLI command dispatch | complete | high | 0E |
-| INF-TSK-022-019 | Port Go unit tests to Rust | todo | high | 0F |
+| INF-TSK-022-019 | Port Go unit tests to Rust | complete | high | 0F |
 | INF-TSK-022-020 | Build contract conformance test suite | todo | critical | 0F |
 | INF-TSK-022-021 | Validate shell test suite passes | todo | critical | 0F |
 | INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |

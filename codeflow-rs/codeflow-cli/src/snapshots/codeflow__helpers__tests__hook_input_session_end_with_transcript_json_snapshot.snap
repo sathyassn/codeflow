@@ -1,0 +1,11 @@
+---
+source: codeflow-cli/src/helpers.rs
+expression: json
+---
+{
+  "event": "session_end",
+  "session_id": "ses-snap00000000000000000003",
+  "project_dir": "/project",
+  "source": "compact",
+  "transcript_path": "/project/.state/transcripts/session.jsonl"
+}

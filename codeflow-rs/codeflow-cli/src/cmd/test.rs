@@ -73,4 +73,32 @@ mod tests {
             "expected path to contain run-tests.sh, got: {msg}"
         );
     }
+
+    #[test]
+    fn test_test_with_passing_script_returns_ok() {
+        // Verify the passing path produces Ok(()) not just not-Err.
+        let dir = tempfile::tempdir().unwrap();
+        let script_dir = dir.path().join(".codeflow").join("testing");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let script_path = script_dir.join("run-tests.sh");
+        std::fs::write(&script_path, "#!/bin/bash\nexit 0\n").unwrap();
+        let result = run_with_dir(dir.path());
+        assert!(result.is_ok(), "passing script should return Ok(())");
+    }
+
+    #[test]
+    fn test_test_script_path_includes_codeflow_testing() {
+        // Verify the error message includes the full expected path structure.
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_with_dir(dir.path());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains(".codeflow"),
+            "error should mention .codeflow directory: {msg}"
+        );
+        assert!(
+            msg.contains("testing"),
+            "error should mention testing directory: {msg}"
+        );
+    }
 }

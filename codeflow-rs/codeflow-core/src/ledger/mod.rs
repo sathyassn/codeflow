@@ -70,3 +70,148 @@ pub trait LedgerWriter: Send + Sync {
     /// Return the ledger directory path.
     fn dir(&self) -> &std::path::Path;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn make_event(event_type: &str, session_id: Option<&str>) -> Event {
+        let mut data = HashMap::new();
+        data.insert("key".to_string(), serde_json::json!("value"));
+        Event {
+            event_type: event_type.to_string(),
+            timestamp: "2026-03-07T12:00:00Z".to_string(),
+            session_id: session_id.map(String::from),
+            data,
+        }
+    }
+
+    #[test]
+    fn test_event_serde_roundtrip() {
+        let event = make_event("task_created", Some("ses-123"));
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["event"], "task_created");
+        assert_eq!(parsed["timestamp"], "2026-03-07T12:00:00Z");
+        assert_eq!(parsed["session_id"], "ses-123");
+        assert_eq!(parsed["key"], "value");
+    }
+
+    #[test]
+    fn test_event_no_session_id_omits_field() {
+        let event = make_event("epic_created", None);
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // skip_serializing_if = Option::is_none means session_id absent
+        assert!(
+            parsed.get("session_id").is_none(),
+            "session_id should be absent when None, but got: {json}",
+        );
+    }
+
+    #[test]
+    fn test_event_rename_event_field() {
+        // event_type field serializes as "event"
+        let event = make_event("begin_work", None);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""event":"begin_work""#));
+        assert!(!json.contains("event_type"));
+    }
+
+    #[test]
+    fn test_event_flatten_data() {
+        let mut data = HashMap::new();
+        data.insert(
+            "format_id".to_string(),
+            serde_json::json!("INF-TSK-022-019"),
+        );
+        data.insert("status".to_string(), serde_json::json!("todo"));
+        let event = Event {
+            event_type: "task_created".to_string(),
+            timestamp: "2026-03-07T00:00:00Z".to_string(),
+            session_id: None,
+            data,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // Flattened fields appear at top level
+        assert_eq!(parsed["format_id"], "INF-TSK-022-019");
+        assert_eq!(parsed["status"], "todo");
+        assert_eq!(parsed["event"], "task_created");
+    }
+
+    #[test]
+    fn test_event_deserialize_from_jsonl_line() {
+        let line = r#"{"event":"session_start","timestamp":"2026-03-07T00:00:00Z","session_id":"ses-abc","source":"startup"}"#;
+        let event: Event = serde_json::from_str(line).unwrap();
+        assert_eq!(event.event_type, "session_start");
+        assert_eq!(event.timestamp, "2026-03-07T00:00:00Z");
+        assert_eq!(event.session_id.as_deref(), Some("ses-abc"));
+        assert_eq!(event.data["source"], "startup");
+    }
+
+    #[test]
+    fn test_ledger_files_constants() {
+        assert_eq!(files::WORK_GRAPH, "work-graph.jsonl");
+        assert_eq!(files::MEMORY_EVENTS, "memory-events.jsonl");
+        assert_eq!(files::SESSIONS, "sessions.jsonl");
+        assert_eq!(files::CONFIG, "config.jsonl");
+        assert_eq!(files::PATHFLOW_EVENTS, "pathflow-events.jsonl");
+        assert_eq!(files::CANONICAL.len(), 4);
+        assert!(!files::CANONICAL.contains(&files::PATHFLOW_EVENTS));
+    }
+
+    #[test]
+    fn test_event_snapshot() {
+        let event = make_event("task_status_changed", Some("ses-177137202131769e89b2d5688"));
+        insta::assert_json_snapshot!(event);
+    }
+
+    mod proptests {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        fn arb_event_type() -> impl Strategy<Value = String> {
+            prop_oneof![
+                Just("session_start".to_string()),
+                Just("task_created".to_string()),
+                Just("epic_created".to_string()),
+                Just("begin_work".to_string()),
+                Just("config_set".to_string()),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn event_serde_roundtrip(
+                event_type in arb_event_type(),
+                has_session in any::<bool>(),
+            ) {
+                let session_id = if has_session {
+                    Some("ses-test".to_string())
+                } else {
+                    None
+                };
+                let mut data = HashMap::new();
+                data.insert("key".to_string(), serde_json::json!("value"));
+                let event = Event {
+                    event_type: event_type.clone(),
+                    timestamp: "2026-03-07T00:00:00Z".to_string(),
+                    session_id,
+                    data,
+                };
+                let json = serde_json::to_string(&event).unwrap();
+                let reparsed: Event = serde_json::from_str(&json).unwrap();
+                prop_assert_eq!(&event.event_type, &reparsed.event_type);
+                prop_assert_eq!(&event.timestamp, &reparsed.timestamp);
+                prop_assert_eq!(&event.session_id, &reparsed.session_id);
+            }
+        }
+    }
+}

@@ -1,0 +1,7 @@
+---
+source: codeflow-cli/src/helpers.rs
+expression: json
+---
+{
+  "event": "session_end"
+}

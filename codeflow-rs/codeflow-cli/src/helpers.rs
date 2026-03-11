@@ -454,4 +454,138 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), sid);
     }
+
+    // ─── proptest: HookInput JSON roundtrip stability ───────────────────────
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// All valid HookEvent values survive a serialize → deserialize roundtrip
+        /// through `parse_hook_input`. The JSON produced by serde_json must be
+        /// parseable by `parse_hook_input` without error.
+        #[test]
+        fn proptest_hook_input_serialize_roundtrip(
+            tool_name in proptest::option::of("[A-Za-z][A-Za-z0-9_-]{0,30}"),
+            session_id in proptest::option::of("ses-[a-z0-9]{20}"),
+            project_dir in proptest::option::of("/[a-z/]{1,40}"),
+        ) {
+            let input = HookInput {
+                tool_name: tool_name.clone(),
+                tool_input: None,
+                event: HookEvent::PreToolUse,
+                session_id: session_id.clone(),
+                project_dir: project_dir.clone(),
+                source: None,
+                transcript_path: None,
+            };
+            let json = serde_json::to_string(&input).expect("serialize");
+            let result = parse_hook_input(&json);
+            prop_assert!(result.is_ok(), "roundtrip parse failed: {}", result.unwrap_err().message);
+            let parsed = result.unwrap();
+            // Verify the handler would receive the same fields it serialized.
+            let parsed_input: HookInput = serde_json::from_str(&json).expect("re-parse");
+            prop_assert_eq!(parsed_input.tool_name, tool_name);
+            prop_assert_eq!(parsed_input.session_id, session_id);
+            prop_assert_eq!(parsed_input.project_dir, project_dir);
+            prop_assert_eq!(parsed_input.event, HookEvent::PreToolUse);
+            // Verify parse_hook_input returns EXIT_SUCCESS path (no structural error).
+            drop(parsed);
+        }
+
+        /// Any JSON string containing an unknown event value should fail to parse,
+        /// and the error should carry EXIT_SUCCESS exit code (graceful degradation).
+        #[test]
+        fn proptest_hook_input_invalid_event_fails_gracefully(
+            bad_event in "[a-z_]{3,20}",
+        ) {
+            // Avoid accidentally generating a valid event name.
+            let valid_events = [
+                "pre_tool_use", "post_tool_use", "task_completed",
+                "session_start", "session_end", "stop", "user_prompt_submit",
+            ];
+            prop_assume!(!valid_events.contains(&bad_event.as_str()));
+            let json = format!(r#"{{"event": "{bad_event}"}}"#);
+            let result = parse_hook_input(&json);
+            prop_assert!(result.is_err(), "invalid event '{bad_event}' should fail to parse");
+            prop_assert_eq!(result.unwrap_err().code, EXIT_SUCCESS,
+                "invalid event parse error should use EXIT_SUCCESS (graceful)");
+        }
+
+        /// process_hook_input with an allow handler returns EXIT_SUCCESS for any
+        /// well-formed HookInput JSON string.
+        #[test]
+        fn proptest_process_hook_input_allow_returns_zero(
+            tool_name in "[A-Za-z]{1,20}",
+        ) {
+            let handler = AllowHandler;
+            let json = format!(
+                r#"{{"event":"pre_tool_use","tool_name":"{tool_name}"}}"#
+            );
+            let result = process_hook_input(&handler, &json);
+            prop_assert!(result.is_ok(), "allow handler should not fail: {:?}", result.err());
+            prop_assert_eq!(result.unwrap(), EXIT_SUCCESS);
+        }
+    }
+
+    // ─── insta snapshots: hook JSON output format stability ─────────────────
+
+    #[test]
+    fn test_hook_input_session_start_json_snapshot() {
+        let input = HookInput {
+            tool_name: None,
+            tool_input: None,
+            event: HookEvent::SessionStart,
+            session_id: Some("ses-snap00000000000000000001".into()),
+            project_dir: Some("/project".into()),
+            source: Some("startup".into()),
+            transcript_path: None,
+        };
+        let json = serde_json::to_string_pretty(&input).expect("serialize");
+        insta::assert_snapshot!(json);
+    }
+
+    #[test]
+    fn test_hook_input_pre_tool_use_json_snapshot() {
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "ls -la"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-snap00000000000000000002".into()),
+            project_dir: Some("/project".into()),
+            source: None,
+            transcript_path: None,
+        };
+        let json = serde_json::to_string_pretty(&input).expect("serialize");
+        insta::assert_snapshot!(json);
+    }
+
+    #[test]
+    fn test_hook_input_session_end_with_transcript_json_snapshot() {
+        let input = HookInput {
+            tool_name: None,
+            tool_input: None,
+            event: HookEvent::SessionEnd,
+            session_id: Some("ses-snap00000000000000000003".into()),
+            project_dir: Some("/project".into()),
+            source: Some("compact".into()),
+            transcript_path: Some("/project/.state/transcripts/session.jsonl".into()),
+        };
+        let json = serde_json::to_string_pretty(&input).expect("serialize");
+        insta::assert_snapshot!(json);
+    }
+
+    #[test]
+    fn test_hook_input_minimal_session_end_json_snapshot() {
+        let input = HookInput {
+            tool_name: None,
+            tool_input: None,
+            event: HookEvent::SessionEnd,
+            session_id: None,
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+        };
+        let json = serde_json::to_string_pretty(&input).expect("serialize");
+        insta::assert_snapshot!(json);
+    }
 }

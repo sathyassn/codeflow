@@ -1,0 +1,13 @@
+---
+source: codeflow-cli/src/helpers.rs
+expression: json
+---
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls -la"
+  },
+  "event": "pre_tool_use",
+  "session_id": "ses-snap00000000000000000002",
+  "project_dir": "/project"
+}

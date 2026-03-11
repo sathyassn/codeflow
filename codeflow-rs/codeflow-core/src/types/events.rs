@@ -451,4 +451,188 @@ mod tests {
         let set: HashSet<_> = types.iter().collect();
         assert_eq!(set.len(), types.len(), "duplicate event type detected");
     }
+
+    #[test]
+    fn test_memory_event_alias() {
+        // "memory_event" alias deserializes to MemoryEvent variant
+        let json = r#"{"event":"memory_event","timestamp":"2026-03-07T00:00:00Z","key":"value"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_type(), "memory_event");
+    }
+
+    #[test]
+    fn test_memory_milestone_alias() {
+        let json =
+            r#"{"event":"memory_milestone","timestamp":"2026-03-07T00:00:00Z","key":"value"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_type(), "memory_milestone");
+    }
+
+    fn assert_variants_roundtrip(variants: &[(&str, serde_json::Value)]) {
+        for (event_type, extra_fields) in variants {
+            let mut obj = serde_json::json!({"event": event_type});
+            if let Some(extra) = extra_fields.as_object() {
+                obj.as_object_mut().unwrap().extend(extra.clone());
+            }
+            let json = serde_json::to_string(&obj).unwrap();
+            let event: LedgerEvent = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("failed to deserialize {event_type}: {e}"));
+            assert_eq!(
+                event.event_type(),
+                *event_type,
+                "event_type() mismatch for {event_type}"
+            );
+            let re_json = serde_json::to_string(&event).unwrap();
+            let re_event: LedgerEvent = serde_json::from_str(&re_json)
+                .unwrap_or_else(|e| panic!("roundtrip failed for {event_type}: {e}"));
+            assert_eq!(event.event_type(), re_event.event_type());
+        }
+    }
+
+    #[test]
+    fn test_session_workgraph_variants_serde_roundtrip() {
+        // Session, epic, task, and work-graph variants
+        let ts = "2026-03-07T00:00:00Z";
+        let with_sid = serde_json::json!({"session_id": "ses-1", "timestamp": ts});
+        let no_sid = serde_json::json!({"timestamp": ts});
+        assert_variants_roundtrip(&[
+            ("session_start", with_sid.clone()),
+            ("session_end", with_sid.clone()),
+            ("epic_created", no_sid.clone()),
+            ("epic_status_changed", no_sid.clone()),
+            ("task_created", no_sid.clone()),
+            ("task_status_changed", no_sid.clone()),
+            ("task_updated", no_sid.clone()),
+            ("task_id_corrected", no_sid.clone()),
+            ("task_cancelled", no_sid.clone()),
+            ("begin_work", with_sid.clone()),
+            ("complete_work", no_sid.clone()),
+            ("commit", no_sid.clone()),
+            ("pr_created", no_sid.clone()),
+            ("work_finding", no_sid.clone()),
+            ("void", no_sid.clone()),
+            ("work_cancelled", no_sid.clone()),
+            ("stale_work_cleanup", no_sid.clone()),
+        ]);
+    }
+
+    #[test]
+    fn test_memory_pathflow_config_variants_serde_roundtrip() {
+        // Memory, pathflow, and config variants
+        let ts = "2026-03-07T00:00:00Z";
+        let with_sid = serde_json::json!({"session_id": "ses-1", "timestamp": ts});
+        let no_sid = serde_json::json!({"timestamp": ts});
+        assert_variants_roundtrip(&[
+            ("memory_store", no_sid.clone()),
+            ("milestone", no_sid.clone()),
+            ("progress", no_sid.clone()),
+            ("finding", no_sid.clone()),
+            ("decision", no_sid.clone()),
+            ("session_summary", no_sid.clone()),
+            ("memory_event", no_sid.clone()),
+            ("memory_milestone", no_sid.clone()),
+            ("phase_transition", with_sid.clone()),
+            ("stage_transition", with_sid.clone()),
+            ("session_register", with_sid.clone()),
+            ("session_metadata", with_sid.clone()),
+            ("pathflow_task_update", with_sid.clone()),
+            ("config_set", no_sid.clone()),
+            ("config_updated", no_sid.clone()),
+        ]);
+    }
+
+    #[test]
+    fn test_event_type_no_session_id_for_non_session_variants() {
+        // Variants without session_id should serialize without the field
+        let event = LedgerEvent::EpicCreated {
+            timestamp: Some("2026-03-07T00:00:00Z".to_string()),
+            data: serde_json::json!({}),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // EpicCreated has no session_id field in its variant
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["event"], "epic_created");
+        // session_id should be absent (not null) since it's not a field of EpicCreated
+        assert!(parsed.get("session_id").is_none() || parsed["session_id"].is_null());
+    }
+
+    #[test]
+    fn test_ledger_event_snapshot_session_start() {
+        let event = LedgerEvent::SessionStart {
+            session_id: Some("ses-177137202131769e89b2d5688".to_string()),
+            timestamp: Some("2026-03-07T12:00:00Z".to_string()),
+            data: serde_json::json!({
+                "interaction_mode": "interactive",
+                "source": "startup"
+            }),
+        };
+        insta::assert_json_snapshot!(event);
+    }
+
+    #[test]
+    fn test_ledger_event_snapshot_work_graph() {
+        let event = LedgerEvent::TaskStatusChanged {
+            timestamp: Some("2026-03-07T12:00:00Z".to_string()),
+            data: serde_json::json!({
+                "format_id": "INF-TSK-022-019",
+                "old_status": "todo",
+                "new_status": "in_progress"
+            }),
+        };
+        insta::assert_json_snapshot!(event);
+    }
+
+    mod proptests {
+        use proptest::prelude::*;
+
+        use super::LedgerEvent;
+
+        fn arb_optional_string() -> impl Strategy<Value = Option<String>> {
+            prop_oneof![Just(None), any::<String>().prop_map(Some)]
+        }
+
+        fn arb_ledger_event() -> impl Strategy<Value = LedgerEvent> {
+            prop_oneof![
+                (arb_optional_string(), arb_optional_string()).prop_map(|(sid, ts)| {
+                    LedgerEvent::SessionStart {
+                        session_id: sid,
+                        timestamp: ts,
+                        data: serde_json::json!({"key": "value"}),
+                    }
+                }),
+                arb_optional_string().prop_map(|ts| LedgerEvent::TaskCreated {
+                    timestamp: ts,
+                    data: serde_json::json!({"format_id": "INF-TSK-022-019"}),
+                }),
+                arb_optional_string().prop_map(|ts| LedgerEvent::EpicCreated {
+                    timestamp: ts,
+                    data: serde_json::json!({"area_type": "INF"}),
+                }),
+                arb_optional_string().prop_map(|ts| LedgerEvent::TaskStatusChanged {
+                    timestamp: ts,
+                    data: serde_json::json!({"old": "todo", "new": "in_progress"}),
+                }),
+                (arb_optional_string(), arb_optional_string()).prop_map(|(sid, ts)| {
+                    LedgerEvent::PhaseTransition {
+                        session_id: sid,
+                        timestamp: ts,
+                        data: serde_json::json!({"from": "PF1-INIT", "to": "PF2-CONTEXT"}),
+                    }
+                }),
+                arb_optional_string().prop_map(|ts| LedgerEvent::ConfigSet {
+                    timestamp: ts,
+                    data: serde_json::json!({"key": "mode", "value": "interactive"}),
+                }),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn ledger_event_serde_roundtrip(event in arb_ledger_event()) {
+                let json = serde_json::to_string(&event).unwrap();
+                let reparsed: LedgerEvent = serde_json::from_str(&json).unwrap();
+                prop_assert_eq!(event.event_type(), reparsed.event_type());
+            }
+        }
+    }
 }

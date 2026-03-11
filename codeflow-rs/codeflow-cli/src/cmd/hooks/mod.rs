@@ -208,4 +208,65 @@ mod tests {
             "nonexistent handler name should fail to parse"
         );
     }
+
+    // ─── proptest: hook command parse stability ──────────────────────────────
+
+    use proptest::prelude::*;
+
+    /// Valid pre-tool-use handler names that the CLI must accept.
+    const PRE_TOOL_USE_HANDLERS: &[&str] = &[
+        "gate-check",
+        "team-guard",
+        "edit-write-guard",
+        "gh-pr-guard",
+        "protection-guard",
+        "security",
+        "webfetch-guard",
+    ];
+
+    /// Valid post-tool-use handler names that the CLI must accept.
+    const POST_TOOL_USE_HANDLERS: &[&str] = &[
+        "sentinel-write",
+        "settings-validate",
+        "checkpoint-register",
+        "logging",
+    ];
+
+    proptest! {
+        /// Any valid pre-tool-use handler name must parse successfully.
+        #[test]
+        fn proptest_pre_tool_use_handlers_parse(idx in 0usize..7) {
+            let handler = PRE_TOOL_USE_HANDLERS[idx];
+            let cli = TestCli::try_parse_from(["test", "pre-tool-use", handler]);
+            prop_assert!(cli.is_ok(), "pre-tool-use {handler} should parse");
+        }
+
+        /// Any valid post-tool-use handler name must parse successfully.
+        #[test]
+        fn proptest_post_tool_use_handlers_parse(idx in 0usize..4) {
+            let handler = POST_TOOL_USE_HANDLERS[idx];
+            let cli = TestCli::try_parse_from(["test", "post-tool-use", handler]);
+            prop_assert!(cli.is_ok(), "post-tool-use {handler} should parse");
+        }
+
+        /// Arbitrary alphanumeric strings that are NOT valid handler names
+        /// must be rejected by the CLI parser.
+        #[test]
+        fn proptest_invalid_handler_names_rejected(
+            prefix in "[xyzXYZ]{1,5}",
+            suffix in "[0-9]{3,6}",
+        ) {
+            let name = format!("{prefix}-invalid-{suffix}");
+            // Ensure the generated name doesn't accidentally match a real handler.
+            let all_valid: &[&str] = &[
+                "gate-check", "team-guard", "edit-write-guard", "gh-pr-guard",
+                "protection-guard", "security", "webfetch-guard",
+                "sentinel-write", "settings-validate", "checkpoint-register", "logging",
+                "init", "instructions", "cleanup",
+            ];
+            prop_assume!(!all_valid.contains(&name.as_str()));
+            let cli = TestCli::try_parse_from(["test", "pre-tool-use", &name]);
+            prop_assert!(cli.is_err(), "unknown handler '{name}' should be rejected");
+        }
+    }
 }

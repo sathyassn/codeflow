@@ -1,0 +1,10 @@
+---
+source: codeflow-core/src/ledger/mod.rs
+expression: event
+---
+{
+  "event": "task_status_changed",
+  "timestamp": "2026-03-07T12:00:00Z",
+  "session_id": "ses-177137202131769e89b2d5688",
+  "key": "value"
+}
