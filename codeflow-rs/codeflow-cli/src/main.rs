@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod cmd;
+mod exit;
+mod helpers;
 
 #[derive(Debug, Parser)]
 #[command(name = "codeflow", version, about = "CodeFlow CLI")]
@@ -41,9 +43,15 @@ enum Command {
     /// State management
     State,
     /// Validate configuration and state
-    Validate,
+    Validate {
+        #[command(subcommand)]
+        command: cmd::validate::ValidateCommand,
+    },
     /// Hook event handlers
-    Hooks,
+    Hooks {
+        #[command(subcommand)]
+        command: cmd::hooks::HookCommand,
+    },
     /// Sentinel management
     Sentinel,
     /// Coordination operations
@@ -71,30 +79,33 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    dispatch(cli.command).await
+}
 
-    match cli.command {
+async fn dispatch(command: Command) -> Result<()> {
+    match command {
         Command::Version => cmd::version::run(),
         Command::Uninstall => cmd::uninstall::run(),
-        Command::Db => cmd::db::run(),
+        Command::Db => cmd::db::run().await,
         Command::Session => cmd::session::run(),
         Command::Init => cmd::init::run(),
-        Command::Doctor => cmd::doctor::run(),
+        Command::Doctor => cmd::doctor::run().await,
         Command::Config => cmd::config::run(),
         Command::Update => cmd::update::run(),
-        Command::Autorun => cmd::autorun::run(),
+        Command::Autorun => cmd::autorun::run().await,
         Command::Ledger => cmd::ledger::run(),
         Command::Welcome => cmd::welcome::run(),
         Command::Internal => cmd::internal::run(),
         Command::Pathflow => cmd::pathflow::run(),
         Command::State => cmd::state::run(),
-        Command::Validate => cmd::validate::run(),
-        Command::Hooks => cmd::hooks::run(),
+        Command::Validate { command } => cmd::validate::run(command),
+        Command::Hooks { command } => cmd::hooks::run(command),
         Command::Sentinel => cmd::sentinel::run(),
         Command::Coordination => cmd::coordination::run(),
         Command::Settings => cmd::settings::run(),
         Command::Worktree => cmd::worktree::run(),
         Command::Report => cmd::report::run(),
-        Command::Workgraph => cmd::workgraph::run(),
+        Command::Workgraph => cmd::workgraph::run().await,
         Command::GitHooks => cmd::git_hooks::run(),
         Command::ShadowTest => cmd::shadow_test::run(),
         Command::Normalize => cmd::normalize::run(),
@@ -108,18 +119,13 @@ mod tests {
 
     #[test]
     fn test_cli_parses_help() {
-        // Verify the CLI struct can be constructed and the subcommand enum has all variants.
-        // clap's derive macro validates the structure at compile time.
         let result = Cli::try_parse_from(["codeflow", "--help"]);
-        // --help causes clap to return an error (it prints help and exits),
-        // but the error kind should be DisplayHelp, not a parse failure.
         let err = result.expect_err("--help returns an error");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
     }
 
     #[test]
     fn test_subcommand_count() {
-        // Verify all 26 subcommands are present by checking help output.
         let err = Cli::try_parse_from(["codeflow", "--help"]).expect_err("help error");
         let help_text = err.to_string();
         let expected_commands = [
@@ -161,6 +167,7 @@ mod tests {
 
     #[test]
     fn test_each_subcommand_parses() {
+        // Subcommands that parse with just the name (no further args required).
         let commands = [
             "version",
             "uninstall",
@@ -176,8 +183,6 @@ mod tests {
             "internal",
             "pathflow",
             "state",
-            "validate",
-            "hooks",
             "sentinel",
             "coordination",
             "settings",
@@ -193,5 +198,160 @@ mod tests {
             let result = Cli::try_parse_from(["codeflow", cmd]);
             assert!(result.is_ok(), "failed to parse subcommand: {cmd}");
         }
+    }
+
+    #[test]
+    fn test_validate_subcommand_requires_subcommand() {
+        let result = Cli::try_parse_from(["codeflow", "validate"]);
+        assert!(result.is_err(), "validate without subcommand should fail");
+    }
+
+    #[test]
+    fn test_validate_epic_parses() {
+        let result = Cli::try_parse_from(["codeflow", "validate", "epic", "/tmp/epic.md"]);
+        assert!(result.is_ok(), "should parse validate epic <file>");
+    }
+
+    #[test]
+    fn test_validate_task_parses() {
+        let result = Cli::try_parse_from(["codeflow", "validate", "task", "/tmp/task.md"]);
+        assert!(result.is_ok(), "should parse validate task <file>");
+    }
+
+    #[test]
+    fn test_validate_all_parses() {
+        let result = Cli::try_parse_from(["codeflow", "validate", "all"]);
+        assert!(result.is_ok(), "should parse validate all");
+    }
+
+    #[test]
+    fn test_hooks_subcommand_requires_event_group() {
+        // `codeflow hooks` alone should fail (needs a subcommand).
+        let result = Cli::try_parse_from(["codeflow", "hooks"]);
+        assert!(result.is_err(), "hooks without event should fail");
+    }
+
+    #[test]
+    fn test_hooks_three_level_parse() {
+        let result = Cli::try_parse_from(["codeflow", "hooks", "pre-tool-use", "gate-check"]);
+        assert!(
+            result.is_ok(),
+            "should parse 3-level: hooks pre-tool-use gate-check"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_version() {
+        let result = dispatch(Command::Version).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_uninstall() {
+        let result = dispatch(Command::Uninstall).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_welcome() {
+        let result = dispatch(Command::Welcome).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_internal() {
+        let result = dispatch(Command::Internal).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_update() {
+        let result = dispatch(Command::Update).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_normalize() {
+        let result = dispatch(Command::Normalize).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_shadow_test() {
+        let result = dispatch(Command::ShadowTest).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_config() {
+        let result = dispatch(Command::Config).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ledger() {
+        let result = dispatch(Command::Ledger).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_init() {
+        let result = dispatch(Command::Init).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sentinel() {
+        let result = dispatch(Command::Sentinel).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_coordination() {
+        let result = dispatch(Command::Coordination).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_state() {
+        let result = dispatch(Command::State).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_report() {
+        let result = dispatch(Command::Report).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_session() {
+        // Session returns error when no state dir exists, which is fine.
+        let _result = dispatch(Command::Session).await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_pathflow() {
+        let result = dispatch(Command::Pathflow).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_git_hooks() {
+        let result = dispatch(Command::GitHooks).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unknown_subcommand_rejected() {
+        let result = Cli::try_parse_from(["codeflow", "nonexistent"]);
+        assert!(result.is_err(), "unknown subcommand should be rejected");
+    }
+
+    #[test]
+    fn test_version_flag_shows_version() {
+        let result = Cli::try_parse_from(["codeflow", "--version"]);
+        let err = result.expect_err("--version returns an error");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
 }

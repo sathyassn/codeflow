@@ -788,10 +788,12 @@ dependencies = [
  "anyhow",
  "clap",
  "codeflow-core",
+ "git2",
  "insta",
  "proptest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -13,10 +13,24 @@
     "exceptions": [
       {
         "crate": "codeflow-cli",
-        "reason": "TEMPORARY: Skeleton stubs with no real implementation yet. Remove each file's exception as it gets implemented — do NOT wait for full cutover.",
+        "reason": "TEMPORARY: Per-file exceptions for async commands requiring database/network integration tests. Remove each as integration test infrastructure is added.",
         "temporary": true,
-        "remove_when": "per-file: remove exception for each file as it receives real implementation",
-        "granularity": "per_file"
+        "remove_when": "per-file: remove exception for each file as integration tests are added",
+        "granularity": "per_file",
+        "files": [
+          "src/cmd/db.rs",
+          "src/cmd/workgraph.rs",
+          "src/cmd/doctor.rs",
+          "src/cmd/settings.rs",
+          "src/cmd/worktree.rs"
+        ],
+        "file_reasons": {
+          "src/cmd/db.rs": "Async SurrealDB integration — needs embedded DB test harness",
+          "src/cmd/workgraph.rs": "Async SurrealDB + JSONL — needs embedded DB test harness",
+          "src/cmd/doctor.rs": "Async with external dependency checks — needs mock infrastructure",
+          "src/cmd/settings.rs": "Depends on codeflow_core::settings::validate_settings_templates internal behavior",
+          "src/cmd/worktree.rs": "Depends on git repo with worktree support — needs git fixture"
+        }
       }
     ]
   }
