@@ -2,6 +2,7 @@
 // only (no dyn DataStore), so the Send bound concern does not apply.
 #![allow(async_fn_in_trait)]
 
+pub mod autorun;
 pub mod config;
 pub mod doctor;
 pub mod error;
@@ -21,8 +22,8 @@ pub mod worktree;
 
 // Re-export commonly used items at crate root.
 pub use error::{
-    ConfigError, DbError, DoctorError, HookError, IdgenError, LedgerError, PathflowError,
-    SessionError, SettingsError, ValidateError, WorkgraphError, WorktreeError,
+    AutorunError, ConfigError, DbError, DoctorError, HookError, IdgenError, LedgerError,
+    PathflowError, SessionError, SettingsError, ValidateError, WorkgraphError, WorktreeError,
 };
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, JsonlWriter, LedgerWriter};

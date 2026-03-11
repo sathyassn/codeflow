@@ -280,9 +280,61 @@ pub enum SettingsError {
     Config(#[from] ConfigError),
 }
 
+/// Autorun batch parsing and orchestration errors.
+#[derive(Debug, Error)]
+pub enum AutorunError {
+    #[error("invalid batch file: {0}")]
+    InvalidBatch(String),
+
+    #[error("dependency cycle detected: {0}")]
+    DependencyCycle(String),
+
+    #[error("missing task: {0}")]
+    MissingTask(String),
+
+    #[error("protected merge: {0}")]
+    ProtectedMerge(String),
+
+    #[error("worker timeout: {0}")]
+    WorkerTimeout(String),
+
+    #[error("worker failed: {0}")]
+    WorkerFailed(String),
+
+    #[error("session not found: {0}")]
+    SessionNotFound(String),
+
+    #[error("yaml parse error: {0}")]
+    Yaml(String),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_autorun_error_display() {
+        let err = AutorunError::InvalidBatch("no tasks defined".into());
+        assert_eq!(err.to_string(), "invalid batch file: no tasks defined");
+    }
+
+    #[test]
+    fn test_autorun_error_dependency_cycle() {
+        let err = AutorunError::DependencyCycle("tasks involved: a, b".into());
+        assert_eq!(
+            err.to_string(),
+            "dependency cycle detected: tasks involved: a, b"
+        );
+    }
+
+    #[test]
+    fn test_autorun_error_protected_merge() {
+        let err = AutorunError::ProtectedMerge("cannot auto_merge into main".into());
+        assert!(err.to_string().contains("protected merge"));
+    }
 
     #[test]
     fn test_session_error_from_db_error() {

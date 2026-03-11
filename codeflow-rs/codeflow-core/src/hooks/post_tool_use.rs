@@ -1,10 +1,12 @@
 //! `PostToolUse` hook handlers.
 //!
-//! Four handlers that run after tool invocations:
+//! Three handlers that run after tool invocations:
 //! - `SentinelWrite`: Creates stage sentinels on `STAGE-COMPLETE` messages
 //! - `CheckpointRegister`: Registers `PF{N}-TSK-{NN}` tasks in checkpoint
 //! - `SettingsValidate`: Validates settings.json consistency
-//! - `PostToolUseLogging`: Logs `PostToolUse` events per enforcement policy
+//!
+//! Note: `PostToolUse` logging was moved to `hooks::logging::ToolUseLogging`
+//! for full-featured tool-use logging with redaction, truncation, and config.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -284,66 +286,6 @@ impl HookHandler for SettingsValidate {
 }
 
 // ---------------------------------------------------------------------------
-// PostToolUseLogging handler
-// ---------------------------------------------------------------------------
-
-/// Logs `PostToolUse` events to the pathflow events log. Severity and detail
-/// controlled by enforcement policy logging configuration.
-pub struct PostToolUseLogging {
-    pub project_dir: PathBuf,
-}
-
-impl PostToolUseLogging {
-    #[must_use]
-    pub fn new(project_dir: PathBuf) -> Self {
-        Self { project_dir }
-    }
-}
-
-impl HookHandler for PostToolUseLogging {
-    fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
-        let tool_name = input.tool_name.as_deref().unwrap_or("unknown");
-        let log_dir = self.project_dir.join(".state").join("logs");
-
-        // Best-effort logging: create dir, append line, never block.
-        if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            return Ok(HookOutput::Warn {
-                message: format!("post-tool-use logging dir creation failed: {e}"),
-            });
-        }
-
-        let log_path = log_dir.join("hook-events.jsonl");
-        let entry = serde_json::json!({
-            "event": "post_tool_use",
-            "tool_name": tool_name,
-            "timestamp": crate::util::now_rfc3339(),
-        });
-
-        if let Ok(line) = serde_json::to_string(&entry) {
-            // Append to log file. Ignore errors — logging must not block.
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "{line}")
-                });
-        }
-
-        Ok(HookOutput::Allow)
-    }
-
-    fn name(&self) -> &'static str {
-        "post-tool-use-logging"
-    }
-
-    fn events(&self) -> &[HookEvent] {
-        &[HookEvent::PostToolUse]
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -520,27 +462,6 @@ mod tests {
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
-    }
-
-    // -- PostToolUseLogging tests --
-
-    #[test]
-    fn test_logging_creates_log_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let handler = PostToolUseLogging::new(dir.path().to_path_buf());
-        let input = make_input("Bash", serde_json::json!({"command": "ls"}));
-        let result = handler.handle(input).unwrap();
-        assert!(matches!(result, HookOutput::Allow));
-
-        let log_path = dir
-            .path()
-            .join(".state")
-            .join("logs")
-            .join("hook-events.jsonl");
-        assert!(log_path.exists());
-        let content = std::fs::read_to_string(log_path).unwrap();
-        assert!(content.contains("post_tool_use"));
-        assert!(content.contains("Bash"));
     }
 
     // -- SentinelWrite: stage ordering and sentinel creation --
@@ -752,46 +673,6 @@ mod tests {
         assert!(matches!(result, HookOutput::Allow));
     }
 
-    // -- PostToolUseLogging: edge cases --
-
-    #[test]
-    fn test_logging_with_no_tool_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let handler = PostToolUseLogging::new(dir.path().to_path_buf());
-        let input = HookInput {
-            tool_name: None,
-            tool_input: None,
-            event: HookEvent::PostToolUse,
-            session_id: None,
-            project_dir: None,
-            source: None,
-            transcript_path: None,
-        };
-        let result = handler.handle(input).unwrap();
-        assert!(matches!(result, HookOutput::Allow));
-
-        let log_path = dir.path().join(".state/logs/hook-events.jsonl");
-        assert!(log_path.exists());
-        let content = std::fs::read_to_string(log_path).unwrap();
-        assert!(content.contains("\"unknown\""));
-    }
-
-    #[test]
-    fn test_logging_appends_multiple_entries() {
-        let dir = tempfile::tempdir().unwrap();
-        let handler = PostToolUseLogging::new(dir.path().to_path_buf());
-
-        for tool in &["Bash", "Edit", "Write"] {
-            let input = make_input(tool, serde_json::json!({}));
-            handler.handle(input).unwrap();
-        }
-
-        let log_path = dir.path().join(".state/logs/hook-events.jsonl");
-        let content = std::fs::read_to_string(log_path).unwrap();
-        let lines: Vec<&str> = content.trim().lines().collect();
-        assert_eq!(lines.len(), 3);
-    }
-
     // -- Handler metadata tests --
 
     #[test]
@@ -808,10 +689,6 @@ mod tests {
         assert_eq!(
             SettingsValidate::new(dir.path().to_path_buf()).name(),
             "settings-validate"
-        );
-        assert_eq!(
-            PostToolUseLogging::new(dir.path().to_path_buf()).name(),
-            "post-tool-use-logging"
         );
     }
 

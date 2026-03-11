@@ -4,6 +4,7 @@
 //! `HookOutput`, `HookEvent`) that all hook implementations build on.
 //! Session-specific hooks live in submodules.
 
+pub mod logging;
 pub mod post_tool_use;
 pub mod pre_tool_use;
 pub mod security;
