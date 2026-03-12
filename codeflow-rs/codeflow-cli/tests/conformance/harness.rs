@@ -257,6 +257,7 @@ pub fn assert_conformance(args: &[&str], stdin: &str) {
 ///
 /// Only use this for handlers where stderr is stable and deterministic
 /// (e.g., empty, or a fixed message not containing timestamps/paths).
+#[allow(dead_code)]
 pub fn assert_conformance_strict(args: &[&str], stdin: &str) {
     let (go, rust) = run_conformance(args, stdin);
 
