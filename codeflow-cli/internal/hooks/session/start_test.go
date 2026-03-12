@@ -2174,6 +2174,149 @@ func setupPathflowConfig(t *testing.T, projectDir string) {
 	}
 }
 
+func TestAcquireSessionLock_Exclusive(t *testing.T) {
+	t.Parallel()
+
+	runtimeDir := t.TempDir()
+
+	// Acquire first lock.
+	lock1, err := session.AcquireSessionLock(runtimeDir)
+	if err != nil {
+		t.Fatalf("AcquireSessionLock() error = %v", err)
+	}
+
+	// Try to acquire second lock in a goroutine — it should block.
+	acquired := make(chan struct{})
+	go func() {
+		lock2, err := session.AcquireSessionLock(runtimeDir)
+		if err != nil {
+			t.Errorf("second AcquireSessionLock() error = %v", err)
+			close(acquired)
+			return
+		}
+		session.ReleaseSessionLock(lock2)
+		close(acquired)
+	}()
+
+	// Wait briefly — the second lock should NOT be acquired yet.
+	select {
+	case <-acquired:
+		t.Error("second lock was acquired while first lock is held")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: second lock is still blocked.
+	}
+
+	// Release first lock — second lock should now be acquired.
+	session.ReleaseSessionLock(lock1)
+
+	select {
+	case <-acquired:
+		// Expected: second lock acquired after first released.
+	case <-time.After(2 * time.Second):
+		t.Error("second lock was not acquired after first lock was released")
+	}
+}
+
+func TestStartInit_ConcurrentSessionCreation(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	setupPathflowConfig(t, projectDir)
+
+	const numGoroutines = 5
+	leadPID := os.Getpid()
+
+	// The mock SessionStarter writes pathflow-team.json as a side effect,
+	// simulating the real flow where the lead creates the team file after
+	// generating the session ID. This allows subsequent goroutines (under
+	// the serialized lock) to detect teammate mode.
+	callCount := make(chan struct{}, numGoroutines)
+
+	type result struct {
+		initResult *InitResult
+		err        error
+	}
+	results := make(chan result, numGoroutines)
+
+	homeDir := t.TempDir()
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			init_ := &Initializer{
+				Now:            func() time.Time { return fixedTime },
+				ProcessChecker: mockProcessChecker{alive: map[int]bool{leadPID: true}},
+				TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
+				SessionStarter: mockSessionStarterFunc(func(_ context.Context, _ string, pDir string) (string, error) {
+					callCount <- struct{}{}
+					// After "generating" the session, write pathflow-team.json
+					// so subsequent goroutines detect teammate mode.
+					pfDir := filepath.Join(pDir, ".state", "session", testULIDSessionID, "pathflow")
+					_ = os.MkdirAll(pfDir, 0o755)
+					teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: leadPID, TeamName: "test-concurrent"})
+					_ = os.WriteFile(filepath.Join(pfDir, "pathflow-team.json"), teamData, 0o644)
+					return testULIDSessionID, nil
+				}),
+				ReadBuildInfo: func() string { return "" },
+				PPID:          leadPID,
+				HomeDir:       homeDir,
+			}
+
+			stdin := strings.NewReader(`{"session_id":"agent-uuid","source":"startup"}`)
+			r, err := init_.StartInit(stdin, projectDir)
+			results <- result{r, err}
+		}()
+	}
+
+	// Collect results.
+	var initResults []*InitResult
+	for i := 0; i < numGoroutines; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("goroutine StartInit() error = %v", r.err)
+		}
+		initResults = append(initResults, r.initResult)
+	}
+	close(callCount)
+
+	// Count how many goroutines actually called StartSession.
+	var sessionStartCalls int
+	for range callCount {
+		sessionStartCalls++
+	}
+
+	// All goroutines should return the same session ID.
+	for i, r := range initResults {
+		if r.SessionID != testULIDSessionID {
+			t.Errorf("goroutine %d: SessionID = %q, want %q", i, r.SessionID, testULIDSessionID)
+		}
+	}
+
+	// Exactly 1 goroutine should have called StartSession (the leader).
+	// The rest detect the env file + team.json with alive PID under the lock.
+	if sessionStartCalls != 1 {
+		t.Errorf("StartSession called %d times, want exactly 1", sessionStartCalls)
+	}
+
+	// Count teammates vs leaders.
+	teammates := 0
+	leaders := 0
+	for _, r := range initResults {
+		if r.IsTeammate {
+			teammates++
+		} else {
+			leaders++
+		}
+	}
+
+	// The first goroutine is the leader, the rest are teammates.
+	if leaders != 1 {
+		t.Errorf("leaders = %d, want 1", leaders)
+	}
+	if teammates != numGoroutines-1 {
+		t.Errorf("teammates = %d, want %d", teammates, numGoroutines-1)
+	}
+}
+
 func assertDirExists(t *testing.T, path string) {
 	t.Helper()
 	info, err := os.Stat(path)

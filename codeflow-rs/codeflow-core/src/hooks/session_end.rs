@@ -317,10 +317,16 @@ impl<P: ProcessChecker> SessionEndCleanup<P> {
         }
     }
 
-    /// Remove runtime files (env file, `current-session-id`).
+    /// Remove runtime files (env file, session lock, `current-session-id`).
     fn clean_runtime_files(&self, project_dir: &Path, _result: &mut CleanupResult) {
         let runtime_dir = project_dir.join(".state").join("runtime");
         let _ = session::remove_env_file(&runtime_dir);
+
+        // Remove session lock file.
+        let lock_path = runtime_dir.join("session.lock");
+        if lock_path.exists() {
+            let _ = fs::remove_file(&lock_path);
+        }
 
         // Also remove current-session-id if it exists (legacy cleanup).
         let current_sid_path = runtime_dir.join("current-session-id");
@@ -958,5 +964,36 @@ mod tests {
 
         assert_eq!(handler.name(), "session-end-logging");
         assert_eq!(handler.events(), &[HookEvent::SessionEnd]);
+    }
+
+    #[test]
+    fn test_cleanup_removes_session_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        // Create a session.lock file in runtime dir.
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let lock_path = runtime_dir.join("session.lock");
+        fs::write(&lock_path, b"").unwrap();
+        assert!(lock_path.exists(), "lock file should exist before cleanup");
+
+        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Verify lock file was removed.
+        assert!(
+            !lock_path.exists(),
+            "session.lock should be removed during cleanup"
+        );
+
+        // Verify env file was also removed (existing behavior).
+        assert!(session::read_env_file(&runtime_dir).unwrap().is_none());
+
+        // Verify session_id was resolved correctly (cleanup proceeded).
+        assert_eq!(_result.session_id, session_id);
     }
 }

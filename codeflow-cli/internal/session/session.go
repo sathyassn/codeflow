@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/codeflow/codeflow-cli/internal/db"
@@ -217,6 +218,35 @@ func CleanRuntimeFiles(runtimeDir string) {
 	// Remove codeflow-env.sh so Current() no longer resolves this session.
 	envFile := filepath.Join(runtimeDir, EnvFile)
 	_ = os.Remove(envFile)
+	// Remove session lock file.
+	lockFile := filepath.Join(runtimeDir, "session.lock")
+	_ = os.Remove(lockFile)
+}
+
+// AcquireSessionLock acquires an exclusive file lock on session.lock in runtimeDir.
+// Returns the lock file handle. Caller must call ReleaseSessionLock to release.
+// The lock serializes session creation across concurrent agents.
+func AcquireSessionLock(runtimeDir string) (*os.File, error) {
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating runtime directory for lock: %w", err)
+	}
+	lockPath := filepath.Join(runtimeDir, "session.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open session lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("acquire session lock: %w", err)
+	}
+	return f, nil
+}
+
+// ReleaseSessionLock closes the lock file handle, releasing the flock.
+func ReleaseSessionLock(f *os.File) {
+	if f != nil {
+		f.Close()
+	}
 }
 
 // Current reads and returns the current session ID.

@@ -200,6 +200,20 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 	// --- Section 1: Parse stdin JSON ---
 	input := parseStdin(stdin)
 
+	// --- Section 1a: Acquire session lock ---
+	// Serialize session creation across concurrent agents (teammates + lead).
+	// The lock covers: read env file -> teammate detection -> SID generation -> write env file.
+	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
+	lockFile, lockErr := session.AcquireSessionLock(runtimeDir)
+	if lockErr != nil {
+		result.warn("session lock: %v (proceeding without lock)", lockErr)
+	}
+	releaseLock := func() {
+		session.ReleaseSessionLock(lockFile)
+		lockFile = nil
+	}
+	defer releaseLock() // safety net for early returns
+
 	// --- Section 1b: PID-based stale session cleanup ---
 	envFilePath := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 	existingSID, teamMode, err := init_.handleStaleCleanup(projectDir, envFilePath, input.Source)
@@ -240,7 +254,6 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 			return nil, fmt.Errorf("session init: generating session ID: %w", startErr)
 		}
 		// Write env file atomically via the session package (single authoritative writer).
-		runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 		if err := session.WriteEnvFile(runtimeDir, sessionID, projectDir); err != nil {
 			result.warn("env file write error: %v", err)
 		}
@@ -259,6 +272,9 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 	result.SessionID = sessionID
 	result.EnvVars["CODEFLOW_SESSION_ID"] = sessionID
 	result.EnvVars["CF_PROJECT_ROOT"] = filepath.Base(projectDir)
+
+	// Release session lock — env file written, teammates can now detect this session.
+	releaseLock()
 
 	// --- Section 3: Directory creation ---
 	init_.createDirectories(projectDir, sessionID)

@@ -20,6 +20,28 @@ use crate::session;
 use crate::types::SessionId;
 
 // ---------------------------------------------------------------------------
+// Session lock
+// ---------------------------------------------------------------------------
+
+/// Acquire an exclusive file lock on `session.lock` in `runtime_dir`.
+///
+/// Serializes concurrent session creation across multiple agents. The returned
+/// `File` holds the lock via `flock(LOCK_EX)`. The lock is released when the
+/// file is dropped.
+fn acquire_session_lock(runtime_dir: &Path) -> Result<std::fs::File, std::io::Error> {
+    fs::create_dir_all(runtime_dir)?;
+    let lock_path = runtime_dir.join("session.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    fs2::FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+// ---------------------------------------------------------------------------
 // SessionStartInit
 // ---------------------------------------------------------------------------
 
@@ -84,6 +106,19 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
 
         let runtime_dir = project_dir.join(".state").join("runtime");
 
+        // --- Section 0: Acquire session lock ---
+        // Serialize concurrent session creation across multiple agents.
+        // Lock is acquired before stale cleanup and released after env file write.
+        let lock_file = match acquire_session_lock(&runtime_dir) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                result
+                    .warnings
+                    .push(format!("session lock: {e} (proceeding without lock)"));
+                None
+            }
+        };
+
         // --- Section 1: PID-based stale session cleanup + teammate detection ---
         let (existing_sid, team_mode) =
             self.handle_stale_cleanup(project_dir, &runtime_dir, source, &mut result);
@@ -105,6 +140,9 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
                 result
                     .env_vars
                     .insert("CF_PROJECT_ROOT".into(), project_name);
+
+                // Release session lock -- teammate detected, env file already exists.
+                drop(lock_file);
 
                 write_env_json(writer, &result.env_vars)?;
                 return Ok(result);
@@ -132,6 +170,9 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         result
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
+
+        // Release session lock -- env file written, teammates can now detect this session.
+        drop(lock_file);
 
         // --- Section 3: Directory creation ---
         self.create_directories(project_dir, session_id.as_str());
@@ -2389,5 +2430,154 @@ mod tests {
             .unwrap();
 
         assert_eq!(sid, existing_sid, "resume should use env file SID");
+    }
+
+    // --- Session lock tests ---
+
+    #[test]
+    fn test_acquire_session_lock_exclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        // Acquire first lock.
+        let lock1 = acquire_session_lock(&runtime_dir).unwrap();
+
+        // Try to acquire second lock in another thread -- should block.
+        let runtime_dir2 = runtime_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            // Signal that we're about to try locking.
+            tx.send("trying").unwrap();
+            let _lock2 = acquire_session_lock(&runtime_dir2).unwrap();
+            tx.send("acquired").unwrap();
+        });
+
+        // Wait for the thread to start trying.
+        assert_eq!(rx.recv().unwrap(), "trying");
+
+        // Give it a moment -- it should NOT have acquired yet.
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "second lock should block while first is held"
+        );
+
+        // Release first lock.
+        drop(lock1);
+
+        // Now the second lock should succeed.
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            "acquired"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_acquire_session_lock_creates_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join("nonexistent").join("runtime");
+
+        let lock = acquire_session_lock(&runtime_dir).unwrap();
+        assert!(runtime_dir.join("session.lock").exists());
+        drop(lock);
+    }
+
+    #[test]
+    fn test_concurrent_startup_single_session_id() {
+        // Simulates the real race: multiple agents start concurrently.
+        // The lead (thread 0) runs first (serialized by lock), generates a
+        // session, writes env file, and writes pathflow-team.json (simulating
+        // TeamCreate which happens immediately after StartInit in the real flow).
+        // Subsequent threads acquire the lock, see the env file + team file,
+        // and enter teammate mode -- all converging on the same SID.
+        use std::sync::{Arc, Barrier, Mutex};
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let project_dir = Arc::new(dir.path().to_path_buf());
+        let home_dir = Arc::new(home.path().to_path_buf());
+
+        // Phase 1: Lead agent creates the session.
+        let lead_init = SessionStartInit {
+            process_checker: MockProcessChecker { alive_pids: vec![] },
+            tmux_checker: MockTmuxChecker::new(),
+            ppid: 1000,
+            home_dir: home_dir.as_ref().clone(),
+            now: fixed_now,
+        };
+        let lead_input = make_input("startup", project_dir.to_str().unwrap());
+        let mut buf = Vec::new();
+        let lead_result = lead_init.run(&lead_input, &project_dir, &mut buf).unwrap();
+        let lead_sid = lead_result.session_id.clone();
+
+        // Lead writes pathflow-team.json (simulates TeamCreate).
+        let team_dir = project_dir
+            .join(".state")
+            .join("session")
+            .join(lead_sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&team_dir).unwrap();
+        let team_info = PathflowTeamInfo {
+            lead_pid: 1000,
+            team_name: "test-team".into(),
+        };
+        fs::write(
+            team_dir.join("pathflow-team.json"),
+            serde_json::to_string(&team_info).unwrap(),
+        )
+        .unwrap();
+
+        // Phase 2: Multiple teammate agents start concurrently.
+        let num_teammates = 4;
+        let barrier = Arc::new(Barrier::new(num_teammates));
+        let results = Arc::new(Mutex::new(Vec::new()));
+
+        let handles: Vec<_> = (0..num_teammates)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let project_dir = Arc::clone(&project_dir);
+                let home_dir = Arc::clone(&home_dir);
+                let results = Arc::clone(&results);
+
+                thread::spawn(move || {
+                    let init = SessionStartInit {
+                        process_checker: MockProcessChecker {
+                            alive_pids: vec![1000], // Lead PID is alive.
+                        },
+                        tmux_checker: MockTmuxChecker::new(),
+                        ppid: 2000, // Different PPID (teammate process).
+                        home_dir: home_dir.as_ref().clone(),
+                        now: fixed_now,
+                    };
+                    let input = make_input("startup", project_dir.to_str().unwrap());
+
+                    // Synchronize all threads to start at once.
+                    barrier.wait();
+
+                    let mut buf = Vec::new();
+                    let result = init.run(&input, &project_dir, &mut buf).unwrap();
+                    results.lock().unwrap().push(result);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let teammate_results = results.lock().unwrap();
+        // All teammates should get the same SID as the lead.
+        for (i, r) in teammate_results.iter().enumerate() {
+            assert_eq!(
+                r.session_id,
+                lead_sid,
+                "teammate {i} got different SID: {} vs {lead_sid}",
+                r.session_id.as_str()
+            );
+            assert!(r.is_teammate, "teammate {i} should be in teammate mode");
+        }
     }
 }

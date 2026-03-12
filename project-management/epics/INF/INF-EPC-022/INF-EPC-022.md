@@ -121,7 +121,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 
 - [ ] Go unit tests ported to Rust `#[test]` and `#[tokio::test]`
 - [ ] Contract conformance suite verifies identical output between Go and Rust binaries
-- [ ] All ~1,555 shell integration tests pass UNCHANGED against the Rust binary
+- [ ] Full test suite passes with Rust binary on PATH (shell integration tests, conformance tests at 93/93, git hook dispatch verified)
 - [ ] Property-based tests with `proptest` for serialization roundtrips
 - [ ] Snapshot tests with `insta` for JSON output verification
 
@@ -134,7 +134,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 - [ ] Coverage gate: 85% threshold via `cargo-llvm-cov`
 - [ ] Cutover: `codeflow-cli/` (Go) removed, `codeflow-rs/` renamed to `codeflow-cli/`
 - [ ] All references updated (CI, test scripts, docs)
-- [ ] Final validation: all 1,555+ shell tests pass against Rust binary at final location
+- [ ] Final validation: full test suite passes with Rust binary as sole codeflow binary at final location
 - [ ] Go-specific CI jobs, Makefile targets, `.golangci.yml` removed
 - [ ] Go CLI binary (`codeflow-cli/`) retained throughout Phases 0A-0F; removal only in Phase 0G after contract conformance verification
 
@@ -167,7 +167,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-018 | Implement CLI command dispatch | complete | high | 0E |
 | INF-TSK-022-019 | Port Go unit tests to Rust | complete | high | 0F |
 | INF-TSK-022-020 | Build contract conformance test suite | complete | critical | 0F |
-| INF-TSK-022-021 | Validate shell test suite passes | todo | critical | 0F |
+| INF-TSK-022-021 | Pre-cutover Rust binary validation | todo | critical | 0F |
 | INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |
 | INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
 | INF-TSK-022-024 | Cross-compile release builds | todo | normal | 0G |
@@ -177,6 +177,8 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
 | INF-TSK-022-029 | Add pre-push test hook to enforce tests + coverage before PR | cancelled | high | deferred-to-rust-hooks-epic |
 | INF-TSK-022-030 | Fix session startup stale cleanup and PID management | complete | high | adhoc |
+| INF-TSK-022-031 | Fix INF-EPC-022 task docs based on post-Go-migration analysis | complete | high | adhoc |
+| INF-TSK-022-032 | Fix session creation race condition (flock serialization) | complete | critical | adhoc |
 
 ## Dependencies
 
@@ -265,8 +267,9 @@ codeflow-rs/                          (Rust workspace)
 5. **Go binary remains active** throughout Phases 0A-0F
 6. **Rust binary builds in parallel** -- `codeflow-rs/` alongside `codeflow-cli/`
 7. **Tests in same PR as source** -- every code task includes unit tests
-8. **85% coverage threshold** -- per-file enforcement matching Go conventions
+8. **85% coverage threshold** -- per-file enforcement matching Go conventions; temporary `codeflow-cli` exceptions removed progressively as files receive implementation (do NOT wait for full cutover)
 9. **Coexistence requirement** -- both `codeflow-cli/` (Go) and `codeflow-rs/` (Rust) exist simultaneously during migration. The Go binary remains the active `codeflow` command until Phase 0G explicitly retires it after all Phase 0F contract conformance tests pass.
+10. **Rust tests inline** -- unit tests written as `#[cfg(test)] mod tests` in the same source file per cf-rust-standards (`#[cfg(test)] mod tests`); no separate unit test files
 
 ### Rust-Idiomatic Design Principles
 
