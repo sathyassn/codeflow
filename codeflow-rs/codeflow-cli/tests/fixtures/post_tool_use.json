@@ -1,0 +1,7 @@
+{
+  "event": "post_tool_use",
+  "tool_name": "Bash",
+  "tool_input": {"command": "ls -la"},
+  "session_id": "ses-conformance000000000002",
+  "project_dir": "/tmp/conformance-test"
+}

@@ -1,0 +1,6 @@
+{
+  "event": "session_start",
+  "session_id": "ses-conformance000000000004",
+  "project_dir": "/tmp/conformance-test",
+  "source": "startup"
+}

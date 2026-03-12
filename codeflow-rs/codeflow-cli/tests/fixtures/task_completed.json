@@ -1,0 +1,5 @@
+{
+  "event": "task_completed",
+  "session_id": "ses-conformance000000000003",
+  "project_dir": "/tmp/conformance-test"
+}
