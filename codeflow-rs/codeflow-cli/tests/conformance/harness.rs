@@ -106,31 +106,15 @@ pub fn resolve_binaries() -> BinaryPaths {
 
 /// Run a single binary with the given CLI arguments and stdin input.
 ///
+/// **Always runs in isolation:** sets `CF_PROJECT_ROOT` to a temporary directory
+/// with `.state/` subdirectories, `GIT_CEILING_DIRECTORIES` to prevent git from
+/// walking up to the real repo, and removes `CODEFLOW_SESSION_ID` to prevent env
+/// leakage. This ensures conformance tests NEVER pollute production state files.
+///
 /// Returns `BinaryOutput` with stdout, stderr, and exit code.
 pub fn run_binary(binary: &Path, args: &[&str], stdin: &str) -> BinaryOutput {
-    let mut child = Command::new(binary)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", binary.display()));
-
-    if let Some(mut stdin_pipe) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin_pipe.write_all(stdin.as_bytes());
-        // Drop closes the pipe, signaling EOF to the child.
-    }
-
-    let output = child
-        .wait_with_output()
-        .unwrap_or_else(|e| panic!("failed to wait on {}: {e}", binary.display()));
-
-    BinaryOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        exit_code: output.status.code().unwrap_or(-1),
-    }
+    let tmp = make_isolated_project_dir();
+    run_binary_isolated(binary, args, stdin, tmp.path())
 }
 
 /// Create an isolated project directory with `.state/` subdirectory tree.
@@ -152,6 +136,18 @@ pub fn make_isolated_project_dir() -> tempfile::TempDir {
         std::fs::create_dir_all(state.join(subdir))
             .unwrap_or_else(|e| panic!("failed to create {subdir}: {e}"));
     }
+
+    // Seed a minimal codeflow-env.sh with a dummy session ID.
+    // Handlers like session-start init with source=compact/resume expect an
+    // existing session. Without this file, they error (Go exits 1) while
+    // the Rust stub always exits 0, causing false conformance mismatches.
+    let env_file = state.join("runtime").join("codeflow-env.sh");
+    std::fs::write(
+        &env_file,
+        "export CODEFLOW_SESSION_ID='ses-test-isolation-00000000000'\n",
+    )
+    .unwrap_or_else(|e| panic!("failed to write codeflow-env.sh: {e}"));
+
     tmp
 }
 
@@ -199,6 +195,11 @@ pub fn run_binary_isolated(
 ///
 /// Returns `(go_output, rust_output, temp_dir)`. The caller must keep
 /// `temp_dir` alive until all assertions are complete.
+///
+/// Note: `run_conformance` and `run_binary` already isolate automatically.
+/// Use this only when you need access to the shared temp directory (e.g.,
+/// to inspect state files written by the binaries).
+#[allow(dead_code)]
 pub fn run_conformance_isolated(
     args: &[&str],
     stdin: &str,
@@ -212,11 +213,12 @@ pub fn run_conformance_isolated(
 
 /// Run both binaries with the same args and stdin, returning `(go_output, rust_output)`.
 ///
-/// Uses test isolation internally: each invocation gets a fresh temp directory
-/// with `CF_PROJECT_ROOT` set, preventing writes to production state files.
+/// Each binary invocation is automatically isolated (see `run_binary`).
 pub fn run_conformance(args: &[&str], stdin: &str) -> (BinaryOutput, BinaryOutput) {
-    let (go, rust, _tmp) = run_conformance_isolated(args, stdin);
-    (go, rust)
+    let paths = resolve_binaries();
+    let go_out = run_binary(&paths.go_binary, args, stdin);
+    let rust_out = run_binary(&paths.rust_binary, args, stdin);
+    (go_out, rust_out)
 }
 
 /// Assert that Go and Rust outputs match on exit code and stdout.
