@@ -175,7 +175,15 @@ func parseEnvFileSessionID(content string) string {
 
 // detectProjectDir returns the project root directory.
 func detectProjectDir() string {
-	// Try git rev-parse first
+	// Check CF_PROJECT_ROOT env var first (used by test isolation).
+	// Only accept absolute paths that exist as directories; basenames
+	// like "codeflow" (the production default) fall through.
+	if root := os.Getenv("CF_PROJECT_ROOT"); root != "" {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return root
+		}
+	}
+	// Try git rev-parse
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err == nil {
 		return strings.TrimSpace(string(out))

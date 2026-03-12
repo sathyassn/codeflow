@@ -339,6 +339,34 @@ func TestDetectProjectDirFallback(t *testing.T) {
 	}
 }
 
+func TestDetectProjectDir_CFProjectRootEnvVar(t *testing.T) {
+	// NOTE: no t.Parallel -- t.Setenv is not compatible with t.Parallel.
+	tmpDir := t.TempDir()
+	t.Setenv("CF_PROJECT_ROOT", tmpDir)
+	result := detectProjectDir()
+	if result != tmpDir {
+		t.Errorf("detectProjectDir() = %q, want %q (CF_PROJECT_ROOT)", result, tmpDir)
+	}
+}
+
+func TestDetectProjectDir_CFProjectRootBasename(t *testing.T) {
+	// NOTE: no t.Parallel -- t.Setenv is not compatible with t.Parallel.
+	t.Setenv("CF_PROJECT_ROOT", "nonexistent-basename")
+	result := detectProjectDir()
+	if result == "nonexistent-basename" {
+		t.Error("detectProjectDir() used basename CF_PROJECT_ROOT, want fallthrough to git/cwd")
+	}
+}
+
+func TestDetectProjectDir_CFProjectRootNonexistentAbsolute(t *testing.T) {
+	// NOTE: no t.Parallel -- t.Setenv is not compatible with t.Parallel.
+	t.Setenv("CF_PROJECT_ROOT", "/tmp/nonexistent-cfpr-test-dir-12345")
+	result := detectProjectDir()
+	if result == "/tmp/nonexistent-cfpr-test-dir-12345" {
+		t.Error("detectProjectDir() used nonexistent absolute path, want fallthrough")
+	}
+}
+
 func TestDetectCurrentBranchNonGit(t *testing.T) {
 	// NOTE: no t.Parallel -- os.Chdir is process-global and races with other tests.
 
