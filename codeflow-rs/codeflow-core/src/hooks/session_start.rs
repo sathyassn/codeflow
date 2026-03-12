@@ -136,12 +136,10 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         // --- Section 3: Directory creation ---
         self.create_directories(project_dir, session_id.as_str());
 
-        // --- Section 4: Stale session detection (warning-only) ---
-        let stale_warnings = self.detect_stale_sessions(project_dir, session_id.as_str());
-        result.warnings.extend(stale_warnings);
-
-        // --- Section 5: Orphan sentinel sweep ---
-        self.sweep_orphan_sentinels(project_dir, session_id.as_str());
+        // --- Section 4+5: Sweep all stale sessions (replaces detect_stale_sessions + sweep_orphan_sentinels) ---
+        if source == "startup" || source == "unknown" {
+            self.sweep_all_stale_sessions(project_dir, session_id.as_str());
+        }
 
         // --- Section 6: Active task context expiry ---
         self.cleanup_active_task(project_dir);
@@ -222,8 +220,14 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
                     return (None, false);
                 }
 
-                // Compact/resume with dead PID -- update lead PID.
-                self.update_lead_pid(&team_file_path);
+                // Resume with dead PID -- update lead PID (user relaunched claude).
+                if source == "resume" {
+                    self.update_lead_pid(&team_file_path);
+                    return (Some(old_sid), false);
+                }
+
+                // Compact/clear with dead PID -- don't update PID.
+                // The caller is a surviving tmux teammate whose lead died.
                 return (Some(old_sid), false);
             }
         }
@@ -321,30 +325,55 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         }
     }
 
-    /// Detect stale sessions with active sentinels (warning-only).
-    fn detect_stale_sessions(&self, project_dir: &Path, current_sid: &str) -> Vec<String> {
-        let sentinel_base = project_dir
-            .join(".state")
-            .join("sentinels")
-            .join("pathflow");
-        let mut warnings = Vec::new();
+    /// Sweep ALL stale sessions: scan every `ses-*` dir under `.state/session/`,
+    /// check if the lead PID is alive, and remove stale sessions with their
+    /// sentinel dirs and team artifacts. Also sweeps orphan sentinel dirs.
+    fn sweep_all_stale_sessions(&self, project_dir: &Path, current_sid: &str) {
+        let session_base = project_dir.join(".state").join("session");
 
-        if let Ok(entries) = fs::read_dir(&sentinel_base) {
+        if let Ok(entries) = fs::read_dir(&session_base) {
             for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name != current_sid {
-                        warnings.push(format!("stale sentinel directory: {name}"));
-                    }
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
                 }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with("ses-") || name == current_sid {
+                    continue;
+                }
+
+                let team_file_path = session_base
+                    .join(&name)
+                    .join("pathflow")
+                    .join("pathflow-team.json");
+
+                let Ok(team_data) = fs::read_to_string(&team_file_path) else {
+                    // No team file -- stale session, clean it up.
+                    self.remove_stale_session_artifacts(project_dir, &name, None);
+                    continue;
+                };
+
+                let Ok(team_info) = serde_json::from_str::<PathflowTeamInfo>(&team_data) else {
+                    // Invalid team file -- stale.
+                    self.remove_stale_session_artifacts(project_dir, &name, None);
+                    continue;
+                };
+
+                if team_info.lead_pid > 0 && self.process_checker.is_alive(team_info.lead_pid) {
+                    // Lead is alive -- skip.
+                    continue;
+                }
+
+                // Lead PID dead or zero -- clean up.
+                let team_name = if team_info.team_name.is_empty() {
+                    None
+                } else {
+                    Some(team_info.team_name.as_str())
+                };
+                self.remove_stale_session_artifacts(project_dir, &name, team_name);
             }
         }
 
-        warnings
-    }
-
-    /// Sweep orphan sentinel directories from previous sessions.
-    fn sweep_orphan_sentinels(&self, project_dir: &Path, current_sid: &str) {
+        // Also sweep orphan sentinel dirs that have no matching session dir.
         let sentinel_base = project_dir
             .join(".state")
             .join("sentinels")
@@ -352,22 +381,39 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
 
         if let Ok(entries) = fs::read_dir(&sentinel_base) {
             for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name != current_sid {
-                        // Check if the session's pathflow-active flag is gone.
-                        let flag = project_dir
-                            .join(".state")
-                            .join("session")
-                            .join(&name)
-                            .join("pathflow")
-                            .join("is-pathflow-active");
-                        if !flag.exists() {
-                            let _ = fs::remove_dir_all(entry.path());
-                        }
-                    }
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with("ses-") || name == current_sid {
+                    continue;
+                }
+                let session_dir = session_base.join(&name);
+                if !session_dir.exists() {
+                    let _ = fs::remove_dir_all(entry.path());
                 }
             }
+        }
+    }
+
+    /// Remove all artifacts for a stale session: session dir, sentinel dir, team config/tasks.
+    fn remove_stale_session_artifacts(
+        &self,
+        project_dir: &Path,
+        sid: &str,
+        team_name: Option<&str>,
+    ) {
+        let _ = fs::remove_dir_all(project_dir.join(".state").join("session").join(sid));
+        let _ = fs::remove_dir_all(
+            project_dir
+                .join(".state")
+                .join("sentinels")
+                .join("pathflow")
+                .join(sid),
+        );
+        if let Some(name) = team_name {
+            let _ = fs::remove_dir_all(self.home_dir.join(".claude").join("teams").join(name));
+            let _ = fs::remove_dir_all(self.home_dir.join(".claude").join("tasks").join(name));
         }
     }
 
@@ -481,35 +527,54 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         }
     }
 
-    /// Detect stale team directories under `~/.claude/teams/`.
+    /// Detect stale team directories under `~/.claude/teams/` and clean them up.
+    ///
+    /// A team is stale when ALL its tmux pane members are dead.
+    /// Returns warnings for each team that was cleaned.
     fn detect_stale_teams(&self) -> Vec<String> {
         let teams_dir = self.home_dir.join(".claude").join("teams");
         let mut warnings = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&teams_dir) {
             for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    let config_path = entry.path().join("config.json");
-                    if config_path.exists() {
-                        // Check if the team config references a dead PID.
-                        if let Ok(data) = fs::read_to_string(&config_path) {
-                            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&data) {
-                                if let Some(pid) =
-                                    config.get("leadPid").and_then(serde_json::Value::as_u64)
-                                {
-                                    #[allow(clippy::cast_possible_truncation)]
-                                    let pid_u32 = pid as u32;
-                                    if !self.process_checker.is_alive(pid_u32) {
-                                        warnings.push(format!(
-                                            "stale team: {} (lead PID {} dead)",
-                                            entry.file_name().to_string_lossy(),
-                                            pid
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                let team_name = entry.file_name().to_string_lossy().to_string();
+                let config_path = entry.path().join("config.json");
+                let Ok(data) = fs::read_to_string(&config_path) else {
+                    continue;
+                };
+                let Ok(config) = serde_json::from_str::<serde_json::Value>(&data) else {
+                    continue;
+                };
+
+                // Extract members array and count alive tmux panes.
+                let members = match config.get("members").and_then(serde_json::Value::as_array) {
+                    Some(m) if !m.is_empty() => m,
+                    _ => continue,
+                };
+
+                let alive = members
+                    .iter()
+                    .filter(|m| {
+                        m.get("tmuxPaneId")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|id| self.tmux_checker.is_pane_alive(id))
+                    })
+                    .count();
+
+                // If ALL members are dead, remove the team directory and task list.
+                if alive == 0 {
+                    let _ = fs::remove_dir_all(entry.path());
+                    let _ = fs::remove_dir_all(
+                        self.home_dir.join(".claude").join("tasks").join(&team_name),
+                    );
+                    warnings.push(format!(
+                        "STALE TEAM CLEANED: '{}' ({} members, all panes dead)",
+                        team_name,
+                        members.len()
+                    ));
                 }
             }
         }
@@ -800,15 +865,29 @@ mod tests {
         }
     }
 
-    struct MockTmuxChecker;
+    struct MockTmuxChecker {
+        alive_panes: Vec<String>,
+    }
+
+    impl MockTmuxChecker {
+        fn new() -> Self {
+            Self {
+                alive_panes: Vec::new(),
+            }
+        }
+
+        fn with_alive_panes(panes: Vec<String>) -> Self {
+            Self { alive_panes: panes }
+        }
+    }
 
     impl TmuxChecker for MockTmuxChecker {
-        fn is_pane_alive(&self, _pane_id: &str) -> bool {
-            false
+        fn is_pane_alive(&self, pane_id: &str) -> bool {
+            self.alive_panes.iter().any(|p| p == pane_id)
         }
 
         fn list_panes(&self) -> Result<Vec<String>, HookError> {
-            Ok(Vec::new())
+            Ok(self.alive_panes.clone())
         }
     }
 
@@ -822,7 +901,21 @@ mod tests {
     ) -> SessionStartInit<MockProcessChecker, MockTmuxChecker> {
         SessionStartInit {
             process_checker: MockProcessChecker { alive_pids },
-            tmux_checker: MockTmuxChecker,
+            tmux_checker: MockTmuxChecker::new(),
+            ppid: 1000,
+            home_dir: home,
+            now: fixed_now,
+        }
+    }
+
+    fn make_init_with_tmux(
+        alive_pids: Vec<u32>,
+        alive_panes: Vec<String>,
+        home: PathBuf,
+    ) -> SessionStartInit<MockProcessChecker, MockTmuxChecker> {
+        SessionStartInit {
+            process_checker: MockProcessChecker { alive_pids },
+            tmux_checker: MockTmuxChecker::with_alive_panes(alive_panes),
             ppid: 1000,
             home_dir: home,
             now: fixed_now,
@@ -1298,16 +1391,23 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_stale_teams_with_dead_pid() {
+    fn test_detect_stale_teams_all_panes_dead_cleans_up() {
         let home = tempfile::tempdir().unwrap();
         let teams_dir = home.path().join(".claude").join("teams");
+        let tasks_dir = home.path().join(".claude").join("tasks");
 
-        // Create a team directory with a dead lead PID.
+        // Create a team directory with members that have dead panes.
         let team_dir = teams_dir.join("stale-team");
         fs::create_dir_all(&team_dir).unwrap();
+        let task_dir = tasks_dir.join("stale-team");
+        fs::create_dir_all(&task_dir).unwrap();
         let config = serde_json::json!({
-            "leadPid": 4294967295_u64,
-            "teamName": "stale-team"
+            "leadPid": 99999,
+            "teamName": "stale-team",
+            "members": [
+                {"tmuxPaneId": "%dead1"},
+                {"tmuxPaneId": "%dead2"}
+            ]
         });
         fs::write(
             team_dir.join("config.json"),
@@ -1315,29 +1415,38 @@ mod tests {
         )
         .unwrap();
 
-        let init = make_init(vec![], home.path().to_path_buf());
+        // No alive panes -- all dead.
+        let init = make_init_with_tmux(vec![], vec![], home.path().to_path_buf());
         let warnings = init.detect_stale_teams();
 
         assert!(
             !warnings.is_empty(),
-            "should detect stale team with dead PID"
+            "should detect stale team with all dead panes"
         );
-        assert!(warnings[0].contains("stale team: stale-team"));
-        assert!(warnings[0].contains("dead"));
+        assert!(warnings[0].contains("STALE TEAM CLEANED"));
+        assert!(warnings[0].contains("stale-team"));
+        assert!(warnings[0].contains("2 members"));
+
+        // Verify team dir and task dir were removed.
+        assert!(!team_dir.exists(), "stale team directory should be removed");
+        assert!(!task_dir.exists(), "stale team task list should be removed");
     }
 
     #[test]
-    fn test_detect_stale_teams_with_alive_pid() {
+    fn test_detect_stale_teams_some_panes_alive_not_cleaned() {
         let home = tempfile::tempdir().unwrap();
         let teams_dir = home.path().join(".claude").join("teams");
 
-        // Create a team directory with our own PID (alive).
-        let my_pid = std::process::id();
+        // Create a team with one alive and one dead pane.
         let team_dir = teams_dir.join("alive-team");
         fs::create_dir_all(&team_dir).unwrap();
         let config = serde_json::json!({
-            "leadPid": my_pid,
-            "teamName": "alive-team"
+            "leadPid": 99999,
+            "teamName": "alive-team",
+            "members": [
+                {"tmuxPaneId": "%alive1"},
+                {"tmuxPaneId": "%dead1"}
+            ]
         });
         fs::write(
             team_dir.join("config.json"),
@@ -1345,10 +1454,14 @@ mod tests {
         )
         .unwrap();
 
-        let init = make_init(vec![my_pid], home.path().to_path_buf());
+        let init = make_init_with_tmux(vec![], vec!["%alive1".into()], home.path().to_path_buf());
         let warnings = init.detect_stale_teams();
 
-        assert!(warnings.is_empty(), "should not flag team with alive PID");
+        assert!(
+            warnings.is_empty(),
+            "team with at least one alive pane should not be cleaned"
+        );
+        assert!(team_dir.exists(), "team dir should still exist");
     }
 
     #[test]
@@ -1364,6 +1477,7 @@ mod tests {
         let warnings = init.detect_stale_teams();
 
         assert!(warnings.is_empty(), "no config.json means no warnings");
+        assert!(team_dir.exists(), "team dir without config should remain");
     }
 
     #[test]
@@ -1377,6 +1491,38 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "missing teams dir should produce no warnings"
+        );
+    }
+
+    #[test]
+    fn test_detect_stale_teams_empty_members_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        let teams_dir = home.path().join(".claude").join("teams");
+
+        // Create a team with empty members array.
+        let team_dir = teams_dir.join("empty-members-team");
+        fs::create_dir_all(&team_dir).unwrap();
+        let config = serde_json::json!({
+            "leadPid": 99999,
+            "teamName": "empty-members-team",
+            "members": []
+        });
+        fs::write(
+            team_dir.join("config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let init = make_init(vec![], home.path().to_path_buf());
+        let warnings = init.detect_stale_teams();
+
+        assert!(
+            warnings.is_empty(),
+            "team with empty members should be skipped"
+        );
+        assert!(
+            team_dir.exists(),
+            "team dir with empty members should remain"
         );
     }
 
@@ -1473,94 +1619,181 @@ mod tests {
     }
 
     #[test]
-    fn test_sweep_orphan_sentinels_removes_orphans() {
+    fn test_sweep_all_stale_sessions_cleans_dead_pid() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let current_sid = "ses-01jq7current000000000000";
 
+        let session_base = dir.path().join(".state").join("session");
         let sentinel_base = dir.path().join(".state").join("sentinels").join("pathflow");
 
-        // Create current session sentinel dir.
-        fs::create_dir_all(sentinel_base.join(current_sid)).unwrap();
+        // Create current session.
+        fs::create_dir_all(session_base.join(current_sid)).unwrap();
 
-        // Create orphan sentinel dir (no pathflow-active flag).
-        let orphan_sid = "ses-01jq7orphan0000000000000";
-        fs::create_dir_all(sentinel_base.join(orphan_sid)).unwrap();
+        // Create a stale session with a dead PID.
+        let stale_sid = "ses-01jq7stale00000000000000";
+        let stale_pathflow = session_base.join(stale_sid).join("pathflow");
+        fs::create_dir_all(&stale_pathflow).unwrap();
+        let team_info = PathflowTeamInfo {
+            lead_pid: 99999,
+            team_name: "stale-team".into(),
+        };
+        fs::write(
+            stale_pathflow.join("pathflow-team.json"),
+            serde_json::to_string(&team_info).unwrap(),
+        )
+        .unwrap();
+        // Create sentinel dir for stale session.
+        fs::create_dir_all(sentinel_base.join(stale_sid)).unwrap();
+        // Create team dir for stale session.
+        let stale_team_dir = home.path().join(".claude").join("teams").join("stale-team");
+        fs::create_dir_all(&stale_team_dir).unwrap();
+        let stale_task_dir = home.path().join(".claude").join("tasks").join("stale-team");
+        fs::create_dir_all(&stale_task_dir).unwrap();
+
+        // PID 99999 is NOT alive.
+        let init = make_init(vec![], home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        // Stale session artifacts should be removed.
+        assert!(
+            !session_base.join(stale_sid).exists(),
+            "stale session dir should be removed"
+        );
+        assert!(
+            !sentinel_base.join(stale_sid).exists(),
+            "stale sentinel dir should be removed"
+        );
+        assert!(!stale_team_dir.exists(), "stale team dir should be removed");
+        assert!(!stale_task_dir.exists(), "stale task dir should be removed");
+        // Current session should remain.
+        assert!(session_base.join(current_sid).exists());
+    }
+
+    #[test]
+    fn test_sweep_all_stale_sessions_skips_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000001";
+
+        let session_base = dir.path().join(".state").join("session");
+
+        // Create an alive session with PID 42.
+        let alive_sid = "ses-01jq7alive00000000000001";
+        let alive_pathflow = session_base.join(alive_sid).join("pathflow");
+        fs::create_dir_all(&alive_pathflow).unwrap();
+        let team_info = PathflowTeamInfo {
+            lead_pid: 42,
+            team_name: "alive-team".into(),
+        };
+        fs::write(
+            alive_pathflow.join("pathflow-team.json"),
+            serde_json::to_string(&team_info).unwrap(),
+        )
+        .unwrap();
+
+        // PID 42 is alive.
+        let init = make_init(vec![42], home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        // Alive session should remain.
+        assert!(
+            session_base.join(alive_sid).exists(),
+            "alive session should not be removed"
+        );
+    }
+
+    #[test]
+    fn test_sweep_all_stale_sessions_cleans_no_team_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000002";
+
+        let session_base = dir.path().join(".state").join("session");
+
+        // Create a session dir with no team file.
+        let orphan_sid = "ses-01jq7orphan0000000000002";
+        fs::create_dir_all(session_base.join(orphan_sid)).unwrap();
 
         let init = make_init(vec![], home.path().to_path_buf());
-        init.sweep_orphan_sentinels(dir.path(), current_sid);
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
 
-        // Current session sentinel should still exist.
-        assert!(sentinel_base.join(current_sid).exists());
+        // Session without team file should be removed.
+        assert!(
+            !session_base.join(orphan_sid).exists(),
+            "session without team file should be removed"
+        );
+    }
+
+    #[test]
+    fn test_sweep_all_stale_sessions_sweeps_orphan_sentinels() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000003";
+
+        let session_base = dir.path().join(".state").join("session");
+        let sentinel_base = dir.path().join(".state").join("sentinels").join("pathflow");
+
+        // Create orphan sentinel dir (no matching session dir).
+        let orphan_sid = "ses-01jq7orphan0000000000003";
+        fs::create_dir_all(sentinel_base.join(orphan_sid)).unwrap();
+
+        // Create sentinel dir with matching alive session.
+        let good_sid = "ses-01jq7goodsid000000000003";
+        fs::create_dir_all(sentinel_base.join(good_sid)).unwrap();
+        let good_pathflow = session_base.join(good_sid).join("pathflow");
+        fs::create_dir_all(&good_pathflow).unwrap();
+        let team_info = PathflowTeamInfo {
+            lead_pid: 42,
+            team_name: "good-team".into(),
+        };
+        fs::write(
+            good_pathflow.join("pathflow-team.json"),
+            serde_json::to_string(&team_info).unwrap(),
+        )
+        .unwrap();
+
+        // PID 42 is alive.
+        let init = make_init(vec![42], home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
         // Orphan sentinel should be removed.
         assert!(
             !sentinel_base.join(orphan_sid).exists(),
             "orphan sentinel dir should be removed"
         );
-    }
-
-    #[test]
-    fn test_sweep_orphan_sentinels_preserves_active_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let current_sid = "ses-01jq7current000000000001";
-
-        let sentinel_base = dir.path().join(".state").join("sentinels").join("pathflow");
-        fs::create_dir_all(sentinel_base.join(current_sid)).unwrap();
-
-        // Create another session's sentinel dir WITH an active flag.
-        let other_sid = "ses-01jq7other00000000000000";
-        fs::create_dir_all(sentinel_base.join(other_sid)).unwrap();
-        let flag_dir = dir
-            .path()
-            .join(".state")
-            .join("session")
-            .join(other_sid)
-            .join("pathflow");
-        fs::create_dir_all(&flag_dir).unwrap();
-        fs::write(flag_dir.join("is-pathflow-active"), "{}").unwrap();
-
-        let init = make_init(vec![], home.path().to_path_buf());
-        init.sweep_orphan_sentinels(dir.path(), current_sid);
-
-        // Both should still exist (other has active flag).
-        assert!(sentinel_base.join(current_sid).exists());
+        // Good sentinel should remain (session has alive lead PID).
         assert!(
-            sentinel_base.join(other_sid).exists(),
-            "session with active flag should not be swept"
+            sentinel_base.join(good_sid).exists(),
+            "non-orphan sentinel dir should remain"
         );
     }
 
     #[test]
-    fn test_detect_stale_sessions_finds_stale_dirs() {
+    fn test_sweep_all_stale_sessions_skips_current_and_non_session() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let current_sid = "ses-01jq7current000000000002";
+        let current_sid = "ses-01jq7current000000000004";
 
-        let sentinel_base = dir.path().join(".state").join("sentinels").join("pathflow");
-        fs::create_dir_all(sentinel_base.join(current_sid)).unwrap();
-        fs::create_dir_all(sentinel_base.join("ses-01jq7stale00000000000002")).unwrap();
+        let session_base = dir.path().join(".state").join("session");
 
-        let init = make_init(vec![], home.path().to_path_buf());
-        let warnings = init.detect_stale_sessions(dir.path(), current_sid);
-
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("stale sentinel directory"));
-    }
-
-    #[test]
-    fn test_detect_stale_sessions_no_stale() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let current_sid = "ses-01jq7current000000000003";
-
-        let sentinel_base = dir.path().join(".state").join("sentinels").join("pathflow");
-        fs::create_dir_all(sentinel_base.join(current_sid)).unwrap();
+        // Create current session.
+        fs::create_dir_all(session_base.join(current_sid)).unwrap();
+        // Create a non-session directory.
+        fs::create_dir_all(session_base.join("not-a-session")).unwrap();
 
         let init = make_init(vec![], home.path().to_path_buf());
-        let warnings = init.detect_stale_sessions(dir.path(), current_sid);
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
 
-        assert!(warnings.is_empty());
+        // Neither should be removed.
+        assert!(
+            session_base.join(current_sid).exists(),
+            "current session should not be removed"
+        );
+        assert!(
+            session_base.join("not-a-session").exists(),
+            "non-session dir should not be removed"
+        );
     }
 
     #[test]
@@ -1609,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_stale_cleanup_dead_pid_compact_updates_pid() {
+    fn test_handle_stale_cleanup_dead_pid_compact_does_not_update_pid() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
@@ -1632,7 +1865,8 @@ mod tests {
         let team_file = team_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string(&team_info).unwrap()).unwrap();
 
-        // PID 88888 is NOT alive -> dead. Source is "compact" -> should update PID.
+        // PID 88888 is NOT alive -> dead. Source is "compact" -> should NOT update PID.
+        // The caller is a surviving tmux teammate whose lead died.
         let init = make_init(vec![], home.path().to_path_buf());
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-unknown"),
@@ -1653,10 +1887,67 @@ mod tests {
         assert_eq!(existing.unwrap(), old_sid);
         assert!(!team_mode, "dead PID should not be team mode");
 
+        // Verify PID was NOT updated -- should still be the original dead PID.
+        let updated_data = fs::read_to_string(&team_file).unwrap();
+        let updated_info: PathflowTeamInfo = serde_json::from_str(&updated_data).unwrap();
+        assert_eq!(
+            updated_info.lead_pid, 88888,
+            "compact should NOT update PID -- caller is a surviving teammate"
+        );
+    }
+
+    #[test]
+    fn test_handle_stale_cleanup_dead_pid_resume_updates_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let old_sid = SessionId::new_unchecked("ses-01jq7deadresume00000000");
+        session::write_env_file(&runtime_dir, &old_sid, "codeflow").unwrap();
+
+        // Create pathflow-team.json with a dead PID.
+        let team_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(old_sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&team_dir).unwrap();
+        let team_info = PathflowTeamInfo {
+            lead_pid: 88888,
+            team_name: "resume-team".into(),
+        };
+        let team_file = team_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string(&team_info).unwrap()).unwrap();
+
+        // PID 88888 is NOT alive -> dead. Source is "resume" -> SHOULD update PID.
+        let init = make_init(vec![], home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let (existing, team_mode) =
+            init.handle_stale_cleanup(dir.path(), &runtime_dir, "resume", &mut result);
+
+        assert!(
+            existing.is_some(),
+            "resume with dead PID should return existing SID"
+        );
+        assert_eq!(existing.unwrap(), old_sid);
+        assert!(!team_mode, "dead PID should not be team mode");
+
         // Verify PID was updated in the file.
         let updated_data = fs::read_to_string(&team_file).unwrap();
         let updated_info: PathflowTeamInfo = serde_json::from_str(&updated_data).unwrap();
-        assert_eq!(updated_info.lead_pid, 1000, "PID should be updated to ppid");
+        assert_eq!(
+            updated_info.lead_pid, 1000,
+            "resume should update PID to ppid (user relaunched claude)"
+        );
     }
 
     #[test]

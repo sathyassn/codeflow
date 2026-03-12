@@ -357,7 +357,9 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 
 	init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{99998: false}}
 
-	// Dead PID + source=compact -> preserve session, update PID.
+	// Dead PID + source=compact -> preserve session, DON'T update PID.
+	// On compact, the claude process doesn't restart. If lead PID is dead,
+	// this caller is a surviving teammate. PID should NOT be updated.
 	stdin := strings.NewReader(`{"session_id":"compact-uuid","source":"compact"}`)
 	result, err := init_.StartInit(stdin, projectDir)
 	if err != nil {
@@ -369,7 +371,67 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 		t.Errorf("SessionID = %q, want %q (should preserve for compact)", result.SessionID, sid)
 	}
 
-	// Verify pathflow-team.json was updated with new PID.
+	// Verify pathflow-team.json was NOT updated with new PID (compact does not update).
+	updatedData, err := os.ReadFile(filepath.Join(pfDir, "pathflow-team.json"))
+	if err != nil {
+		t.Fatalf("reading team file: %v", err)
+	}
+	var updated pathflowTeamJSON
+	if err := json.Unmarshal(updatedData, &updated); err != nil {
+		t.Fatalf("unmarshaling team file: %v", err)
+	}
+	if updated.LeadPID == init_.PPID {
+		t.Errorf("lead_pid should NOT be updated on compact (got %d, PPID=%d)", updated.LeadPID, init_.PPID)
+	}
+	if updated.LeadPID != 99998 {
+		t.Errorf("lead_pid should remain %d (original dead PID), got %d", 99998, updated.LeadPID)
+	}
+}
+
+func TestStartInit_ResumeContinuation(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	sid := "ses-1709136000000abcdef012345"
+	init_ := newTestInitializer(t)
+	setupPathflowConfig(t, projectDir)
+
+	// Create existing session with dead PID (simulating resume after lead died).
+	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 99998, TeamName: "resume-team"})
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write env file.
+	envDir := filepath.Join(projectDir, ".state", "runtime")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "export CODEFLOW_SESSION_ID='" + sid + "'\nexport CF_PROJECT_ROOT='test'\n"
+	if err := os.WriteFile(filepath.Join(envDir, "codeflow-env.sh"), []byte(envContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{99998: false}}
+
+	// Dead PID + source=resume -> preserve session AND update PID.
+	// On resume, the user relaunched claude, so PID update is correct.
+	stdin := strings.NewReader(`{"session_id":"resume-uuid","source":"resume"}`)
+	result, err := init_.StartInit(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("StartInit() error = %v", err)
+	}
+
+	// Should preserve the existing session ID.
+	if result.SessionID != sid {
+		t.Errorf("SessionID = %q, want %q (should preserve for resume)", result.SessionID, sid)
+	}
+
+	// Verify pathflow-team.json WAS updated with new PID (resume updates PID).
 	updatedData, err := os.ReadFile(filepath.Join(pfDir, "pathflow-team.json"))
 	if err != nil {
 		t.Fatalf("reading updated team file: %v", err)
@@ -379,13 +441,7 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 		t.Fatalf("unmarshaling updated team file: %v", err)
 	}
 	if updated.LeadPID != init_.PPID {
-		t.Errorf("updated lead_pid = %d, want %d", updated.LeadPID, init_.PPID)
-	}
-
-	// Verify current-session-id was NOT written (compact reuses existing session).
-	csidPath := filepath.Join(projectDir, ".state", "runtime", "current-session-id")
-	if _, err := os.Stat(csidPath); !os.IsNotExist(err) {
-		t.Error("current-session-id should NOT be written on compact (only on fresh startup)")
+		t.Errorf("updated lead_pid = %d, want %d (resume should update PID)", updated.LeadPID, init_.PPID)
 	}
 }
 
@@ -930,42 +986,155 @@ func TestCleanupActiveTask(t *testing.T) {
 	})
 }
 
-func TestSweepOrphanSentinels(t *testing.T) {
+func TestSweepAllStaleSessions(t *testing.T) {
 	t.Parallel()
 
-	init_ := newTestInitializer(t)
-	projectDir := t.TempDir()
-	currentSID := "ses-1709136000000abcdef012345"
+	t.Run("cleans_stale_session_with_dead_pid", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		projectDir := t.TempDir()
+		currentSID := "ses-1709136000000current00001"
 
-	// Create sentinel dir for orphan (no matching session dir).
-	orphanSID := "ses-1709136000000orphan000001"
-	orphanDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", orphanSID)
-	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+		// Create current session dir (should not be touched).
+		if err := os.MkdirAll(filepath.Join(projectDir, ".state", "session", currentSID, "pathflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 
-	// Create sentinel dir with matching session dir (not orphan).
-	goodSID := "ses-1709136000000goodsid00001"
-	goodSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", goodSID)
-	goodSessionDir := filepath.Join(projectDir, ".state", "session", goodSID)
-	if err := os.MkdirAll(goodSentinelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(goodSessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+		// Create stale session with dead PID.
+		staleSID := "ses-1709136000000stale000001"
+		staleDir := filepath.Join(projectDir, ".state", "session", staleSID, "pathflow")
+		if err := os.MkdirAll(staleDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 88888, TeamName: "stale-team"})
+		if err := os.WriteFile(filepath.Join(staleDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-	init_.sweepOrphanSentinels(projectDir, currentSID)
+		// Create stale sentinel dir.
+		staleSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", staleSID)
+		if err := os.MkdirAll(staleSentinelDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 
-	// Orphan should be removed.
-	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
-		t.Error("orphan sentinel dir should have been removed")
-	}
+		// Create team config to verify it's cleaned.
+		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "stale-team")
+		if err := os.MkdirAll(teamDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-	// Good sentinel should remain.
-	if _, err := os.Stat(goodSentinelDir); os.IsNotExist(err) {
-		t.Error("non-orphan sentinel dir should remain")
-	}
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{88888: false}}
+		init_.sweepAllStaleSessions(projectDir, currentSID)
+
+		// Stale session dir should be removed.
+		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", staleSID)); !os.IsNotExist(err) {
+			t.Error("stale session directory should have been removed")
+		}
+		// Stale sentinel dir should be removed.
+		if _, err := os.Stat(staleSentinelDir); !os.IsNotExist(err) {
+			t.Error("stale sentinel directory should have been removed")
+		}
+		// Team config should be removed.
+		if _, err := os.Stat(teamDir); !os.IsNotExist(err) {
+			t.Error("stale team directory should have been removed")
+		}
+		// Current session should remain.
+		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", currentSID)); os.IsNotExist(err) {
+			t.Error("current session directory should remain")
+		}
+	})
+
+	t.Run("skips_alive_session", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		projectDir := t.TempDir()
+		currentSID := "ses-1709136000000current00001"
+
+		// Create alive session.
+		aliveSID := "ses-1709136000000alive000001"
+		aliveDir := filepath.Join(projectDir, ".state", "session", aliveSID, "pathflow")
+		if err := os.MkdirAll(aliveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 77777, TeamName: "alive-team"})
+		if err := os.WriteFile(filepath.Join(aliveDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{77777: true}}
+		init_.sweepAllStaleSessions(projectDir, currentSID)
+
+		// Alive session should remain.
+		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", aliveSID)); os.IsNotExist(err) {
+			t.Error("alive session directory should remain")
+		}
+	})
+
+	t.Run("cleans_session_without_team_file", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		projectDir := t.TempDir()
+		currentSID := "ses-1709136000000current00001"
+
+		// Create session with no team file.
+		noTeamSID := "ses-1709136000000noteam00001"
+		noTeamDir := filepath.Join(projectDir, ".state", "session", noTeamSID, "pathflow")
+		if err := os.MkdirAll(noTeamDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		init_.sweepAllStaleSessions(projectDir, currentSID)
+
+		// Session without team file should be removed.
+		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", noTeamSID)); !os.IsNotExist(err) {
+			t.Error("session without team file should have been removed")
+		}
+	})
+
+	t.Run("sweeps_orphan_sentinels", func(t *testing.T) {
+		t.Parallel()
+		init_ := newTestInitializer(t)
+		init_.ProcessChecker = &mockProcessChecker{alive: map[int]bool{9999: true}}
+		projectDir := t.TempDir()
+		currentSID := "ses-1709136000000current00001"
+
+		// Create orphan sentinel dir (no matching session dir).
+		orphanSID := "ses-1709136000000orphan000001"
+		orphanDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", orphanSID)
+		if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create sentinel dir with matching session dir and alive lead PID (not orphan).
+		goodSID := "ses-1709136000000goodsid00001"
+		goodSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", goodSID)
+		goodSessionDir := filepath.Join(projectDir, ".state", "session", goodSID, "pathflow")
+		if err := os.MkdirAll(goodSentinelDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(goodSessionDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Write a valid pathflow-team.json with an alive PID so the session is not stale.
+		teamJSON := []byte(`{"team_name":"good-team","lead_pid":9999}`)
+		if err := os.WriteFile(filepath.Join(goodSessionDir, "pathflow-team.json"), teamJSON, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		init_.sweepAllStaleSessions(projectDir, currentSID)
+
+		// Orphan should be removed.
+		if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+			t.Error("orphan sentinel dir should have been removed")
+		}
+		// Good sentinel should remain (session has alive lead PID).
+		if _, err := os.Stat(goodSentinelDir); os.IsNotExist(err) {
+			t.Error("non-orphan sentinel dir should remain")
+		}
+	})
 }
 
 func TestDetectCompactRecovery(t *testing.T) {
@@ -1044,7 +1213,7 @@ func TestFormatEnvOutput(t *testing.T) {
 	}
 }
 
-func TestDetectStaleSessions(t *testing.T) {
+func TestSweepAllStaleSessions_CleansStaleFlagOnly(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -1056,7 +1225,7 @@ func TestDetectStaleSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create stale session with pathflow flag.
+	// Create stale session with pathflow flag but no team file.
 	staleSID := "ses-1709136000000stale000001"
 	staleDir := filepath.Join(projectDir, ".state", "session", staleSID, "pathflow")
 	if err := os.MkdirAll(staleDir, 0o755); err != nil {
@@ -1066,21 +1235,12 @@ func TestDetectStaleSessions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(staleDir, "is-pathflow-active"), flagData, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// No pathflow-team.json -- isSessionStale returns true (no team file = stale).
 
-	warnings := init_.detectStaleSessions(projectDir, currentSID)
-	if len(warnings) == 0 {
-		t.Error("expected stale session warnings")
-	}
-	found := false
-	for _, w := range warnings {
-		if strings.Contains(w, staleSID) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("warnings should mention stale SID %q, got: %v", staleSID, warnings)
+	init_.sweepAllStaleSessions(projectDir, currentSID)
+
+	// Stale session should be removed (no team file = stale).
+	if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", staleSID)); !os.IsNotExist(err) {
+		t.Error("stale session without team file should have been removed")
 	}
 }
 
@@ -1326,176 +1486,35 @@ func TestHandleNoTeamFile_NoFlagNoTeam(t *testing.T) {
 	}
 }
 
-func TestIsSessionStale(t *testing.T) {
+func TestSweepAllStaleSessions_InvalidTeamJSON(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no_team_file", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		// Flag path in a dir with no pathflow-team.json.
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if !init_.isSessionStale(flagPath) {
-			t.Error("missing pathflow-team.json should be detected as stale")
-		}
-	})
+	init_ := newTestInitializer(t)
+	projectDir := t.TempDir()
+	currentSID := "ses-1709136000000current00001"
 
-	t.Run("invalid_json_team_file", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), []byte("not json"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if !init_.isSessionStale(flagPath) {
-			t.Error("invalid JSON team file should be detected as stale")
-		}
-	})
+	// Create session with invalid JSON team file.
+	badSID := "ses-1709136000000badjson00001"
+	badDir := filepath.Join(projectDir, ".state", "session", badSID, "pathflow")
+	if err := os.MkdirAll(badDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "pathflow-team.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	t.Run("lead_pid_alive", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: true}}
+	init_.sweepAllStaleSessions(projectDir, currentSID)
 
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "test-team"})
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if init_.isSessionStale(flagPath) {
-			t.Error("session with alive lead PID should not be stale")
-		}
-	})
-
-	t.Run("lead_pid_dead_no_team_config", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
-
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "nonexistent-team"})
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if !init_.isSessionStale(flagPath) {
-			t.Error("dead lead PID with missing team config should be stale")
-		}
-	})
-
-	t.Run("all_panes_dead", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%1": false, "%2": false}}
-
-		// Create team config with members.
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "test-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%1"},
-				{"tmuxPaneId": "%2"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "test-team"})
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if !init_.isSessionStale(flagPath) {
-			t.Error("all dead panes should be detected as stale")
-		}
-	})
-
-	t.Run("one_pane_alive", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%1": true, "%2": false}}
-
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "alive-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%1"},
-				{"tmuxPaneId": "%2"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345, "team_name": "alive-team"})
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if init_.isSessionStale(flagPath) {
-			t.Error("session with alive pane should not be stale")
-		}
-	})
-
-	t.Run("no_team_name_in_team_file", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.ProcessChecker = mockProcessChecker{alive: map[int]bool{12345: false}}
-
-		flagDir := t.TempDir()
-		flagPath := filepath.Join(flagDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte(`{"session_id":"test"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		// Team file with lead_pid but no team_name.
-		teamData, _ := json.Marshal(map[string]any{"lead_pid": 12345})
-		if err := os.WriteFile(filepath.Join(flagDir, "pathflow-team.json"), teamData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if !init_.isSessionStale(flagPath) {
-			t.Error("dead lead PID with empty team_name should be stale")
-		}
-	})
+	// Session with invalid team JSON should be removed.
+	if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", badSID)); !os.IsNotExist(err) {
+		t.Error("session with invalid team JSON should have been removed")
+	}
 }
 
 func TestDetectStaleTeams(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stale_team_detected", func(t *testing.T) {
+	t.Run("stale_team_cleaned", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
 		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%dead": false}}
@@ -1513,19 +1532,34 @@ func TestDetectStaleTeams(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Create task list for the team.
+		taskDir := filepath.Join(init_.HomeDir, ".claude", "tasks", "stale-team")
+		if err := os.MkdirAll(taskDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
 		warnings := init_.detectStaleTeams()
 		if len(warnings) == 0 {
 			t.Error("expected stale team warning")
 		}
 		found := false
 		for _, w := range warnings {
-			if strings.Contains(w, "stale-team") {
+			if strings.Contains(w, "STALE TEAM CLEANED") && strings.Contains(w, "stale-team") {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("warnings should mention 'stale-team', got: %v", warnings)
+			t.Errorf("warnings should mention 'STALE TEAM CLEANED: stale-team', got: %v", warnings)
+		}
+
+		// Team directory should be removed.
+		if _, err := os.Stat(teamDir); !os.IsNotExist(err) {
+			t.Error("stale team directory should have been removed")
+		}
+		// Task list should be removed.
+		if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
+			t.Error("stale team task list should have been removed")
 		}
 	})
 
@@ -1714,7 +1748,7 @@ func TestUpdateLeadPID(t *testing.T) {
 	})
 }
 
-func TestDetectStaleSessions_NoStale(t *testing.T) {
+func TestSweepAllStaleSessions_SkipsCurrentSession(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -1722,17 +1756,20 @@ func TestDetectStaleSessions_NoStale(t *testing.T) {
 	currentSID := "ses-1709136000000current00001"
 
 	// Create current session only.
-	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "session", currentSID), 0o755); err != nil {
+	sessionDir := filepath.Join(projectDir, ".state", "session", currentSID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	warnings := init_.detectStaleSessions(projectDir, currentSID)
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings, got: %v", warnings)
+	init_.sweepAllStaleSessions(projectDir, currentSID)
+
+	// Current session must NOT be removed.
+	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+		t.Error("current session should not be removed by sweep")
 	}
 }
 
-func TestDetectStaleSessions_NonSessionDir(t *testing.T) {
+func TestSweepAllStaleSessions_IgnoresNonSessionDir(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -1740,13 +1777,16 @@ func TestDetectStaleSessions_NonSessionDir(t *testing.T) {
 	currentSID := "ses-1709136000000current00001"
 
 	// Create a non-session directory (doesn't start with ses-).
-	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "session", "not-a-session"), 0o755); err != nil {
+	nonSessionDir := filepath.Join(projectDir, ".state", "session", "not-a-session")
+	if err := os.MkdirAll(nonSessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	warnings := init_.detectStaleSessions(projectDir, currentSID)
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings for non-session dirs, got: %v", warnings)
+	init_.sweepAllStaleSessions(projectDir, currentSID)
+
+	// Non-session directories must NOT be removed.
+	if _, err := os.Stat(nonSessionDir); os.IsNotExist(err) {
+		t.Error("non-session directory should not be touched by sweep")
 	}
 }
 

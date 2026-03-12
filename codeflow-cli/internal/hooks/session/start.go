@@ -263,14 +263,11 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 	// --- Section 3: Directory creation ---
 	init_.createDirectories(projectDir, sessionID)
 
-	// --- Section 4: Stale session detection (warning-only) ---
-	staleWarnings := init_.detectStaleSessions(projectDir, sessionID)
-	for _, w := range staleWarnings {
-		result.warn("%s", w)
+	// --- Section 4+5: Sweep all stale sessions (replaces detectStaleSessions + sweepOrphanSentinels) ---
+	// Only sweep on startup (fresh session) to avoid costly scans on compact/resume.
+	if input.Source == "startup" || input.Source == "unknown" {
+		init_.sweepAllStaleSessions(projectDir, sessionID)
 	}
-
-	// --- Section 5: Orphan sentinel sweep ---
-	init_.sweepOrphanSentinels(projectDir, sessionID)
 
 	// --- Section 6: Active task context expiry ---
 	init_.cleanupActiveTask(projectDir)
@@ -381,8 +378,17 @@ func (init_ *Initializer) handleStaleCleanup(projectDir, envFilePath, source str
 		return "", false, nil
 	}
 
-	// Compact/resume/clear with dead PID -- update lead_pid.
-	init_.updateLeadPID(teamFilePath, teamData)
+	// Resume with dead PID -- update lead_pid (user relaunched claude).
+	if source == "resume" {
+		init_.updateLeadPID(teamFilePath, teamData)
+		return oldSID, false, nil
+	}
+
+	// Compact/clear with dead PID -- don't update PID.
+	// On compact/clear, the claude process does NOT restart. If the lead PID
+	// is dead and source is compact/clear, this caller is a surviving tmux
+	// teammate whose lead died. Updating the PID would incorrectly claim
+	// leadership.
 	return oldSID, false, nil
 }
 
@@ -483,99 +489,13 @@ func (init_ *Initializer) createDirectories(projectDir, sessionID string) {
 	}
 }
 
-// detectStaleSessions scans for sessions with pathflow-active flags and dead tmux panes.
-func (init_ *Initializer) detectStaleSessions(projectDir, currentSID string) []string {
-	sessionDir := filepath.Join(projectDir, ".state", "session")
-	entries, err := os.ReadDir(sessionDir)
-	if err != nil {
-		return nil
-	}
-
-	var warnings []string
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "ses-") {
-			continue
-		}
-		sid := e.Name()
-		if sid == currentSID {
-			continue
-		}
-
-		flagPath := filepath.Join(sessionDir, sid, "pathflow", "is-pathflow-active")
-		if _, err := os.Stat(flagPath); err != nil {
-			continue
-		}
-
-		// Check if session is stale by reading team info from the flag file.
-		if init_.isSessionStale(flagPath) {
-			warnings = append(warnings, fmt.Sprintf("STALE SESSION: %s (pathflow-active flag set, no live tmux panes)", sid))
-		}
-	}
-
-	if len(warnings) > 0 {
-		warnings = append(warnings, "Run '/cf-cleanup --sessions' to clean up stale session state.")
-	}
-	return warnings
-}
-
-// isSessionStale checks if a session's lead process is dead.
-// It reads pathflow-team.json (in the same directory as flagPath) for team state.
-// If pathflow-team.json doesn't exist, the session has no team (considered stale).
-func (init_ *Initializer) isSessionStale(flagPath string) bool {
-	// Read pathflow-team.json from the same directory as the flag file.
-	teamFilePath := filepath.Join(filepath.Dir(flagPath), "pathflow-team.json")
-	data, err := os.ReadFile(teamFilePath)
-	if err != nil {
-		// No team file -- session has no team, considered stale.
-		return true
-	}
-
-	var teamInfo struct {
-		LeadPID  int    `json:"lead_pid"`
-		TeamName string `json:"team_name"`
-	}
-	if err := json.Unmarshal(data, &teamInfo); err != nil {
-		return true
-	}
-
-	// Check lead PID liveness first (fast path).
-	if teamInfo.LeadPID > 0 && init_.ProcessChecker.IsAlive(teamInfo.LeadPID) {
-		return false
-	}
-
-	// Lead PID dead or zero -- fall back to tmux pane check via team config.
-	if teamInfo.TeamName == "" {
-		return true
-	}
-
-	teamCfgPath := filepath.Join(init_.HomeDir, ".claude", "teams", teamInfo.TeamName, "config.json")
-	cfgData, err := os.ReadFile(teamCfgPath)
-	if err != nil {
-		return true
-	}
-
-	var cfg struct {
-		Members []struct {
-			TmuxPaneID string `json:"tmuxPaneId"`
-		} `json:"members"`
-	}
-	if err := json.Unmarshal(cfgData, &cfg); err != nil {
-		return true
-	}
-
-	// If any pane is alive, session is not stale.
-	for _, m := range cfg.Members {
-		if init_.TmuxChecker.IsPaneAlive(m.TmuxPaneID) {
-			return false
-		}
-	}
-	return true
-}
-
-// sweepOrphanSentinels removes pathflow sentinel dirs that have no corresponding session dir.
-func (init_ *Initializer) sweepOrphanSentinels(projectDir, currentSID string) {
-	sentinelBase := filepath.Join(projectDir, ".state", "sentinels", "pathflow")
-	entries, err := os.ReadDir(sentinelBase)
+// sweepAllStaleSessions scans ALL ses-* dirs under .state/session/ (excluding
+// currentSID), checks if the lead PID is alive via pathflow-team.json, and
+// removes stale sessions along with their sentinel dirs and team artifacts.
+// Called on source=startup only, after generating a new SID.
+func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
+	sessionBase := filepath.Join(projectDir, ".state", "session")
+	entries, err := os.ReadDir(sessionBase)
 	if err != nil {
 		return
 	}
@@ -588,10 +508,60 @@ func (init_ *Initializer) sweepOrphanSentinels(projectDir, currentSID string) {
 		if sid == currentSID {
 			continue
 		}
-		sessionDir := filepath.Join(projectDir, ".state", "session", sid)
-		if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+
+		teamFilePath := filepath.Join(sessionBase, sid, "pathflow", "pathflow-team.json")
+		teamData, readErr := os.ReadFile(teamFilePath)
+		if readErr != nil {
+			// No team file -- stale session, clean it up.
+			init_.removeStaleSessionArtifacts(projectDir, sid, "")
+			continue
+		}
+
+		var teamInfo pathflowTeamJSON
+		if err := json.Unmarshal(teamData, &teamInfo); err != nil {
+			// Invalid team file -- stale.
+			init_.removeStaleSessionArtifacts(projectDir, sid, "")
+			continue
+		}
+
+		if teamInfo.LeadPID > 0 && init_.ProcessChecker.IsAlive(teamInfo.LeadPID) {
+			// Lead is alive -- skip.
+			continue
+		}
+
+		// Lead PID dead or zero -- clean up.
+		init_.removeStaleSessionArtifacts(projectDir, sid, teamInfo.TeamName)
+	}
+
+	// Also sweep orphan sentinel dirs that have no matching session dir.
+	sentinelBase := filepath.Join(projectDir, ".state", "sentinels", "pathflow")
+	sentinelEntries, err := os.ReadDir(sentinelBase)
+	if err != nil {
+		return
+	}
+	for _, e := range sentinelEntries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "ses-") {
+			continue
+		}
+		sid := e.Name()
+		if sid == currentSID {
+			continue
+		}
+		sessionDir := filepath.Join(sessionBase, sid)
+		if _, statErr := os.Stat(sessionDir); os.IsNotExist(statErr) {
 			_ = os.RemoveAll(filepath.Join(sentinelBase, sid))
 		}
+	}
+}
+
+// removeStaleSessionArtifacts removes session dir, sentinel dir, and team
+// config/tasks for a stale session.
+func (init_ *Initializer) removeStaleSessionArtifacts(projectDir, sid, teamName string) {
+	_ = os.RemoveAll(filepath.Join(projectDir, ".state", "session", sid))
+	_ = os.RemoveAll(filepath.Join(projectDir, ".state", "sentinels", "pathflow", sid))
+	if teamName != "" {
+		_ = os.RemoveAll(filepath.Join(init_.HomeDir, ".claude", "teams", teamName))
+		_ = os.RemoveAll(filepath.Join(init_.HomeDir, ".claude", "tasks", teamName))
 	}
 }
 
@@ -736,7 +706,8 @@ func detectGitCommit(projectDir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// detectStaleTeams scans for team configs with dead tmux panes.
+// detectStaleTeams scans for team configs with dead tmux panes and cleans them up.
+// Returns warnings for each team that was cleaned.
 func (init_ *Initializer) detectStaleTeams() []string {
 	teamsDir := filepath.Join(init_.HomeDir, ".claude", "teams")
 	entries, err := os.ReadDir(teamsDir)
@@ -749,7 +720,8 @@ func (init_ *Initializer) detectStaleTeams() []string {
 		if !e.IsDir() {
 			continue
 		}
-		cfgPath := filepath.Join(teamsDir, e.Name(), "config.json")
+		teamName := e.Name()
+		cfgPath := filepath.Join(teamsDir, teamName, "config.json")
 		data, err := os.ReadFile(cfgPath)
 		if err != nil {
 			continue
@@ -767,16 +739,21 @@ func (init_ *Initializer) detectStaleTeams() []string {
 			continue
 		}
 
-		stale := 0
+		// Count alive members.
+		alive := 0
 		for _, m := range cfg.Members {
-			if !init_.TmuxChecker.IsPaneAlive(m.TmuxPaneID) {
-				stale++
+			if init_.TmuxChecker.IsPaneAlive(m.TmuxPaneID) {
+				alive++
 			}
 		}
-		if stale > 0 {
+
+		// If ALL members are dead, remove the team directory and task list.
+		if alive == 0 {
+			_ = os.RemoveAll(filepath.Join(teamsDir, teamName))
+			_ = os.RemoveAll(filepath.Join(init_.HomeDir, ".claude", "tasks", teamName))
 			warnings = append(warnings,
-				fmt.Sprintf("STALE TEAM: '%s' has %d/%d members with dead panes",
-					e.Name(), stale, len(cfg.Members)))
+				fmt.Sprintf("STALE TEAM CLEANED: '%s' (%d members, all panes dead)",
+					teamName, len(cfg.Members)))
 		}
 	}
 	return warnings

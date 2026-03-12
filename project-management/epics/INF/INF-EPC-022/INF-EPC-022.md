@@ -166,7 +166,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-017 | Implement logging and autorun modules | complete | high | 0D |
 | INF-TSK-022-018 | Implement CLI command dispatch | complete | high | 0E |
 | INF-TSK-022-019 | Port Go unit tests to Rust | complete | high | 0F |
-| INF-TSK-022-020 | Build contract conformance test suite | todo | critical | 0F |
+| INF-TSK-022-020 | Build contract conformance test suite | done | critical | 0F |
 | INF-TSK-022-021 | Validate shell test suite passes | todo | critical | 0F |
 | INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |
 | INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
@@ -176,6 +176,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
 | INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
 | INF-TSK-022-029 | Add pre-push test hook to enforce tests + coverage before PR | cancelled | high | deferred-to-rust-hooks-epic |
+| INF-TSK-022-030 | Fix session startup stale cleanup and PID management | in_progress | high | adhoc |
 
 ## Dependencies
 
