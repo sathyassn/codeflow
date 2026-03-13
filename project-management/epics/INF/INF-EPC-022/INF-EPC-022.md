@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-03-05T00:00:00Z"
-updated_at: "2026-03-07T00:00:00Z"
+updated_at: "2026-03-13T08:00:00Z"
 ---
 
 # INF-EPC-022: Rust CLI -- Idiomatic Redesign (Epic 0)
@@ -167,7 +167,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-018 | Implement CLI command dispatch | complete | high | 0E |
 | INF-TSK-022-019 | Port Go unit tests to Rust | complete | high | 0F |
 | INF-TSK-022-020 | Build contract conformance test suite | complete | critical | 0F |
-| INF-TSK-022-021 | Pre-cutover Rust binary validation | todo | critical | 0F |
+| INF-TSK-022-021 | Pre-cutover Rust binary validation | complete | critical | 0F |
 | INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |
 | INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
 | INF-TSK-022-024 | Cross-compile release builds | todo | normal | 0G |
