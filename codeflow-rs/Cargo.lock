@@ -791,6 +791,7 @@ dependencies = [
  "git2",
  "insta",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

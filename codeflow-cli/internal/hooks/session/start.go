@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,7 +135,9 @@ func (osTmuxChecker) IsPaneAlive(paneID string) bool {
 	}
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}").Output()
 	if err != nil {
-		return false
+		// If tmux is unreachable, assume pane is alive (safe default).
+		// Treating failure as "all panes dead" would destroy live sessions.
+		return true
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.TrimSpace(line) == paneID {
@@ -169,6 +172,29 @@ type Initializer struct {
 	HomeDir string
 }
 
+// getClaudePID returns the persistent Claude Code process PID by walking up
+// the process tree one level. The hook execution chain is:
+//
+//	claude (persistent) → /bin/zsh (ephemeral) → codeflow binary
+//
+// os.Getppid() returns the ephemeral shell PID. This function gets its parent
+// (the claude process) via ps, falling back to os.Getppid() on error.
+func getClaudePID() int {
+	ppid := os.Getppid()
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(ppid)).Output()
+	if err != nil {
+		return ppid
+	}
+	claudePID, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return ppid
+	}
+	if claudePID <= 1 {
+		return ppid // Don't return init/launchd PID
+	}
+	return claudePID
+}
+
 // NewInitializer creates an Initializer with production defaults.
 func NewInitializer() *Initializer {
 	home, _ := os.UserHomeDir()
@@ -178,7 +204,7 @@ func NewInitializer() *Initializer {
 		TmuxChecker:    osTmuxChecker{},
 		SessionStarter: dbSessionStarter{},
 		ReadBuildInfo:  readBinaryVCSRevision,
-		PPID:           os.Getppid(),
+		PPID:           getClaudePID(),
 		HomeDir:        home,
 	}
 }
@@ -299,9 +325,14 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 	init_.writeSessionMetadata(projectDir, sessionID, input, result)
 
 	// --- Section 9: Stale team detection ---
-	teamWarnings := init_.detectStaleTeams()
-	for _, w := range teamWarnings {
-		result.warn("%s", w)
+	// Only detect stale teams on startup. On compact/resume/clear the lead's
+	// context overflowed but teammates are likely still alive — destroying their
+	// team config would kill an active session.
+	if input.Source == "startup" || input.Source == "unknown" {
+		teamWarnings := init_.detectStaleTeams()
+		for _, w := range teamWarnings {
+			result.warn("%s", w)
+		}
 	}
 
 	// --- Section 10: Compact recovery detection ---
@@ -381,28 +412,29 @@ func (init_ *Initializer) handleStaleCleanup(projectDir, envFilePath, source str
 		return init_.handleNoTeamFile(projectDir, envFilePath, oldSID, source)
 	}
 
-	// Check if lead PID is alive.
-	if teamInfo.LeadPID > 0 && init_.ProcessChecker.IsAlive(teamInfo.LeadPID) {
-		// Lead is alive -- teammate mode.
+	// Check session liveness via tmux pane status from team config.
+	if teamInfo.TeamName != "" && init_.hasLiveTeamPanes(teamInfo.TeamName) {
+		// Team has live tmux panes -- teammate mode.
 		return oldSID, true, nil
 	}
 
-	// Lead PID is dead.
+	// No live panes (or no team config).
 	if source == "startup" || source == "unknown" {
-		// Fresh startup with dead PID -- full cleanup.
+		// Fresh startup with dead session -- full cleanup.
 		init_.cleanupStaleSession(projectDir, envFilePath, oldSID, teamInfo.TeamName)
 		return "", false, nil
 	}
 
-	// Resume with dead PID -- update lead_pid (user relaunched claude).
+	// Resume with dead session -- update lead_pid (user relaunched claude).
+	// lead_pid is informational only but kept for backward compatibility.
 	if source == "resume" {
 		init_.updateLeadPID(teamFilePath, teamData)
 		return oldSID, false, nil
 	}
 
-	// Compact/clear with dead PID -- don't update PID.
-	// On compact/clear, the claude process does NOT restart. If the lead PID
-	// is dead and source is compact/clear, this caller is a surviving tmux
+	// Compact/clear with no live panes -- don't update PID.
+	// On compact/clear, the claude process does NOT restart. If no panes
+	// are alive and source is compact/clear, this caller is a surviving tmux
 	// teammate whose lead died. Updating the PID would incorrectly claim
 	// leadership.
 	return oldSID, false, nil
@@ -452,6 +484,9 @@ func (init_ *Initializer) cleanupStaleSession(projectDir, envFilePath, sid, team
 }
 
 // updateLeadPID updates the lead_pid in pathflow-team.json for compact recovery.
+// The PID is the persistent Claude Code process PID (grandparent of the codeflow
+// binary), captured via getClaudePID(). Used for session liveness checks alongside
+// tmux pane status from ~/.claude/teams/{team_name}/config.json.
 func (init_ *Initializer) updateLeadPID(teamFilePath string, teamData []byte) {
 	var raw map[string]any
 	if err := json.Unmarshal(teamData, &raw); err != nil {
@@ -470,6 +505,32 @@ func (init_ *Initializer) updateLeadPID(teamFilePath string, teamData []byte) {
 	if err := os.Rename(tmpPath, teamFilePath); err != nil {
 		_ = os.Remove(tmpPath)
 	}
+}
+
+// hasLiveTeamPanes checks whether any tmux pane in the team config is alive.
+// Returns false if the config is missing, unreadable, or has no live panes.
+func (init_ *Initializer) hasLiveTeamPanes(teamName string) bool {
+	cfgPath := filepath.Join(init_.HomeDir, ".claude", "teams", teamName, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return false
+	}
+
+	var cfg struct {
+		Members []struct {
+			TmuxPaneID string `json:"tmuxPaneId"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+
+	for _, m := range cfg.Members {
+		if init_.TmuxChecker.IsPaneAlive(m.TmuxPaneID) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseEnvFileSessionID extracts CODEFLOW_SESSION_ID from an env file.
@@ -506,7 +567,7 @@ func (init_ *Initializer) createDirectories(projectDir, sessionID string) {
 }
 
 // sweepAllStaleSessions scans ALL ses-* dirs under .state/session/ (excluding
-// currentSID), checks if the lead PID is alive via pathflow-team.json, and
+// currentSID), checks if the team has live tmux panes via team config, and
 // removes stale sessions along with their sentinel dirs and team artifacts.
 // Called on source=startup only, after generating a new SID.
 func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
@@ -540,12 +601,13 @@ func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
 			continue
 		}
 
-		if teamInfo.LeadPID > 0 && init_.ProcessChecker.IsAlive(teamInfo.LeadPID) {
-			// Lead is alive -- skip.
+		// Check session liveness via tmux pane status from team config.
+		if teamInfo.TeamName != "" && init_.hasLiveTeamPanes(teamInfo.TeamName) {
+			// Team has live panes -- skip.
 			continue
 		}
 
-		// Lead PID dead or zero -- clean up.
+		// No live panes or no team name -- clean up.
 		init_.removeStaleSessionArtifacts(projectDir, sid, teamInfo.TeamName)
 	}
 
@@ -724,6 +786,10 @@ func detectGitCommit(projectDir string) string {
 
 // detectStaleTeams scans for team configs with dead tmux panes and cleans them up.
 // Returns warnings for each team that was cleaned.
+//
+// SAFETY: If tmux is unavailable (not installed, server not running), this
+// function skips detection entirely. Treating tmux failure as "all panes dead"
+// would destroy live sessions that use in-process agents (no tmux panes).
 func (init_ *Initializer) detectStaleTeams() []string {
 	teamsDir := filepath.Join(init_.HomeDir, ".claude", "teams")
 	entries, err := os.ReadDir(teamsDir)

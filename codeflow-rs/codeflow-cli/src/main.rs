@@ -27,7 +27,10 @@ enum Command {
     /// Diagnose infrastructure issues
     Doctor,
     /// Configuration management
-    Config,
+    Config {
+        #[command(subcommand)]
+        command: Option<cmd::config::ConfigCommand>,
+    },
     /// Update `CodeFlow`
     Update,
     /// Autorun batch execution
@@ -66,7 +69,10 @@ enum Command {
     Workgraph,
     /// Git hooks management
     #[command(name = "git-hooks")]
-    GitHooks,
+    GitHooks {
+        #[command(subcommand)]
+        command: Option<cmd::git_hooks::GitHooksCommand>,
+    },
     /// Shadow test runner
     #[command(name = "shadow-test")]
     ShadowTest,
@@ -90,7 +96,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Session => cmd::session::run(),
         Command::Init => cmd::init::run(),
         Command::Doctor => cmd::doctor::run().await,
-        Command::Config => cmd::config::run(),
+        Command::Config { command } => cmd::config::run(command),
         Command::Update => cmd::update::run(),
         Command::Autorun => cmd::autorun::run().await,
         Command::Ledger => cmd::ledger::run(),
@@ -106,7 +112,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Worktree => cmd::worktree::run(),
         Command::Report => cmd::report::run(),
         Command::Workgraph => cmd::workgraph::run().await,
-        Command::GitHooks => cmd::git_hooks::run(),
+        Command::GitHooks { command } => cmd::git_hooks::run(command),
         Command::ShadowTest => cmd::shadow_test::run(),
         Command::Normalize => cmd::normalize::run(),
         Command::Test => cmd::test::run(),
@@ -284,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_config() {
-        let result = dispatch(Command::Config).await;
+        let result = dispatch(Command::Config { command: None }).await;
         assert!(result.is_ok());
     }
 
@@ -338,7 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_git_hooks() {
-        let result = dispatch(Command::GitHooks).await;
+        let result = dispatch(Command::GitHooks { command: None }).await;
         assert!(result.is_ok());
     }
 

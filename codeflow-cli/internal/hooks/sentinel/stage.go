@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -181,6 +183,29 @@ type PathflowTeam struct {
 	LastSpawnName     *string `json:"last_spawn_name"`
 }
 
+// getClaudePID returns the persistent Claude Code process PID by walking up
+// the process tree one level. The hook execution chain is:
+//
+//	claude (persistent) → /bin/zsh (ephemeral) → codeflow binary
+//
+// os.Getppid() returns the ephemeral shell PID. This function gets its parent
+// (the claude process) via ps, falling back to os.Getppid() on error.
+func getClaudePID() int {
+	ppid := os.Getppid()
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(ppid)).Output()
+	if err != nil {
+		return ppid
+	}
+	claudePID, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return ppid
+	}
+	if claudePID <= 1 {
+		return ppid // Don't return init/launchd PID
+	}
+	return claudePID
+}
+
 // HandleTeamCreate processes a TeamCreate PostToolUse event and creates
 // pathflow-team.json in the session pathflow directory.
 //
@@ -206,7 +231,7 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 
 	team := PathflowTeam{
 		TeamName:          tc.TeamName,
-		LeadPID:           os.Getppid(),
+		LeadPID:           getClaudePID(),
 		CodeflowSessionID: sessionID,
 		TeammateSpawned:   false,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339),

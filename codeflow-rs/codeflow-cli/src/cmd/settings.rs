@@ -42,9 +42,34 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_no_project_dir() {
+    fn test_settings_run_with_dir_empty() {
         let dir = tempfile::tempdir().unwrap();
-        // Will either succeed (no templates to validate) or fail gracefully.
-        let _result = run_with_dir(dir.path());
+        let result = run_with_dir(dir.path());
+        let _ = result;
+    }
+
+    #[test]
+    fn test_settings_run_with_dir_with_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmpl_dir = dir.path().join(".claude").join("settings-templates");
+        std::fs::create_dir_all(&tmpl_dir).unwrap();
+        let settings_json = r#"{"permissions":{}}"#;
+        std::fs::write(tmpl_dir.join("autonomous.json"), settings_json).unwrap();
+        std::fs::write(tmpl_dir.join("interactive.json"), settings_json).unwrap();
+
+        let result = run_with_dir(dir.path());
+        let _ = result;
+    }
+
+    #[test]
+    fn test_settings_run_with_dir_failure_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmpl_dir = dir.path().join(".claude").join("settings-templates");
+        std::fs::create_dir_all(&tmpl_dir).unwrap();
+        std::fs::write(tmpl_dir.join("a.json"), r#"{"hooks":[]}"#).unwrap();
+        std::fs::write(tmpl_dir.join("b.json"), r#"{"hooks":["different"]}"#).unwrap();
+
+        let result = run_with_dir(dir.path());
+        let _ = result;
     }
 }

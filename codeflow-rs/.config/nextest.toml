@@ -6,3 +6,16 @@ fail-fast = true
 [profile.ci]
 retries = 2
 fail-fast = false
+
+# Serialize tests that create SurrealDB in-memory instances.
+# Under LLVM coverage instrumentation, concurrent instances cause OOM SIGKILL.
+[test-groups]
+surrealdb-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
+test-group = "surrealdb-serial"
+
+[[profile.ci.overrides]]
+filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
+test-group = "surrealdb-serial"

@@ -3,6 +3,7 @@
 //! Glob-to-regex conversion, path boundary checking, command segment
 //! splitting, and helper functions shared across security modules.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -194,6 +195,54 @@ pub fn split_command_segments(cmd: &str) -> Vec<String> {
     segments
 }
 
+/// Extract variable assignments (`VAR=value`) from command segments.
+///
+/// Handles unquoted, single-quoted, and double-quoted values.
+/// Returns a map of variable name to assigned value (quotes stripped).
+///
+/// # Panics
+///
+/// Panics if the internal regex fails to compile (should never happen).
+#[must_use]
+pub fn extract_variable_assignments(segments: &[String]) -> HashMap<String, String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|(\S*))"#)
+            .expect("valid")
+    });
+
+    let mut map = HashMap::new();
+    for seg in segments {
+        for caps in re.captures_iter(seg) {
+            let var = caps.get(1).unwrap().as_str().to_string();
+            // Group 3 = double-quoted, 4 = single-quoted, 5 = unquoted.
+            let val = caps
+                .get(3)
+                .or_else(|| caps.get(4))
+                .or_else(|| caps.get(5))
+                .map_or(String::new(), |m| m.as_str().to_string());
+            map.insert(var, val);
+        }
+    }
+    map
+}
+
+/// Detect shell variable indirection (`$VAR` or `${VAR}`) in a command,
+/// excluding special variables (`$?`, `$!`, `$$`, `$0`-`$9`, `$@`, `$*`, `$#`).
+///
+/// # Panics
+///
+/// Panics if the internal regex fails to compile (should never happen).
+#[must_use]
+pub fn has_variable_indirection(cmd: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        // Match $VAR or ${VAR} where VAR starts with a letter or underscore.
+        Regex::new(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?").expect("valid")
+    });
+    re.is_match(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +378,81 @@ mod tests {
     fn test_split_command_segments_or() {
         let segments = split_command_segments("cmd1 || cmd2");
         assert_eq!(segments.len(), 2);
+    }
+
+    // -- extract_variable_assignments --
+
+    #[test]
+    fn test_extract_var_unquoted() {
+        let segs = vec!["F=.claude/settings.json".to_string()];
+        let map = extract_variable_assignments(&segs);
+        assert_eq!(map.get("F").unwrap(), ".claude/settings.json");
+    }
+
+    #[test]
+    fn test_extract_var_double_quoted() {
+        let segs = vec![r#"F=".claude/settings.json""#.to_string()];
+        let map = extract_variable_assignments(&segs);
+        assert_eq!(map.get("F").unwrap(), ".claude/settings.json");
+    }
+
+    #[test]
+    fn test_extract_var_single_quoted() {
+        let segs = vec!["F='.claude/settings.json'".to_string()];
+        let map = extract_variable_assignments(&segs);
+        assert_eq!(map.get("F").unwrap(), ".claude/settings.json");
+    }
+
+    #[test]
+    fn test_extract_var_multiple_segments() {
+        let segs = vec![
+            "A=/tmp/safe".to_string(),
+            "B=.claude/hooks/codeflow/test.sh".to_string(),
+        ];
+        let map = extract_variable_assignments(&segs);
+        assert_eq!(map.get("A").unwrap(), "/tmp/safe");
+        assert_eq!(map.get("B").unwrap(), ".claude/hooks/codeflow/test.sh");
+    }
+
+    #[test]
+    fn test_extract_var_no_assignment() {
+        let segs = vec!["echo hello".to_string()];
+        let map = extract_variable_assignments(&segs);
+        assert!(map.is_empty());
+    }
+
+    // -- has_variable_indirection --
+
+    #[test]
+    fn test_has_var_indirection_dollar_var() {
+        assert!(has_variable_indirection("rm $F"));
+    }
+
+    #[test]
+    fn test_has_var_indirection_braced() {
+        assert!(has_variable_indirection("rm ${DIR}"));
+    }
+
+    #[test]
+    fn test_has_var_indirection_special_vars_excluded() {
+        // Special vars ($?, $!, $$, $0-$9, $@, $*, $#) are not matched.
+        assert!(!has_variable_indirection("echo $?"));
+        assert!(!has_variable_indirection("echo $!"));
+        assert!(!has_variable_indirection("echo $$"));
+        assert!(!has_variable_indirection("echo $0"));
+        assert!(!has_variable_indirection("echo $9"));
+        assert!(!has_variable_indirection("echo $@"));
+        assert!(!has_variable_indirection("echo $*"));
+        assert!(!has_variable_indirection("echo $#"));
+    }
+
+    #[test]
+    fn test_has_var_indirection_no_vars() {
+        assert!(!has_variable_indirection("ls -la"));
+    }
+
+    #[test]
+    fn test_has_var_indirection_path_env() {
+        assert!(has_variable_indirection("echo $PATH"));
     }
 }

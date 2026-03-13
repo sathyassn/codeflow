@@ -196,8 +196,13 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         self.write_session_metadata(project_dir, session_id.as_str(), source, &mut result);
 
         // --- Section 9: Stale team detection ---
-        let team_warnings = self.detect_stale_teams();
-        result.warnings.extend(team_warnings);
+        // Only detect stale teams on startup. On compact/resume/clear the lead's
+        // context overflowed but teammates are likely still alive — destroying their
+        // team config would kill an active session.
+        if source == "startup" || source == "unknown" {
+            let team_warnings = self.detect_stale_teams();
+            result.warnings.extend(team_warnings);
+        }
 
         // --- Section 10: Compact recovery detection ---
         self.detect_compact_recovery(project_dir, source, &mut result);
@@ -244,14 +249,17 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
 
         if let Ok(team_data) = fs::read_to_string(&team_file_path) {
             if let Ok(team_info) = serde_json::from_str::<PathflowTeamInfo>(&team_data) {
-                if team_info.lead_pid > 0 && self.process_checker.is_alive(team_info.lead_pid) {
-                    // Lead is alive -- teammate mode.
+                // Check tmux pane liveness via team config instead of PID.
+                let any_pane_alive = self.check_team_panes_alive(&team_info.team_name);
+
+                if any_pane_alive {
+                    // At least one tmux pane alive -- teammate mode.
                     return (Some(old_sid), true);
                 }
 
-                // Lead PID is dead.
+                // All panes dead (or no team config).
                 if source == "startup" || source == "unknown" {
-                    // Fresh startup with dead PID -- full cleanup.
+                    // Fresh startup with dead panes -- full cleanup.
                     self.cleanup_stale_session(
                         project_dir,
                         runtime_dir,
@@ -261,13 +269,13 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
                     return (None, false);
                 }
 
-                // Resume with dead PID -- update lead PID (user relaunched claude).
+                // Resume with dead panes -- update lead PID (user relaunched claude).
                 if source == "resume" {
                     self.update_lead_pid(&team_file_path);
                     return (Some(old_sid), false);
                 }
 
-                // Compact/clear with dead PID -- don't update PID.
+                // Compact/clear with dead panes -- don't update PID.
                 // The caller is a surviving tmux teammate whose lead died.
                 return (Some(old_sid), false);
             }
@@ -399,12 +407,13 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
                     continue;
                 };
 
-                if team_info.lead_pid > 0 && self.process_checker.is_alive(team_info.lead_pid) {
-                    // Lead is alive -- skip.
+                // Check tmux pane liveness via team config instead of PID.
+                if self.check_team_panes_alive(&team_info.team_name) {
+                    // At least one tmux pane alive -- skip.
                     continue;
                 }
 
-                // Lead PID dead or zero -- clean up.
+                // All panes dead (or no team config) -- clean up.
                 let team_name = if team_info.team_name.is_empty() {
                     None
                 } else {
@@ -572,6 +581,10 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
     ///
     /// A team is stale when ALL its tmux pane members are dead.
     /// Returns warnings for each team that was cleaned.
+    ///
+    /// SAFETY: If tmux is unavailable (not installed, server not running), this
+    /// function skips detection entirely. Treating tmux failure as "all panes dead"
+    /// would destroy live sessions that use in-process agents (no tmux panes).
     fn detect_stale_teams(&self) -> Vec<String> {
         let teams_dir = self.home_dir.join(".claude").join("teams");
         let mut warnings = Vec::new();
@@ -685,6 +698,43 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionStartInit<P, T> {
         let _ = session::remove_env_file(runtime_dir);
     }
 
+    /// Check if any tmux panes from the Claude Code team config are alive.
+    ///
+    /// Reads `~/.claude/teams/{team_name}/config.json`, extracts the `members`
+    /// array, and checks each member's `tmuxPaneId` via `self.tmux_checker`.
+    /// Returns `true` if at least one pane is alive, `false` if all dead or
+    /// the team config is missing/unreadable.
+    fn check_team_panes_alive(&self, team_name: &str) -> bool {
+        if team_name.is_empty() {
+            return false;
+        }
+
+        let config_path = self
+            .home_dir
+            .join(".claude")
+            .join("teams")
+            .join(team_name)
+            .join("config.json");
+
+        let Ok(data) = fs::read_to_string(&config_path) else {
+            return false;
+        };
+
+        let Ok(config) = serde_json::from_str::<serde_json::Value>(&data) else {
+            return false;
+        };
+
+        let Some(members) = config.get("members").and_then(serde_json::Value::as_array) else {
+            return false;
+        };
+
+        members.iter().any(|m| {
+            m.get("tmuxPaneId")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| !id.is_empty() && self.tmux_checker.is_pane_alive(id))
+        })
+    }
+
     /// Update the lead PID in `pathflow-team.json` to the current PPID.
     fn update_lead_pid(&self, team_file_path: &Path) {
         if let Ok(data) = fs::read_to_string(team_file_path) {
@@ -704,8 +754,10 @@ impl<P: ProcessChecker, T: TmuxChecker> HookHandler for SessionStartInit<P, T> {
             HookError::Config("project_dir required for session-start init".into())
         })?;
 
-        let mut buf = Vec::new();
-        self.run(&input, Path::new(project_dir), &mut buf)?;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        self.run(&input, Path::new(project_dir), &mut out)?;
+        out.flush().map_err(HookError::Io)?;
 
         Ok(HookOutput::Allow)
     }
@@ -723,53 +775,258 @@ impl<P: ProcessChecker, T: TmuxChecker> HookHandler for SessionStartInit<P, T> {
 // SessionStartInstructions
 // ---------------------------------------------------------------------------
 
+/// Hardcoded fallback instructions when config is unavailable.
+/// Matches Go's `fallbackInstructions` constant in `instructions.go`.
+const FALLBACK_INSTRUCTIONS: &str = "SESSION START - EXECUTE CLAUDE.md SECTION 2\n\
+You MUST execute the Session Start procedure from CLAUDE.md Section 2.\n\
+Check for active work (grep Status: active), present options to user, wait for choice.";
+
+/// Instructions config JSON structure matching Go's `instructionsConfig`.
+#[derive(serde::Deserialize)]
+struct InstructionsConfig {
+    hooks: InstructionsHooks,
+}
+
+#[derive(serde::Deserialize)]
+struct InstructionsHooks {
+    #[serde(rename = "SessionStart", default)]
+    session_start: HashMap<String, InstructionEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct InstructionEntry {
+    file: Option<String>,
+    enabled: Option<bool>,
+}
+
 /// Session-start instructions handler.
 ///
-/// Outputs active task context and `PathFlow` recovery information to help the
-/// agent orient after startup or context overflow.
+/// Outputs config-driven instructions, active task context, and `PathFlow`
+/// recovery information to help the agent orient after startup or context
+/// overflow. Matches Go's `RunInstructions` in `instructions.go`.
 pub struct SessionStartInstructions;
 
 impl SessionStartInstructions {
     /// Generate instruction output for the agent.
     ///
+    /// Three sections matching Go:
+    /// 1. Config-driven instruction loading (with fallback)
+    /// 2. Active task context (with "None" fallback)
+    /// 3. `PathFlow` context (sentinels, recovery)
+    ///
     /// # Errors
     ///
     /// Returns `HookError` on I/O failures when writing to the writer.
     pub fn generate(&self, project_dir: &Path, writer: &mut dyn Write) -> Result<(), HookError> {
-        let runtime_dir = project_dir.join(".state").join("runtime");
+        // Section 1: Config-driven instruction loading.
+        Self::output_instructions(project_dir, writer)?;
 
-        // Output active task context.
-        if let Ok(Some(task)) = session::get_active_task(&runtime_dir) {
-            writeln!(
-                writer,
-                "Active task: {} ({})",
-                task.task_format_id
-                    .as_ref()
-                    .map_or("unknown", crate::types::FormatId::as_str),
-                task.title.as_deref().unwrap_or("untitled")
-            )
-            .map_err(HookError::Io)?;
+        // Section 2: Active task context.
+        Self::output_active_task(project_dir, writer)?;
 
-            if let Some(stage) = &task.current_stage {
-                writeln!(writer, "Current stage: {stage}").map_err(HookError::Io)?;
-            }
-            if let Some(branch) = &task.branch {
-                writeln!(writer, "Branch: {branch}").map_err(HookError::Io)?;
+        // Section 3: PathFlow context.
+        Self::output_pathflow_context(project_dir, writer)?;
+
+        Ok(())
+    }
+
+    /// Load and output instructions from config, falling back to hardcoded text.
+    fn output_instructions(project_dir: &Path, writer: &mut dyn Write) -> Result<(), HookError> {
+        let instructions_dir = project_dir
+            .join(".codeflow")
+            .join("config")
+            .join("instructions");
+        let config_path = instructions_dir.join("instructions-config.json");
+
+        let Ok(data) = fs::read_to_string(&config_path) else {
+            writeln!(writer, "{FALLBACK_INSTRUCTIONS}").map_err(HookError::Io)?;
+            return Ok(());
+        };
+
+        let Ok(cfg) = serde_json::from_str::<InstructionsConfig>(&data) else {
+            writeln!(writer, "{FALLBACK_INSTRUCTIONS}").map_err(HookError::Io)?;
+            return Ok(());
+        };
+
+        if cfg.hooks.session_start.is_empty() {
+            writeln!(writer, "{FALLBACK_INSTRUCTIONS}").map_err(HookError::Io)?;
+            return Ok(());
+        }
+
+        let mut wrote = false;
+        for entry in cfg.hooks.session_start.values() {
+            let enabled = entry.enabled.unwrap_or(false);
+            let file = match &entry.file {
+                Some(f) if !f.is_empty() && enabled => f,
+                _ => continue,
+            };
+            let file_path = instructions_dir.join(file);
+            if let Ok(content) = fs::read_to_string(&file_path) {
+                write!(writer, "{content}").map_err(HookError::Io)?;
+                writeln!(writer).map_err(HookError::Io)?; // Blank line between.
+                wrote = true;
             }
         }
 
-        // Output PathFlow recovery info.
-        let state_dir = project_dir.join(".state");
-        if let Ok(sid) = session::current_session_id(&state_dir.join("runtime")) {
-            let sentinel_dir = pathflow::sentinel::resolve_dir(project_dir, sid.as_str());
-            if let Ok(sentinel_dir) = sentinel_dir {
-                if let Ok(sentinels) = pathflow::sentinel::list_sentinels(&sentinel_dir) {
-                    if !sentinels.is_empty() {
-                        writeln!(writer, "PathFlow sentinels: {}", sentinels.join(", "))
-                            .map_err(HookError::Io)?;
-                    }
+        if !wrote {
+            writeln!(writer, "{FALLBACK_INSTRUCTIONS}").map_err(HookError::Io)?;
+        }
+
+        Ok(())
+    }
+
+    /// Output active task context or "None" fallback with register-work reminder.
+    fn output_active_task(project_dir: &Path, writer: &mut dyn Write) -> Result<(), HookError> {
+        let runtime_dir = project_dir.join(".state").join("runtime");
+
+        if let Ok(Some(task)) = session::get_active_task(&runtime_dir) {
+            let task_id = task
+                .task_format_id
+                .as_ref()
+                .map_or_else(|| task.task_id.as_str(), crate::types::FormatId::as_str);
+
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(writer, "ACTIVE TASKS DETECTED").map_err(HookError::Io)?;
+            writeln!(writer, "=====================").map_err(HookError::Io)?;
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(writer, "Incomplete tasks found:").map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "  - {} ({})",
+                task_id,
+                task.status.as_deref().unwrap_or("unknown")
+            )
+            .map_err(HookError::Io)?;
+            if let Some(title) = &task.title {
+                if !title.is_empty() {
+                    writeln!(writer, "    \"{title}\"").map_err(HookError::Io)?;
                 }
             }
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(writer, "Options:").map_err(HookError::Io)?;
+            writeln!(writer, "  1. Resume task").map_err(HookError::Io)?;
+            writeln!(writer, "  2. Start new work").map_err(HookError::Io)?;
+            writeln!(writer, "  3. Review tasks").map_err(HookError::Io)?;
+        } else {
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(writer, "ACTIVE TASKS DETECTED: None").map_err(HookError::Io)?;
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "IMPORTANT: Register work before making modifications."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "Delegate to cf-knowledge-layer teammate: \
+                 SendMessage(recipient=\"cf-knowledge-layer\", \
+                 content=\"ensure-work-registered\")"
+            )
+            .map_err(HookError::Io)?;
+        }
+
+        Ok(())
+    }
+
+    /// Output `PathFlow` context: active session, completed phases, recovery checklist.
+    fn output_pathflow_context(
+        project_dir: &Path,
+        writer: &mut dyn Write,
+    ) -> Result<(), HookError> {
+        let state_dir = project_dir.join(".state");
+        let Ok(session_id) = session::current_session_id(&state_dir.join("runtime")) else {
+            return Ok(());
+        };
+
+        // Check if PathFlow is active.
+        let flag_path = state_dir
+            .join("session")
+            .join(session_id.as_str())
+            .join("pathflow")
+            .join("is-pathflow-active");
+        if !flag_path.exists() {
+            return Ok(());
+        }
+
+        writeln!(writer).map_err(HookError::Io)?;
+        writeln!(writer, "PATHFLOW SESSION ACTIVE").map_err(HookError::Io)?;
+        writeln!(writer, "======================").map_err(HookError::Io)?;
+
+        // List completed phase sentinels.
+        let sentinel_dir = state_dir
+            .join("sentinels")
+            .join("pathflow")
+            .join(session_id.as_str());
+        let names = pathflow::sentinel::list_sentinels(&sentinel_dir).unwrap_or_default();
+
+        let phases: Vec<&str> = names
+            .iter()
+            .filter(|n| n.starts_with("pf-"))
+            .map(String::as_str)
+            .collect();
+
+        if phases.is_empty() {
+            writeln!(writer, "No completed phases found").map_err(HookError::Io)?;
+        } else {
+            writeln!(writer, "Completed phases:").map_err(HookError::Io)?;
+            for p in &phases {
+                writeln!(writer, "  - pathflow-{p}").map_err(HookError::Io)?;
+            }
+        }
+
+        writeln!(writer, "Mode: pathflow").map_err(HookError::Io)?;
+        writeln!(writer, "PCV: bypassed (WS-REV provides quality assurance)")
+            .map_err(HookError::Io)?;
+        writeln!(writer).map_err(HookError::Io)?;
+
+        // Compact recovery checklist (only if phase sentinels exist).
+        if !phases.is_empty() {
+            writeln!(
+                writer,
+                "COMPACT RECOVERY: Task tracker registration check required."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "Phase sentinels exist from prior context. Task tracker may be out of sync."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "MANDATORY: Resume task tracker registration after context overflow."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(writer, "  Step 1: Read checkpoint state at .state/session/{{SID}}/pathflow/pathflow-phase-tasks.json").map_err(HookError::Io)?;
+            writeln!(writer, "  Step 2: Identify current phase from sentinel files at .state/sentinels/pathflow/{{SID}}/").map_err(HookError::Io)?;
+            writeln!(writer, "  Step 3: Backfill completed phases: TaskCreate then TaskUpdate to completed for each missing task").map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "  Step 4: Register current phase tasks: TaskCreate for EVERY PF{{N}}-TSK-{{NN}}"
+            )
+            .map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "  Step 5: Verify sentinel pipeline resumes creating sentinels"
+            )
+            .map_err(HookError::Io)?;
+            writeln!(writer).map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "FORBIDDEN: Skipping task tracker registration after context overflow."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "FORBIDDEN: Clubbing multiple PF{{N}}-TSK-{{NN}} entries into a single TaskCreate."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(
+                writer,
+                "FORBIDDEN: Proceeding past a phase gate without verifying its sentinel exists."
+            )
+            .map_err(HookError::Io)?;
+            writeln!(writer).map_err(HookError::Io)?;
         }
 
         Ok(())
@@ -783,8 +1040,10 @@ impl HookHandler for SessionStartInstructions {
             .as_deref()
             .ok_or_else(|| HookError::Config("project_dir required for instructions".into()))?;
 
-        let mut buf = Vec::new();
-        self.generate(Path::new(project_dir), &mut buf)?;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        self.generate(Path::new(project_dir), &mut out)?;
+        out.flush().map_err(HookError::Io)?;
 
         Ok(HookOutput::Allow)
     }
@@ -1026,7 +1285,7 @@ mod tests {
         let sid = SessionId::new_unchecked("ses-01jq7teammate12345678abc");
         session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
 
-        // Create pathflow-team.json with alive lead PID.
+        // Create pathflow-team.json with team name.
         let team_dir = dir
             .path()
             .join(".state")
@@ -1037,6 +1296,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 42,
             team_name: "test-team".into(),
+            ..Default::default()
         };
         fs::write(
             team_dir.join("pathflow-team.json"),
@@ -1044,8 +1304,17 @@ mod tests {
         )
         .unwrap();
 
-        // PID 42 is "alive" in our mock.
-        let init = make_init(vec![42], home.path().to_path_buf());
+        // Create Claude Code team config with alive tmux pane.
+        let config_dir = home.path().join(".claude").join("teams").join("test-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%42"}]}"#,
+        )
+        .unwrap();
+
+        // Tmux pane %42 is "alive" in our mock.
+        let init = make_init_with_tmux(vec![], vec!["%42".into()], home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -1164,10 +1433,13 @@ mod tests {
         handler.generate(dir.path(), &mut buf).unwrap();
 
         let output = String::from_utf8(buf).unwrap();
+        // Section 1: Fallback instructions (no config file in temp dir).
+        assert!(output.contains("SESSION START"));
+        // Section 2: Active task detected in full format.
+        assert!(output.contains("ACTIVE TASKS DETECTED"));
         assert!(output.contains("INF-TSK-022-015"));
+        assert!(output.contains("in_progress"));
         assert!(output.contains("Implement session hooks"));
-        assert!(output.contains("WS-DEV"));
-        assert!(output.contains("feat/rust-session-hooks"));
     }
 
     #[test]
@@ -1179,7 +1451,12 @@ mod tests {
         handler.generate(dir.path(), &mut buf).unwrap();
 
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.is_empty());
+        // Section 1: Fallback instructions (no config file in temp dir).
+        assert!(output.contains("SESSION START"));
+        assert!(output.contains("CLAUDE.md"));
+        // Section 2: No active task — shows "None" with register-work reminder.
+        assert!(output.contains("ACTIVE TASKS DETECTED: None"));
+        assert!(output.contains("ensure-work-registered"));
     }
 
     #[test]
@@ -1409,6 +1686,7 @@ mod tests {
         let initial = PathflowTeamInfo {
             lead_pid: 999,
             team_name: "my-team".into(),
+            ..Default::default()
         };
         fs::write(&team_file, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
@@ -1429,6 +1707,107 @@ mod tests {
 
         // Should not panic on nonexistent file.
         init.update_lead_pid(Path::new("/tmp/nonexistent-team-file.json"));
+    }
+
+    // --- check_team_panes_alive tests ---
+
+    #[test]
+    fn test_check_team_panes_alive_empty_team_name() {
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive(""));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_missing_config() {
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("nonexistent-team"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_invalid_json() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".claude").join("teams").join("bad-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), "not json").unwrap();
+
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("bad-team"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_no_members_field() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".claude").join("teams").join("no-members");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"name": "test"}"#).unwrap();
+
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("no-members"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_empty_members() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("empty-members");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
+
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("empty-members"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_all_dead() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".claude").join("teams").join("dead-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%dead1"}, {"name": "cf-rev", "tmuxPaneId": "%dead2"}]}"#,
+        )
+        .unwrap();
+
+        // No alive panes.
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("dead-team"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_some_alive() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".claude").join("teams").join("mixed-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%alive1"}, {"name": "cf-rev", "tmuxPaneId": "%dead1"}]}"#,
+        )
+        .unwrap();
+
+        // %alive1 is alive.
+        let init = make_init_with_tmux(vec![], vec!["%alive1".into()], home.path().to_path_buf());
+        assert!(init.check_team_panes_alive("mixed-team"));
+    }
+
+    #[test]
+    fn test_check_team_panes_alive_empty_pane_id_ignored() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".claude").join("teams").join("empty-pane");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": ""}]}"#,
+        )
+        .unwrap();
+
+        // Empty pane IDs should be ignored (not counted as alive).
+        let init = make_init(vec![], home.path().to_path_buf());
+        assert!(!init.check_team_panes_alive("empty-pane"));
     }
 
     #[test]
@@ -1678,6 +2057,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 99999,
             team_name: "stale-team".into(),
+            ..Default::default()
         };
         fs::write(
             stale_pathflow.join("pathflow-team.json"),
@@ -1719,13 +2099,14 @@ mod tests {
 
         let session_base = dir.path().join(".state").join("session");
 
-        // Create an alive session with PID 42.
+        // Create an alive session with team name.
         let alive_sid = "ses-01jq7alive00000000000001";
         let alive_pathflow = session_base.join(alive_sid).join("pathflow");
         fs::create_dir_all(&alive_pathflow).unwrap();
         let team_info = PathflowTeamInfo {
             lead_pid: 42,
             team_name: "alive-team".into(),
+            ..Default::default()
         };
         fs::write(
             alive_pathflow.join("pathflow-team.json"),
@@ -1733,8 +2114,17 @@ mod tests {
         )
         .unwrap();
 
-        // PID 42 is alive.
-        let init = make_init(vec![42], home.path().to_path_buf());
+        // Create Claude Code team config with alive tmux pane.
+        let config_dir = home.path().join(".claude").join("teams").join("alive-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%42"}]}"#,
+        )
+        .unwrap();
+
+        // Tmux pane %42 is alive.
+        let init = make_init_with_tmux(vec![], vec!["%42".into()], home.path().to_path_buf());
         init.sweep_all_stale_sessions(dir.path(), current_sid);
 
         // Alive session should remain.
@@ -1787,6 +2177,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 42,
             team_name: "good-team".into(),
+            ..Default::default()
         };
         fs::write(
             good_pathflow.join("pathflow-team.json"),
@@ -1794,8 +2185,17 @@ mod tests {
         )
         .unwrap();
 
-        // PID 42 is alive.
-        let init = make_init(vec![42], home.path().to_path_buf());
+        // Create Claude Code team config with alive tmux pane.
+        let config_dir = home.path().join(".claude").join("teams").join("good-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%42"}]}"#,
+        )
+        .unwrap();
+
+        // Tmux pane %42 is alive.
+        let init = make_init_with_tmux(vec![], vec!["%42".into()], home.path().to_path_buf());
         init.sweep_all_stale_sessions(dir.path(), current_sid);
 
         // Orphan sentinel should be removed.
@@ -1803,7 +2203,7 @@ mod tests {
             !sentinel_base.join(orphan_sid).exists(),
             "orphan sentinel dir should be removed"
         );
-        // Good sentinel should remain (session has alive lead PID).
+        // Good sentinel should remain (session has alive tmux panes).
         assert!(
             sentinel_base.join(good_sid).exists(),
             "non-orphan sentinel dir should remain"
@@ -1857,6 +2257,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 99999,
             team_name: "dead-team".into(),
+            ..Default::default()
         };
         fs::write(
             team_dir.join("pathflow-team.json"),
@@ -1902,6 +2303,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 88888,
             team_name: "compact-team".into(),
+            ..Default::default()
         };
         let team_file = team_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string(&team_info).unwrap()).unwrap();
@@ -1957,6 +2359,7 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 88888,
             team_name: "resume-team".into(),
+            ..Default::default()
         };
         let team_file = team_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string(&team_info).unwrap()).unwrap();
@@ -2488,10 +2891,11 @@ mod tests {
     fn test_concurrent_startup_single_session_id() {
         // Simulates the real race: multiple agents start concurrently.
         // The lead (thread 0) runs first (serialized by lock), generates a
-        // session, writes env file, and writes pathflow-team.json (simulating
-        // TeamCreate which happens immediately after StartInit in the real flow).
+        // session, writes env file, writes pathflow-team.json (simulating
+        // TeamCreate), and creates team config with tmux pane IDs.
         // Subsequent threads acquire the lock, see the env file + team file,
-        // and enter teammate mode -- all converging on the same SID.
+        // and check tmux panes to enter teammate mode -- all converging on
+        // the same SID.
         use std::sync::{Arc, Barrier, Mutex};
         use std::thread;
 
@@ -2523,10 +2927,20 @@ mod tests {
         let team_info = PathflowTeamInfo {
             lead_pid: 1000,
             team_name: "test-team".into(),
+            ..Default::default()
         };
         fs::write(
             team_dir.join("pathflow-team.json"),
             serde_json::to_string(&team_info).unwrap(),
+        )
+        .unwrap();
+
+        // Create Claude Code team config with alive tmux pane (simulates TeamCreate).
+        let config_dir = home.path().join(".claude").join("teams").join("test-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"members": [{"name": "lead", "tmuxPaneId": "%lead1"}]}"#,
         )
         .unwrap();
 
@@ -2544,10 +2958,9 @@ mod tests {
 
                 thread::spawn(move || {
                     let init = SessionStartInit {
-                        process_checker: MockProcessChecker {
-                            alive_pids: vec![1000], // Lead PID is alive.
-                        },
-                        tmux_checker: MockTmuxChecker::new(),
+                        process_checker: MockProcessChecker { alive_pids: vec![] },
+                        // Tmux pane %lead1 is alive (team config exists).
+                        tmux_checker: MockTmuxChecker::with_alive_panes(vec!["%lead1".into()]),
                         ppid: 2000, // Different PPID (teammate process).
                         home_dir: home_dir.as_ref().clone(),
                         now: fixed_now,

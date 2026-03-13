@@ -52,6 +52,7 @@ fn build_handler(
             );
             Box::new(codeflow_core::hooks::session_end::SessionEndCleanup {
                 process_checker: codeflow_core::hooks::OsProcessChecker,
+                tmux_checker: codeflow_core::hooks::OsTmuxChecker,
                 home_dir,
                 ppid,
                 now,

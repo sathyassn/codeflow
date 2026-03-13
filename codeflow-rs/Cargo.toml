@@ -17,6 +17,7 @@ surrealdb = { version = "2", features = ["kv-mem", "kv-surrealkv"] }
 loro = "1"
 fs2 = "0.4"
 git2 = "0.20"
+regex = "1"
 serde_yaml = "0.9"
 ulid = "1"
 tokio = { version = "1", features = ["full"] }
@@ -34,6 +35,9 @@ inherits = "release"
 opt-level = 2
 codegen-units = 4
 lto = false
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

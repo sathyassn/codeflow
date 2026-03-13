@@ -111,6 +111,90 @@ func TestGetFlagsPortion(t *testing.T) {
 	}
 }
 
+func TestExtractVariableAssignments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		segments []string
+		want     map[string]string
+	}{
+		{
+			"simple assignment",
+			[]string{`F=".claude/settings.json"`},
+			map[string]string{"F": ".claude/settings.json"},
+		},
+		{
+			"single-quoted value",
+			[]string{`F='.claude/settings.json'`},
+			map[string]string{"F": ".claude/settings.json"},
+		},
+		{
+			"unquoted value",
+			[]string{"DIR=.claude"},
+			map[string]string{"DIR": ".claude"},
+		},
+		{
+			"multiple segments",
+			[]string{`F=".claude/settings.json"`, "rm $F"},
+			map[string]string{"F": ".claude/settings.json"},
+		},
+		{
+			"no assignments",
+			[]string{"rm -rf /tmp/safe"},
+			map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractVariableAssignments(tt.segments)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractVariableAssignments(%v) returned %d entries, want %d: %v", tt.segments, len(got), len(tt.want), got)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("extractVariableAssignments(%v)[%q] = %q, want %q", tt.segments, k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestHasVariableIndirection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"rm $F", true},
+		{`rm "$F"`, true},
+		{"rm ${DIR}", true},
+		{"echo $PATH", true},
+		{"echo $?", false},       // special variable
+		{"echo $$", false},       // special variable
+		{"echo $!", false},       // special variable
+		{"echo $0", false},       // special variable
+		{"echo $@", false},       // special variable
+		{"echo $*", false},       // special variable
+		{"echo $#", false},       // special variable
+		{"rm some-file.txt", false},
+		{"echo hello world", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			t.Parallel()
+			got := hasVariableIndirection(tt.cmd)
+			if got != tt.want {
+				t.Errorf("hasVariableIndirection(%q) = %v, want %v", tt.cmd, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizePath(t *testing.T) {
 	t.Parallel()
 

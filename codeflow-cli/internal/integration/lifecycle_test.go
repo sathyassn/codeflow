@@ -1267,11 +1267,10 @@ func TestTeammateModeIndependent(t *testing.T) {
 
 		projectDir := t.TempDir()
 		setupPathflowConfig(t, projectDir)
+		homeDir := t.TempDir()
 
-		const (
-			leadPID   = 12345
-			existingSID = "ses-01jk7777777777777777777777"
-		)
+		const existingSID = "ses-01jk7777777777777777777777"
+		const teamName = "test-team"
 
 		// Set up existing session state: env file + pathflow-team.json.
 		runtimeDir := filepath.Join(projectDir, ".state", "runtime")
@@ -1283,24 +1282,34 @@ func TestTeammateModeIndependent(t *testing.T) {
 			t.Fatalf("write env file: %v", err)
 		}
 
-		// Create pathflow-team.json with the lead PID.
+		// Create pathflow-team.json with team name.
 		pathflowDir := filepath.Join(projectDir, ".state", "session", existingSID, "pathflow")
 		if err := os.MkdirAll(pathflowDir, 0o755); err != nil {
 			t.Fatalf("mkdir pathflowDir: %v", err)
 		}
-		teamJSON := fmt.Sprintf(`{"lead_pid":%d,"team_name":"test-team"}`, leadPID)
+		teamJSON := fmt.Sprintf(`{"lead_pid":12345,"team_name":"%s"}`, teamName)
 		if err := os.WriteFile(filepath.Join(pathflowDir, "pathflow-team.json"), []byte(teamJSON), 0o644); err != nil {
 			t.Fatalf("write pathflow-team.json: %v", err)
 		}
 
-		// Mock the process checker to report lead PID as alive.
+		// Create team config with a live tmux pane.
+		teamDir := filepath.Join(homeDir, ".claude", "teams", teamName)
+		if err := os.MkdirAll(teamDir, 0o755); err != nil {
+			t.Fatalf("mkdir teamDir: %v", err)
+		}
+		cfgJSON := `{"members":[{"tmuxPaneId":"%lead-pane"}]}`
+		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+			t.Fatalf("write team config: %v", err)
+		}
+
+		// Mock the tmux checker to report the lead pane as alive.
 		init_ := &hooksession.Initializer{
 			Now:            func() time.Time { return fixedTime },
-			ProcessChecker: mockProcessChecker{alive: map[int]bool{leadPID: true}},
-			TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
+			ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
+			TmuxChecker:    mockTmuxChecker{alive: map[string]bool{"%lead-pane": true}},
 			SessionStarter: mockSessionStarter{id: "ses-01jk8888888888888888888888"},
 			PPID:           99999,
-			HomeDir:        t.TempDir(),
+			HomeDir:        homeDir,
 		}
 
 		stdin := strings.NewReader(`{"session_id":"new-claude-uuid","source":"startup"}`)
@@ -1310,7 +1319,7 @@ func TestTeammateModeIndependent(t *testing.T) {
 		}
 
 		if !result.IsTeammate {
-			t.Error("IsTeammate should be true when lead PID is alive")
+			t.Error("IsTeammate should be true when team has live tmux panes")
 		}
 		if result.SessionID != existingSID {
 			t.Errorf("SessionID = %q, want %q (should reuse existing SID)", result.SessionID, existingSID)

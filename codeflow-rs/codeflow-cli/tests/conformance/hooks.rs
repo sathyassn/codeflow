@@ -25,27 +25,31 @@
 //! messages but is non-deterministic (timestamps, paths), so only exit code
 //! and stdout are compared in conformance tests.
 
-use crate::harness::{assert_both_allow, assert_conformance, load_fixture, run_conformance};
+use crate::harness::{
+    assert_both_allow, assert_both_allow_fixture, assert_conformance_fixture,
+    assert_conformance_json_env_fixture, assert_conformance_strict_fixture,
+    load_fixture_with_project_dir, make_isolated_project_dir, resolve_binaries,
+    run_binary_isolated, run_conformance_with_fixture,
+};
 
 // ─── session-start ───────────────────────────────────────────────────────────
 
-/// session-start init: Go outputs JSON env vars to stdout (session ID + project root);
-/// Rust init handler is not yet fully implemented — outputs nothing to stdout.
-///
-/// TODO: Implement session-start init in Rust to match Go's JSON env output.
-/// Remove #[ignore] when implemented.
+/// session-start init: both Go and Rust output JSON env vars to stdout.
+/// Uses structural JSON comparison because session IDs and project roots
+/// are dynamic (unique per invocation).
 #[test]
-#[ignore = "TODO: implement session-start init stdout (Go outputs JSON env vars; Rust stub produces no output)"]
 fn test_session_start_init_allow_with_valid_input() {
-    let fixture = load_fixture("session_start");
-    assert_conformance(&["hooks", "session-start", "init"], &fixture);
+    assert_conformance_json_env_fixture(
+        &["hooks", "session-start", "init"],
+        "session_start",
+        &["CODEFLOW_SESSION_ID", "CF_PROJECT_ROOT"],
+    );
 }
 
 /// Verify both binaries exit 0 for session-start init (even the stub).
 #[test]
 fn test_session_start_init_both_exit_zero() {
-    let fixture = load_fixture("session_start");
-    assert_both_allow(&["hooks", "session-start", "init"], &fixture);
+    assert_both_allow_fixture(&["hooks", "session-start", "init"], "session_start");
 }
 
 #[test]
@@ -58,16 +62,43 @@ fn test_session_start_init_graceful_on_invalid_json() {
     assert_both_allow(&["hooks", "session-start", "init"], "not valid json");
 }
 
-/// session-start instructions: Go outputs full session instructions text to stdout;
-/// Rust instructions handler is not yet fully implemented — outputs nothing.
+/// session-start instructions: both Go and Rust output instruction text to stdout.
 ///
-/// TODO: Implement session-start instructions in Rust to match Go's output.
-/// Remove #[ignore] when implemented.
+/// Uses a shared isolated project dir so that Rust's `input.project_dir` and
+/// Go's `CF_PROJECT_ROOT` both resolve to the same clean temp directory.
+/// Without this, Rust reads leftover state from the fixture's hardcoded path.
 #[test]
-#[ignore = "TODO: implement session-start instructions stdout (Go outputs instructions text; Rust stub produces no output)"]
 fn test_session_start_instructions_allow_with_valid_input() {
-    let fixture = load_fixture("session_start");
-    assert_conformance(&["hooks", "session-start", "instructions"], &fixture);
+    let tmp = make_isolated_project_dir();
+    let fixture = load_fixture_with_project_dir("session_start", tmp.path());
+    let paths = resolve_binaries();
+    let go = run_binary_isolated(
+        &paths.go_binary,
+        &["hooks", "session-start", "instructions"],
+        &fixture,
+        tmp.path(),
+    );
+    let rust = run_binary_isolated(
+        &paths.rust_binary,
+        &["hooks", "session-start", "instructions"],
+        &fixture,
+        tmp.path(),
+    );
+
+    assert_eq!(
+        go.exit_code,
+        rust.exit_code,
+        "exit code mismatch for session-start instructions:\n  Go:   {}\n  Rust: {}\n  Go stderr:   {}\n  Rust stderr: {}",
+        go.exit_code,
+        rust.exit_code,
+        go.stderr.trim(),
+        rust.stderr.trim()
+    );
+    assert_eq!(
+        go.stdout, rust.stdout,
+        "stdout mismatch for session-start instructions:\n  Go:   {:?}\n  Rust: {:?}",
+        go.stdout, rust.stdout
+    );
 }
 
 #[test]
@@ -77,8 +108,8 @@ fn test_session_start_instructions_graceful_on_empty_stdin() {
 
 #[test]
 fn test_session_start_instructions_exit_code_is_zero() {
-    let fixture = load_fixture("session_start");
-    let (go, rust) = run_conformance(&["hooks", "session-start", "instructions"], &fixture);
+    let (go, rust) =
+        run_conformance_with_fixture(&["hooks", "session-start", "instructions"], "session_start");
     assert_eq!(
         go.exit_code, 0,
         "Go session-start instructions should exit 0"
@@ -96,17 +127,15 @@ fn test_session_start_logging_graceful_on_empty_stdin() {
 
 #[test]
 fn test_session_start_logging_exit_code_matches() {
-    let fixture = load_fixture("session_start");
     // Logging writes to filesystem — only compare exit code and stdout.
-    assert_conformance(&["hooks", "session-start", "logging"], &fixture);
+    assert_conformance_fixture(&["hooks", "session-start", "logging"], "session_start");
 }
 
 // ─── session-end ─────────────────────────────────────────────────────────────
 
 #[test]
 fn test_session_end_cleanup_allow_with_valid_input() {
-    let fixture = load_fixture("session_end");
-    assert_conformance(&["hooks", "session-end", "cleanup"], &fixture);
+    assert_conformance_fixture(&["hooks", "session-end", "cleanup"], "session_end");
 }
 
 #[test]
@@ -126,16 +155,14 @@ fn test_session_end_logging_graceful_on_empty_stdin() {
 
 #[test]
 fn test_session_end_logging_exit_code_matches() {
-    let fixture = load_fixture("session_end");
-    assert_conformance(&["hooks", "session-end", "logging"], &fixture);
+    assert_conformance_fixture(&["hooks", "session-end", "logging"], "session_end");
 }
 
 // ─── pre-tool-use ────────────────────────────────────────────────────────────
 
 #[test]
 fn test_pre_tool_use_gate_check_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "gate-check"], &fixture);
+    assert_conformance_fixture(&["hooks", "pre-tool-use", "gate-check"], "pre_tool_use");
 }
 
 #[test]
@@ -150,8 +177,7 @@ fn test_pre_tool_use_gate_check_graceful_on_invalid_json() {
 
 #[test]
 fn test_pre_tool_use_team_guard_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "team-guard"], &fixture);
+    assert_conformance_fixture(&["hooks", "pre-tool-use", "team-guard"], "pre_tool_use");
 }
 
 #[test]
@@ -161,8 +187,10 @@ fn test_pre_tool_use_team_guard_graceful_on_empty_stdin() {
 
 #[test]
 fn test_pre_tool_use_edit_write_guard_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "edit-write-guard"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "pre-tool-use", "edit-write-guard"],
+        "pre_tool_use",
+    );
 }
 
 #[test]
@@ -172,8 +200,7 @@ fn test_pre_tool_use_edit_write_guard_graceful_on_empty_stdin() {
 
 #[test]
 fn test_pre_tool_use_gh_pr_guard_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "gh-pr-guard"], &fixture);
+    assert_conformance_fixture(&["hooks", "pre-tool-use", "gh-pr-guard"], "pre_tool_use");
 }
 
 #[test]
@@ -183,8 +210,10 @@ fn test_pre_tool_use_gh_pr_guard_graceful_on_empty_stdin() {
 
 #[test]
 fn test_pre_tool_use_protection_guard_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "protection-guard"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "pre-tool-use", "protection-guard"],
+        "pre_tool_use",
+    );
 }
 
 #[test]
@@ -194,8 +223,7 @@ fn test_pre_tool_use_protection_guard_graceful_on_empty_stdin() {
 
 #[test]
 fn test_pre_tool_use_security_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "security"], &fixture);
+    assert_conformance_fixture(&["hooks", "pre-tool-use", "security"], "pre_tool_use");
 }
 
 #[test]
@@ -210,8 +238,7 @@ fn test_pre_tool_use_security_graceful_on_invalid_json() {
 
 #[test]
 fn test_pre_tool_use_webfetch_guard_allow_with_valid_input() {
-    let fixture = load_fixture("pre_tool_use");
-    assert_conformance(&["hooks", "pre-tool-use", "webfetch-guard"], &fixture);
+    assert_conformance_fixture(&["hooks", "pre-tool-use", "webfetch-guard"], "pre_tool_use");
 }
 
 #[test]
@@ -223,8 +250,10 @@ fn test_pre_tool_use_webfetch_guard_graceful_on_empty_stdin() {
 
 #[test]
 fn test_post_tool_use_sentinel_write_allow_with_valid_input() {
-    let fixture = load_fixture("post_tool_use");
-    assert_conformance(&["hooks", "post-tool-use", "sentinel-write"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "post-tool-use", "sentinel-write"],
+        "post_tool_use",
+    );
 }
 
 #[test]
@@ -239,8 +268,10 @@ fn test_post_tool_use_sentinel_write_graceful_on_invalid_json() {
 
 #[test]
 fn test_post_tool_use_settings_validate_allow_with_valid_input() {
-    let fixture = load_fixture("post_tool_use");
-    assert_conformance(&["hooks", "post-tool-use", "settings-validate"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "post-tool-use", "settings-validate"],
+        "post_tool_use",
+    );
 }
 
 #[test]
@@ -250,8 +281,10 @@ fn test_post_tool_use_settings_validate_graceful_on_empty_stdin() {
 
 #[test]
 fn test_post_tool_use_checkpoint_register_allow_with_valid_input() {
-    let fixture = load_fixture("post_tool_use");
-    assert_conformance(&["hooks", "post-tool-use", "checkpoint-register"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "post-tool-use", "checkpoint-register"],
+        "post_tool_use",
+    );
 }
 
 #[test]
@@ -266,18 +299,16 @@ fn test_post_tool_use_logging_graceful_on_empty_stdin() {
 
 #[test]
 fn test_post_tool_use_logging_exit_code_matches() {
-    let fixture = load_fixture("post_tool_use");
-    assert_conformance(&["hooks", "post-tool-use", "logging"], &fixture);
+    assert_conformance_fixture(&["hooks", "post-tool-use", "logging"], "post_tool_use");
 }
 
 // ─── task-completed ──────────────────────────────────────────────────────────
 
 #[test]
 fn test_task_completed_checkpoint_complete_allow_with_valid_input() {
-    let fixture = load_fixture("task_completed");
-    assert_conformance(
+    assert_conformance_fixture(
         &["hooks", "task-completed", "checkpoint-complete"],
-        &fixture,
+        "task_completed",
     );
 }
 
@@ -303,8 +334,7 @@ fn test_stop_logging_graceful_on_empty_stdin() {
 
 #[test]
 fn test_stop_logging_exit_code_matches() {
-    let fixture = load_fixture("stop");
-    assert_conformance(&["hooks", "stop", "logging"], &fixture);
+    assert_conformance_fixture(&["hooks", "stop", "logging"], "stop");
 }
 
 // ─── user-prompt-submit ──────────────────────────────────────────────────────
@@ -316,34 +346,29 @@ fn test_user_prompt_submit_logging_graceful_on_empty_stdin() {
 
 #[test]
 fn test_user_prompt_submit_logging_exit_code_matches() {
-    let fixture = load_fixture("user_prompt_submit");
-    assert_conformance(&["hooks", "user-prompt-submit", "logging"], &fixture);
+    assert_conformance_fixture(
+        &["hooks", "user-prompt-submit", "logging"],
+        "user_prompt_submit",
+    );
 }
 
-/// user-prompt-submit validate: STUB in Rust — output differs from Go.
-///
-/// Go's implementation outputs context reminders (git status, protected branch,
-/// active task, `PathFlow` mode) to stderr. Rust's `PromptValidateStub` always
-/// returns Allow with no stderr output.
-///
-/// TODO: Implement full prompt validation in Rust matching Go's `PromptValidator`.
-/// Remove `#[ignore]` when implemented.
+/// user-prompt-submit validate: both Go and Rust output context reminders.
 #[test]
-#[ignore = "TODO: implement full prompt validation (currently stub). Go outputs context reminders to stderr; Rust stub produces no output."]
 fn test_user_prompt_submit_validate_output_matches() {
-    let fixture = load_fixture("user_prompt_submit");
     // This will diff stderr when Go outputs reminders and Rust outputs nothing.
-    crate::harness::assert_conformance_strict(
+    assert_conformance_strict_fixture(
         &["hooks", "user-prompt-submit", "validate"],
-        &fixture,
+        "user_prompt_submit",
     );
 }
 
 /// Verify that both binaries exit 0 for user-prompt-submit validate (even the stub).
 #[test]
 fn test_user_prompt_submit_validate_both_exit_zero() {
-    let fixture = load_fixture("user_prompt_submit");
-    assert_both_allow(&["hooks", "user-prompt-submit", "validate"], &fixture);
+    assert_both_allow_fixture(
+        &["hooks", "user-prompt-submit", "validate"],
+        "user_prompt_submit",
+    );
 }
 
 #[test]

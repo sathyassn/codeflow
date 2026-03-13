@@ -8,7 +8,8 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::pattern::{
-    glob_to_regex, is_glob_path_targeted, is_glob_pattern, is_path_targeted, split_command_segments,
+    extract_variable_assignments, glob_to_regex, has_variable_indirection, is_glob_path_targeted,
+    is_glob_pattern, is_path_or_glob_targeted, is_path_targeted, split_command_segments,
 };
 use super::{CheckContext, SecurityModule, Verdict, block};
 
@@ -82,6 +83,16 @@ impl SecurityModule for PathModule {
                     return Some(v);
                 }
             }
+        }
+
+        // Check variable indirection bypass (e.g., F=".claude/settings.json" && rm $F).
+        if let Some(v) = check_variable_indirection(&segments, &paths) {
+            return Some(v);
+        }
+
+        // Check eval with protected path literals (e.g., eval "rm .claude/settings.json").
+        if let Some(v) = check_eval_bypass(&segments, &paths) {
+            return Some(v);
         }
 
         // Check .claude and .codeflow directory-level protection.
@@ -244,6 +255,77 @@ fn check_redirect_protection(segments: &[String], paths: &[String]) -> Option<Ve
                     }
                 }
             }
+        }
+    }
+
+    None
+}
+
+/// Detect `eval` commands that contain protected path literals.
+fn check_eval_bypass(segments: &[String], paths: &[String]) -> Option<Verdict> {
+    for seg in segments {
+        let trimmed = seg.trim();
+        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        if first_word != "eval" {
+            continue;
+        }
+        for path in paths {
+            if is_path_or_glob_targeted(trimmed, path) {
+                return Some(block(
+                    "Protected Path Indirection",
+                    "eval command with protected path argument",
+                    path,
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Detect dangerous commands using shell variables assigned protected path values.
+fn check_variable_indirection(segments: &[String], paths: &[String]) -> Option<Verdict> {
+    let assignments = extract_variable_assignments(segments);
+    if assignments.is_empty() {
+        return None;
+    }
+
+    let mut protected_vars: Vec<(&str, &str)> = Vec::new();
+    for (name, value) in &assignments {
+        for path in paths {
+            // Match if the value IS a protected path, or if any protected
+            // path starts with the value as a directory prefix (e.g.,
+            // ".claude" is a parent of ".claude/settings.json").
+            if is_path_or_glob_targeted(value, path)
+                || value.as_str() == path
+                || path.starts_with(&format!("{value}/"))
+            {
+                protected_vars.push((name, path));
+                break;
+            }
+        }
+    }
+    if protected_vars.is_empty() {
+        return None;
+    }
+
+    let dangerous = dangerous_cmds_re();
+    let perm = permission_cmds_re();
+    let git = git_rm_re();
+
+    for seg in segments {
+        let trimmed = seg.trim();
+        if !dangerous.is_match(trimmed) && !perm.is_match(trimmed) && !git.is_match(trimmed) {
+            continue;
+        }
+        if !has_variable_indirection(trimmed) {
+            continue;
+        }
+        if let Some((_, protected_path)) = protected_vars.first() {
+            return Some(block(
+                "Protected Path Indirection",
+                "Variable indirection targeting protected path",
+                protected_path,
+            ));
         }
     }
 
@@ -476,5 +558,112 @@ mod tests {
             policy: &empty_policy,
         };
         assert!(PathModule.check(&empty_ctx).is_none());
+    }
+
+    // -- Variable indirection bypass --
+
+    #[test]
+    fn test_indirection_rm_var_and() {
+        // F=".claude/settings.json" && rm $F → BLOCKED
+        let result = PathModule.check(&ctx(r#"F=".claude/settings.json" && rm $F"#));
+        assert!(result.is_some(), "Should block rm via variable indirection");
+    }
+
+    #[test]
+    fn test_indirection_rm_var_semicolon() {
+        // F=".claude/settings.json"; rm "$F" → BLOCKED
+        let result = PathModule.check(&ctx(r#"F=".claude/settings.json"; rm "$F""#));
+        assert!(
+            result.is_some(),
+            "Should block rm via variable indirection with semicolon"
+        );
+    }
+
+    #[test]
+    fn test_indirection_rm_braced_var() {
+        // DIR=".claude" && rm -rf ${DIR} → BLOCKED
+        let result = PathModule.check(&ctx(r#"DIR=".claude" && rm -rf ${DIR}"#));
+        assert!(
+            result.is_some(),
+            "Should block rm via braced variable indirection"
+        );
+    }
+
+    #[test]
+    fn test_eval_rm_protected() {
+        // eval "rm .claude/settings.json" → BLOCKED
+        let result = PathModule.check(&ctx(r#"eval "rm .claude/settings.json""#));
+        assert!(result.is_some(), "Should block eval with protected path rm");
+    }
+
+    #[test]
+    fn test_indirection_safe_path_allowed() {
+        // X="/tmp/safe" && rm $X → ALLOWED (not a protected path)
+        let result = PathModule.check(&ctx(r#"X="/tmp/safe" && rm $X"#));
+        assert!(
+            result.is_none(),
+            "Should allow rm via variable when path is not protected"
+        );
+    }
+
+    #[test]
+    fn test_indirection_echo_path_allowed() {
+        // echo $PATH → ALLOWED (no dangerous cmd on protected path)
+        let result = PathModule.check(&ctx("echo $PATH"));
+        assert!(result.is_none(), "Should allow echo $PATH");
+    }
+
+    #[test]
+    fn test_indirection_cat_protected_allowed() {
+        // F=".claude/settings.json" && cat $F → ALLOWED (cat is not dangerous)
+        let result = PathModule.check(&ctx(r#"F=".claude/settings.json" && cat $F"#));
+        assert!(
+            result.is_none(),
+            "Should allow cat via variable indirection (read-only)"
+        );
+    }
+
+    #[test]
+    fn test_indirection_glob_path_via_var() {
+        // P=".claude/hooks/codeflow/**" && rm $P → BLOCKED
+        let result = PathModule.check(&ctx(r#"P=".claude/hooks/codeflow/**" && rm $P"#));
+        assert!(
+            result.is_some(),
+            "Should block rm via variable with glob protected path"
+        );
+    }
+
+    #[test]
+    fn test_eval_false_positive_gh_pr() {
+        // gh pr create --body "checkEvalBypass detects eval" → ALLOWED
+        let result = PathModule.check(&ctx(
+            r#"gh pr create --body "checkEvalBypass detects eval .claude/settings.json""#,
+        ));
+        assert!(
+            result.is_none(),
+            "Should allow gh pr with eval mentioned in body text"
+        );
+    }
+
+    #[test]
+    fn test_eval_false_positive_echo() {
+        // echo "the eval command is dangerous" → ALLOWED
+        let result = PathModule.check(&ctx(
+            r#"echo "the eval command is dangerous .claude/settings.json""#,
+        ));
+        assert!(
+            result.is_none(),
+            "Should allow echo with eval mentioned in string"
+        );
+    }
+
+    #[test]
+    fn test_eval_still_blocked() {
+        // eval "rm .claude/settings.json" → BLOCKED (actual eval command)
+        let result = PathModule.check(&ctx(r#"eval "rm .claude/settings.json""#));
+        assert!(
+            result.is_some(),
+            "Should still block actual eval with protected path"
+        );
     }
 }

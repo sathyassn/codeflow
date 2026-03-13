@@ -49,12 +49,18 @@ type Cleaner struct {
 	Now func() time.Time
 
 	// ProcessChecker checks if a PID is alive.
+	// Retained for backward compatibility but no longer used for lead liveness.
 	ProcessChecker ProcessChecker
+
+	// TmuxChecker checks if a tmux pane is alive.
+	// Used for session liveness detection via team config pane IDs.
+	TmuxChecker TmuxChecker
 
 	// HomeDir overrides os.UserHomeDir for testing.
 	HomeDir string
 
-	// PPID is the parent process ID for lead identification.
+	// PPID is the parent process ID.
+	// Informational only — liveness checks use tmux pane status.
 	PPID int
 }
 
@@ -64,6 +70,7 @@ func NewCleaner() *Cleaner {
 	return &Cleaner{
 		Now:            func() time.Time { return time.Now().UTC() },
 		ProcessChecker: osProcessChecker{},
+		TmuxChecker:    osTmuxChecker{},
 		HomeDir:        home,
 		PPID:           os.Getppid(),
 	}
@@ -188,7 +195,13 @@ func (c *Cleaner) resolveSessionID(projectDir string) string {
 }
 
 // shouldSkipCleanup checks the pathflow guard. Returns true if cleanup should
-// be skipped (teammate shutdown while lead is alive).
+// be skipped (teammate shutdown while session is still active).
+//
+// Liveness is determined by tmux pane status from the team config at
+// ~/.claude/teams/{team_name}/config.json, not by PID checks. The process
+// chain is: claude (persistent) -> /bin/zsh (ephemeral) -> codeflow binary,
+// so os.Getppid() returns an ephemeral shell PID that dies immediately after
+// each hook invocation, making PID-based checks effectively dead code.
 func (c *Cleaner) shouldSkipCleanup(sessionStateDir string, result *CleanupResult) bool {
 	flagPath := filepath.Join(sessionStateDir, "pathflow", "is-pathflow-active")
 	if _, err := os.Stat(flagPath); err != nil {
@@ -210,25 +223,46 @@ func (c *Cleaner) shouldSkipCleanup(sessionStateDir string, result *CleanupResul
 		return false
 	}
 
-	if teamInfo.LeadPID <= 0 {
-		result.msg("SessionEnd: PathFlow active but lead PID unknown -- proceeding with cleanup")
+	// Use tmux pane liveness from team config instead of PID checks.
+	// The lead_pid field is informational only (ephemeral shell PID).
+	if teamInfo.TeamName == "" {
+		result.msg("SessionEnd: PathFlow active but no team name -- proceeding with cleanup")
 		return false
 	}
 
-	// Check 1: Is this the lead's own SessionEnd?
-	if teamInfo.LeadPID == c.PPID {
-		result.msg("SessionEnd: PathFlow active, PPID matches lead PID %d -- proceeding with cleanup (lead's own SessionEnd)", teamInfo.LeadPID)
-		return false
-	}
-
-	// Check 2: Is the lead alive?
-	if c.ProcessChecker.IsAlive(teamInfo.LeadPID) {
-		result.msg("SessionEnd: PathFlow active, lead PID %d alive -- skipping cleanup (teammate shutdown)", teamInfo.LeadPID)
+	alive := c.hasLiveTeamPanes(teamInfo.TeamName)
+	if alive {
+		result.msg("SessionEnd: PathFlow active, team %q has live tmux panes -- skipping cleanup (teammate shutdown)", teamInfo.TeamName)
 		return true
 	}
 
-	// Check 3: Lead is dead -- orphaned session.
-	result.msg("SessionEnd: PathFlow active but lead PID %d dead -- proceeding with cleanup (orphaned session)", teamInfo.LeadPID)
+	result.msg("SessionEnd: PathFlow active but no live tmux panes for team %q -- proceeding with cleanup (session ended)", teamInfo.TeamName)
+	return false
+}
+
+// hasLiveTeamPanes checks whether any tmux pane in the team config is alive.
+// Returns false if the config is missing, unreadable, or has no live panes.
+func (c *Cleaner) hasLiveTeamPanes(teamName string) bool {
+	cfgPath := filepath.Join(c.HomeDir, ".claude", "teams", teamName, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return false
+	}
+
+	var cfg struct {
+		Members []struct {
+			TmuxPaneID string `json:"tmuxPaneId"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+
+	for _, m := range cfg.Members {
+		if c.TmuxChecker.IsPaneAlive(m.TmuxPaneID) {
+			return true
+		}
+	}
 	return false
 }
 

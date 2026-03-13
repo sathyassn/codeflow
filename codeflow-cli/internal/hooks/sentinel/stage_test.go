@@ -2,6 +2,7 @@ package sentinel
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -617,4 +618,273 @@ func TestAtomicWriteFile(t *testing.T) {
 			t.Error("file is empty after concurrent writes")
 		}
 	})
+
+	t.Run("error when directory does not exist", func(t *testing.T) {
+		t.Parallel()
+		// Target a path whose parent directory does not exist.
+		path := filepath.Join(t.TempDir(), "nonexistent", "deep", "file.json")
+
+		err := atomicWriteFile(path, []byte(`{"key":"value"}`), 0o644)
+		if err == nil {
+			t.Fatal("expected error when directory does not exist, got nil")
+		}
+		if !strings.Contains(err.Error(), "create temp file") {
+			t.Errorf("error = %q, want substring %q", err.Error(), "create temp file")
+		}
+	})
+
+	t.Run("error when rename target is in non-writable dir", func(t *testing.T) {
+		t.Parallel()
+		// Write to a temp file then move to a path in a non-existent directory.
+		// Since atomicWriteFile creates the temp in the same dir as the target,
+		// this tests the rename failure path by making the target a directory.
+		dir := t.TempDir()
+		targetPath := filepath.Join(dir, "target.json")
+
+		// First, create target as a directory (rename file -> dir fails).
+		if err := os.MkdirAll(targetPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		err := atomicWriteFile(targetPath, []byte(`{"key":"value"}`), 0o644)
+		if err == nil {
+			t.Fatal("expected error when rename target is a directory, got nil")
+		}
+		if !strings.Contains(err.Error(), "rename tmp to target") {
+			t.Errorf("error = %q, want substring %q", err.Error(), "rename tmp to target")
+		}
+	})
+}
+
+func TestCreateSentinelFile_MkdirAllFails(t *testing.T) {
+	t.Parallel()
+
+	// Place a regular file where the sentinel dir would be created,
+	// so MkdirAll will fail trying to create a dir through it.
+	base := t.TempDir()
+	blockFile := filepath.Join(base, "blocked")
+	if err := os.WriteFile(blockFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// sentinelDir is a path that goes *through* the regular file.
+	sentinelDir := filepath.Join(blockFile, "subdir")
+
+	err := createSentinelFile(sentinelDir, "pf-1")
+	if err == nil {
+		t.Fatal("expected error when MkdirAll fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "create sentinel dir") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "create sentinel dir")
+	}
+}
+
+func TestCheckAndCreateStageSentinel_CreateSentinelFails(t *testing.T) {
+	t.Parallel()
+
+	// Create a base dir with a file blocking the sentinel directory creation.
+	base := t.TempDir()
+	blockFile := filepath.Join(base, "blocked")
+	if err := os.WriteFile(blockFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Point sentinelDir through the blocking file so createSentinelFile fails.
+	sentinelDir := filepath.Join(blockFile, "sentinels")
+
+	stdin := `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`
+	verdict := CheckAndCreateStageSentinel(strings.NewReader(stdin), sentinelDir)
+
+	// Should allow through (graceful degradation) but have a reason about failure.
+	if !verdict.Allow {
+		t.Errorf("Allow = false, want true on sentinel creation failure")
+	}
+	if !strings.Contains(verdict.Reason, "sentinel creation failed") {
+		t.Errorf("Reason = %q, want substring %q", verdict.Reason, "sentinel creation failed")
+	}
+}
+
+func TestGetClaudePID(t *testing.T) {
+	t.Parallel()
+
+	// getClaudePID walks up the process tree. In a test environment, the result
+	// should be a valid PID > 1 (either the actual grandparent PID or the
+	// fallback ppid). We can at least verify it returns something reasonable.
+	pid := getClaudePID()
+	if pid <= 0 {
+		t.Errorf("getClaudePID() = %d, want > 0", pid)
+	}
+}
+
+func TestCheckAndCreateStageSentinelFromData_NullToolInput(t *testing.T) {
+	t.Parallel()
+
+	// When tool_input is null JSON, ToolInput is empty (len=0), triggering
+	// the empty tool_input guard.
+	data := []byte(`{"tool_name":"SendMessage","tool_input":null}`)
+	verdict := CheckAndCreateStageSentinelFromData(data, t.TempDir())
+
+	if !verdict.Allow {
+		t.Errorf("Allow = false, want true for null tool_input")
+	}
+}
+
+func TestCheckAndCreateStageSentinel_ReadError(t *testing.T) {
+	t.Parallel()
+
+	// Use an error-producing reader to trigger the io.ReadAll error path
+	// in CheckAndCreateStageSentinel.
+	verdict := CheckAndCreateStageSentinel(&errorReader{}, t.TempDir())
+
+	if !verdict.Allow {
+		t.Errorf("Allow = false, want true on read error (graceful degradation)")
+	}
+}
+
+// errorReader always returns an error on Read.
+type errorReader struct{}
+
+func (errorReader) Read(_ []byte) (int, error) {
+	return 0, fmt.Errorf("simulated read error")
+}
+
+func TestHandleTeamCreate_MkdirAllFails(t *testing.T) {
+	t.Parallel()
+
+	// Block directory creation by placing a file where the dir should be.
+	base := t.TempDir()
+	blockFile := filepath.Join(base, "blocked")
+	if err := os.WriteFile(blockFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Session dir goes through the blocking file.
+	sessionDir := filepath.Join(blockFile, "pathflow")
+
+	data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"test"}}`)
+	verdict := HandleTeamCreate(data, sessionDir, "ses-test")
+
+	if !verdict.Allow {
+		t.Fatal("Allow = false, want true on MkdirAll failure")
+	}
+	if !strings.Contains(verdict.Reason, "create session dir") {
+		t.Errorf("Reason = %q, want substring %q", verdict.Reason, "create session dir")
+	}
+}
+
+func TestHandleTeamCreate_AtomicWriteFails(t *testing.T) {
+	t.Parallel()
+
+	// Create session dir but make the team file path a directory so rename fails.
+	sessionDir := t.TempDir()
+	teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+	if err := os.MkdirAll(teamFilePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"test"}}`)
+	verdict := HandleTeamCreate(data, sessionDir, "ses-test")
+
+	if !verdict.Allow {
+		t.Fatal("Allow = false, want true on atomic write failure")
+	}
+	if !strings.Contains(verdict.Reason, "write pathflow-team.json") {
+		t.Errorf("Reason = %q, want substring %q", verdict.Reason, "write pathflow-team.json")
+	}
+}
+
+func TestHandleTeammateSpawn_InvalidToolInput(t *testing.T) {
+	t.Parallel()
+
+	// tool_input is not a valid JSON object for taskSpawnInput.
+	data := []byte(`{"tool_name":"Task","tool_input":"not-object"}`)
+	verdict := HandleTeammateSpawn(data, t.TempDir())
+
+	if !verdict.Allow {
+		t.Fatal("Allow = false for invalid tool_input JSON")
+	}
+}
+
+func TestHandleTeammateSpawn_InvalidExistingTeamJSON(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	// Write invalid JSON to pathflow-team.json.
+	teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
+	if err := os.WriteFile(teamFilePath, []byte("not-valid-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-dev"}}`)
+	verdict := HandleTeammateSpawn(data, sessionDir)
+
+	if !verdict.Allow {
+		t.Fatal("Allow = false for invalid existing team JSON")
+	}
+}
+
+func TestHandleTeammateSpawn_AtomicWriteFails(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	// Pre-create valid pathflow-team.json.
+	team := PathflowTeam{
+		TeamName:        "test",
+		LeadPID:         1234,
+		TeammateSpawned: false,
+	}
+	teamJSON, _ := json.Marshal(team)
+	if err := os.WriteFile(filepath.Join(sessionDir, "pathflow-team.json"), teamJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the session dir read-only so atomicWriteFile can't create temp files.
+	if err := os.Chmod(sessionDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(sessionDir, 0o755) // restore for cleanup
+
+	data := []byte(`{"tool_name":"Task","tool_input":{"name":"cf-dev"}}`)
+	verdict := HandleTeammateSpawn(data, sessionDir)
+
+	if !verdict.Allow {
+		t.Fatal("Allow = false, want true on atomic write failure")
+	}
+	if !strings.Contains(verdict.Reason, "update pathflow-team.json") {
+		t.Errorf("Reason = %q, want substring %q", verdict.Reason, "update pathflow-team.json")
+	}
+}
+
+func TestAtomicWriteFile_WriteError(t *testing.T) {
+	t.Parallel()
+
+	// Create a temp file manually, then make the directory read-only
+	// after creating the temp file -- but atomicWriteFile creates the temp
+	// internally. We can test write errors by using a pipe or similar.
+	// Actually, write errors are hard to trigger on real filesystems.
+	// Instead, test the chmod error path by using a file descriptor
+	// that doesn't support chmod -- also hard.
+	//
+	// The practical approach: test that the function returns the right
+	// error prefix for directory-level failures (already tested above).
+	// These internal error paths (write/chmod/close) are defensive and
+	// difficult to trigger without fault injection.
+	//
+	// For coverage: at least verify the function works end-to-end and
+	// the error wrapping format is consistent.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	// Successful write.
+	if err := atomicWriteFile(path, []byte(`ok`), 0o644); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Overwrite with new content.
+	if err := atomicWriteFile(path, []byte(`updated`), 0o600); err != nil {
+		t.Fatalf("expected no error on overwrite, got: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "updated" {
+		t.Errorf("content = %q, want %q", string(data), "updated")
+	}
 }

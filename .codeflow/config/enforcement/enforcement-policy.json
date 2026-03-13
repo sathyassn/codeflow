@@ -401,7 +401,13 @@
       ".github/**",
       ".git/hooks/**",
       ".state/sentinels/**",
-      ".state/session/**"
+      ".state/session/**",
+      "codeflow-cli/internal/hooks/**",
+      "codeflow-cli/cmd/codeflow/hooks*",
+      "codeflow-cli/cmd/codeflow/githooks*",
+      "codeflow-rs/codeflow-core/src/hooks/**",
+      "codeflow-rs/codeflow-cli/src/cmd/hooks/**",
+      "codeflow-rs/codeflow-cli/src/cmd/git_hooks.rs"
     ],
     "moderate": [
       "project/mission.md",

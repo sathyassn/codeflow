@@ -7,6 +7,7 @@
 pub mod logging;
 pub mod post_tool_use;
 pub mod pre_tool_use;
+pub mod prompt_validate;
 pub mod security;
 pub mod session_end;
 pub mod session_start;
@@ -191,8 +192,13 @@ impl TmuxChecker for OsTmuxChecker {
         if pane_id.is_empty() {
             return false;
         }
-        self.list_panes()
-            .is_ok_and(|panes| panes.iter().any(|p| p == pane_id))
+        // If tmux is unreachable (list_panes returns Err), assume pane is alive
+        // (safe default). Treating failure as "all panes dead" would destroy
+        // live sessions when tmux is temporarily unavailable.
+        match self.list_panes() {
+            Ok(panes) => panes.iter().any(|p| p == pane_id),
+            Err(_) => true,
+        }
     }
 
     fn list_panes(&self) -> Result<Vec<String>, HookError> {
@@ -202,7 +208,9 @@ impl TmuxChecker for OsTmuxChecker {
             .map_err(HookError::Io)?;
 
         if !output.status.success() {
-            return Ok(Vec::new());
+            // Return Err so is_pane_alive hits the Err(_) => true path (safe default).
+            // Returning Ok(empty) would make panes appear dead, destroying live sessions.
+            return Err(HookError::Config("tmux exited with non-zero status".into()));
         }
 
         let panes = String::from_utf8_lossy(&output.stdout)
@@ -215,15 +223,62 @@ impl TmuxChecker for OsTmuxChecker {
     }
 }
 
+/// Returns the persistent Claude Code process PID by walking up the process
+/// tree one level. The hook execution chain is:
+///   `claude` (persistent) -> `/bin/zsh` (ephemeral) -> `codeflow` binary
+///
+/// `parent_id()` returns the ephemeral shell PID. This function gets its
+/// parent (the claude process) via `ps`, falling back to `parent_id()` on error.
+#[cfg(unix)]
+#[must_use]
+pub fn get_claude_pid() -> u32 {
+    use std::os::unix::process::parent_id;
+    let ppid = parent_id();
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &ppid.to_string()])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let claude_pid = String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(ppid);
+            if claude_pid <= 1 { ppid } else { claude_pid }
+        }
+        _ => ppid,
+    }
+}
+
+/// Non-unix fallback for [`get_claude_pid`].
+#[cfg(not(unix))]
+#[must_use]
+pub fn get_claude_pid() -> u32 {
+    0
+}
+
 /// JSON structure for `pathflow-team.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Matches the Go `PathflowTeam` struct in `sentinel/stage.go`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PathflowTeamInfo {
-    /// PID of the lead agent process.
+    /// PID of the lead agent process (kept for backward compatibility).
     #[serde(default)]
     pub lead_pid: u32,
     /// Team name for Claude Code teams.
     #[serde(default)]
     pub team_name: String,
+    /// The `CODEFLOW_SESSION_ID` at team creation time.
+    #[serde(default)]
+    pub codeflow_session_id: String,
+    /// Whether at least one teammate has been spawned.
+    #[serde(default)]
+    pub teammate_spawned: bool,
+    /// RFC 3339 timestamp of team creation.
+    #[serde(default)]
+    pub created_at: String,
+    /// Name of the last spawned teammate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_spawn_name: Option<String>,
 }
 
 /// JSON structure for session metadata file.
@@ -375,6 +430,30 @@ mod tests {
         let info: PathflowTeamInfo = serde_json::from_str(json).expect("deserialize");
         assert_eq!(info.lead_pid, 12345);
         assert_eq!(info.team_name, "codeflow-team");
+        // New fields should default
+        assert_eq!(info.codeflow_session_id, "");
+        assert!(!info.teammate_spawned);
+        assert_eq!(info.created_at, "");
+        assert!(info.last_spawn_name.is_none());
+    }
+
+    #[test]
+    fn test_pathflow_team_info_full_deserialize() {
+        let json = r#"{
+            "lead_pid": 12345,
+            "team_name": "codeflow-team",
+            "codeflow_session_id": "ses-abc123",
+            "teammate_spawned": true,
+            "created_at": "2026-03-10T00:00:00Z",
+            "last_spawn_name": "cf-development"
+        }"#;
+        let info: PathflowTeamInfo = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(info.lead_pid, 12345);
+        assert_eq!(info.team_name, "codeflow-team");
+        assert_eq!(info.codeflow_session_id, "ses-abc123");
+        assert!(info.teammate_spawned);
+        assert_eq!(info.created_at, "2026-03-10T00:00:00Z");
+        assert_eq!(info.last_spawn_name.as_deref(), Some("cf-development"));
     }
 
     #[test]
@@ -383,6 +462,24 @@ mod tests {
         let info: PathflowTeamInfo = serde_json::from_str(json).expect("deserialize");
         assert_eq!(info.lead_pid, 0);
         assert_eq!(info.team_name, "");
+        assert_eq!(info.codeflow_session_id, "");
+        assert!(!info.teammate_spawned);
+        assert_eq!(info.created_at, "");
+        assert!(info.last_spawn_name.is_none());
+    }
+
+    #[test]
+    fn test_pathflow_team_info_skip_serializing_none_last_spawn() {
+        let info = PathflowTeamInfo {
+            lead_pid: 1,
+            team_name: "t".into(),
+            codeflow_session_id: "ses-x".into(),
+            teammate_spawned: false,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            last_spawn_name: None,
+        };
+        let json = serde_json::to_string(&info).expect("serialize");
+        assert!(!json.contains("last_spawn_name"));
     }
 
     #[test]
@@ -541,17 +638,18 @@ mod tests {
     #[test]
     fn test_os_tmux_checker_nonexistent_pane() {
         let checker = OsTmuxChecker;
-        // A pane ID that doesn't exist should return false.
-        assert!(!checker.is_pane_alive("%99999"));
+        // When tmux is running: pane not found → false.
+        // When tmux is NOT running: error → true (safe default).
+        // Either result is valid depending on the environment.
+        let _ = checker.is_pane_alive("%99999");
     }
 
     #[test]
-    fn test_os_tmux_checker_list_panes_returns_vec() {
+    fn test_os_tmux_checker_list_panes() {
         let checker = OsTmuxChecker;
-        // list_panes should not error even if tmux is not running
-        // (returns empty vec on command failure).
-        let result = checker.list_panes();
-        assert!(result.is_ok());
+        // list_panes returns Ok(vec) when tmux is running, Err when not.
+        // Both outcomes are valid depending on the environment.
+        let _ = checker.list_panes();
     }
 
     #[test]

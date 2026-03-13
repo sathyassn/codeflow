@@ -1,12 +1,12 @@
 //! User prompt submit hook handlers: 2 handlers matching Go CLI.
 //!
-//! - `validate`: outputs context reminders (stub -- full implementation pending
-//!   a core `PromptValidator` equivalent of Go's `internal/hooks/prompt/validate.go`)
+//! - `validate`: outputs context reminders via `PromptValidator` in codeflow-core
+//!   (matches Go's `internal/hooks/prompt/validate.go`)
 //! - `logging`: logs prompt events via `PromptLogging`
 
 use anyhow::Result;
 use clap::Subcommand;
-use codeflow_core::{HookError, HookEvent, HookHandler, HookInput, HookOutput};
+use codeflow_core::HookHandler;
 
 use crate::helpers;
 
@@ -17,30 +17,6 @@ pub enum UserPromptSubmitHandler {
     Validate,
     /// User prompt logging
     Logging,
-}
-
-/// Stub prompt validator handler.
-///
-/// In Go, `internal/hooks/prompt/validate.go` outputs context reminders
-/// (git status, protected branch, active task, `PathFlow` mode). This stub
-/// always allows -- full implementation requires a core `PromptValidator`.
-struct PromptValidateStub;
-
-impl HookHandler for PromptValidateStub {
-    fn handle(&self, _input: HookInput) -> Result<HookOutput, HookError> {
-        // TODO: Implement full prompt validation matching Go's PromptValidator.
-        // Should output context reminders (git status, protected branch, active task,
-        // PathFlow mode) to stderr, then return Allow (never blocks).
-        Ok(HookOutput::Allow)
-    }
-
-    fn name(&self) -> &'static str {
-        "prompt-validate"
-    }
-
-    fn events(&self) -> &[HookEvent] {
-        &[HookEvent::UserPromptSubmit]
-    }
 }
 
 pub fn run(handler: UserPromptSubmitHandler) -> Result<()> {
@@ -55,7 +31,9 @@ fn build_handler(
     project_dir: std::path::PathBuf,
 ) -> Box<dyn HookHandler> {
     match handler {
-        UserPromptSubmitHandler::Validate => Box::new(PromptValidateStub),
+        UserPromptSubmitHandler::Validate => Box::new(
+            codeflow_core::hooks::prompt_validate::new_prompt_validator(project_dir),
+        ),
         UserPromptSubmitHandler::Logging => Box::new(
             codeflow_core::hooks::logging::PromptLogging::new(project_dir),
         ),
@@ -65,30 +43,7 @@ fn build_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_prompt_validate_stub_allows() {
-        let handler = PromptValidateStub;
-        let input = HookInput {
-            tool_name: None,
-            tool_input: None,
-            event: HookEvent::UserPromptSubmit,
-            session_id: Some("ses-test".into()),
-            project_dir: Some("/tmp".into()),
-            source: None,
-            transcript_path: None,
-        };
-        let result = handler.handle(input);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), HookOutput::Allow));
-    }
-
-    #[test]
-    fn test_prompt_validate_stub_metadata() {
-        let handler = PromptValidateStub;
-        assert_eq!(handler.name(), "prompt-validate");
-        assert_eq!(handler.events(), &[HookEvent::UserPromptSubmit]);
-    }
+    use codeflow_core::{HookEvent, HookInput, HookOutput};
 
     #[test]
     fn test_build_handler_validate_name() {
@@ -105,14 +60,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_handler_validate_handle() {
+    fn test_build_handler_validate_always_allows() {
         let dir = tempfile::tempdir().unwrap();
         let h = build_handler(UserPromptSubmitHandler::Validate, dir.path().to_path_buf());
         let input = HookInput {
             tool_name: None,
             tool_input: None,
             event: HookEvent::UserPromptSubmit,
-            session_id: Some("ses-testpromptvalidatestub".into()),
+            session_id: Some("ses-testpromptvalidateall".into()),
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: None,
             transcript_path: None,
@@ -120,6 +75,16 @@ mod tests {
         let result = h.handle(input);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), HookOutput::Allow));
+    }
+
+    #[test]
+    fn test_build_handler_validate_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = build_handler(UserPromptSubmitHandler::Validate, dir.path().to_path_buf());
+        assert!(
+            h.events().contains(&HookEvent::UserPromptSubmit),
+            "prompt validate should handle UserPromptSubmit events"
+        );
     }
 
     #[test]

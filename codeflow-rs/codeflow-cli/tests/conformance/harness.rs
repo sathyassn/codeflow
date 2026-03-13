@@ -221,38 +221,6 @@ pub fn run_conformance(args: &[&str], stdin: &str) -> (BinaryOutput, BinaryOutpu
     (go_out, rust_out)
 }
 
-/// Assert that Go and Rust outputs match on exit code and stdout.
-///
-/// stderr is excluded from the primary assertion because:
-/// - Logging handlers write timestamps to stderr (non-deterministic).
-/// - Some handlers write environment-dependent paths.
-/// - The known gap for user-prompt-submit validate produces intentional stderr diff.
-///
-/// Use `assert_conformance_strict` when stderr must also match.
-pub fn assert_conformance(args: &[&str], stdin: &str) {
-    let (go, rust) = run_conformance(args, stdin);
-
-    assert_eq!(
-        go.exit_code,
-        rust.exit_code,
-        "exit code mismatch for `{}`:\n  Go:   {}\n  Rust: {}\n  Go stderr:   {}\n  Rust stderr: {}",
-        args.join(" "),
-        go.exit_code,
-        rust.exit_code,
-        go.stderr.trim(),
-        rust.stderr.trim()
-    );
-
-    assert_eq!(
-        go.stdout,
-        rust.stdout,
-        "stdout mismatch for `{}`:\n  Go:   {:?}\n  Rust: {:?}",
-        args.join(" "),
-        go.stdout,
-        rust.stdout
-    );
-}
-
 /// Assert that Go and Rust outputs match on exit code, stdout, AND stderr.
 ///
 /// Only use this for handlers where stderr is stable and deterministic
@@ -348,6 +316,181 @@ pub fn assert_both_block(args: &[&str], stdin: &str) {
 #[allow(dead_code)]
 pub fn assert_conformance_json_env(args: &[&str], stdin: &str, dynamic_keys: &[&str]) {
     let (go, rust) = run_conformance(args, stdin);
+
+    assert_eq!(
+        go.exit_code,
+        0,
+        "Go should exit 0 for `{}`, got {}\n  stderr: {}",
+        args.join(" "),
+        go.exit_code,
+        go.stderr.trim()
+    );
+    assert_eq!(
+        rust.exit_code,
+        0,
+        "Rust should exit 0 for `{}`, got {}\n  stderr: {}",
+        args.join(" "),
+        rust.exit_code,
+        rust.stderr.trim()
+    );
+
+    let go_json: serde_json::Value = serde_json::from_str(go.stdout.trim()).unwrap_or_else(|e| {
+        panic!(
+            "Go stdout is not valid JSON: {e}\n  stdout: {:?}",
+            go.stdout
+        )
+    });
+    let rust_json: serde_json::Value =
+        serde_json::from_str(rust.stdout.trim()).unwrap_or_else(|e| {
+            panic!(
+                "Rust stdout is not valid JSON: {e}\n  stdout: {:?}",
+                rust.stdout
+            )
+        });
+
+    let go_env = go_json
+        .get("env")
+        .and_then(|v| v.as_object())
+        .unwrap_or_else(|| panic!("Go JSON missing 'env' object: {go_json:?}"));
+    let rust_env = rust_json
+        .get("env")
+        .and_then(|v| v.as_object())
+        .unwrap_or_else(|| panic!("Rust JSON missing 'env' object: {rust_json:?}"));
+
+    let go_keys: std::collections::BTreeSet<&String> = go_env.keys().collect();
+    let rust_keys: std::collections::BTreeSet<&String> = rust_env.keys().collect();
+    assert_eq!(
+        go_keys, rust_keys,
+        "env keys differ:\n  Go:   {go_keys:?}\n  Rust: {rust_keys:?}"
+    );
+
+    for key in &go_keys {
+        let go_val = go_env[*key].as_str().unwrap_or("");
+        let rust_val = rust_env[*key].as_str().unwrap_or("");
+
+        if dynamic_keys.contains(&key.as_str()) {
+            assert!(!go_val.is_empty(), "Go env[{key}] should not be empty");
+            assert!(!rust_val.is_empty(), "Rust env[{key}] should not be empty");
+        } else {
+            assert_eq!(
+                go_val, rust_val,
+                "env[{key}] mismatch:\n  Go:   {go_val:?}\n  Rust: {rust_val:?}"
+            );
+        }
+    }
+}
+
+/// Run both binaries with a fixture, using a shared isolated project dir.
+///
+/// Loads the fixture and replaces its `project_dir` with a shared temp dir.
+/// Both binaries run against the same temp dir and see the same `project_dir`
+/// in their stdin JSON and `CF_PROJECT_ROOT` env var, eliminating cross-test
+/// contamination from the hardcoded `/tmp/conformance-test` path.
+///
+/// Returns `(go_output, rust_output)`. The temp dir lives until the return
+/// values are consumed by assertions.
+pub fn run_conformance_with_fixture(
+    args: &[&str],
+    event_name: &str,
+) -> (BinaryOutput, BinaryOutput) {
+    let tmp = make_isolated_project_dir();
+    let fixture = load_fixture_with_project_dir(event_name, tmp.path());
+    let paths = resolve_binaries();
+    let go = run_binary_isolated(&paths.go_binary, args, &fixture, tmp.path());
+    let rust = run_binary_isolated(&paths.rust_binary, args, &fixture, tmp.path());
+    (go, rust)
+}
+
+/// Assert that Go and Rust outputs match on exit code and stdout, using a
+/// shared isolated project dir loaded from the named fixture.
+///
+/// This is the preferred way to run conformance tests with fixture data.
+/// Uses a shared isolated project dir from the named fixture, ensuring
+/// both binaries see the same `project_dir`.
+pub fn assert_conformance_fixture(args: &[&str], event_name: &str) {
+    let (go, rust) = run_conformance_with_fixture(args, event_name);
+
+    assert_eq!(
+        go.exit_code,
+        rust.exit_code,
+        "exit code mismatch for `{}`:\n  Go:   {}\n  Rust: {}\n  Go stderr:   {}\n  Rust stderr: {}",
+        args.join(" "),
+        go.exit_code,
+        rust.exit_code,
+        go.stderr.trim(),
+        rust.stderr.trim()
+    );
+
+    assert_eq!(
+        go.stdout,
+        rust.stdout,
+        "stdout mismatch for `{}`:\n  Go:   {:?}\n  Rust: {:?}",
+        args.join(" "),
+        go.stdout,
+        rust.stdout
+    );
+}
+
+/// Assert that Go and Rust outputs match on exit code, stdout, AND stderr,
+/// using a shared isolated project dir loaded from the named fixture.
+pub fn assert_conformance_strict_fixture(args: &[&str], event_name: &str) {
+    let (go, rust) = run_conformance_with_fixture(args, event_name);
+
+    assert_eq!(
+        go.exit_code,
+        rust.exit_code,
+        "exit code mismatch for `{}`:\n  Go:   {}\n  Rust: {}",
+        args.join(" "),
+        go.exit_code,
+        rust.exit_code
+    );
+
+    assert_eq!(
+        go.stdout,
+        rust.stdout,
+        "stdout mismatch for `{}`:\n  Go:   {:?}\n  Rust: {:?}",
+        args.join(" "),
+        go.stdout,
+        rust.stdout
+    );
+
+    assert_eq!(
+        go.stderr,
+        rust.stderr,
+        "stderr mismatch for `{}`:\n  Go:   {:?}\n  Rust: {:?}",
+        args.join(" "),
+        go.stderr,
+        rust.stderr
+    );
+}
+
+/// Assert that both binaries exit with code 0, using a shared isolated
+/// project dir loaded from the named fixture.
+pub fn assert_both_allow_fixture(args: &[&str], event_name: &str) {
+    let (go, rust) = run_conformance_with_fixture(args, event_name);
+    assert_eq!(
+        go.exit_code,
+        0,
+        "Go should exit 0 for `{}`, got {}\n  stderr: {}",
+        args.join(" "),
+        go.exit_code,
+        go.stderr.trim()
+    );
+    assert_eq!(
+        rust.exit_code,
+        0,
+        "Rust should exit 0 for `{}`, got {}\n  stderr: {}",
+        args.join(" "),
+        rust.exit_code,
+        rust.stderr.trim()
+    );
+    assert_eq!(go.exit_code, rust.exit_code);
+}
+
+/// Assert structural conformance for JSON env output, using a shared
+/// isolated project dir loaded from the named fixture.
+pub fn assert_conformance_json_env_fixture(args: &[&str], event_name: &str, dynamic_keys: &[&str]) {
+    let (go, rust) = run_conformance_with_fixture(args, event_name);
 
     assert_eq!(
         go.exit_code,

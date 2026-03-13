@@ -16,7 +16,7 @@ fn run_with_dir(project_dir: &Path) -> Result<()> {
     let test_script = project_dir
         .join(".codeflow")
         .join("testing")
-        .join("run-tests.sh");
+        .join("run-all-tests.sh");
 
     if !test_script.exists() {
         anyhow::bail!("test runner not found at {}", test_script.display());
@@ -53,7 +53,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let script_dir = dir.path().join(".codeflow").join("testing");
         std::fs::create_dir_all(&script_dir).unwrap();
-        std::fs::write(script_dir.join("run-tests.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+        std::fs::write(script_dir.join("run-all-tests.sh"), "#!/bin/bash\nexit 0\n").unwrap();
         let result = run_with_dir(dir.path());
         assert!(result.is_ok());
     }
@@ -69,8 +69,8 @@ mod tests {
             "expected 'test runner not found', got: {msg}"
         );
         assert!(
-            msg.contains("run-tests.sh"),
-            "expected path to contain run-tests.sh, got: {msg}"
+            msg.contains("run-all-tests.sh"),
+            "expected path to contain run-all-tests.sh, got: {msg}"
         );
     }
 
@@ -80,7 +80,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let script_dir = dir.path().join(".codeflow").join("testing");
         std::fs::create_dir_all(&script_dir).unwrap();
-        let script_path = script_dir.join("run-tests.sh");
+        let script_path = script_dir.join("run-all-tests.sh");
         std::fs::write(&script_path, "#!/bin/bash\nexit 0\n").unwrap();
         let result = run_with_dir(dir.path());
         assert!(result.is_ok(), "passing script should return Ok(())");

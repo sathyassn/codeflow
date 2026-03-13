@@ -1,19 +1,21 @@
 //! `PostToolUse` hook handlers.
 //!
-//! Three handlers that run after tool invocations:
-//! - `SentinelWrite`: Creates stage sentinels on `STAGE-COMPLETE` messages
+//! Four handler types that run after tool invocations:
+//! - `SentinelWrite`: Creates stage sentinels on `STAGE-COMPLETE` messages,
+//!   handles `TeamCreate`/`Task`/`TeamDelete` for pathflow-team.json
 //! - `CheckpointRegister`: Registers `PF{N}-TSK-{NN}` tasks in checkpoint
 //! - `SettingsValidate`: Validates settings.json consistency
 //!
 //! Note: `PostToolUse` logging was moved to `hooks::logging::ToolUseLogging`
 //! for full-featured tool-use logging with redaction, truncation, and config.
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::{BlockCategory, HookEvent, HookHandler, HookInput, HookOutput};
+use super::{BlockCategory, HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo};
 use crate::error::HookError;
 use crate::pathflow::{checkpoint::Checkpoint, sentinel};
 use crate::session;
@@ -42,8 +44,11 @@ const PRIMARY_STAGES: &[&str] = &["dev", "plan", "docs", "test"];
 // ---------------------------------------------------------------------------
 
 /// Creates stage sentinels when `STAGE-COMPLETE: WS-{STAGE}` appears in
-/// `SendMessage` content. Validates stage ordering (REV needs a primary
-/// stage sentinel, QA needs `ws-dev` or `ws-test`).
+/// `SendMessage` content. Also handles `TeamCreate`, `Task` (teammate spawn),
+/// and `TeamDelete` events for `pathflow-team.json` management.
+///
+/// Validates stage ordering (REV needs a primary stage sentinel, QA needs
+/// `ws-dev` or `ws-test`).
 pub struct SentinelWrite {
     /// Project root directory for resolving sentinel paths.
     pub project_dir: PathBuf,
@@ -61,17 +66,20 @@ impl SentinelWrite {
         sentinel::resolve_dir(&self.project_dir, sid.as_ref())
             .map_err(|e| HookError::Config(format!("sentinel dir: {e}")))
     }
-}
 
-impl HookHandler for SentinelWrite {
-    fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
-        // Only process SendMessage PostToolUse events.
-        match &input.tool_name {
-            Some(name) if name == "SendMessage" => {}
-            _ => return Ok(HookOutput::Allow),
-        }
+    fn session_pathflow_dir(&self) -> Result<(PathBuf, String), HookError> {
+        let sid = session::current_session_id(&self.project_dir.join(".state"))
+            .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
+        let dir = self
+            .project_dir
+            .join(".state")
+            .join("session")
+            .join(sid.as_ref())
+            .join("pathflow");
+        Ok((dir, sid.as_str().to_string()))
+    }
 
-        // Extract content from tool_input.
+    fn handle_send_message(&self, input: &HookInput) -> Result<HookOutput, HookError> {
         let content = input
             .tool_input
             .as_ref()
@@ -129,6 +137,51 @@ impl HookHandler for SentinelWrite {
 
         Ok(HookOutput::Allow)
     }
+}
+
+impl HookHandler for SentinelWrite {
+    fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
+        match input.tool_name.as_deref() {
+            Some("SendMessage") => self.handle_send_message(&input),
+            Some("TeamCreate") => {
+                let tool_input = input.tool_input.as_ref();
+                let team_name = tool_input
+                    .and_then(|v| v.get("team_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if team_name.is_empty() {
+                    return Ok(HookOutput::Allow);
+                }
+
+                match self.session_pathflow_dir() {
+                    Ok((session_dir, session_id)) => {
+                        handle_team_create(team_name, &session_dir, &session_id)
+                    }
+                    Err(_) => Ok(HookOutput::Allow),
+                }
+            }
+            Some("Task") => {
+                let tool_input = input.tool_input.as_ref();
+                let agent_name = tool_input
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                match self.session_pathflow_dir() {
+                    Ok((session_dir, _)) => handle_teammate_spawn(agent_name, &session_dir),
+                    Err(_) => Ok(HookOutput::Allow),
+                }
+            }
+            Some("TeamDelete") => match self.session_pathflow_dir() {
+                Ok((session_dir, session_id)) => {
+                    handle_team_delete(&session_dir, &self.project_dir, &session_id)
+                }
+                Err(_) => Ok(HookOutput::Allow),
+            },
+            _ => Ok(HookOutput::Allow),
+        }
+    }
 
     fn name(&self) -> &'static str {
         "sentinel-write"
@@ -137,6 +190,155 @@ impl HookHandler for SentinelWrite {
     fn events(&self) -> &[HookEvent] {
         &[HookEvent::PostToolUse]
     }
+}
+
+// ---------------------------------------------------------------------------
+// TeamCreate handler
+// ---------------------------------------------------------------------------
+
+/// Handle a `TeamCreate` post-tool-use event. Creates `pathflow-team.json`
+/// in the session pathflow directory with team metadata.
+///
+/// Mirrors Go's `HandleTeamCreate` in `sentinel/stage.go`.
+///
+/// # Errors
+///
+/// Returns `HookError` on I/O or serialization failures.
+pub fn handle_team_create(
+    team_name: &str,
+    session_dir: &Path,
+    session_id: &str,
+) -> Result<HookOutput, HookError> {
+    if team_name.is_empty() || session_id.is_empty() {
+        return Ok(HookOutput::Allow);
+    }
+
+    let ppid = get_ppid();
+
+    let team = PathflowTeamInfo {
+        lead_pid: ppid,
+        team_name: team_name.to_string(),
+        codeflow_session_id: session_id.to_string(),
+        teammate_spawned: false,
+        created_at: crate::util::now_rfc3339(),
+        last_spawn_name: None,
+    };
+
+    let team_json = serde_json::to_string_pretty(&team)
+        .map_err(|e| HookError::Config(format!("pathflow-team.json marshal failed: {e}")))?;
+
+    fs::create_dir_all(session_dir).map_err(HookError::Io)?;
+
+    let team_file_path = session_dir.join("pathflow-team.json");
+    atomic_write_file(&team_file_path, team_json.as_bytes())?;
+
+    Ok(HookOutput::Allow)
+}
+
+// ---------------------------------------------------------------------------
+// TeammateSpawn handler
+// ---------------------------------------------------------------------------
+
+/// Handle a `Task` (teammate spawn) post-tool-use event. Updates
+/// `pathflow-team.json` with `teammate_spawned=true` and `last_spawn_name`.
+///
+/// Mirrors Go's `HandleTeammateSpawn` in `sentinel/stage.go`.
+///
+/// # Errors
+///
+/// Returns `HookError` on I/O or serialization failures.
+pub fn handle_teammate_spawn(
+    agent_name: &str,
+    session_dir: &Path,
+) -> Result<HookOutput, HookError> {
+    let team_file_path = session_dir.join("pathflow-team.json");
+
+    let existing = match fs::read_to_string(&team_file_path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // pathflow-team.json doesn't exist yet -- skip silently.
+            return Ok(HookOutput::Allow);
+        }
+        Err(_) => return Ok(HookOutput::Allow),
+    };
+
+    let mut team: PathflowTeamInfo = match serde_json::from_str(&existing) {
+        Ok(t) => t,
+        Err(_) => return Ok(HookOutput::Allow),
+    };
+
+    team.teammate_spawned = true;
+    if !agent_name.is_empty() {
+        team.last_spawn_name = Some(agent_name.to_string());
+    }
+
+    let updated = serde_json::to_string_pretty(&team)
+        .map_err(|e| HookError::Config(format!("pathflow-team.json marshal failed: {e}")))?;
+
+    atomic_write_file(&team_file_path, updated.as_bytes())?;
+
+    Ok(HookOutput::Allow)
+}
+
+// ---------------------------------------------------------------------------
+// TeamDelete cleanup handler
+// ---------------------------------------------------------------------------
+
+/// Handle a `TeamDelete` post-tool-use event. Cleans up `PathFlow` artifacts:
+/// 1. Remove the sentinel directory
+/// 2. Remove pathflow-team.json
+/// 3. Reset the checkpoint file
+///
+/// Mirrors Go's `HandlePostTeamDelete` in `team/guard.go`.
+///
+/// The `is-pathflow-active` flag is NOT removed here (handled by `SessionEnd`).
+/// All operations are non-fatal: errors are logged but do not block.
+///
+/// # Errors
+///
+/// Returns `HookError` on I/O failures.
+pub fn handle_team_delete(
+    session_dir: &Path,
+    project_dir: &Path,
+    session_id: &str,
+) -> Result<HookOutput, HookError> {
+    // 1. Remove sentinel directory.
+    let sentinel_dir = project_dir
+        .join(".state")
+        .join("sentinels")
+        .join("pathflow")
+        .join(session_id);
+
+    if sentinel_dir.exists() {
+        let _ = fs::remove_dir_all(&sentinel_dir);
+    }
+
+    // 2. Remove pathflow-team.json.
+    let team_file_path = session_dir.join("pathflow-team.json");
+    if team_file_path.exists() {
+        let _ = fs::remove_file(&team_file_path);
+    }
+
+    // 3. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).
+    let checkpoint_path = session_dir.join("pathflow-phase-tasks.json");
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("pathflow")
+        .join("pathflow-config.json");
+
+    // Remove the existing checkpoint so init_all_phases creates a fresh one.
+    if checkpoint_path.exists() {
+        let _ = fs::remove_file(&checkpoint_path);
+    }
+
+    if config_path.exists() {
+        let cp = Checkpoint::new();
+        // Non-fatal: if reset fails, log but allow through.
+        let _ = cp.init_all_phases(&checkpoint_path, &config_path);
+    }
+
+    Ok(HookOutput::Allow)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +465,7 @@ impl HookHandler for SettingsValidate {
         }
 
         // Validate that the file is valid JSON.
-        match std::fs::read_to_string(file_path) {
+        match fs::read_to_string(file_path) {
             Ok(data) => match serde_json::from_str::<serde_json::Value>(&data) {
                 Ok(_) => Ok(HookOutput::Allow),
                 Err(e) => Ok(HookOutput::Warn {
@@ -291,6 +493,23 @@ impl HookHandler for SettingsValidate {
 
 fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Get the persistent Claude Code process PID. Used as the lead PID in
+/// pathflow-team.json. Delegates to [`super::get_claude_pid`] which walks up
+/// the process tree past the ephemeral shell.
+fn get_ppid() -> u32 {
+    super::get_claude_pid()
+}
+
+/// Atomically write file contents: write to `.tmp` file then rename.
+fn atomic_write_file(path: &Path, data: &[u8]) -> Result<(), HookError> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, data).map_err(HookError::Io)?;
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        HookError::Io(e)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +645,7 @@ mod tests {
     fn test_settings_validate_valid_json() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"key": "value"}"#).unwrap();
+        fs::write(&settings_path, r#"{"key": "value"}"#).unwrap();
 
         let handler = SettingsValidate::new(dir.path().to_path_buf());
         let input = make_input(
@@ -441,7 +660,7 @@ mod tests {
     fn test_settings_validate_invalid_json() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, "not valid json {{{").unwrap();
+        fs::write(&settings_path, "not valid json {{{").unwrap();
 
         let handler = SettingsValidate::new(dir.path().to_path_buf());
         let input = make_input(
@@ -470,8 +689,8 @@ mod tests {
     fn setup_sentinel_env(dir: &std::path::Path) -> String {
         let sid = "ses-1234567890abc";
         let state_dir = dir.join(".state");
-        std::fs::create_dir_all(state_dir.join("runtime")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(state_dir.join("runtime")).unwrap();
+        fs::write(
             state_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID=\"{sid}\"\nexport CF_PROJECT_ROOT=\"test\"\n"),
         )
@@ -523,8 +742,8 @@ mod tests {
 
         // Create ws-dev sentinel first.
         let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(&sid);
-        std::fs::create_dir_all(&sentinel_dir).unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
 
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
@@ -554,8 +773,8 @@ mod tests {
         let sid = setup_sentinel_env(dir.path());
 
         let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(&sid);
-        std::fs::create_dir_all(&sentinel_dir).unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
 
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
@@ -572,8 +791,8 @@ mod tests {
         let sid = setup_sentinel_env(dir.path());
 
         let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(&sid);
-        std::fs::create_dir_all(&sentinel_dir).unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-ws-test"), "").unwrap();
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-ws-test"), "").unwrap();
 
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
@@ -638,7 +857,7 @@ mod tests {
     fn test_settings_validate_write_tool_valid() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks": []}"#).unwrap();
+        fs::write(&settings_path, r#"{"hooks": []}"#).unwrap();
 
         let handler = SettingsValidate::new(dir.path().to_path_buf());
         let input = make_input(
@@ -653,7 +872,7 @@ mod tests {
     fn test_settings_validate_write_tool_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, "{broken").unwrap();
+        fs::write(&settings_path, "{broken").unwrap();
 
         let handler = SettingsValidate::new(dir.path().to_path_buf());
         let input = make_input(
@@ -700,5 +919,398 @@ mod tests {
 
         let cr = CheckpointRegister::new(dir.path().to_path_buf());
         assert_eq!(cr.events(), &[HookEvent::PostToolUse]);
+    }
+
+    // -- TeamCreate tests --
+
+    #[test]
+    fn test_handle_team_create_creates_team_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+
+        let result = handle_team_create("my-team", &session_dir, "ses-abc123").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(team_file.exists(), "pathflow-team.json should be created");
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let info: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(info.team_name, "my-team");
+        assert_eq!(info.codeflow_session_id, "ses-abc123");
+        assert!(!info.teammate_spawned);
+        assert!(info.last_spawn_name.is_none());
+        assert!(!info.created_at.is_empty());
+        assert!(info.lead_pid > 0);
+    }
+
+    #[test]
+    fn test_handle_team_create_empty_team_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+
+        let result = handle_team_create("", &session_dir, "ses-abc123").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // No file should be created.
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(!team_file.exists());
+    }
+
+    #[test]
+    fn test_handle_team_create_empty_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+
+        let result = handle_team_create("my-team", &session_dir, "").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(!team_file.exists());
+    }
+
+    // -- TeammateSpawn tests --
+
+    #[test]
+    fn test_handle_teammate_spawn_updates_team_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create initial team file.
+        let team = PathflowTeamInfo {
+            lead_pid: 1234,
+            team_name: "my-team".into(),
+            codeflow_session_id: "ses-abc".into(),
+            teammate_spawned: false,
+            created_at: "2026-03-10T00:00:00Z".into(),
+            last_spawn_name: None,
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        let result = handle_teammate_spawn("cf-development", &session_dir).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Verify updates.
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
+        // Unchanged fields.
+        assert_eq!(updated.lead_pid, 1234);
+        assert_eq!(updated.team_name, "my-team");
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_no_team_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // No pathflow-team.json exists.
+        let result = handle_teammate_spawn("cf-review", &session_dir).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_empty_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            lead_pid: 1234,
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        let result = handle_teammate_spawn("", &session_dir).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        // Empty name should not update last_spawn_name.
+        assert!(updated.last_spawn_name.is_none());
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_multiple_spawns() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            lead_pid: 1234,
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        // First spawn.
+        handle_teammate_spawn("cf-development", &session_dir).unwrap();
+        // Second spawn should update last_spawn_name.
+        handle_teammate_spawn("cf-review", &session_dir).unwrap();
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-review"));
+    }
+
+    // -- TeamDelete tests --
+
+    #[test]
+    fn test_handle_team_delete_removes_sentinels_and_team_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        let session_id = "ses-delete-test";
+        let project_dir = dir.path();
+
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create pathflow-team.json.
+        let team = PathflowTeamInfo {
+            lead_pid: 1234,
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        // Create sentinel directory with some sentinels.
+        let sentinel_dir = project_dir
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(session_id);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+        fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
+
+        let result = handle_team_delete(&session_dir, project_dir, session_id).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Sentinel directory should be gone.
+        assert!(!sentinel_dir.exists(), "sentinel dir should be removed");
+        // pathflow-team.json should be gone.
+        assert!(!team_file.exists(), "pathflow-team.json should be removed");
+    }
+
+    #[test]
+    fn test_handle_team_delete_missing_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // No sentinel dir, no team file -- should not error.
+        let result = handle_team_delete(&session_dir, dir.path(), "ses-missing-test").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+    }
+
+    #[test]
+    fn test_handle_team_delete_resets_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        let project_dir = dir.path();
+
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create a dummy checkpoint file.
+        let checkpoint_path = session_dir.join("pathflow-phase-tasks.json");
+        fs::write(&checkpoint_path, r#"{"PF1": {"expected": ["PF1-TSK-01"]}}"#).unwrap();
+
+        // Create pathflow-config.json.
+        let config_dir = project_dir
+            .join(".codeflow")
+            .join("config")
+            .join("pathflow");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config = serde_json::json!({
+            "phases": {
+                "PF1-INIT": {
+                    "required_tasks": ["PF1-TSK-01"],
+                    "tasks": [{"id": "PF1-TSK-01"}]
+                }
+            }
+        });
+        fs::write(
+            config_dir.join("pathflow-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let result = handle_team_delete(&session_dir, project_dir, "ses-reset-test").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Checkpoint should have been reset (re-initialized fresh).
+        assert!(
+            checkpoint_path.exists(),
+            "checkpoint should be re-initialized"
+        );
+        let data = fs::read_to_string(&checkpoint_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        // PF1 should exist with empty registered/completed.
+        let pf1 = parsed
+            .get("PF1")
+            .expect("PF1 should exist in reset checkpoint");
+        assert!(
+            pf1.get("registered")
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.is_empty()),
+            "registered should be empty after reset"
+        );
+    }
+
+    // -- SentinelWrite dispatch to TeamCreate/Task/TeamDelete via handler --
+
+    #[test]
+    fn test_sentinel_write_dispatches_team_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        // Create the session pathflow dir.
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input(
+            "TeamCreate",
+            serde_json::json!({"team_name": "dispatch-team"}),
+        );
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(
+            team_file.exists(),
+            "TeamCreate dispatch should create pathflow-team.json"
+        );
+    }
+
+    #[test]
+    fn test_sentinel_write_dispatches_task_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Pre-create team file.
+        let team = PathflowTeamInfo {
+            lead_pid: 1,
+            team_name: "t".into(),
+            ..Default::default()
+        };
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            serde_json::to_string(&team).unwrap(),
+        )
+        .unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input("Task", serde_json::json!({"name": "cf-development"}));
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
+    }
+
+    #[test]
+    fn test_sentinel_write_dispatches_team_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create team file to verify removal.
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            r#"{"team_name":"t"}"#,
+        )
+        .unwrap();
+
+        // Create sentinel dir.
+        let sentinel_dir = dir
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(&sid);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input("TeamDelete", serde_json::json!({}));
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        assert!(
+            !sentinel_dir.exists(),
+            "sentinel dir should be cleaned by TeamDelete"
+        );
+        assert!(
+            !session_dir.join("pathflow-team.json").exists(),
+            "team file should be cleaned by TeamDelete"
+        );
+    }
+
+    #[test]
+    fn test_sentinel_write_team_create_empty_team_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let _sid = setup_sentinel_env(dir.path());
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input("TeamCreate", serde_json::json!({"team_name": ""}));
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+    }
+
+    // -- atomic_write_file tests --
+
+    #[test]
+    fn test_atomic_write_file_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        atomic_write_file(&path, b"hello world").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello world");
+        // Temp file should not remain.
+        assert!(!path.with_extension("tmp").exists());
+    }
+
+    #[test]
+    fn test_atomic_write_file_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        atomic_write_file(&path, b"first").unwrap();
+        atomic_write_file(&path, b"second").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
     }
 }

@@ -5,6 +5,39 @@ import (
 	"strings"
 )
 
+// specialVarRe matches shell special variables ($?, $!, $$, $0-$9, $@, $*, $#)
+// that should NOT be treated as user-defined variable indirection.
+var specialVarRe = regexp.MustCompile(`\$[?!$@*#0-9]`)
+
+// userVarRe matches user-defined shell variable references: $VAR or ${VAR}.
+var userVarRe = regexp.MustCompile(`\$\{?[A-Za-z_][A-Za-z0-9_]*\}?`)
+
+// varAssignRe matches VAR=value patterns in a shell segment.
+var varAssignRe = regexp.MustCompile(`(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(\S+)`)
+
+// extractVariableAssignments scans segments for VAR=value patterns and
+// returns a map of variable name to unquoted value.
+func extractVariableAssignments(segments []string) map[string]string {
+	assignments := make(map[string]string)
+	for _, seg := range segments {
+		for _, match := range varAssignRe.FindAllStringSubmatch(seg, -1) {
+			name := match[1]
+			value := strings.Trim(match[2], "\"'")
+			assignments[name] = value
+		}
+	}
+	return assignments
+}
+
+// hasVariableIndirection returns true if the command contains user-defined
+// variable references ($VAR or ${VAR}), excluding shell special variables
+// like $?, $!, $$, $0-$9, $@, $*, $#.
+func hasVariableIndirection(cmd string) bool {
+	// Strip special variables first so they don't create false positives.
+	stripped := specialVarRe.ReplaceAllString(cmd, "")
+	return userVarRe.MatchString(stripped)
+}
+
 // globToRegex converts a glob pattern to a Go regexp pattern.
 // Handles * (single path segment), ** (recursive), and ? (single char).
 func globToRegex(pattern string) string {

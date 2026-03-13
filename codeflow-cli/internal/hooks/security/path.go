@@ -58,6 +58,16 @@ func (m *PathModule) Check(ctx *CheckContext) *Verdict {
 		}
 	}
 
+	// Check variable indirection bypass
+	if v := checkVariableIndirection(segments, paths); v != nil {
+		return v
+	}
+
+	// Check eval bypass
+	if v := checkEvalBypass(segments, paths); v != nil {
+		return v
+	}
+
 	// Check .claude and .codeflow directory-level protection
 	if v := checkDirectoryProtection(segments); v != nil {
 		return v
@@ -182,6 +192,72 @@ func checkRedirectProtection(segments []string, paths []string) *Verdict {
 					return block("Protected File Append", "Redirect append to protected path", ">> "+path)
 				}
 			}
+		}
+	}
+
+	return nil
+}
+
+// checkEvalBypass detects eval commands that contain protected path literals
+// anywhere in the compound command. eval can hide arbitrary operations, so
+// any mention of a protected path near eval is blocked.
+func checkEvalBypass(segments []string, paths []string) *Verdict {
+	for _, seg := range segments {
+		trimmed := strings.TrimSpace(seg)
+		fields := strings.Fields(trimmed)
+		if len(fields) == 0 || fields[0] != "eval" {
+			continue
+		}
+		for _, path := range paths {
+			if isPathOrGlobTargeted(trimmed, path) {
+				return block("Protected Path Indirection",
+					"eval command with protected path argument",
+					path)
+			}
+		}
+	}
+	return nil
+}
+
+// checkVariableIndirection detects when a dangerous command uses a shell
+// variable that was assigned a protected path value in the same compound
+// command. Example: F=".claude/settings.json" && rm $F
+func checkVariableIndirection(segments []string, paths []string) *Verdict {
+	assignments := extractVariableAssignments(segments)
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	// Find which assigned variables hold protected path values.
+	// Also match directory prefixes: if value is ".claude" and a protected
+	// path is ".claude/settings.json", the variable targets that path.
+	protectedVars := make(map[string]string) // var name -> protected path
+	for name, value := range assignments {
+		for _, path := range paths {
+			if isPathOrGlobTargeted(value, path) || value == path || strings.HasPrefix(path, value+"/") {
+				protectedVars[name] = path
+				break
+			}
+		}
+	}
+	if len(protectedVars) == 0 {
+		return nil
+	}
+
+	// Check each segment: if it has a dangerous command and variable indirection,
+	// and any of the variables refer to a protected path, block it.
+	for _, seg := range segments {
+		trimmed := strings.TrimSpace(seg)
+		if !dangerousCmds.MatchString(trimmed) && !permissionCmds.MatchString(trimmed) && !gitRm.MatchString(trimmed) {
+			continue
+		}
+		if !hasVariableIndirection(trimmed) {
+			continue
+		}
+		for _, protectedPath := range protectedVars {
+			return block("Protected Path Indirection",
+				"Variable indirection targeting protected path",
+				protectedPath)
 		}
 	}
 
