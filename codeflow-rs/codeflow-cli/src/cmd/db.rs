@@ -16,7 +16,7 @@ async fn run_with_dir(project_dir: &std::path::Path) -> Result<()> {
     verify_database(&store).await
 }
 
-/// Open the project's SurrealDB store.
+/// Open the project's `SurrealDB` store.
 ///
 /// In tests, returns an in-memory store to avoid the `surrealkv://`
 /// SIGKILL under LLVM coverage instrumentation.

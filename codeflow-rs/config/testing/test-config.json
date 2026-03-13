@@ -3,7 +3,7 @@
     "threshold": 85,
     "enforcement": "per_file",
     "tool": "cargo-llvm-cov",
-    "business_packages": ["codeflow-core"]
+    "business_packages": ["codeflow-core", "codeflow-cli"]
   },
   "conventions": {
     "test_runner": "cargo-nextest",

@@ -146,7 +146,7 @@ jobs:
       - name: Run tests with coverage enforcement
         if: vars.SKIP_RUST_COVERAGE != 'true'
         working-directory: codeflow-rs
-        run: cargo llvm-cov nextest --package codeflow-core --fail-under-lines 85
+        run: cargo llvm-cov nextest --workspace --fail-under-lines 85
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
@@ -169,5 +169,56 @@ jobs:
           echo "  cd codeflow-rs && cargo fmt --check"
           echo "  cd codeflow-rs && cargo clippy --workspace -- -D warnings"
           echo "  cd codeflow-rs && cargo build --profile ci"
-          echo "  cd codeflow-rs && cargo llvm-cov nextest --package codeflow-core --fail-under-lines 85"
+          echo "  cd codeflow-rs && cargo llvm-cov nextest --workspace --fail-under-lines 85"
           exit 1
+
+  build-release:
+    name: Build Release (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    if: vars.SKIP_RUST_TESTS != 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            binary: codeflow
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            binary: codeflow
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            binary: codeflow
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          cache-shared-key: "release-${{ matrix.target }}"
+
+      - name: Install mold linker (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y mold
+
+      - name: Build release binary
+        working-directory: codeflow-rs
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: ${{ runner.os == 'Linux' && 'clang' || '' }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ runner.os == 'Linux' && '-C link-arg=-fuse-ld=mold' || '' }}
+
+      - name: Verify binary
+        run: file codeflow-rs/target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeflow-${{ matrix.target }}
+          path: codeflow-rs/target/${{ matrix.target }}/release/${{ matrix.binary }}
+          retention-days: 7

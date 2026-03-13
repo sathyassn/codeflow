@@ -7,7 +7,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]
-# Runtime dependencies (10)
+# Runtime dependencies (13)
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,19 +16,23 @@ anyhow = "1"
 surrealdb = { version = "2", features = ["kv-mem", "kv-surrealkv"] }
 loro = "1"
 fs2 = "0.4"
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 regex = "1"
 serde_yaml = "0.9"
 ulid = "1"
 tokio = { version = "1", features = ["full"] }
-ort = "2"
-
 # Dev-only dependencies (3)
 proptest = "1"
 insta = { version = "1", features = ["json"] }
 tempfile = "3"
 
 # Note: cargo-nextest and cargo-llvm-cov are installed tools, NOT Cargo deps.
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+strip = true
+codegen-units = 1
 
 [profile.ci]
 inherits = "release"

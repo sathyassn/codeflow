@@ -15,10 +15,11 @@ async fn run_with_dir(project_dir: &std::path::Path) -> Result<()> {
     let ledger_dir = project_dir.join(".state").join("ledger");
     let store = open_store(project_dir).await?;
     let ledger = JsonlWriter::new(&ledger_dir).context("opening ledger")?;
-    verify_workgraph(store, ledger)
+    verify_workgraph(store, ledger);
+    Ok(())
 }
 
-/// Open the project's SurrealDB store.
+/// Open the project's `SurrealDB` store.
 ///
 /// In tests, returns an in-memory store to avoid the `surrealkv://`
 /// SIGKILL under LLVM coverage instrumentation.
@@ -37,11 +38,10 @@ async fn open_store(_project_dir: &std::path::Path) -> Result<SurrealStore> {
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-fn verify_workgraph(store: SurrealStore, ledger: JsonlWriter) -> Result<()> {
+fn verify_workgraph(store: SurrealStore, ledger: JsonlWriter) {
     let _service = codeflow_core::workgraph::WorkgraphService::new(store, ledger);
 
     println!("workgraph ok");
-    Ok(())
 }
 
 #[cfg(test)]
@@ -85,8 +85,7 @@ mod tests {
 
         let store = SurrealStore::in_memory().await.unwrap();
         let ledger = JsonlWriter::new(&ledger_dir).unwrap();
-        let result = verify_workgraph(store, ledger);
-        assert!(result.is_ok(), "verify_workgraph should succeed: {result:?}");
+        verify_workgraph(store, ledger);
     }
 
     #[test]
