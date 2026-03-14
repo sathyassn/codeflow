@@ -149,7 +149,7 @@ run_coverage_enforcement() {
     echo "  Threshold: ${COVERAGE_THRESHOLD}%"
 
     # Run coverage and capture JSON output for per-file analysis
-    local cov_json="/tmp/codeflow-rust-cov-$$.json"
+    local cov_json="${TMPDIR:-/tmp}/codeflow-rust-cov-$$.json"
     if ! (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" --json 2>/dev/null > "$cov_json"); then
         test_fail "Coverage run failed"
         rm -f "$cov_json"

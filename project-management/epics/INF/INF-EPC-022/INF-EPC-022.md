@@ -3,7 +3,7 @@ id: "epic-01kk09r9yqn9hb7v8pa1zsa4gc"
 format_id: "INF-EPC-022"
 title: "Rust CLI -- Idiomatic Redesign (Epic 0)"
 summary: "Replace the Go CLI with a pure Rust implementation using SurrealDB as the sole database, modular crate structure, and trait-based abstractions"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -172,7 +172,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
 | INF-TSK-022-024 | Cross-compile release builds | complete | normal | 0G |
 | INF-TSK-022-025 | Cutover: Go removal and Rust installation | complete | critical | 0G |
-| INF-TSK-022-026 | Update test infrastructure references | todo | high | 0G |
+| INF-TSK-022-026 | Update test infrastructure references | complete | high | 0G |
 | INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
 | INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
 | INF-TSK-022-029 | Add pre-push test hook to enforce tests + coverage before PR | cancelled | high | deferred-to-rust-hooks-epic |
