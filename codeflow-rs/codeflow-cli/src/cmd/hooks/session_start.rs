@@ -74,8 +74,6 @@ fn build_handler(
             let ppid = codeflow_core::hooks::get_claude_pid();
             let home_dir = dirs_home();
             Box::new(codeflow_core::hooks::session_start::SessionStartInit {
-                process_checker: codeflow_core::hooks::OsProcessChecker,
-                tmux_checker: codeflow_core::hooks::OsTmuxChecker,
                 ppid,
                 home_dir,
                 now,

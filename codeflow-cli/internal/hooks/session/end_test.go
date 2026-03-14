@@ -14,11 +14,8 @@ import (
 func newTestCleaner(t *testing.T) *Cleaner {
 	t.Helper()
 	return &Cleaner{
-		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
-		HomeDir:        t.TempDir(),
-		PPID:           99999,
+		Now:     func() time.Time { return fixedTime },
+		HomeDir: t.TempDir(),
 	}
 }
 
@@ -59,6 +56,22 @@ func setupCleanupFixture(t *testing.T, sessionID string) string {
 	return projectDir
 }
 
+// writeSessionStatus creates a pathflow-session-status.json file for testing.
+func writeSessionStatus(t *testing.T, projectDir, sessionID string, status *PathflowSessionStatus) {
+	t.Helper()
+	pathflowDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(pathflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pathflowDir, PathflowSessionStatusFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEndCleanup_NormalCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -66,7 +79,6 @@ func TestEndCleanup_NormalCleanup(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create pathflow sentinels.
 	pfSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.WriteFile(filepath.Join(pfSentinelDir, "pathflow-pf-3"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -81,39 +93,26 @@ func TestEndCleanup_NormalCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Verify session ID resolved.
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
 	}
-
-	// Verify PF7 was valid (sentinel existed before cleanup).
 	if !result.PF7Valid {
 		t.Error("PF7Valid = false, want true")
 	}
-
-	// Verify sentinels were cleaned.
 	if result.SentinelsCleaned < 1 {
 		t.Errorf("SentinelsCleaned = %d, want >= 1", result.SentinelsCleaned)
 	}
-
-	// Verify pathflow sentinel directory was removed.
 	if _, err := os.Stat(pfSentinelDir); !os.IsNotExist(err) {
 		t.Error("pathflow sentinel dir still exists after cleanup")
 	}
-
-	// Verify session state directory was removed.
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
 		t.Error("session state dir still exists after cleanup")
 	}
-
-	// Verify runtime files were removed.
 	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		t.Error("env file still exists after cleanup")
 	}
-
-	// Verify session_end event was written to ledger.
 	ledgerPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
 	data, err := os.ReadFile(ledgerPath)
 	if err != nil {
@@ -125,33 +124,17 @@ func TestEndCleanup_NormalCleanup(t *testing.T) {
 	if !strings.Contains(string(data), sessionID) {
 		t.Error("ledger file does not contain session ID")
 	}
-
-	// Verify no warnings.
 	if len(result.Warnings) > 0 {
 		t.Errorf("unexpected warnings: %v", result.Warnings)
 	}
 }
 
-func TestEndCleanup_StalePathflowFlag(t *testing.T) {
+func TestEndCleanup_NoStatusFile(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
-
-	// Create pathflow-active flag (simulates TeamDelete PostToolUse not running).
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	flag := pathflowFlag{
-		SessionID:     sessionID,
-		CreatedAt:     fixedTime.Format("2006-01-02T15:04:05.000Z"),
-		TrackingLevel: "tracked",
-	}
-	flagData, _ := json.Marshal(flag)
-	if err := os.WriteFile(flagPath, flagData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// No pathflow-team.json -- simulates pre-TeamCreate scenario.
 
 	stdin := strings.NewReader(`{}`)
 	result, err := cleaner.EndCleanup(stdin, projectDir)
@@ -159,19 +142,89 @@ func TestEndCleanup_StalePathflowFlag(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should proceed with cleanup (no team file = no lead to protect).
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
 	}
-
-	// Verify session state was cleaned up (including the stale flag).
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
-		t.Error("session state dir still exists after cleanup (stale flag should be removed)")
+		t.Error("session state dir still exists after cleanup (no status file should allow cleanup)")
 	}
 }
 
-func TestEndCleanup_TeammateShutdownSkip(t *testing.T) {
+func TestEndCleanup_StatusPfComplete(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	cleaner := newTestCleaner(t)
+
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "pf-complete",
+		TeamName:  "test-team",
+	})
+
+	stdin := strings.NewReader(`{}`)
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
+	}
+	if result.SessionID != sessionID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
+	}
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
+	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
+		t.Error("session state dir still exists (pf-complete should trigger cleanup)")
+	}
+	foundMsg := false
+	for _, m := range result.Messages {
+		if strings.Contains(m, "pf-complete") {
+			foundMsg = true
+			break
+		}
+	}
+	if !foundMsg {
+		t.Errorf("no pf-complete message found in Messages; got: %v", result.Messages)
+	}
+}
+
+func TestEndCleanup_StatusCreated(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	cleaner := newTestCleaner(t)
+
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "created",
+	})
+
+	stdin := strings.NewReader(`{}`)
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
+	}
+	if result.SessionID != sessionID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
+	}
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
+	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
+		t.Error("session state dir still exists (created should trigger cleanup)")
+	}
+	foundMsg := false
+	for _, m := range result.Messages {
+		if strings.Contains(m, "'created'") {
+			foundMsg = true
+			break
+		}
+	}
+	if !foundMsg {
+		t.Errorf("no 'created' status message found in Messages; got: %v", result.Messages)
+	}
+}
+
+func TestEndCleanup_ActiveSessionWithTeamConfig(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
@@ -179,39 +232,24 @@ func TestEndCleanup_TeammateShutdownSkip(t *testing.T) {
 	homeDir := t.TempDir()
 	teamName := "test-team"
 
-	// Create cleaner with a live tmux pane for the team.
 	cleaner := &Cleaner{
-		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{"%100": true}},
-		HomeDir:        homeDir,
-		PPID:           99999,
+		Now:     func() time.Time { return fixedTime },
+		HomeDir: homeDir,
 	}
 
-	// Create team config with a live pane.
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID:          sessionID,
+		Status:             "pf-started",
+		TeamName:           teamName,
+		LastCompletedPhase: "pf-3",
+	})
+
 	teamDir := filepath.Join(homeDir, ".claude", "teams", teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfgData, _ := json.Marshal(map[string]any{
-		"members": []map[string]string{
-			{"tmuxPaneId": "%100"},
-		},
-	})
+	cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
 	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-active flag.
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte(`{"session_id":"`+sessionID+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-team.json with team name.
-	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 12345, TeamName: teamName})
-	if err := os.WriteFile(teamFile, teamData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,20 +259,10 @@ func TestEndCleanup_TeammateShutdownSkip(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should skip cleanup (teammate shutdown -- live tmux panes detected).
-	// Session state should still exist.
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); os.IsNotExist(err) {
-		t.Error("session state dir was removed during teammate shutdown (should be skipped)")
+		t.Error("session state dir was removed (should skip cleanup for active session)")
 	}
-
-	// Env file should still exist.
-	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
-	if _, err := os.Stat(envFile); os.IsNotExist(err) {
-		t.Error("env file was removed during teammate shutdown (should be skipped)")
-	}
-
-	// Verify the skip message was logged.
 	foundSkipMsg := false
 	for _, m := range result.Messages {
 		if strings.Contains(m, "skipping cleanup") {
@@ -247,7 +275,59 @@ func TestEndCleanup_TeammateShutdownSkip(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_NoLivePanesCleanup(t *testing.T) {
+func TestEndCleanup_PfInProgressWithTeamConfig(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	homeDir := t.TempDir()
+	teamName := "pf-started-team"
+
+	cleaner := &Cleaner{
+		Now:     func() time.Time { return fixedTime },
+		HomeDir: homeDir,
+	}
+
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID:          sessionID,
+		Status:             "pf-in-progress",
+		TeamName:           teamName,
+		LastCompletedPhase: "pf-4",
+		LastCompletedStage: "ws-dev",
+	})
+
+	teamDir := filepath.Join(homeDir, ".claude", "teams", teamName)
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
+	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdin := strings.NewReader(`{}`)
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
+	}
+
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
+	if _, err := os.Stat(sessionStateDir); os.IsNotExist(err) {
+		t.Error("session state dir was removed (should skip cleanup for pf-in-progress session)")
+	}
+	foundSkipMsg := false
+	for _, m := range result.Messages {
+		if strings.Contains(m, "skipping cleanup") {
+			foundSkipMsg = true
+			break
+		}
+	}
+	if !foundSkipMsg {
+		t.Errorf("no skip message found in Messages; got: %v", result.Messages)
+	}
+}
+
+func TestEndCleanup_ActiveSessionPF7Completed(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
@@ -255,39 +335,24 @@ func TestEndCleanup_NoLivePanesCleanup(t *testing.T) {
 	homeDir := t.TempDir()
 	teamName := "test-team"
 
-	// Create cleaner with NO live tmux panes.
 	cleaner := &Cleaner{
-		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{"%200": false}},
-		HomeDir:        homeDir,
-		PPID:           55555,
+		Now:     func() time.Time { return fixedTime },
+		HomeDir: homeDir,
 	}
 
-	// Create team config with a dead pane.
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID:          sessionID,
+		Status:             "pf-started",
+		TeamName:           teamName,
+		LastCompletedPhase: "pf-7",
+	})
+
 	teamDir := filepath.Join(homeDir, ".claude", "teams", teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfgData, _ := json.Marshal(map[string]any{
-		"members": []map[string]string{
-			{"tmuxPaneId": "%200"},
-		},
-	})
+	cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
 	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-active flag.
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte(`{"session_id":"`+sessionID+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-team.json with team name.
-	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 55555, TeamName: teamName})
-	if err := os.WriteFile(teamFile, teamData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -297,49 +362,75 @@ func TestEndCleanup_NoLivePanesCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should proceed with cleanup (no live panes = session ended).
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
-		t.Error("session state dir still exists (no live panes should trigger cleanup)")
+		t.Error("session state dir still exists (PF7 completed should trigger cleanup)")
 	}
-
-	// Verify the cleanup message.
 	foundMsg := false
 	for _, m := range result.Messages {
-		if strings.Contains(m, "no live tmux panes") {
+		if strings.Contains(m, "PF7 already completed") {
 			foundMsg = true
 			break
 		}
 	}
 	if !foundMsg {
-		t.Errorf("no 'no live tmux panes' message found in Messages; got: %v", result.Messages)
+		t.Errorf("no PF7 completed message found in Messages; got: %v", result.Messages)
 	}
 }
 
-func TestEndCleanup_NoTeamConfigCleanup(t *testing.T) {
+func TestEndCleanup_ActiveSessionNoTeamConfig(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := setupCleanupFixture(t, sessionID)
 	homeDir := t.TempDir()
+	teamName := "dissolved-team"
 
-	// No team config file at all -- hasLiveTeamPanes returns false.
 	cleaner := &Cleaner{
-		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
-		HomeDir:        homeDir,
-		PPID:           99999,
+		Now:     func() time.Time { return fixedTime },
+		HomeDir: homeDir,
 	}
 
-	// Create pathflow-active flag and team file with a team name but no config.
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID:          sessionID,
+		Status:             "pf-started",
+		TeamName:           teamName,
+		LastCompletedPhase: "pf-3",
+	})
+
+	stdin := strings.NewReader(`{}`)
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
+	}
+
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
+	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
+		t.Error("session state dir still exists (missing team config should trigger cleanup)")
+	}
+	foundMsg := false
+	for _, m := range result.Messages {
+		if strings.Contains(m, "config missing") {
+			foundMsg = true
+			break
+		}
+	}
+	if !foundMsg {
+		t.Errorf("no config missing message found; got: %v", result.Messages)
+	}
+}
+
+func TestEndCleanup_OldFlagNoStatusFile(t *testing.T) {
+	t.Parallel()
+
+	// Old is-pathflow-active flag exists but no status file.
+	// With legacy fallback removed, shouldSkipCleanup returns false (allow cleanup).
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	cleaner := newTestCleaner(t)
+
 	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
 	if err := os.WriteFile(flagPath, []byte(`{"session_id":"`+sessionID+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 88888, TeamName: "orphan-team"})
-	if err := os.WriteFile(teamFile, teamData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,22 +440,48 @@ func TestEndCleanup_NoTeamConfigCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should proceed with cleanup (no team config = no live panes).
+	// No status file means cleanup proceeds (old flag is ignored).
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
-		t.Error("session state dir still exists (missing team config should trigger cleanup)")
+		t.Error("session state dir still exists (old flag without status file should trigger cleanup)")
+	}
+	if result.SessionID != sessionID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
+	}
+}
+
+func TestEndCleanup_EmptyTeamNameInStatus(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "ses-1234567890123abcdef012345"
+	projectDir := setupCleanupFixture(t, sessionID)
+	cleaner := newTestCleaner(t)
+
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "pf-started",
+		TeamName:  "",
+	})
+
+	stdin := strings.NewReader(`{}`)
+	result, err := cleaner.EndCleanup(stdin, projectDir)
+	if err != nil {
+		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Verify cleanup message.
+	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
+	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
+		t.Error("session state dir still exists (empty team name should trigger cleanup)")
+	}
 	foundMsg := false
 	for _, m := range result.Messages {
-		if strings.Contains(m, "no live tmux panes") {
+		if strings.Contains(m, "no team name") {
 			foundMsg = true
 			break
 		}
 	}
 	if !foundMsg {
-		t.Errorf("no 'no live tmux panes' message found in Messages; got: %v", result.Messages)
+		t.Errorf("no 'no team name' message found; got: %v", result.Messages)
 	}
 }
 
@@ -374,14 +491,12 @@ func TestEndCleanup_MissingFiles(t *testing.T) {
 	projectDir := t.TempDir()
 	cleaner := newTestCleaner(t)
 
-	// No runtime dir, no env file, no session state -- should gracefully handle.
 	stdin := strings.NewReader(`{}`)
 	result, err := cleaner.EndCleanup(stdin, projectDir)
 	if err != nil {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should warn about missing session ID and return early.
 	if result.SessionID != "" {
 		t.Errorf("SessionID = %q, want empty", result.SessionID)
 	}
@@ -419,7 +534,6 @@ func TestEndCleanup_NilStdin(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// nil stdin should not crash.
 	result, err := cleaner.EndCleanup(nil, projectDir)
 	if err != nil {
 		t.Fatalf("EndCleanup() error = %v", err)
@@ -436,7 +550,6 @@ func TestEndCleanup_IncompletePF7(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create some sentinels but NOT pf-7.
 	pfSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.WriteFile(filepath.Join(pfSentinelDir, "pathflow-pf-3"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -451,17 +564,12 @@ func TestEndCleanup_IncompletePF7(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// PF7 should be invalid.
 	if result.PF7Valid {
 		t.Error("PF7Valid = true, want false (pf-7 sentinel missing)")
 	}
-
-	// Should still complete cleanup successfully.
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
 	}
-
-	// Verify warning message about incomplete PF7.
 	foundPF7Msg := false
 	for _, m := range result.Messages {
 		if strings.Contains(m, "Incomplete PF7") {
@@ -481,7 +589,6 @@ func TestEndCleanup_ActiveTaskPreserved(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create active task with in_progress status.
 	taskPath := filepath.Join(projectDir, ".state", "runtime", "active-task.json")
 	taskData, _ := json.Marshal(map[string]string{
 		"task_id": "INF-TSK-021-011",
@@ -500,8 +607,6 @@ func TestEndCleanup_ActiveTaskPreserved(t *testing.T) {
 	if !result.TaskPreserved {
 		t.Error("TaskPreserved = false, want true")
 	}
-
-	// Active task file should still exist.
 	if _, err := os.Stat(taskPath); os.IsNotExist(err) {
 		t.Error("active-task.json was removed (should be preserved for in_progress tasks)")
 	}
@@ -514,7 +619,6 @@ func TestEndCleanup_CompletedTaskRemoved(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create active task with completed status.
 	taskPath := filepath.Join(projectDir, ".state", "runtime", "active-task.json")
 	taskData, _ := json.Marshal(map[string]string{
 		"task_id": "INF-TSK-021-011",
@@ -533,8 +637,6 @@ func TestEndCleanup_CompletedTaskRemoved(t *testing.T) {
 	if result.TaskPreserved {
 		t.Error("TaskPreserved = true, want false (completed task should be removed)")
 	}
-
-	// Active task file should be removed.
 	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
 		t.Error("active-task.json still exists (completed task should be removed)")
 	}
@@ -549,7 +651,6 @@ func TestEndCleanup_TeamArtifactCleanup(t *testing.T) {
 
 	teamName := "codeflow-test-team"
 
-	// Create pathflow-team.json with team name.
 	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
 	teamData, _ := json.Marshal(map[string]any{
 		"team_name": teamName,
@@ -559,7 +660,6 @@ func TestEndCleanup_TeamArtifactCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create team config and task list directories.
 	teamDir := filepath.Join(cleaner.HomeDir, ".claude", "teams", teamName)
 	taskDir := filepath.Join(cleaner.HomeDir, ".claude", "tasks", teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
@@ -578,8 +678,6 @@ func TestEndCleanup_TeamArtifactCleanup(t *testing.T) {
 	if result.TeamName != teamName {
 		t.Errorf("TeamName = %q, want %q", result.TeamName, teamName)
 	}
-
-	// Team directories should be removed.
 	if _, err := os.Stat(teamDir); !os.IsNotExist(err) {
 		t.Error("team config dir still exists after cleanup")
 	}
@@ -595,7 +693,6 @@ func TestEndCleanup_LedgerEventContent(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create pf-7 sentinel for a clean session.
 	pfSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.WriteFile(filepath.Join(pfSentinelDir, "pathflow-pf-7"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -607,7 +704,6 @@ func TestEndCleanup_LedgerEventContent(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Read and parse the ledger event.
 	ledgerPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
 	data, err := os.ReadFile(ledgerPath)
 	if err != nil {
@@ -639,19 +735,15 @@ func TestEndCleanup_LedgerEventContent(t *testing.T) {
 }
 
 func TestEndCleanup_SessionIDFromEnvVar(t *testing.T) {
-	// Cannot use t.Parallel() with t.Setenv.
-
+	// NOTE: no t.Parallel() — t.Setenv is incompatible with parallel tests.
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := t.TempDir()
 	cleaner := newTestCleaner(t)
 
-	// No env file -- only CODEFLOW_SESSION_ID env var is set.
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	// Create ledger dir.
 	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "ledger"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +756,6 @@ func TestEndCleanup_SessionIDFromEnvVar(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should resolve session ID from CODEFLOW_SESSION_ID env var.
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
 	}
@@ -677,7 +768,6 @@ func TestEndCleanup_EnvFileCleanup(t *testing.T) {
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Verify the env file exists before cleanup.
 	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 	if _, err := os.Stat(envFile); err != nil {
 		t.Fatalf("codeflow-env.sh should exist before cleanup: %v", err)
@@ -689,7 +779,6 @@ func TestEndCleanup_EnvFileCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// codeflow-env.sh should be cleaned up.
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		t.Error("codeflow-env.sh should have been removed after cleanup")
 	}
@@ -716,7 +805,6 @@ func TestValidatePF7_SentinelMissing(t *testing.T) {
 	t.Parallel()
 
 	sentinelDir := t.TempDir()
-	// Create some other sentinels but not pf-7.
 	if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-3"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -731,8 +819,6 @@ func TestValidatePF7_SentinelMissing(t *testing.T) {
 	if len(warnings) == 0 {
 		t.Error("expected warnings for missing pf-7 sentinel")
 	}
-
-	// Should mention incomplete PF7.
 	foundIncomplete := false
 	for _, w := range warnings {
 		if strings.Contains(w, "Incomplete PF7") {
@@ -743,8 +829,6 @@ func TestValidatePF7_SentinelMissing(t *testing.T) {
 	if !foundIncomplete {
 		t.Error("no 'Incomplete PF7' warning found")
 	}
-
-	// Should list existing sentinels.
 	foundExisting := false
 	for _, w := range warnings {
 		if strings.Contains(w, "existing sentinels") {
@@ -797,14 +881,8 @@ func TestParseEndStdin(t *testing.T) {
 			wantSessionID:  "test-uuid",
 			wantTranscript: "/tmp/tx",
 		},
-		{
-			name:  "empty input",
-			input: "",
-		},
-		{
-			name:  "invalid JSON",
-			input: "not-json",
-		},
+		{name: "empty input", input: ""},
+		{name: "invalid JSON", input: "not-json"},
 		{
 			name:          "partial input",
 			input:         `{"session_id":"partial-uuid"}`,
@@ -837,31 +915,17 @@ func TestNewCleaner(t *testing.T) {
 	if cleaner.Now == nil {
 		t.Error("Now is nil")
 	}
-	if cleaner.ProcessChecker == nil {
-		t.Error("ProcessChecker is nil")
-	}
-	if cleaner.TmuxChecker == nil {
-		t.Error("TmuxChecker is nil")
-	}
 	if cleaner.HomeDir == "" {
 		t.Error("HomeDir is empty")
 	}
-	if cleaner.PPID <= 0 {
-		t.Errorf("PPID = %d, want > 0", cleaner.PPID)
-	}
 }
 
-func TestEndCleanup_IdempotentFlagRemoval(t *testing.T) {
+func TestEndCleanup_IdempotentNoStatusFile(t *testing.T) {
 	t.Parallel()
 
-	// Test that cleanup works even when pathflow-active flag is already removed
-	// (TeamDelete PostToolUse hook may have already removed it).
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
-
-	// Do NOT create pathflow-active flag (already removed by TeamDelete hook).
-	// Session state dir exists but no flag.
 
 	stdin := strings.NewReader(`{}`)
 	result, err := cleaner.EndCleanup(stdin, projectDir)
@@ -869,7 +933,6 @@ func TestEndCleanup_IdempotentFlagRemoval(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should complete without errors.
 	if result.SessionID != sessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sessionID)
 	}
@@ -878,25 +941,17 @@ func TestEndCleanup_IdempotentFlagRemoval(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_EmptyTeamNameCleanup(t *testing.T) {
+func TestEndCleanup_UnknownStatusAllowsCleanup(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
 	projectDir := setupCleanupFixture(t, sessionID)
 	cleaner := newTestCleaner(t)
 
-	// Create pathflow-active flag.
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte(`{"session_id":"`+sessionID+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-team.json with EMPTY team name.
-	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 12345, TeamName: ""})
-	if err := os.WriteFile(teamFile, teamData, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeSessionStatus(t, projectDir, sessionID, &PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "some-unknown-status",
+	})
 
 	stdin := strings.NewReader(`{}`)
 	result, err := cleaner.EndCleanup(stdin, projectDir)
@@ -904,177 +959,18 @@ func TestEndCleanup_EmptyTeamNameCleanup(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
-	// Should proceed with cleanup (no team name = can't check panes).
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 	if _, err := os.Stat(sessionStateDir); !os.IsNotExist(err) {
-		t.Error("session state dir still exists (empty team name should trigger cleanup)")
+		t.Error("session state dir still exists (unknown status should trigger cleanup)")
 	}
-
 	foundMsg := false
 	for _, m := range result.Messages {
-		if strings.Contains(m, "no team name") {
+		if strings.Contains(m, "Unknown session status") {
 			foundMsg = true
 			break
 		}
 	}
 	if !foundMsg {
-		t.Errorf("no 'no team name' message found; got: %v", result.Messages)
+		t.Errorf("no unknown status message found; got: %v", result.Messages)
 	}
-}
-
-func TestEndCleanup_MultiplePanesPartiallyAlive(t *testing.T) {
-	t.Parallel()
-
-	sessionID := "ses-1234567890123abcdef012345"
-	projectDir := setupCleanupFixture(t, sessionID)
-	homeDir := t.TempDir()
-	teamName := "multi-pane-team"
-
-	// One pane alive, one dead -- should skip cleanup (any alive = session active).
-	cleaner := &Cleaner{
-		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{"%300": false, "%301": true}},
-		HomeDir:        homeDir,
-		PPID:           99999,
-	}
-
-	// Create team config with mixed panes.
-	teamDir := filepath.Join(homeDir, ".claude", "teams", teamName)
-	if err := os.MkdirAll(teamDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfgData, _ := json.Marshal(map[string]any{
-		"members": []map[string]string{
-			{"tmuxPaneId": "%300"},
-			{"tmuxPaneId": "%301"},
-		},
-	})
-	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create pathflow-active flag and team file.
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte(`{"session_id":"`+sessionID+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	teamFile := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "pathflow-team.json")
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 12345, TeamName: teamName})
-	if err := os.WriteFile(teamFile, teamData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	stdin := strings.NewReader(`{}`)
-	result, err := cleaner.EndCleanup(stdin, projectDir)
-	if err != nil {
-		t.Fatalf("EndCleanup() error = %v", err)
-	}
-
-	// Should skip cleanup (at least one pane is alive).
-	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
-	if _, err := os.Stat(sessionStateDir); os.IsNotExist(err) {
-		t.Error("session state dir was removed (should skip cleanup when any pane is alive)")
-	}
-
-	foundSkipMsg := false
-	for _, m := range result.Messages {
-		if strings.Contains(m, "skipping cleanup") {
-			foundSkipMsg = true
-			break
-		}
-	}
-	if !foundSkipMsg {
-		t.Errorf("no skip message found; got: %v", result.Messages)
-	}
-}
-
-func TestHasLiveTeamPanes_Cleaner(t *testing.T) {
-	t.Parallel()
-
-	t.Run("config_missing", func(t *testing.T) {
-		t.Parallel()
-		cleaner := newTestCleaner(t)
-		// No team config at all.
-		if cleaner.hasLiveTeamPanes("nonexistent-team") {
-			t.Error("hasLiveTeamPanes should return false when config is missing")
-		}
-	})
-
-	t.Run("config_invalid_json", func(t *testing.T) {
-		t.Parallel()
-		cleaner := newTestCleaner(t)
-		teamDir := filepath.Join(cleaner.HomeDir, ".claude", "teams", "bad-json")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte("not-json"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if cleaner.hasLiveTeamPanes("bad-json") {
-			t.Error("hasLiveTeamPanes should return false for invalid JSON")
-		}
-	})
-
-	t.Run("empty_members", func(t *testing.T) {
-		t.Parallel()
-		cleaner := newTestCleaner(t)
-		teamDir := filepath.Join(cleaner.HomeDir, ".claude", "teams", "empty-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if cleaner.hasLiveTeamPanes("empty-team") {
-			t.Error("hasLiveTeamPanes should return false for empty members")
-		}
-	})
-
-	t.Run("all_panes_dead", func(t *testing.T) {
-		t.Parallel()
-		cleaner := newTestCleaner(t)
-		cleaner.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%dead1": false, "%dead2": false}}
-
-		teamDir := filepath.Join(cleaner.HomeDir, ".claude", "teams", "dead-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%dead1"},
-				{"tmuxPaneId": "%dead2"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if cleaner.hasLiveTeamPanes("dead-team") {
-			t.Error("hasLiveTeamPanes should return false when all panes are dead")
-		}
-	})
-
-	t.Run("one_pane_alive", func(t *testing.T) {
-		t.Parallel()
-		cleaner := newTestCleaner(t)
-		cleaner.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%alive": true, "%dead": false}}
-
-		teamDir := filepath.Join(cleaner.HomeDir, ".claude", "teams", "partial-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%alive"},
-				{"tmuxPaneId": "%dead"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if !cleaner.hasLiveTeamPanes("partial-team") {
-			t.Error("hasLiveTeamPanes should return true when any pane is alive")
-		}
-	})
 }

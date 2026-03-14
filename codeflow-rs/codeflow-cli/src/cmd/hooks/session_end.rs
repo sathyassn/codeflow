@@ -51,8 +51,6 @@ fn build_handler(
                 std::path::PathBuf::from,
             );
             Box::new(codeflow_core::hooks::session_end::SessionEndCleanup {
-                process_checker: codeflow_core::hooks::OsProcessChecker,
-                tmux_checker: codeflow_core::hooks::OsTmuxChecker,
                 home_dir,
                 ppid,
                 now,

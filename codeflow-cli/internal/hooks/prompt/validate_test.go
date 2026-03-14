@@ -422,29 +422,30 @@ func TestDefaultPathFlowCheck(t *testing.T) {
 	t.Run("pathflow active", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		flagDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
-		if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		pfDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
+		if err := os.MkdirAll(pfDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		statusJSON := `{"session_id":"ses-123","status":"pf-in-progress","team_name":"test"}`
+		if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		if !defaultPathFlowCheck(dir) {
-			t.Error("should return true when pathflow flag exists")
+			t.Error("should return true when session status is active")
 		}
 	})
 
-	t.Run("no pathflow flag", func(t *testing.T) {
+	t.Run("no status file", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		sessionDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
 		if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		// No flag file.
+		// No status file.
 		if defaultPathFlowCheck(dir) {
-			t.Error("should return false when no flag file")
+			t.Error("should return false when no status file")
 		}
 	})
 }

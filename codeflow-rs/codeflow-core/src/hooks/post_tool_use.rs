@@ -135,6 +135,17 @@ impl SentinelWrite {
         sentinel::create_by_name(&sentinel_dir, &sentinel_name)
             .map_err(|e| HookError::Config(format!("sentinel creation failed: {e}")))?;
 
+        // Update session status with completed stage.
+        if let Ok((session_dir, _)) = self.session_pathflow_dir() {
+            update_session_status(
+                &session_dir,
+                &serde_json::json!({
+                    "last_completed_stage": format!("ws-{}", stage_lower),
+                    "status": "pf-in-progress",
+                }),
+            );
+        }
+
         Ok(HookOutput::Allow)
     }
 }
@@ -193,11 +204,48 @@ impl HookHandler for SentinelWrite {
 }
 
 // ---------------------------------------------------------------------------
+// Session status helper
+// ---------------------------------------------------------------------------
+
+/// Update a field in `pathflow-session-status.json`.
+///
+/// Reads the existing status file, merges the provided updates, and writes
+/// back atomically. Non-fatal: returns silently on any I/O or parse error.
+pub fn update_session_status(session_dir: &Path, updates: &serde_json::Value) {
+    let status_path = session_dir.join("pathflow-session-status.json");
+    let mut status: serde_json::Value = match fs::read_to_string(&status_path) {
+        Ok(data) => match serde_json::from_str(&data) {
+            Ok(v) => v,
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
+
+    if let (Some(obj), Some(upd)) = (status.as_object_mut(), updates.as_object()) {
+        for (k, v) in upd {
+            obj.insert(k.clone(), v.clone());
+        }
+        obj.insert(
+            "updated_at".to_string(),
+            serde_json::Value::String(crate::util::now_rfc3339()),
+        );
+    }
+
+    let _ = atomic_write_file(
+        &status_path,
+        serde_json::to_string_pretty(&status)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // TeamCreate handler
 // ---------------------------------------------------------------------------
 
 /// Handle a `TeamCreate` post-tool-use event. Creates `pathflow-team.json`
-/// in the session pathflow directory with team metadata.
+/// in the session pathflow directory with team metadata, and updates the
+/// session status to `pf-started`.
 ///
 /// Mirrors Go's `HandleTeamCreate` in `sentinel/stage.go`.
 ///
@@ -231,6 +279,15 @@ pub fn handle_team_create(
 
     let team_file_path = session_dir.join("pathflow-team.json");
     atomic_write_file(&team_file_path, team_json.as_bytes())?;
+
+    // Update session status to pf-started with team_name.
+    update_session_status(
+        session_dir,
+        &serde_json::json!({
+            "status": "pf-started",
+            "team_name": team_name,
+        }),
+    );
 
     Ok(HookOutput::Allow)
 }
@@ -288,10 +345,10 @@ pub fn handle_teammate_spawn(
 /// 1. Remove the sentinel directory
 /// 2. Remove pathflow-team.json
 /// 3. Reset the checkpoint file
+/// 4. Update session status to `pf-complete`
 ///
 /// Mirrors Go's `HandlePostTeamDelete` in `team/guard.go`.
 ///
-/// The `is-pathflow-active` flag is NOT removed here (handled by `SessionEnd`).
 /// All operations are non-fatal: errors are logged but do not block.
 ///
 /// # Errors
@@ -302,7 +359,19 @@ pub fn handle_team_delete(
     project_dir: &Path,
     session_id: &str,
 ) -> Result<HookOutput, HookError> {
-    // 1. Remove sentinel directory.
+    // 1. Update session status to pf-complete FIRST (before destroying sentinels).
+    // This ordering is critical: SessionEnd reads the status file to decide
+    // whether cleanup is safe. The status must be "pf-complete" before the
+    // sentinel directory is removed, or a concurrent SessionEnd could see
+    // "pf-in-progress" with no sentinels and skip cleanup incorrectly.
+    update_session_status(
+        session_dir,
+        &serde_json::json!({
+            "status": "pf-complete",
+        }),
+    );
+
+    // 2. Remove sentinel directory.
     let sentinel_dir = project_dir
         .join(".state")
         .join("sentinels")
@@ -313,13 +382,13 @@ pub fn handle_team_delete(
         let _ = fs::remove_dir_all(&sentinel_dir);
     }
 
-    // 2. Remove pathflow-team.json.
+    // 3. Remove pathflow-team.json.
     let team_file_path = session_dir.join("pathflow-team.json");
     if team_file_path.exists() {
         let _ = fs::remove_file(&team_file_path);
     }
 
-    // 3. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).
+    // 4. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).
     let checkpoint_path = session_dir.join("pathflow-phase-tasks.json");
     let config_path = project_dir
         .join(".codeflow")
@@ -327,14 +396,12 @@ pub fn handle_team_delete(
         .join("pathflow")
         .join("pathflow-config.json");
 
-    // Remove the existing checkpoint so init_all_phases creates a fresh one.
     if checkpoint_path.exists() {
         let _ = fs::remove_file(&checkpoint_path);
     }
 
     if config_path.exists() {
         let cp = Checkpoint::new();
-        // Non-fatal: if reset fails, log but allow through.
         let _ = cp.init_all_phases(&checkpoint_path, &config_path);
     }
 

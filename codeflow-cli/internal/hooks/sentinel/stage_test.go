@@ -342,8 +342,8 @@ func TestHandleTeamCreate(t *testing.T) {
 		if team.LastSpawnName != nil {
 			t.Errorf("LastSpawnName = %v, want nil", team.LastSpawnName)
 		}
-		if team.LeadPID <= 0 {
-			t.Errorf("LeadPID = %d, want > 0", team.LeadPID)
+		if team.LeadPID != 0 {
+			t.Errorf("LeadPID = %d, want 0 (PID tracking removed)", team.LeadPID)
 		}
 		if team.CreatedAt == "" {
 			t.Error("CreatedAt is empty, want ISO8601 timestamp")
@@ -701,18 +701,6 @@ func TestCheckAndCreateStageSentinel_CreateSentinelFails(t *testing.T) {
 	}
 	if !strings.Contains(verdict.Reason, "sentinel creation failed") {
 		t.Errorf("Reason = %q, want substring %q", verdict.Reason, "sentinel creation failed")
-	}
-}
-
-func TestGetClaudePID(t *testing.T) {
-	t.Parallel()
-
-	// getClaudePID walks up the process tree. In a test environment, the result
-	// should be a valid PID > 1 (either the actual grandparent PID or the
-	// fallback ppid). We can at least verify it returns something reasonable.
-	pid := getClaudePID()
-	if pid <= 0 {
-		t.Errorf("getClaudePID() = %d, want > 0", pid)
 	}
 }
 

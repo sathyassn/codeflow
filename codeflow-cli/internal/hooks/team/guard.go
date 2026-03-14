@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 	"github.com/codeflow/codeflow-cli/internal/pathflow"
 )
 
@@ -84,10 +86,9 @@ func CheckTeamDelete(stdin io.Reader, sessionDir, sentinelDir string) (*Verdict,
 		}
 	}
 
-	// Check if PathFlow is active.
-	flagPath := filepath.Join(sessionDir, "is-pathflow-active")
-	if _, err := os.Stat(flagPath); err != nil {
-		// No pathflow-active flag — no active session, allow.
+	// Check if PathFlow is active using session status file.
+	if !session.IsPathflowActive(sessionDir) {
+		// No active session — allow.
 		return &Verdict{Allow: true}, nil
 	}
 
@@ -121,32 +122,38 @@ func CheckTeamDelete(stdin io.Reader, sessionDir, sentinelDir string) (*Verdict,
 // This is the PostToolUse counterpart to the PreToolUse guard.
 //
 // Cleanup operations (in order):
-//  1. Remove the sentinel directory (.state/sentinels/pathflow/{sessionID}/)
-//  2. Remove pathflow-team.json from the session pathflow dir
-//  3. Reset pathflow-phase-tasks.json to fresh state via ResetAllPhases
-//
-// The is-pathflow-active flag is NOT removed here — it is session-scoped
-// and handled by a different cleanup path.
+//  1. Update session status to "pf-complete"
+//  2. Remove the sentinel directory (.state/sentinels/pathflow/{sessionID}/)
+//  3. Remove pathflow-team.json from the session pathflow dir
+//  4. Reset pathflow-phase-tasks.json to fresh state via ResetAllPhases
 //
 // All operations are non-fatal: errors are logged but do not block TeamDelete.
 func HandlePostTeamDelete(sessionDir, projectDir, sessionID string) error {
 	logger := slog.Default()
 
-	// 1. Remove sentinel directory.
+	// 1. Update session status to "pf-complete".
+	if err := session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
+		s.Status = "pf-complete"
+	}); err != nil {
+		logger.Warn("post-team-delete: failed to update session status",
+			"path", sessionDir, "error", err)
+	}
+
+	// 2. Remove sentinel directory.
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.RemoveAll(sentinelDir); err != nil {
 		logger.Warn("post-team-delete: failed to remove sentinel directory",
 			"path", sentinelDir, "error", err)
 	}
 
-	// 2. Remove pathflow-team.json.
+	// 3. Remove pathflow-team.json.
 	teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
 	if err := os.Remove(teamFilePath); err != nil && !os.IsNotExist(err) {
 		logger.Warn("post-team-delete: failed to remove pathflow-team.json",
 			"path", teamFilePath, "error", err)
 	}
 
-	// 3. Reset pathflow-phase-tasks.json to fresh state.
+	// 4. Reset pathflow-phase-tasks.json to fresh state.
 	checkpointPath := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
 	configPath := filepath.Join(projectDir, ".codeflow", "config", "pathflow", "pathflow-config.json")
 

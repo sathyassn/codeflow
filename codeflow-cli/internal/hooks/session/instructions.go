@@ -137,9 +137,9 @@ func outputPathFlowContext(w io.Writer, projectDir string) {
 		return
 	}
 
-	// Check if PathFlow is active.
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	if _, err := os.Stat(flagPath); err != nil {
+	// Check if PathFlow is active using session status file.
+	pathflowDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if !IsPathflowActive(pathflowDir) {
 		return
 	}
 

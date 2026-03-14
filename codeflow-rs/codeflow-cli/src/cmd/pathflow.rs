@@ -19,14 +19,23 @@ fn run_with_dir(project_dir: &Path) -> Result<()> {
         return Ok(());
     };
 
-    // Check pathflow-active flag.
-    let pathflow_flag = state_dir
+    // Check pathflow session status.
+    let pathflow_dir = state_dir
         .join("session")
         .join(&sid)
-        .join("pathflow")
-        .join("is-pathflow-active");
+        .join("pathflow");
+    let status_path = pathflow_dir.join("pathflow-session-status.json");
 
-    if !pathflow_flag.exists() {
+    let is_active = if let Ok(data) = std::fs::read_to_string(&status_path) {
+        serde_json::from_str::<serde_json::Value>(&data)
+            .ok()
+            .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(String::from))
+            .is_some_and(|s| !s.is_empty() && s != "pf-complete")
+    } else {
+        false
+    };
+
+    if !is_active {
         println!("pathflow: inactive");
         return Ok(());
     }
@@ -92,10 +101,10 @@ mod tests {
         let state_dir = dir.path().join(".state");
         let sid = "ses-testpathflowactive123456";
         write_env_file(&state_dir, sid);
-        // Create pathflow-active flag.
+        // Create status file.
         let flag_dir = state_dir.join("session").join(sid).join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
         let result = run_with_dir(dir.path());
         assert!(result.is_ok());
     }
@@ -106,10 +115,10 @@ mod tests {
         let state_dir = dir.path().join(".state");
         let sid = "ses-testpathflowsentinels12";
         write_env_file(&state_dir, sid);
-        // Create pathflow-active flag.
+        // Create status file.
         let flag_dir = state_dir.join("session").join(sid).join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
         // Create sentinel directory with some sentinel files.
         let sentinel_dir = state_dir.join("sentinels").join("pathflow").join(sid);
         std::fs::create_dir_all(&sentinel_dir).unwrap();

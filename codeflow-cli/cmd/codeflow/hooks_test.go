@@ -243,19 +243,20 @@ func TestDetectPathFlowActive(t *testing.T) {
 		}
 	})
 
-	t.Run("existing flag", func(t *testing.T) {
+	t.Run("active status file", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		sid := "ses-test123"
-		flagDir := filepath.Join(dir, ".state", "session", sid, "pathflow")
-		if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		pfDir := filepath.Join(dir, ".state", "session", sid, "pathflow")
+		if err := os.MkdirAll(pfDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+		statusJSON := `{"session_id":"` + sid + `","status":"pf-in-progress","team_name":"test"}`
+		if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if !detectPathFlowActive(dir, sid) {
-			t.Error("detectPathFlowActive() = false with existing flag, want true")
+			t.Error("detectPathFlowActive() = false with active status file, want true")
 		}
 	})
 }
@@ -530,13 +531,13 @@ func TestRunGateCheckWithPathFlow(t *testing.T) {
 	// Override env file so resolveSessionID returns the test session ID.
 	overrideEnvFileSessionID(t, projectDir, sessionID)
 
-	// Create pathflow-active flag at the real project dir.
-	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create active session status file at the real project dir.
+	pfDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flagFile := filepath.Join(flagDir, "is-pathflow-active")
-	if err := os.WriteFile(flagFile, []byte("1"), 0o644); err != nil {
+	statusJSON := `{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(filepath.Join(projectDir, ".state", "session", sessionID)) })
@@ -631,13 +632,13 @@ func TestRunGateCheckUnknownSession(t *testing.T) {
 	// Override env file so resolveSessionID returns "unknown".
 	overrideEnvFileSessionID(t, projectDir, sessionID)
 
-	// Create pathflow-active flag for "unknown" session.
-	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create active status file for "unknown" session.
+	pfDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flagFile := filepath.Join(flagDir, "is-pathflow-active")
-	if err := os.WriteFile(flagFile, []byte("1"), 0o644); err != nil {
+	statusJSON := `{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(filepath.Join(projectDir, ".state", "session", sessionID)) })
@@ -1039,13 +1040,13 @@ func TestRunTeamGuardWithPathFlow(t *testing.T) {
 	// Override env file so resolveSessionID returns the test session ID.
 	overrideEnvFileSessionID(t, projectDir, sessionID)
 
-	// Create pathflow-active flag.
-	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create active session status file.
+	pfDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flagFile := filepath.Join(flagDir, "is-pathflow-active")
-	if err := os.WriteFile(flagFile, []byte("1"), 0o644); err != nil {
+	statusJSON := `{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(filepath.Join(projectDir, ".state", "session", sessionID)) })

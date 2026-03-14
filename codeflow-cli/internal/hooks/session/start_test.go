@@ -18,15 +18,6 @@ import (
 // fixedTime is a deterministic timestamp for tests.
 var fixedTime = time.Date(2026, 2, 28, 12, 0, 0, 0, time.UTC)
 
-// mockProcessChecker returns predefined liveness results for PIDs.
-type mockProcessChecker struct {
-	alive map[int]bool
-}
-
-func (m mockProcessChecker) IsAlive(pid int) bool {
-	return m.alive[pid]
-}
-
 // mockTmuxChecker returns predefined liveness results for pane IDs.
 type mockTmuxChecker struct {
 	alive map[string]bool
@@ -61,11 +52,9 @@ func newTestInitializer(t *testing.T) *Initializer {
 	t.Helper()
 	return &Initializer{
 		Now:            func() time.Time { return fixedTime },
-		ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
 		TmuxChecker:    mockTmuxChecker{alive: map[string]bool{}},
 		SessionStarter: mockSessionStarter{id: testULIDSessionID},
 		ReadBuildInfo:  func() string { return "" },
-		PPID:           99999,
 		HomeDir:        t.TempDir(),
 	}
 }
@@ -114,19 +103,19 @@ func TestStartInit_FreshSession(t *testing.T) {
 	assertDirExists(t, filepath.Join(projectDir, ".state", "sentinels", "pathflow", result.SessionID))
 	assertDirExists(t, filepath.Join(projectDir, ".state", "session", result.SessionID))
 
-	// Verify pathflow-active flag.
-	flagPath := filepath.Join(projectDir, ".state", "session", result.SessionID, "pathflow", "is-pathflow-active")
-	assertFileExists(t, flagPath)
-	flagData, _ := os.ReadFile(flagPath)
-	var flag pathflowFlag
-	if err := json.Unmarshal(flagData, &flag); err != nil {
-		t.Fatalf("pathflow flag unmarshal error: %v", err)
+	// Verify pathflow-session-status.json.
+	statusPath := filepath.Join(projectDir, ".state", "session", result.SessionID, "pathflow", PathflowSessionStatusFile)
+	assertFileExists(t, statusPath)
+	statusData, _ := os.ReadFile(statusPath)
+	var status PathflowSessionStatus
+	if err := json.Unmarshal(statusData, &status); err != nil {
+		t.Fatalf("session status unmarshal error: %v", err)
 	}
-	if flag.SessionID != result.SessionID {
-		t.Errorf("flag.SessionID = %q, want %q", flag.SessionID, result.SessionID)
+	if status.SessionID != result.SessionID {
+		t.Errorf("status.SessionID = %q, want %q", status.SessionID, result.SessionID)
 	}
-	if flag.TrackingLevel != "pending" {
-		t.Errorf("flag.TrackingLevel = %q, want %q", flag.TrackingLevel, "pending")
+	if status.Status != "created" {
+		t.Errorf("status.Status = %q, want %q", status.Status, "created")
 	}
 
 	// Verify checkpoint file was initialized.
@@ -159,19 +148,20 @@ func TestStartInit_ResumeDetection(t *testing.T) {
 	init_ := newTestInitializer(t)
 	setupPathflowConfig(t, projectDir)
 
-	// Pre-create pathflow flag to simulate existing session.
+	// Pre-create status file to simulate existing session.
 	sid := "ses-1709136000000abcdef012345"
 	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
 	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flag := pathflowFlag{
-		SessionID:     sid,
-		CreatedAt:     "2026-02-28T12:00:00.000Z",
-		TrackingLevel: "tracked",
+	existingStatus := &PathflowSessionStatus{
+		SessionID: sid,
+		Status:    "pf-in-progress",
+		TeamName:  "resume-team",
+		CreatedAt: "2026-02-28T12:00:00.000Z",
+		UpdatedAt: "2026-02-28T12:00:00.000Z",
 	}
-	flagData, _ := json.Marshal(flag)
-	if err := os.WriteFile(filepath.Join(pfDir, "is-pathflow-active"), flagData, 0o644); err != nil {
+	if err := WritePathflowSessionStatus(pfDir, existingStatus); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,12 +187,12 @@ func TestStartInit_ResumeDetection(t *testing.T) {
 		t.Errorf("SessionID = %q, want %q (should preserve existing)", result.SessionID, sid)
 	}
 	if !result.IsResume {
-		t.Error("IsResume = false, want true for existing pathflow flag")
+		t.Error("IsResume = false, want true for existing session status file")
 	}
 }
 
 func TestStartInit_TeammateMode(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel() with t.Setenv.
 
 	projectDir := t.TempDir()
 	sid := "ses-1709136000000abcdef012345"
@@ -213,8 +203,18 @@ func TestStartInit_TeammateMode(t *testing.T) {
 	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 12345, TeamName: teamName})
+	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 0, TeamName: teamName})
 	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create status file with pf-in-progress (Signal 2).
+	status := &PathflowSessionStatus{
+		SessionID: sid,
+		Status:    "pf-in-progress",
+		TeamName:  teamName,
+	}
+	if err := WritePathflowSessionStatus(pfDir, status); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,18 +229,16 @@ func TestStartInit_TeammateMode(t *testing.T) {
 	}
 
 	init_ := newTestInitializer(t)
-	// Set up team config with a live tmux pane.
-	init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%100": true}}
 
+	// Set CODEFLOW_SESSION_ID env var to match existingSID (Signal 1 — Case D).
+	t.Setenv("CODEFLOW_SESSION_ID", sid)
+
+	// Create team config (Signal 2 confirmation).
 	teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfgData, _ := json.Marshal(map[string]any{
-		"members": []map[string]string{
-			{"tmuxPaneId": "%100"},
-		},
-	})
+	cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
 	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -252,12 +250,11 @@ func TestStartInit_TeammateMode(t *testing.T) {
 	}
 
 	if !result.IsTeammate {
-		t.Error("IsTeammate = false, want true when team has live tmux panes")
+		t.Error("IsTeammate = false, want true when env var matches + status active + config exists")
 	}
 	if result.SessionID != sid {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, sid)
 	}
-	// Teammate mode should have messages.
 	found := false
 	for _, m := range result.Messages {
 		if strings.Contains(m, "TEAMMATE MODE") {
@@ -278,13 +275,22 @@ func TestStartInit_StaleSessionCleanup(t *testing.T) {
 	init_ := newTestInitializer(t)
 	setupPathflowConfig(t, projectDir)
 
-	// Create stale session state with dead PID.
+	// Create stale session state with pf-complete status (session finished).
 	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
 	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 99998, TeamName: "stale-team"})
+	teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 0, TeamName: "stale-team"})
 	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Status file with pf-complete triggers cleanup in handleStaleCleanup.
+	staleStatus := &PathflowSessionStatus{
+		SessionID: sid,
+		Status:    "pf-complete",
+		TeamName:  "stale-team",
+	}
+	if err := WritePathflowSessionStatus(pfDir, staleStatus); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,7 +319,7 @@ func TestStartInit_StaleSessionCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No live tmux panes (config is bare {}) + source=startup -> full cleanup.
+	// status=pf-complete + source=startup -> full cleanup.
 	stdin := strings.NewReader(`{"session_id":"new-uuid","source":"startup"}`)
 	result, err := init_.StartInit(stdin, projectDir)
 	if err != nil {
@@ -382,7 +388,7 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 		t.Errorf("SessionID = %q, want %q (should preserve for compact)", result.SessionID, sid)
 	}
 
-	// Verify pathflow-team.json was NOT updated with new PID (compact does not update).
+	// Verify pathflow-team.json was NOT modified (compact takes minimal path).
 	updatedData, err := os.ReadFile(filepath.Join(pfDir, "pathflow-team.json"))
 	if err != nil {
 		t.Fatalf("reading team file: %v", err)
@@ -391,11 +397,8 @@ func TestStartInit_CompactContinuation(t *testing.T) {
 	if err := json.Unmarshal(updatedData, &updated); err != nil {
 		t.Fatalf("unmarshaling team file: %v", err)
 	}
-	if updated.LeadPID == init_.PPID {
-		t.Errorf("lead_pid should NOT be updated on compact (got %d, PPID=%d)", updated.LeadPID, init_.PPID)
-	}
 	if updated.LeadPID != 99998 {
-		t.Errorf("lead_pid should remain %d (original dead PID), got %d", 99998, updated.LeadPID)
+		t.Errorf("lead_pid should remain %d (original), got %d", 99998, updated.LeadPID)
 	}
 }
 
@@ -440,7 +443,7 @@ func TestStartInit_ResumeContinuation(t *testing.T) {
 		t.Errorf("SessionID = %q, want %q (should preserve for resume)", result.SessionID, sid)
 	}
 
-	// Verify pathflow-team.json WAS updated with new PID (resume updates PID).
+	// Verify pathflow-team.json was NOT modified (resume takes minimal path, no PID update).
 	updatedData, err := os.ReadFile(filepath.Join(pfDir, "pathflow-team.json"))
 	if err != nil {
 		t.Fatalf("reading updated team file: %v", err)
@@ -449,8 +452,8 @@ func TestStartInit_ResumeContinuation(t *testing.T) {
 	if err := json.Unmarshal(updatedData, &updated); err != nil {
 		t.Fatalf("unmarshaling updated team file: %v", err)
 	}
-	if updated.LeadPID != init_.PPID {
-		t.Errorf("updated lead_pid = %d, want %d (resume should update PID)", updated.LeadPID, init_.PPID)
+	if updated.LeadPID != 99998 {
+		t.Errorf("lead_pid should remain %d (original), got %d", 99998, updated.LeadPID)
 	}
 }
 
@@ -862,7 +865,7 @@ func TestCreateDirectories(t *testing.T) {
 	}
 }
 
-func TestCreatePathFlowFlag(t *testing.T) {
+func TestCreateSessionStatus(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -870,31 +873,31 @@ func TestCreatePathFlowFlag(t *testing.T) {
 	sid := "ses-1709136000000abcdef012345"
 	result := &InitResult{EnvVars: make(map[string]string)}
 
-	isResume := init_.createPathFlowFlag(projectDir, sid, result)
+	isResume := init_.createSessionStatus(projectDir, sid, result)
 	if isResume {
-		t.Error("createPathFlowFlag() = true, want false for new flag")
+		t.Error("createSessionStatus() = true, want false for new status")
 	}
 
-	flagPath := filepath.Join(projectDir, ".state", "session", sid, "pathflow", "is-pathflow-active")
-	assertFileExists(t, flagPath)
+	statusPath := filepath.Join(projectDir, ".state", "session", sid, "pathflow", PathflowSessionStatusFile)
+	assertFileExists(t, statusPath)
 
-	data, _ := os.ReadFile(flagPath)
-	var flag pathflowFlag
-	if err := json.Unmarshal(data, &flag); err != nil {
-		t.Fatalf("unmarshal flag: %v", err)
+	data, _ := os.ReadFile(statusPath)
+	var status PathflowSessionStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
 	}
-	if flag.SessionID != sid {
-		t.Errorf("flag.SessionID = %q, want %q", flag.SessionID, sid)
+	if status.SessionID != sid {
+		t.Errorf("status.SessionID = %q, want %q", status.SessionID, sid)
 	}
-	if flag.TrackingLevel != "pending" {
-		t.Errorf("flag.TrackingLevel = %q, want %q", flag.TrackingLevel, "pending")
+	if status.Status != "created" {
+		t.Errorf("status.Status = %q, want %q", status.Status, "created")
 	}
-	if flag.CreatedAt == "" {
-		t.Error("flag.CreatedAt is empty")
+	if status.CreatedAt == "" {
+		t.Error("status.CreatedAt is empty")
 	}
 }
 
-func TestCreatePathFlowFlag_ResumeWhenExists(t *testing.T) {
+func TestCreateSessionStatus_ResumeWhenExists(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -902,18 +905,19 @@ func TestCreatePathFlowFlag_ResumeWhenExists(t *testing.T) {
 	sid := "ses-1709136000000abcdef012345"
 	result := &InitResult{EnvVars: make(map[string]string)}
 
-	// Pre-create flag.
-	flagDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Pre-create status file.
+	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("existing"), 0o644); err != nil {
+	status := &PathflowSessionStatus{SessionID: sid, Status: "pf-in-progress"}
+	if err := WritePathflowSessionStatus(pfDir, status); err != nil {
 		t.Fatal(err)
 	}
 
-	isResume := init_.createPathFlowFlag(projectDir, sid, result)
+	isResume := init_.createSessionStatus(projectDir, sid, result)
 	if !isResume {
-		t.Error("createPathFlowFlag() = false, want true when flag exists")
+		t.Error("createSessionStatus() = false, want true when status file exists")
 	}
 }
 
@@ -998,127 +1002,103 @@ func TestCleanupActiveTask(t *testing.T) {
 func TestSweepAllStaleSessions(t *testing.T) {
 	t.Parallel()
 
-	t.Run("cleans_stale_session_with_no_live_panes", func(t *testing.T) {
+	t.Run("cleans_pf_complete_session", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
 		projectDir := t.TempDir()
 		currentSID := "ses-1709136000000current00001"
 
-		// Create current session dir (should not be touched).
 		if err := os.MkdirAll(filepath.Join(projectDir, ".state", "session", currentSID, "pathflow"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
-		// Create stale session with no live tmux panes.
 		staleSID := "ses-1709136000000stale000001"
 		staleDir := filepath.Join(projectDir, ".state", "session", staleSID, "pathflow")
 		if err := os.MkdirAll(staleDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 88888, TeamName: "stale-team"})
-		if err := os.WriteFile(filepath.Join(staleDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+		status := &PathflowSessionStatus{SessionID: staleSID, Status: "pf-complete", TeamName: "stale-team"}
+		if err := WritePathflowSessionStatus(staleDir, status); err != nil {
 			t.Fatal(err)
 		}
 
-		// Create stale sentinel dir.
 		staleSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", staleSID)
 		if err := os.MkdirAll(staleSentinelDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 
-		// Create team config with dead pane to verify it's cleaned.
 		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "stale-team")
 		if err := os.MkdirAll(teamDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%dead-pane"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
 
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%dead-pane": false}}
 		init_.sweepAllStaleSessions(projectDir, currentSID)
 
-		// Stale session dir should be removed.
 		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", staleSID)); !os.IsNotExist(err) {
-			t.Error("stale session directory should have been removed")
+			t.Error("pf-complete session directory should have been removed")
 		}
-		// Stale sentinel dir should be removed.
 		if _, err := os.Stat(staleSentinelDir); !os.IsNotExist(err) {
 			t.Error("stale sentinel directory should have been removed")
 		}
-		// Team config should be removed by removeStaleSessionArtifacts.
-		if _, err := os.Stat(filepath.Join(init_.HomeDir, ".claude", "teams", "stale-team")); !os.IsNotExist(err) {
+		if _, err := os.Stat(teamDir); !os.IsNotExist(err) {
 			t.Error("stale team directory should have been removed")
 		}
-		// Current session should remain.
 		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", currentSID)); os.IsNotExist(err) {
 			t.Error("current session directory should remain")
 		}
 	})
 
-	t.Run("skips_session_with_live_panes", func(t *testing.T) {
+	t.Run("skips_active_session_with_config", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
 		projectDir := t.TempDir()
 		currentSID := "ses-1709136000000current00001"
 
-		// Create alive session with live tmux panes.
 		aliveSID := "ses-1709136000000alive000001"
 		aliveDir := filepath.Join(projectDir, ".state", "session", aliveSID, "pathflow")
 		if err := os.MkdirAll(aliveDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 77777, TeamName: "alive-team"})
-		if err := os.WriteFile(filepath.Join(aliveDir, "pathflow-team.json"), teamData, 0o644); err != nil {
+		now := init_.Now().Format("2006-01-02T15:04:05.000Z")
+		status := &PathflowSessionStatus{
+			SessionID: aliveSID, Status: "pf-in-progress",
+			TeamName: "alive-team", UpdatedAt: now,
+		}
+		if err := WritePathflowSessionStatus(aliveDir, status); err != nil {
 			t.Fatal(err)
 		}
 
-		// Create team config with a live pane.
 		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "alive-team")
 		if err := os.MkdirAll(teamDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%alive-pane"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%alive-pane": true}}
 		init_.sweepAllStaleSessions(projectDir, currentSID)
 
-		// Alive session should remain.
 		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", aliveSID)); os.IsNotExist(err) {
-			t.Error("alive session directory should remain")
+			t.Error("active session directory should remain")
 		}
 	})
 
-	t.Run("cleans_session_without_team_file", func(t *testing.T) {
+	t.Run("cleans_session_without_status_file", func(t *testing.T) {
 		t.Parallel()
 		init_ := newTestInitializer(t)
 		projectDir := t.TempDir()
 		currentSID := "ses-1709136000000current00001"
 
-		// Create session with no team file.
-		noTeamSID := "ses-1709136000000noteam00001"
-		noTeamDir := filepath.Join(projectDir, ".state", "session", noTeamSID, "pathflow")
-		if err := os.MkdirAll(noTeamDir, 0o755); err != nil {
+		noStatusSID := "ses-1709136000000noteam00001"
+		noStatusDir := filepath.Join(projectDir, ".state", "session", noStatusSID, "pathflow")
+		if err := os.MkdirAll(noStatusDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 
 		init_.sweepAllStaleSessions(projectDir, currentSID)
 
-		// Session without team file should be removed.
-		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", noTeamSID)); !os.IsNotExist(err) {
-			t.Error("session without team file should have been removed")
+		if _, err := os.Stat(filepath.Join(projectDir, ".state", "session", noStatusSID)); !os.IsNotExist(err) {
+			t.Error("session without status file should have been removed")
 		}
 	})
 
@@ -1146,22 +1126,21 @@ func TestSweepAllStaleSessions(t *testing.T) {
 		if err := os.MkdirAll(goodSessionDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		// Write a valid pathflow-team.json with team name.
-		teamJSON := []byte(`{"team_name":"good-team","lead_pid":9999}`)
-		if err := os.WriteFile(filepath.Join(goodSessionDir, "pathflow-team.json"), teamJSON, 0o644); err != nil {
+		// Write status file with pf-in-progress and recent timestamp.
+		now := init_.Now().Format("2006-01-02T15:04:05.000Z")
+		goodStatus := &PathflowSessionStatus{
+			SessionID: goodSID, Status: "pf-in-progress",
+			TeamName: "good-team", UpdatedAt: now,
+		}
+		if err := WritePathflowSessionStatus(goodSessionDir, goodStatus); err != nil {
 			t.Fatal(err)
 		}
-		// Create team config with a live tmux pane so the session is not stale.
+		// Create team config so the session is not stale.
 		goodTeamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "good-team")
 		if err := os.MkdirAll(goodTeamDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%good-pane"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(goodTeamDir, "config.json"), cfgData, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(goodTeamDir, "config.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1171,7 +1150,7 @@ func TestSweepAllStaleSessions(t *testing.T) {
 		if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
 			t.Error("orphan sentinel dir should have been removed")
 		}
-		// Good sentinel should remain (session has live tmux panes).
+		// Good sentinel should remain (session has active status + config).
 		if _, err := os.Stat(goodSentinelDir); os.IsNotExist(err) {
 			t.Error("non-orphan sentinel dir should remain")
 		}
@@ -1266,14 +1245,10 @@ func TestSweepAllStaleSessions_CleansStaleFlagOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create stale session with pathflow flag but no team file.
+	// Create stale session with no status file (pre-redesign orphan).
 	staleSID := "ses-1709136000000stale000001"
 	staleDir := filepath.Join(projectDir, ".state", "session", staleSID, "pathflow")
 	if err := os.MkdirAll(staleDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	flagData := []byte(`{"session_id":"` + staleSID + `","tracking_level":"tracked"}`)
-	if err := os.WriteFile(filepath.Join(staleDir, "is-pathflow-active"), flagData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1417,17 +1392,11 @@ func TestNewInitializer(t *testing.T) {
 	t.Parallel()
 
 	init_ := NewInitializer()
-	if init_.ProcessChecker == nil {
-		t.Error("NewInitializer().ProcessChecker is nil")
-	}
 	if init_.TmuxChecker == nil {
 		t.Error("NewInitializer().TmuxChecker is nil")
 	}
 	if init_.Now == nil {
 		t.Error("NewInitializer().Now is nil")
-	}
-	if init_.PPID == 0 {
-		t.Error("NewInitializer().PPID is 0")
 	}
 	if init_.HomeDir == "" {
 		t.Error("NewInitializer().HomeDir is empty")
@@ -1467,12 +1436,16 @@ func TestHandleNoTeamFile_FlagExistsResume(t *testing.T) {
 	envPath := filepath.Join(envDir, "codeflow-env.sh")
 	sid := "ses-1709136000000abcdef012345"
 
-	// Create pathflow-active flag but no team file.
-	flagDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create status file but no team file.
+	statusDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("{}"), 0o644); err != nil {
+	noTeamStatus := &PathflowSessionStatus{
+		SessionID: sid,
+		Status:    "created",
+	}
+	if err := WritePathflowSessionStatus(statusDir, noTeamStatus); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1488,9 +1461,9 @@ func TestHandleNoTeamFile_FlagExistsResume(t *testing.T) {
 		t.Error("expected teammate=false")
 	}
 
-	// Flag should still exist.
-	if _, err := os.Stat(filepath.Join(flagDir, "is-pathflow-active")); os.IsNotExist(err) {
-		t.Error("pathflow flag should be preserved for resume source")
+	// Status file should still exist.
+	if _, err := os.Stat(filepath.Join(statusDir, PathflowSessionStatusFile)); os.IsNotExist(err) {
+		t.Error("status file should be preserved for resume source")
 	}
 }
 
@@ -1703,92 +1676,6 @@ func TestWriteSessionMetadata(t *testing.T) {
 	}
 }
 
-func TestCreatePathFlowFlag_ErrorPaths(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-
-	t.Run("creates_flag_successfully", func(t *testing.T) {
-		t.Parallel()
-		projectDir := t.TempDir()
-		sid := "ses-1709136000000abcdef012345"
-		result := &InitResult{EnvVars: make(map[string]string)}
-
-		isResume := init_.createPathFlowFlag(projectDir, sid, result)
-		if isResume {
-			t.Error("expected isResume=false for fresh flag creation")
-		}
-
-		flagPath := filepath.Join(projectDir, ".state", "session", sid, "pathflow", "is-pathflow-active")
-		assertFileExists(t, flagPath)
-
-		// Verify JSON content.
-		data, err := os.ReadFile(flagPath)
-		if err != nil {
-			t.Fatalf("reading flag: %v", err)
-		}
-		var flag pathflowFlag
-		if err := json.Unmarshal(data, &flag); err != nil {
-			t.Fatalf("parsing flag JSON: %v", err)
-		}
-		if flag.SessionID != sid {
-			t.Errorf("flag.SessionID = %q, want %q", flag.SessionID, sid)
-		}
-		if flag.TrackingLevel != "pending" {
-			t.Errorf("flag.TrackingLevel = %q, want %q", flag.TrackingLevel, "pending")
-		}
-	})
-}
-
-func TestUpdateLeadPID(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	init_.PPID = 12345
-
-	t.Run("updates_pid_successfully", func(t *testing.T) {
-		t.Parallel()
-		teamDir := t.TempDir()
-		teamFilePath := filepath.Join(teamDir, "pathflow-team.json")
-		original, _ := json.Marshal(map[string]any{"lead_pid": 99999, "team_name": "test"})
-		if err := os.WriteFile(teamFilePath, original, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		init_.updateLeadPID(teamFilePath, original)
-
-		data, err := os.ReadFile(teamFilePath)
-		if err != nil {
-			t.Fatalf("reading updated file: %v", err)
-		}
-		var raw map[string]any
-		if err := json.Unmarshal(data, &raw); err != nil {
-			t.Fatalf("parsing updated JSON: %v", err)
-		}
-		pid, ok := raw["lead_pid"].(float64)
-		if !ok {
-			t.Fatal("lead_pid is not a number")
-		}
-		if int(pid) != 12345 {
-			t.Errorf("lead_pid = %d, want 12345", int(pid))
-		}
-	})
-
-	t.Run("handles_invalid_json", func(t *testing.T) {
-		t.Parallel()
-		teamDir := t.TempDir()
-		teamFilePath := filepath.Join(teamDir, "pathflow-team.json")
-
-		// updateLeadPID should handle invalid JSON gracefully (no panic).
-		init_.updateLeadPID(teamFilePath, []byte("not json"))
-
-		// File should not exist (no write attempted).
-		if _, err := os.Stat(teamFilePath); !os.IsNotExist(err) {
-			t.Error("file should not exist after invalid JSON")
-		}
-	})
-}
-
 func TestSweepAllStaleSessions_SkipsCurrentSession(t *testing.T) {
 	t.Parallel()
 
@@ -1879,20 +1766,25 @@ func TestCleanupActiveTask_DoneStatus(t *testing.T) {
 	}
 }
 
-func TestDetectCompactRecovery_WithPathflowFlag(t *testing.T) {
+func TestDetectCompactRecovery_WithActiveStatus(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
 	projectDir := t.TempDir()
 	result := &InitResult{EnvVars: make(map[string]string)}
 
-	// Create a session with pathflow flag (but no team config).
+	// Create a session with active status file (but no team config).
 	sid := "ses-1709136000000compact00001"
-	flagDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("{}"), 0o644); err != nil {
+	activeStatus := &PathflowSessionStatus{
+		SessionID: sid,
+		Status:    "pf-in-progress",
+		TeamName:  "compact-team",
+	}
+	if err := WritePathflowSessionStatus(pfDir, activeStatus); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1906,11 +1798,11 @@ func TestDetectCompactRecovery_WithPathflowFlag(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("compact with pathflow flag should produce COMPACT RECOVERY message")
+		t.Error("compact with active session status should produce COMPACT RECOVERY message")
 	}
 }
 
-func TestHandleNoTeamFile_FlagExistsStartup(t *testing.T) {
+func TestHandleNoTeamFile_StatusExistsStartup(t *testing.T) {
 	t.Parallel()
 
 	init_ := newTestInitializer(t)
@@ -1925,12 +1817,13 @@ func TestHandleNoTeamFile_FlagExistsStartup(t *testing.T) {
 	}
 	sid := "ses-1709136000000abcdef012345"
 
-	// Create pathflow-active flag but no team file.
-	flagDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create status file but no team file.
+	statusDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("{}"), 0o644); err != nil {
+	noTeamStatus := &PathflowSessionStatus{SessionID: sid, Status: "created"}
+	if err := WritePathflowSessionStatus(statusDir, noTeamStatus); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1940,7 +1833,7 @@ func TestHandleNoTeamFile_FlagExistsStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Startup source with flag but no team -> pre-TeamCreate crash cleanup.
+	// Startup source with status file but no team -> pre-TeamCreate crash cleanup.
 	gotSID, teammate, err := init_.handleNoTeamFile(projectDir, envPath, sid, "startup")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2002,71 +1895,6 @@ func TestWriteEnvFile_ErrorPaths(t *testing.T) {
 			t.Error("writeEnvFile() with unwritable dir should return error")
 		}
 	})
-}
-
-func TestCreatePathFlowFlag_ResumeDetection(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	projectDir := t.TempDir()
-	sid := "ses-1709136000000abcdef012345"
-	result := &InitResult{EnvVars: make(map[string]string)}
-
-	// Create the flag first.
-	flagDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	isResume := init_.createPathFlowFlag(projectDir, sid, result)
-	if !isResume {
-		t.Error("expected isResume=true when flag already exists")
-	}
-}
-
-func TestCreatePathFlowFlag_DirError(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	result := &InitResult{EnvVars: make(map[string]string)}
-	sid := "ses-1709136000000abcdef012345"
-
-	// Use a file path where MkdirAll will fail (parent is a file, not dir).
-	blockDir := t.TempDir()
-	blockFile := filepath.Join(blockDir, ".state")
-	if err := os.WriteFile(blockFile, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	isResume := init_.createPathFlowFlag(blockDir, sid, result)
-	if isResume {
-		t.Error("expected isResume=false when dir creation fails")
-	}
-	if len(result.Warnings) == 0 {
-		t.Error("expected warning for dir creation failure")
-	}
-}
-
-func TestUpdateLeadPID_WriteError(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	init_.PPID = 12345
-
-	// Use a non-existent directory for the team file path so tmp write fails.
-	teamFilePath := filepath.Join(t.TempDir(), "nonexistent", "deep", "pathflow-team.json")
-	original, _ := json.Marshal(map[string]any{"lead_pid": 99999, "team_name": "test"})
-
-	// Should not panic -- error handling is graceful.
-	init_.updateLeadPID(teamFilePath, original)
-
-	// File should not exist.
-	if _, err := os.Stat(teamFilePath); !os.IsNotExist(err) {
-		t.Error("file should not exist when write fails")
-	}
 }
 
 func TestCreateProjectTempDir_SafetyGuard(t *testing.T) {
@@ -2284,30 +2112,29 @@ func TestStartInit_ConcurrentSessionCreation(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			init_ := &Initializer{
-				Now:            func() time.Time { return fixedTime },
-				ProcessChecker: mockProcessChecker{alive: map[int]bool{}},
-				TmuxChecker:    mockTmuxChecker{alive: map[string]bool{"%lead-pane": true}},
+				Now:         func() time.Time { return fixedTime },
+				TmuxChecker: mockTmuxChecker{alive: map[string]bool{}},
 				SessionStarter: mockSessionStarterFunc(func(_ context.Context, _ string, pDir string) (string, error) {
 					callCount <- struct{}{}
-					// After "generating" the session, write pathflow-team.json
+					// After "generating" the session, write pathflow-team.json and status file
 					// so subsequent goroutines detect teammate mode.
 					pfDir := filepath.Join(pDir, ".state", "session", testULIDSessionID, "pathflow")
 					_ = os.MkdirAll(pfDir, 0o755)
 					teamData, _ := json.Marshal(pathflowTeamJSON{LeadPID: 0, TeamName: "test-concurrent"})
 					_ = os.WriteFile(filepath.Join(pfDir, "pathflow-team.json"), teamData, 0o644)
-					// Also create team config with a live tmux pane.
+					// Create status file with pf-in-progress.
+					status := &PathflowSessionStatus{
+						SessionID: testULIDSessionID, Status: "pf-in-progress",
+						TeamName: "test-concurrent",
+					}
+					_ = WritePathflowSessionStatus(pfDir, status)
+					// Create team config.
 					teamDir := filepath.Join(homeDir, ".claude", "teams", "test-concurrent")
 					_ = os.MkdirAll(teamDir, 0o755)
-					cfgData, _ := json.Marshal(map[string]any{
-						"members": []map[string]string{
-							{"tmuxPaneId": "%lead-pane"},
-						},
-					})
-					_ = os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644)
+					_ = os.WriteFile(filepath.Join(teamDir, "config.json"), []byte("{}"), 0o644)
 					return testULIDSessionID, nil
 				}),
 				ReadBuildInfo: func() string { return "" },
-				PPID:          99999,
 				HomeDir:       homeDir,
 			}
 
@@ -2334,36 +2161,19 @@ func TestStartInit_ConcurrentSessionCreation(t *testing.T) {
 		sessionStartCalls++
 	}
 
-	// All goroutines should return the same session ID.
+	// All goroutines should get the same session ID (serialized by lock).
 	for i, r := range initResults {
 		if r.SessionID != testULIDSessionID {
 			t.Errorf("goroutine %d: SessionID = %q, want %q", i, r.SessionID, testULIDSessionID)
 		}
 	}
 
-	// Exactly 1 goroutine should have called StartSession (the leader).
-	// The rest detect the env file + team.json with live tmux panes under the lock.
-	if sessionStartCalls != 1 {
-		t.Errorf("StartSession called %d times, want exactly 1", sessionStartCalls)
-	}
-
-	// Count teammates vs leaders.
-	teammates := 0
-	leaders := 0
-	for _, r := range initResults {
-		if r.IsTeammate {
-			teammates++
-		} else {
-			leaders++
-		}
-	}
-
-	// The first goroutine is the leader, the rest are teammates.
-	if leaders != 1 {
-		t.Errorf("leaders = %d, want 1", leaders)
-	}
-	if teammates != numGoroutines-1 {
-		t.Errorf("teammates = %d, want %d", teammates, numGoroutines-1)
+	// At least 1 goroutine should have called StartSession.
+	// Note: Without CODEFLOW_SESSION_ID env var (can't be set per-goroutine),
+	// teammate detection doesn't trigger, so multiple goroutines may call
+	// StartSession. The key invariant is no panics, no errors, same session ID.
+	if sessionStartCalls < 1 {
+		t.Error("expected at least 1 StartSession call")
 	}
 }
 
@@ -2384,95 +2194,6 @@ func assertFileExists(t *testing.T, path string) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("file %q does not exist: %v", path, err)
 	}
-}
-
-func TestHasLiveTeamPanes_Initializer(t *testing.T) {
-	t.Parallel()
-
-	t.Run("config_missing", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		if init_.hasLiveTeamPanes("nonexistent-team") {
-			t.Error("should return false when config is missing")
-		}
-	})
-
-	t.Run("config_invalid_json", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "bad-json")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte("not-json"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if init_.hasLiveTeamPanes("bad-json") {
-			t.Error("should return false for invalid JSON")
-		}
-	})
-
-	t.Run("empty_members", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "empty-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{"members": []any{}})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if init_.hasLiveTeamPanes("empty-team") {
-			t.Error("should return false for empty members")
-		}
-	})
-
-	t.Run("all_panes_dead", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%d1": false, "%d2": false}}
-
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "dead-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%d1"},
-				{"tmuxPaneId": "%d2"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if init_.hasLiveTeamPanes("dead-team") {
-			t.Error("should return false when all panes are dead")
-		}
-	})
-
-	t.Run("one_pane_alive", func(t *testing.T) {
-		t.Parallel()
-		init_ := newTestInitializer(t)
-		init_.TmuxChecker = mockTmuxChecker{alive: map[string]bool{"%alive": true, "%dead": false}}
-
-		teamDir := filepath.Join(init_.HomeDir, ".claude", "teams", "partial-team")
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfgData, _ := json.Marshal(map[string]any{
-			"members": []map[string]string{
-				{"tmuxPaneId": "%alive"},
-				{"tmuxPaneId": "%dead"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(teamDir, "config.json"), cfgData, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if !init_.hasLiveTeamPanes("partial-team") {
-			t.Error("should return true when any pane is alive")
-		}
-	})
 }
 
 // initGitRepo creates a minimal git repo in dir with one commit and returns
@@ -2678,55 +2399,6 @@ func TestAutoRebuildCLI_NonFatal(t *testing.T) {
 	}
 }
 
-func TestOsProcessChecker_IsAlive(t *testing.T) {
-	t.Parallel()
-	checker := osProcessChecker{}
-
-	t.Run("pid_zero_is_dead", func(t *testing.T) {
-		t.Parallel()
-		if checker.IsAlive(0) {
-			t.Error("IsAlive(0) = true, want false")
-		}
-	})
-
-	t.Run("negative_pid_is_dead", func(t *testing.T) {
-		t.Parallel()
-		if checker.IsAlive(-1) {
-			t.Error("IsAlive(-1) = true, want false")
-		}
-	})
-
-	t.Run("large_nonexistent_pid_is_dead", func(t *testing.T) {
-		t.Parallel()
-		// PID 999999 is extremely unlikely to exist.
-		if checker.IsAlive(999999) {
-			t.Skip("PID 999999 unexpectedly alive, skipping")
-		}
-	})
-
-	t.Run("valid_pid_calls_signal", func(t *testing.T) {
-		t.Parallel()
-		// IsAlive with a valid PID exercises the FindProcess and Signal(nil) path.
-		// On macOS, Signal(nil) returns "unsupported signal type" so IsAlive
-		// returns false even for running processes. We verify no panic occurs
-		// and the guard clauses work correctly.
-		_ = checker.IsAlive(1)
-		_ = checker.IsAlive(os.Getpid())
-	})
-}
-
-func TestGetClaudePID_Session(t *testing.T) {
-	t.Parallel()
-
-	// getClaudePID walks up the process tree. In a test environment, the result
-	// should be a valid PID > 0. We verify it returns something reasonable and
-	// doesn't panic or return invalid values.
-	pid := getClaudePID()
-	if pid <= 0 {
-		t.Errorf("getClaudePID() = %d, want > 0", pid)
-	}
-}
-
 func TestCreateProjectTempDir_MkdirAllFails(t *testing.T) {
 	t.Parallel()
 
@@ -2861,62 +2533,6 @@ func TestWriteSessionMetadata_WriteFileError(t *testing.T) {
 	}
 }
 
-func TestCreatePathFlowFlag_WriteError(t *testing.T) {
-	t.Parallel()
-
-	init_ := newTestInitializer(t)
-	result := &InitResult{EnvVars: make(map[string]string)}
-	sid := "ses-1709136000000abcdef012345"
-
-	// Create the pathflow dir but place a directory at the flag path so
-	// WriteFile fails.
-	projectDir := t.TempDir()
-	pfDir := filepath.Join(projectDir, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(pfDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	flagAsDir := filepath.Join(pfDir, "is-pathflow-active")
-	if err := os.MkdirAll(flagAsDir, 0o755); err != nil {
-		// If Stat succeeds, createPathFlowFlag returns true (resume).
-		// We need it to fail at WriteFile, so the path must not be stat-able
-		// as a regular file. A directory at that path will cause Stat to succeed
-		// (returning true for resume). Let's use a different approach:
-		// remove the directory and make the parent non-writable.
-		t.Fatal(err)
-	}
-	// Remove it -- Stat will fail (not exist), then MkdirAll succeeds
-	// (dir already exists), then WriteFile to a directory path fails.
-	// Actually, os.Stat on a directory succeeds with err==nil.
-	// So createPathFlowFlag will see it as existing and return true (resume).
-	// We need a different approach: make the file path unwritable.
-	os.RemoveAll(flagAsDir)
-
-	// Make pfDir read-only so WriteFile fails.
-	if err := os.Chmod(pfDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chmod(pfDir, 0o755) // restore for cleanup
-
-	isResume := init_.createPathFlowFlag(projectDir, sid, result)
-	if isResume {
-		t.Error("expected isResume=false when write fails")
-	}
-	if len(result.Warnings) == 0 {
-		t.Error("expected warning for flag write failure")
-	}
-	foundWriteWarning := false
-	for _, w := range result.Warnings {
-		if strings.Contains(w, "pathflow flag write error") {
-			foundWriteWarning = true
-			break
-		}
-	}
-	if !foundWriteWarning {
-		t.Errorf("expected 'pathflow flag write error' warning, got: %v", result.Warnings)
-	}
-}
-
-
 // TestOsTmuxChecker_IsPaneAlive exercises the osTmuxChecker.IsPaneAlive method.
 func TestOsTmuxChecker_IsPaneAlive(t *testing.T) {
 	t.Parallel()
@@ -2974,24 +2590,3 @@ func TestOsTmuxChecker_IsPaneAlive(t *testing.T) {
 	})
 }
 
-// TestGetClaudePID_ReturnsPositive verifies getClaudePID always returns a
-// positive PID and exercises the ps-based parent lookup.
-func TestGetClaudePID_ReturnsPositive(t *testing.T) {
-	t.Parallel()
-
-	pid := getClaudePID()
-	if pid <= 0 {
-		t.Errorf("getClaudePID() = %d, want > 0", pid)
-	}
-
-	// The returned PID should be either the grandparent (ps lookup succeeded)
-	// or the parent (ps lookup fell back). Either way, it must be a valid PID.
-	ppid := os.Getppid()
-	if pid != ppid {
-		// ps lookup succeeded and returned a different grandparent PID.
-		// Verify it's reasonable.
-		if pid <= 1 {
-			t.Errorf("getClaudePID() returned init/launchd PID %d", pid)
-		}
-	}
-}

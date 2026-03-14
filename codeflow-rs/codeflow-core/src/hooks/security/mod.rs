@@ -272,17 +272,25 @@ fn get_current_branch(project_dir: &std::path::Path) -> String {
 }
 
 /// Check if `PathFlow` is active for any session (best-effort).
+///
+/// Uses `pathflow-session-status.json` as the sole authority.
 fn check_pathflow_active(project_dir: &std::path::Path, session_id: &str) -> bool {
     if session_id.is_empty() {
         return false;
     }
-    let flag_path = project_dir
+    let pathflow_dir = project_dir
         .join(".state")
         .join("session")
         .join(session_id)
-        .join("pathflow")
-        .join("is-pathflow-active");
-    flag_path.exists()
+        .join("pathflow");
+    let status_path = pathflow_dir.join("pathflow-session-status.json");
+    if let Ok(data) = std::fs::read_to_string(&status_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+            let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            return !status.is_empty() && status != "pf-complete";
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -446,11 +454,41 @@ mod tests {
     }
 
     #[test]
-    fn test_check_pathflow_active_with_flag() {
+    fn test_check_pathflow_active_with_status_file() {
         let dir = tempfile::tempdir().unwrap();
-        let flag_dir = dir.path().join(".state/session/ses-test/pathflow");
-        std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "1").unwrap();
+        let pathflow_dir = dir.path().join(".state/session/ses-test/pathflow");
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
+        assert!(check_pathflow_active(dir.path(), "ses-test"));
+    }
+
+    #[test]
+    fn test_check_pathflow_active_complete_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let pathflow_dir = dir.path().join(".state/session/ses-test/pathflow");
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-complete","team_name":"test-team"}"#,
+        )
+        .unwrap();
+        assert!(!check_pathflow_active(dir.path(), "ses-test"));
+    }
+
+    #[test]
+    fn test_check_pathflow_active_status_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let pathflow_dir = dir.path().join(".state/session/ses-test/pathflow");
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            r#"{"status": "pf-in-progress"}"#,
+        )
+        .unwrap();
         assert!(check_pathflow_active(dir.path(), "ses-test"));
     }
 
@@ -478,12 +516,16 @@ mod tests {
         )
         .unwrap();
 
-        // Create pathflow-active flag under the FILESYSTEM session ID.
-        let flag_dir = dir
+        // Create pathflow status file under the FILESYSTEM session ID.
+        let pathflow_dir = dir
             .path()
             .join(format!(".state/session/{fs_session_id}/pathflow"));
-        std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "1").unwrap();
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
 
         let handler = SecurityHandler::new(dir.path().to_path_buf());
 

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 // stageCompleteRe matches "STAGE-COMPLETE: WS-{STAGE}" in normalized (uppercased) content.
@@ -138,6 +138,40 @@ func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdi
 	return &Verdict{Allow: true}
 }
 
+// HandleStageSentinelStatus updates pathflow-session-status.json with the
+// last completed stage when a STAGE-COMPLETE message is detected.
+func HandleStageSentinelStatus(data []byte, sessionDir string) {
+	if sessionDir == "" {
+		return
+	}
+
+	var input postToolUseInput
+	if err := json.Unmarshal(data, &input); err != nil {
+		return
+	}
+
+	if input.ToolName != "SendMessage" || len(input.ToolInput) == 0 {
+		return
+	}
+
+	var msg sendMessageInput
+	if err := json.Unmarshal(input.ToolInput, &msg); err != nil || msg.Content == "" {
+		return
+	}
+
+	normalized := strings.ToUpper(msg.Content)
+	normalized = collapseWhitespace(normalized)
+	matches := stageCompleteRe.FindStringSubmatch(normalized)
+	if matches == nil {
+		return
+	}
+
+	stageLower := strings.ToLower(matches[1])
+	_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
+		s.LastCompletedStage = "ws-" + stageLower
+	})
+}
+
 // hasSentinelFile checks whether a sentinel file exists in the sentinel directory.
 func hasSentinelFile(sentinelDir, name string) bool {
 	path := filepath.Join(sentinelDir, "pathflow-"+name)
@@ -158,8 +192,6 @@ func createSentinelFile(sentinelDir, name string) error {
 
 // collapseWhitespace replaces runs of whitespace with a single space.
 func collapseWhitespace(s string) string {
-	// Use strings.Fields + Join for simplicity -- splits on any whitespace
-	// and joins with single space.
 	return strings.Join(strings.Fields(s), " ")
 }
 
@@ -183,31 +215,9 @@ type PathflowTeam struct {
 	LastSpawnName     *string `json:"last_spawn_name"`
 }
 
-// getClaudePID returns the persistent Claude Code process PID by walking up
-// the process tree one level. The hook execution chain is:
-//
-//	claude (persistent) → /bin/zsh (ephemeral) → codeflow binary
-//
-// os.Getppid() returns the ephemeral shell PID. This function gets its parent
-// (the claude process) via ps, falling back to os.Getppid() on error.
-func getClaudePID() int {
-	ppid := os.Getppid()
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(ppid)).Output()
-	if err != nil {
-		return ppid
-	}
-	claudePID, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return ppid
-	}
-	if claudePID <= 1 {
-		return ppid // Don't return init/launchd PID
-	}
-	return claudePID
-}
-
-// HandleTeamCreate processes a TeamCreate PostToolUse event and creates
-// pathflow-team.json in the session pathflow directory.
+// HandleTeamCreate processes a TeamCreate PostToolUse event, creates
+// pathflow-team.json in the session pathflow directory, and updates the
+// session status to "pf-started" with the team name.
 //
 // The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
 func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
@@ -231,7 +241,7 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 
 	team := PathflowTeam{
 		TeamName:          tc.TeamName,
-		LeadPID:           getClaudePID(),
+		LeadPID:           0, // PID tracking removed — status file is the authority
 		CodeflowSessionID: sessionID,
 		TeammateSpawned:   false,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
@@ -260,6 +270,12 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 			Reason: fmt.Sprintf("write pathflow-team.json: %v", err),
 		}
 	}
+
+	// Update session status to "pf-started" with team name.
+	_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
+		s.Status = "pf-started"
+		s.TeamName = tc.TeamName
+	})
 
 	return &Verdict{Allow: true}
 }

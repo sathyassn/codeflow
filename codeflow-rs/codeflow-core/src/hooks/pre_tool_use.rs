@@ -503,9 +503,17 @@ impl HookHandler for TeamGuard {
             }
         }
 
-        // Check pathflow-active flag.
-        let flag_path = self.session_dir.join("is-pathflow-active");
-        if !flag_path.exists() {
+        // Check pathflow session status (status.json is sole authority).
+        let status_path = self.session_dir.join("pathflow-session-status.json");
+        let is_active = if let Ok(data) = std::fs::read_to_string(&status_path) {
+            serde_json::from_str::<serde_json::Value>(&data)
+                .ok()
+                .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(String::from))
+                .is_some_and(|s| !s.is_empty() && s != "pf-complete")
+        } else {
+            false
+        };
+        if !is_active {
             return Ok(HookOutput::Allow);
         }
 
@@ -1493,7 +1501,11 @@ mod tests {
         let session_dir = dir.path().join("session");
         let sentinel_dir = dir.path().join("sentinels");
         std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("is-pathflow-active"), "1").unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
 
         let handler = TeamGuard::new(session_dir, sentinel_dir);
         let input = HookInput {
@@ -1515,7 +1527,11 @@ mod tests {
         let session_dir = dir.path().join("session");
         let sentinel_dir = dir.path().join("sentinels");
         std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("is-pathflow-active"), "1").unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
         sentinel::create_by_name(&sentinel_dir, "pf-6").unwrap();
 
         let handler = TeamGuard::new(session_dir, sentinel_dir);
@@ -2068,7 +2084,11 @@ mod tests {
         let session_dir = dir.path().join("session");
         let sentinel_dir = dir.path().join("sentinels");
         std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("is-pathflow-active"), "1").unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
 
         let handler = TeamGuard::new(session_dir, sentinel_dir);
         let input = HookInput {
@@ -2090,7 +2110,11 @@ mod tests {
         let session_dir = dir.path().join("session");
         let sentinel_dir = dir.path().join("sentinels");
         std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("is-pathflow-active"), "1").unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test-team"}"#,
+        )
+        .unwrap();
 
         let handler = TeamGuard::new(session_dir, sentinel_dir);
         let input = HookInput {

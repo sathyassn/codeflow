@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	autorunCmd "github.com/codeflow/codeflow-cli/cmd/autorun"
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 	"github.com/codeflow/codeflow-cli/internal/welcome"
 	"github.com/spf13/cobra"
 )
@@ -133,9 +134,9 @@ func readPathFlowState() welcome.Option {
 		return nil
 	}
 
-	// Check pathflow-active flag.
-	flagPath := filepath.Join(".state", "session", sid, "pathflow", "is-pathflow-active")
-	if _, err := os.Stat(flagPath); err != nil {
+	// Check session status file.
+	pathflowDir := filepath.Join(".state", "session", sid, "pathflow")
+	if !session.IsPathflowActive(pathflowDir) {
 		return nil
 	}
 

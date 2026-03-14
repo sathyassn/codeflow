@@ -63,12 +63,19 @@ impl PathFlowChecker for OsPathFlowChecker {
             if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                 continue;
             }
-            let flag_path = session_dir
+            let pathflow_dir = session_dir
                 .join(entry.file_name())
-                .join("pathflow")
-                .join("is-pathflow-active");
-            if flag_path.exists() {
-                return true;
+                .join("pathflow");
+
+            // Check status file (sole authority).
+            let status_path = pathflow_dir.join("pathflow-session-status.json");
+            if let Ok(data) = std::fs::read_to_string(&status_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                    let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    if !status.is_empty() && status != "pf-complete" {
+                        return true;
+                    }
+                }
             }
         }
         false
@@ -544,17 +551,20 @@ mod tests {
     }
 
     #[test]
-    fn test_os_pathflow_checker_with_active_flag() {
+    fn test_os_pathflow_checker_with_status_file() {
         let dir = tempfile::tempdir().unwrap();
-        let flag_path = dir
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join("ses-test123")
-            .join("pathflow")
-            .join("is-pathflow-active");
-        std::fs::create_dir_all(flag_path.parent().unwrap()).unwrap();
-        std::fs::write(&flag_path, "").unwrap();
+            .join("pathflow");
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"test"}"#,
+        )
+        .unwrap();
 
         let checker = OsPathFlowChecker;
         assert!(checker.is_active(dir.path()));

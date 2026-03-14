@@ -25,6 +25,7 @@ guard with a structured `pathflow-session-status.json` status tracker.
 
 - [1. Problem statement](#1-problem-statement)
 - [2. The 13-section SessionEnd cleanup flow](#2-the-13-section-sessionend-cleanup-flow)
+- [2a. Unified SessionEnd flow diagram](#2a-unified-sessionend-flow-diagram)
 - [3. Current broken implementation](#3-current-broken-implementation)
 - [4. PF7 shutdown sequence](#4-pf7-shutdown-sequence)
 - [5. Why option D (pf-7 sentinel) was rejected](#5-why-option-d-pf-7-sentinel-was-rejected)
@@ -130,6 +131,74 @@ EndCleanup() / run()
 The invariant is: **if Section 3 allows cleanup to proceed, Sections 9 and 10
 will always run**. There is no per-section guard. The entire cleanup sequence is
 a single critical section gated by `shouldSkipCleanup()`.
+
+---
+
+## 2a. Unified SessionEnd flow diagram
+
+The following diagram shows `shouldSkipCleanup` behavior for the three caller
+types (lead, tmux teammate, in-process sub-agent) using the new status-based
+logic. Each caller type produces identical inputs to the function — only the
+session status and team config presence differentiate them.
+
+```text
+SessionEnd fires (any agent: lead, tmux teammate, in-process sub-agent)
+│
+├─ Section 2: Resolve session ID
+│   session.Current(runtimeDir)
+│   → reads CODEFLOW_SESSION_ID env var, falls back to codeflow-env.sh
+│   No SID found or SID == "unknown" → return early (no cleanup)
+│
+└─ Section 3: shouldSkipCleanup(sessionStateDir)
+    │
+    ├─ Read pathflow-session-status.json
+    │   Parse error → ALLOW cleanup (proceed to Sections 4-13)
+    │   File missing → check old is-pathflow-active flag
+    │       Flag missing → ALLOW cleanup
+    │       Flag exists  → shouldSkipCleanupLegacy() (team config existence)
+    │
+    ├─ status == "created"
+    │   All callers: ALLOW cleanup
+    │   Rationale: no team created yet, nothing to protect
+    │
+    ├─ status == "pf-complete"
+    │   All callers: ALLOW cleanup
+    │   Rationale: TeamDelete succeeded, session finished cleanly
+    │
+    ├─ status == "pf-started" or "pf-in-progress"
+    │   ├─ team_name == "" → ALLOW cleanup
+    │   ├─ config.json missing → ALLOW cleanup (team already dissolved)
+    │   ├─ last_completed_phase == "PF7" → ALLOW cleanup (guard)
+    │   └─ All checks pass → SKIP cleanup
+    │       Lead: SKIP (should not happen — lead reaches pf-complete before exit)
+    │       tmux teammate: SKIP (session active, lead still running)
+    │       in-process sub-agent: SKIP (BUG FIXED: was ALLOW with old tmux check)
+    │
+    └─ unknown status → ALLOW cleanup
+
+Caller-specific notes:
+
+  Lead (EXIT C from SessionStart):
+    After TeamDelete: status="pf-complete" → ALLOW
+    After crash (status="pf-in-progress"): SKIP → stale sweep handles cleanup
+
+  tmux teammate (EXIT B from SessionStart):
+    status="pf-in-progress", config exists → SKIP (session active)
+    Same behavior as before, but now status-driven instead of tmux-driven
+
+  In-process sub-agent (EXIT B or EXIT A from SessionStart):
+    status="pf-in-progress", config exists → SKIP (BUG FIX)
+    Old behavior: all tmux panes dead → ALLOW (destructive, wrong)
+    New behavior: status file consulted → SKIP (correct)
+```
+
+**Backward compatibility path** (`shouldSkipCleanupLegacy`):
+
+Sessions created before `pathflow-session-status.json` was introduced have only
+the old `is-pathflow-active` empty flag. When the new code finds the flag but
+no status file, it calls `shouldSkipCleanupLegacy`, which checks whether
+`~/.claude/teams/{team_name}/config.json` exists. This replaces the old tmux
+check with a config existence check, which works for in-process agents.
 
 ---
 
@@ -641,17 +710,19 @@ The following files are directly referenced in this analysis.
 
 | File | Relevance |
 |------|-----------|
-| `codeflow-cli/internal/hooks/session/end.go` | `shouldSkipCleanup()`, `cleanTeamArtifacts()`, full 13-section flow |
-| `codeflow-cli/internal/hooks/session/start.go` | Session init, `is-pathflow-active` creation |
-| `codeflow-cli/internal/hooks/team/guard.go` | `HandlePostTeamDelete()`, `CheckTeamDelete()` |
+| `codeflow-cli/internal/hooks/session/end.go` | `shouldSkipCleanup()`, `shouldSkipCleanupLegacy()`, `cleanTeamArtifacts()`, full 13-section flow |
+| `codeflow-cli/internal/hooks/session/start.go` | Session init, `createSessionStatus()`, `IsPathflowActive()`, `WritePathflowSessionStatus()`, `UpdatePathflowSessionStatus()` |
+| `codeflow-cli/internal/hooks/team/guard.go` | `HandlePostTeamDelete()` (writes `pf-complete`), `CheckTeamDelete()` |
+| `codeflow-cli/internal/hooks/sentinel/stage.go` | `HandleTeamCreate()` (planned: writes `pf-started`) |
+| `codeflow-cli/internal/hooks/sentinel/checkpoint.go` | checkpoint-complete hook (planned: writes `pf-in-progress`) |
 
 **Rust implementation:**
 
 | File | Relevance |
 |------|-----------|
 | `codeflow-rs/codeflow-core/src/hooks/session_end.rs` | Rust mirror of `end.go` — `should_skip_cleanup()`, `run()` |
-| `codeflow-rs/codeflow-core/src/hooks/session_start.rs` | Rust mirror of `start.go` — session init |
-| `codeflow-rs/codeflow-core/src/hooks/post_tool_use.rs` | `handle_team_delete()`, `SentinelWrite` handler |
+| `codeflow-rs/codeflow-core/src/hooks/session_start.rs` | Rust mirror of `start.go` — `create_pathflow_flag()` (pending migration to status file) |
+| `codeflow-rs/codeflow-core/src/hooks/post_tool_use.rs` | `handle_team_delete()` (pending: add `pf-complete` update), `handle_team_create()` (pending: add `pf-started` update), `SentinelWrite` handler |
 
 **Configuration:**
 
@@ -664,3 +735,11 @@ The following files are directly referenced in this analysis.
 | File | Relevance |
 |------|-----------|
 | `.claude/memory/bug_team_config_deletion.md` | Recurring bug history and root cause record |
+
+**Related analysis documents:**
+
+| File | Relevance |
+|------|-----------|
+| `.codeflow/docs/analysis/session-start-redesign.md` | SessionStart unified flow, scenario walk-throughs, dead code removal, implementation phasing |
+| `.codeflow/docs/analysis/session-lifecycle-interaction.md` | Full start-to-end lifecycle timeline showing all hook interactions with the status file |
+| `.codeflow/docs/analysis/session-startup-cleanup-redesign.md` | Earlier session startup bug fixes (source-based PID branching, sweepAllStaleSessions) |

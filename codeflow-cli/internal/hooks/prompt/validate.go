@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 // PromptValidator outputs context reminders for user prompt submissions.
@@ -156,7 +158,8 @@ func (v *PromptValidator) isPathFlowActive() bool {
 	return defaultPathFlowCheck(v.ProjectDir)
 }
 
-// defaultPathFlowCheck looks for is-pathflow-active flag files.
+// defaultPathFlowCheck looks for active PathFlow sessions using the session
+// status file (pathflow-session-status.json).
 func defaultPathFlowCheck(projectDir string) bool {
 	sessionDir := filepath.Join(projectDir, ".state", "session")
 	entries, err := os.ReadDir(sessionDir)
@@ -168,8 +171,8 @@ func defaultPathFlowCheck(projectDir string) bool {
 		if !entry.IsDir() {
 			continue
 		}
-		flagPath := filepath.Join(sessionDir, entry.Name(), "pathflow", "is-pathflow-active")
-		if _, err := os.Stat(flagPath); err == nil {
+		pathflowDir := filepath.Join(sessionDir, entry.Name(), "pathflow")
+		if session.IsPathflowActive(pathflowDir) {
 			return true
 		}
 	}

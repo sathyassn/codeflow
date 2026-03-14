@@ -6,16 +6,28 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
-// createPathflowActive creates the is-pathflow-active flag file in the given dir.
+// createPathflowActive creates a pathflow-session-status.json with pf-in-progress
+// status in the given dir, making IsPathflowActive return true.
 func createPathflowActive(t *testing.T, sessionDir string) {
 	t.Helper()
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatalf("create session dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
-		t.Fatalf("create pathflow-active flag: %v", err)
+	status := &session.PathflowSessionStatus{
+		SessionID: "ses-test",
+		Status:    "pf-in-progress",
+		TeamName:  "test-team",
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, session.PathflowSessionStatusFile), data, 0o644); err != nil {
+		t.Fatalf("write status file: %v", err)
 	}
 }
 
@@ -235,7 +247,6 @@ func TestHandlePostTeamDelete_RemovesSentinels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create sentinel directory with files.
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -246,7 +257,6 @@ func TestHandlePostTeamDelete_RemovesSentinels(t *testing.T) {
 		}
 	}
 
-	// Write config for checkpoint reset.
 	writeMinimalPathflowConfig(t, projectDir)
 
 	err := HandlePostTeamDelete(sessionDir, projectDir, sessionID)
@@ -254,7 +264,6 @@ func TestHandlePostTeamDelete_RemovesSentinels(t *testing.T) {
 		t.Fatalf("HandlePostTeamDelete() error = %v", err)
 	}
 
-	// Verify sentinel directory was removed.
 	if _, err := os.Stat(sentinelDir); !os.IsNotExist(err) {
 		t.Error("sentinel directory should be removed after HandlePostTeamDelete")
 	}
@@ -270,13 +279,11 @@ func TestHandlePostTeamDelete_RemovesTeamFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create pathflow-team.json.
 	teamFile := filepath.Join(sessionDir, "pathflow-team.json")
 	if err := os.WriteFile(teamFile, []byte(`{"team_name":"test"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write config for checkpoint reset.
 	writeMinimalPathflowConfig(t, projectDir)
 
 	err := HandlePostTeamDelete(sessionDir, projectDir, sessionID)
@@ -284,7 +291,6 @@ func TestHandlePostTeamDelete_RemovesTeamFile(t *testing.T) {
 		t.Fatalf("HandlePostTeamDelete() error = %v", err)
 	}
 
-	// Verify pathflow-team.json was removed.
 	if _, err := os.Stat(teamFile); !os.IsNotExist(err) {
 		t.Error("pathflow-team.json should be removed after HandlePostTeamDelete")
 	}
@@ -300,10 +306,8 @@ func TestHandlePostTeamDelete_ResetsCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write config for checkpoint reset.
 	writeMinimalPathflowConfig(t, projectDir)
 
-	// Create a checkpoint with completed phases.
 	checkpointPath := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
 	completedCheckpoint := map[string]any{
 		"PF1": map[string]any{
@@ -325,7 +329,6 @@ func TestHandlePostTeamDelete_ResetsCheckpoint(t *testing.T) {
 		t.Fatalf("HandlePostTeamDelete() error = %v", err)
 	}
 
-	// Verify checkpoint was reset (file should exist with fresh state).
 	freshData, err := os.ReadFile(checkpointPath)
 	if err != nil {
 		t.Fatalf("checkpoint file should still exist after reset: %v", err)
@@ -336,7 +339,6 @@ func TestHandlePostTeamDelete_ResetsCheckpoint(t *testing.T) {
 		t.Fatalf("checkpoint file should be valid JSON: %v", err)
 	}
 
-	// PF1 should exist with empty completed/registered maps.
 	pf1Data, ok := freshCheckpoint["PF1"]
 	if !ok {
 		t.Fatal("PF1 should exist in reset checkpoint")
@@ -360,23 +362,27 @@ func TestHandlePostTeamDelete_ResetsCheckpoint(t *testing.T) {
 	}
 }
 
-func TestHandlePostTeamDelete_DoesNotRemoveActiveFlag(t *testing.T) {
+func TestHandlePostTeamDelete_UpdatesStatusToPfComplete(t *testing.T) {
 	t.Parallel()
 
 	projectDir := t.TempDir()
-	sessionID := "ses-flag-test"
+	sessionID := "ses-status-test"
 	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create is-pathflow-active flag.
-	flagPath := filepath.Join(sessionDir, "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte("1"), 0o644); err != nil {
+	// Create a status file with pf-in-progress.
+	status := &session.PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "pf-in-progress",
+		TeamName:  "test-team",
+	}
+	statusData, _ := json.Marshal(status)
+	if err := os.WriteFile(filepath.Join(sessionDir, session.PathflowSessionStatusFile), statusData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write config for checkpoint reset.
 	writeMinimalPathflowConfig(t, projectDir)
 
 	err := HandlePostTeamDelete(sessionDir, projectDir, sessionID)
@@ -384,9 +390,16 @@ func TestHandlePostTeamDelete_DoesNotRemoveActiveFlag(t *testing.T) {
 		t.Fatalf("HandlePostTeamDelete() error = %v", err)
 	}
 
-	// Verify is-pathflow-active was NOT removed.
-	if _, err := os.Stat(flagPath); err != nil {
-		t.Error("is-pathflow-active flag should survive HandlePostTeamDelete")
+	// Read updated status.
+	updatedStatus, readErr := session.ReadPathflowSessionStatus(sessionDir)
+	if readErr != nil {
+		t.Fatalf("reading updated status: %v", readErr)
+	}
+	if updatedStatus == nil {
+		t.Fatal("status file should still exist after HandlePostTeamDelete")
+	}
+	if updatedStatus.Status != "pf-complete" {
+		t.Errorf("status = %q, want %q", updatedStatus.Status, "pf-complete")
 	}
 }
 
@@ -396,9 +409,7 @@ func TestHandlePostTeamDelete_IdempotentWhenFilesAbsent(t *testing.T) {
 	projectDir := t.TempDir()
 	sessionID := "ses-idempotent"
 	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
-	// Intentionally do NOT create sessionDir or any files.
 
-	// Write config for checkpoint reset.
 	writeMinimalPathflowConfig(t, projectDir)
 
 	err := HandlePostTeamDelete(sessionDir, projectDir, sessionID)
@@ -417,21 +428,16 @@ func TestHandlePostTeamDelete_NonFatalOnPartialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a team file that can be removed.
 	teamFile := filepath.Join(sessionDir, "pathflow-team.json")
 	if err := os.WriteFile(teamFile, []byte(`{"team_name":"test"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	// Do NOT write pathflow-config.json — checkpoint reset will fail,
-	// but the other operations should still succeed.
 
 	err := HandlePostTeamDelete(sessionDir, projectDir, sessionID)
 	if err != nil {
 		t.Errorf("HandlePostTeamDelete() error = %v, want nil (non-fatal)", err)
 	}
 
-	// Team file should still be removed despite checkpoint reset failure.
 	if _, err := os.Stat(teamFile); !os.IsNotExist(err) {
 		t.Error("pathflow-team.json should be removed even when checkpoint reset fails")
 	}
@@ -455,7 +461,6 @@ func TestCheckTeamDelete_BlockedReasonFormat(t *testing.T) {
 		t.Fatal("expected block")
 	}
 
-	// Verify the block message contains key information.
 	expectedPhrases := []string{
 		"BLOCKED",
 		"PathFlow is active",

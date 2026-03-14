@@ -58,18 +58,23 @@ func setupActiveTask(t *testing.T, projectDir string, taskID, title, status stri
 	}
 }
 
-// setupPathFlowActive creates the is-pathflow-active flag and optionally
+// setupPathFlowActive creates the pathflow-session-status.json and optionally
 // sentinel files for testing.
 func setupPathFlowActive(t *testing.T, projectDir, sessionID string, sentinels []string) {
 	t.Helper()
 
-	// Create pathflow-active flag.
-	flagDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+	// Create pathflow-session-status.json with pf-in-progress status.
+	pfDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flagData := `{"session_id":"` + sessionID + `","tracking_level":"tracked"}`
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte(flagData), 0o644); err != nil {
+	status := &PathflowSessionStatus{
+		SessionID: sessionID,
+		Status:    "pf-in-progress",
+		TeamName:  "test-team",
+	}
+	statusData, _ := json.Marshal(status)
+	if err := os.WriteFile(filepath.Join(pfDir, PathflowSessionStatusFile), statusData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

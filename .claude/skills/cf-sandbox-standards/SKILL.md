@@ -176,7 +176,7 @@ Logging:
 
 Procedure:
   1. Identify operation type (git network, gh CLI, package manager, HTTP)
-  2. Check if in PathFlow mode (pathflow-active flag exists)
+  2. Check if in PathFlow mode (pathflow-session-status.json exists with status not "pf-complete")
   3. If PathFlow + git/gh: delegate to cf-git-operations
   4. If PathFlow + package manager: self-execute with bypass
   5. If outside PathFlow: self-execute with bypass

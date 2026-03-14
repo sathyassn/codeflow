@@ -12,7 +12,7 @@
 //   - Create required .state/ directories
 //   - Detect and warn about stale sessions and teams
 //   - Clean up orphan sentinel directories
-//   - Create the pathflow-active flag (is-pathflow-active JSON file)
+//   - Create the session status file (pathflow-session-status.json)
 //   - Initialize the checkpoint file for all 7 PathFlow phases
 //   - Write session metadata and codeflow-env.sh files
 //   - Create the project temp directory
@@ -27,7 +27,7 @@
 //
 //   - Parse stdin JSON for session metadata (Claude's per-agent UUID and transcript path)
 //   - Resolve CODEFLOW_SESSION_ID from env file or environment variable
-//   - PathFlow guard: skip cleanup for teammate shutdowns while lead is alive
+//   - PathFlow guard: skip cleanup for teammate shutdowns while session is active
 //   - Validate PF7 completion (check for pathflow-pf-7 sentinel)
 //   - Clean up PathFlow sentinels for the session
 //   - Preserve in-progress tasks, remove completed ones

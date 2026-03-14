@@ -777,7 +777,8 @@ func TestCheckPathflowStuck_StuckPhase(t *testing.T) {
 	if err := os.MkdirAll(flagDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := []byte(`{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`)
+	if err := os.WriteFile(filepath.Join(flagDir, "pathflow-session-status.json"), statusJSON, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -816,7 +817,8 @@ func TestCheckPathflowStuck_RecentPhase(t *testing.T) {
 	if err := os.MkdirAll(flagDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := []byte(`{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`)
+	if err := os.WriteFile(filepath.Join(flagDir, "pathflow-session-status.json"), statusJSON, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1006,7 +1008,8 @@ func TestCheckSentinelDrift_DriftDetected(t *testing.T) {
 	if err := os.MkdirAll(flagDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := []byte(`{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`)
+	if err := os.WriteFile(filepath.Join(flagDir, "pathflow-session-status.json"), statusJSON, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1054,7 +1057,8 @@ func TestCheckSentinelDrift_AllPresent(t *testing.T) {
 	if err := os.MkdirAll(flagDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := []byte(`{"session_id":"` + sessionID + `","status":"pf-in-progress","team_name":"test"}`)
+	if err := os.WriteFile(filepath.Join(flagDir, "pathflow-session-status.json"), statusJSON, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

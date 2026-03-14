@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 // Sentinel errors for preflight check failures.
@@ -24,7 +26,7 @@ const (
 	CodeflowDir       = ".codeflow"
 	GitDir            = ".git"
 	SessionDir        = ".state/session"
-	PathflowActiveFile = "pathflow/is-pathflow-active"
+	PathflowActiveFile = "pathflow/" + session.PathflowSessionStatusFile
 )
 
 // Default stale session threshold.
@@ -230,10 +232,15 @@ func checkStaleSessions(projectRoot string, opts *Options) Result {
 			continue
 		}
 
-		flagPath := filepath.Join(sessionDir, entry.Name(), PathflowActiveFile)
-		info, err := os.Stat(flagPath)
+		pfDir := filepath.Join(sessionDir, entry.Name(), "pathflow")
+		if !session.IsPathflowActive(pfDir) {
+			continue // No active session.
+		}
+
+		statusPath := filepath.Join(pfDir, session.PathflowSessionStatusFile)
+		info, err := os.Stat(statusPath)
 		if err != nil {
-			continue // No active flag for this session.
+			continue
 		}
 
 		age := now.Sub(info.ModTime())

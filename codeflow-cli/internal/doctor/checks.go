@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/codeflow/codeflow-cli/internal/db"
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 // Status represents the outcome of a health check.
@@ -645,11 +646,10 @@ func checkVersion(_ context.Context, _ *Options) Result {
 // considered stuck. Set to half of stage_timeout_minutes (60 min / 2 = 30 min).
 const stuckThreshold = 30 * time.Minute
 
-// pathflowActive returns true if the pathflow-active flag exists for the session.
+// pathflowActive returns true if the session has an active PathFlow status.
 func pathflowActive(stateDir, sessionID string) bool {
-	flag := filepath.Join(stateDir, "session", sessionID, "pathflow", "is-pathflow-active")
-	_, err := os.Stat(flag)
-	return err == nil
+	pathflowDir := filepath.Join(stateDir, "session", sessionID, "pathflow")
+	return session.IsPathflowActive(pathflowDir)
 }
 
 // pathflowEvent represents a single entry from pathflow-events.jsonl.

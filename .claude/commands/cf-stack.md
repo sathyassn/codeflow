@@ -137,9 +137,9 @@ Next: No pipeline progression — standalone info command.
 
 **Step 2: Check PathFlow Session**
 
-- Check for `pathflow-active` flag at `/tmp/claude/managed/state/pathflow-active`
-- If absent: display "No active PathFlow session" with branch info and exit
-- If present: proceed to gather full state
+- Check for `pathflow-session-status.json` at `.state/session/{SID}/pathflow/pathflow-session-status.json`
+- If absent or status is `"pf-complete"`: display "No active PathFlow session" with branch info and exit
+- If present with active status: proceed to gather full state
 
 **Step 3: Gather Session State**
 
@@ -193,9 +193,8 @@ Sentinels:
   pathflow:ws-dev-done   present
   pathflow:ws-rev-done   absent
 
-Flags:
-  pathflow-active        /tmp/claude/managed/state/pathflow-active  present
-  is-pathflow-active     /tmp/claude/managed/state/is-pathflow-active  present
+Session Status:
+  pathflow-session-status.json  .state/session/{SID}/pathflow/pathflow-session-status.json  status: pf-in-progress
 
 Recent Events (last 5):
   2026-02-15T10:30:00  phase_transition  PF4-EXECUTE
@@ -257,8 +256,7 @@ This command reads session state files to display information. It does not modif
 
 | File | Purpose |
 |------|---------|
-| `/tmp/claude/managed/state/pathflow-active` | PathFlow session flag |
-| `/tmp/claude/managed/state/is-pathflow-active` | PathFlow mode flag |
+| `.state/session/{SID}/pathflow/pathflow-session-status.json` | PathFlow session status (status, team_name, phase, stage, timestamps) |
 | `.state/runtime/active-task.json` | Current task context |
 | `.state/runtime/current-session-id` | Session identity |
 | `.state/logs/pathflow-events.jsonl` | Phase/stage transition history |
@@ -273,7 +271,7 @@ This command reads session state files to display information. It does not modif
 | No runtime state | Session files missing or not initialized | Display "No active session" with branch info |
 | JSONL unreadable | Corrupted or empty event log | Display available state, note "Event log unavailable" |
 | Team config missing | Team not created or already dissolved | Display "No team active" |
-| Stale flag file | `pathflow-active` exists but session ended abnormally | Note staleness; suggest `/cf-doctor` for cleanup |
+| Stale session status | `pathflow-session-status.json` shows active status but session ended abnormally | Note staleness; suggest `/cf-doctor` for cleanup |
 
 **Recovery approach:** This command never fails -- it displays whatever state is available and notes what's missing.
 

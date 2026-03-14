@@ -11,8 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::HookError;
 use crate::hooks::{
-    HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo, ProcessChecker, SessionMeta,
-    TmuxChecker,
+    HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo, SessionMeta,
 };
 use crate::ledger::{Event, LedgerWriter};
 use crate::pathflow;
@@ -49,16 +48,14 @@ pub struct CleanupResult {
 /// Performs the 13-section cleanup flow: `PathFlow` guard, PF7 validation,
 /// sentinel cleanup, active task handling, team backstop, runtime cleanup,
 /// and ledger event writing.
-pub struct SessionEndCleanup<P: ProcessChecker, T: TmuxChecker> {
-    pub process_checker: P,
-    pub tmux_checker: T,
+pub struct SessionEndCleanup {
     pub home_dir: PathBuf,
     pub ppid: u32,
     pub now: NowFn,
 }
 
 #[allow(clippy::unused_self)]
-impl<P: ProcessChecker, T: TmuxChecker> SessionEndCleanup<P, T> {
+impl SessionEndCleanup {
     /// Run the full session-end cleanup flow.
     ///
     /// # Errors
@@ -133,99 +130,100 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionEndCleanup<P, T> {
         Ok(result)
     }
 
-    /// Check the `PathFlow` guard. Returns `true` if cleanup should be skipped
-    /// (teammate shutdown while lead/other teammates are still alive).
+    /// Check the `PathFlow` guard using multi-signal approach. Returns `true`
+    /// if cleanup should be skipped (session still active).
     ///
-    /// Uses tmux pane liveness (via team config) instead of PID checks.
-    /// If any tmux pane from the team config is alive, this is a teammate
-    /// shutdown while the session is still active -- skip cleanup.
+    /// Uses `pathflow-session-status.json` as the sole authority, with
+    /// team config existence as a secondary check.
     fn should_skip_cleanup(&self, session_state_dir: &Path, result: &mut CleanupResult) -> bool {
-        let flag_path = session_state_dir
-            .join("pathflow")
-            .join("is-pathflow-active");
-        if !flag_path.exists() {
-            return false;
-        }
+        let pathflow_dir = session_state_dir.join("pathflow");
+        let status_path = pathflow_dir.join("pathflow-session-status.json");
 
-        let team_file_path = session_state_dir
-            .join("pathflow")
-            .join("pathflow-team.json");
+        // Read the status file -- sole authority for session state.
+        let status_data = match fs::read_to_string(&status_path) {
+            Ok(data) => data,
+            Err(_) => {
+                // No status file -- no active PathFlow session, allow cleanup.
+                return false;
+            }
+        };
 
-        let Ok(team_data) = fs::read_to_string(&team_file_path) else {
+        let status: serde_json::Value = match serde_json::from_str(&status_data) {
+            Ok(v) => v,
+            Err(_) => {
+                result.messages.push(
+                    "SessionEnd: pathflow-session-status.json unreadable -- proceeding".into(),
+                );
+                return false;
+            }
+        };
+
+        let session_status = status
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Status "created" means no team was ever created -- safe to clean up.
+        if session_status == "created" {
             result.messages.push(
-                "SessionEnd: PathFlow active but no team file -- proceeding with cleanup".into(),
+                "SessionEnd: Session status is 'created' (no team) -- proceeding".into(),
             );
             return false;
-        };
+        }
 
-        let Ok(team_info) = serde_json::from_str::<PathflowTeamInfo>(&team_data) else {
-            result
-                .messages
-                .push("SessionEnd: PathFlow active but team file unreadable -- proceeding".into());
-            return false;
-        };
-
-        if team_info.team_name.is_empty() {
-            result
-                .messages
-                .push("SessionEnd: PathFlow active but team name empty -- proceeding".into());
+        // Status "pf-complete" means session finished normally -- clean up.
+        if session_status == "pf-complete" {
+            result.messages.push(
+                "SessionEnd: Session status is 'pf-complete' -- proceeding with cleanup".into(),
+            );
             return false;
         }
 
-        // Read the Claude Code team config to get tmux pane IDs.
+        // Status is "pf-started" or "pf-in-progress" -- session may be active.
+        let team_name = status
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if team_name.is_empty() {
+            result
+                .messages
+                .push("SessionEnd: Session active but no team name -- proceeding".into());
+            return false;
+        }
+
+        // Check if team config still exists (team not yet deleted).
         let config_path = self
             .home_dir
             .join(".claude")
             .join("teams")
-            .join(&team_info.team_name)
+            .join(team_name)
             .join("config.json");
 
-        let Ok(config_data) = fs::read_to_string(&config_path) else {
+        if !config_path.exists() {
             result.messages.push(format!(
-                "SessionEnd: PathFlow active but team config missing for '{}' -- proceeding",
-                team_info.team_name
+                "SessionEnd: Session active but team config gone for '{team_name}' -- proceeding"
             ));
             return false;
-        };
-
-        let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_data) else {
-            result.messages.push(format!(
-                "SessionEnd: PathFlow active but team config unreadable for '{}' -- proceeding",
-                team_info.team_name
-            ));
-            return false;
-        };
-
-        // Extract members array and check tmux pane liveness.
-        let Some(members) = config.get("members").and_then(serde_json::Value::as_array) else {
-            result.messages.push(
-                "SessionEnd: PathFlow active but no members in team config -- proceeding".into(),
-            );
-            return false;
-        };
-
-        let alive_count = members
-            .iter()
-            .filter(|m| {
-                m.get("tmuxPaneId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|id| !id.is_empty() && self.tmux_checker.is_pane_alive(id))
-            })
-            .count();
-
-        if alive_count > 0 {
-            result.messages.push(format!(
-                "SessionEnd: PathFlow active, {alive_count} tmux pane(s) alive -- skipping cleanup (teammate shutdown)"
-            ));
-            return true;
         }
 
-        // All panes dead -- orphaned session.
+        // Edge case: status stuck but PF7 already completed.
+        let last_phase = status
+            .get("last_completed_phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if last_phase == "pf-7" {
+            result.messages.push(
+                "SessionEnd: Status stuck but PF7 completed -- proceeding with cleanup".into(),
+            );
+            return false;
+        }
+
+        // All signals indicate active session -- skip cleanup.
         result.messages.push(format!(
-            "SessionEnd: PathFlow active but all {} tmux panes dead -- proceeding (orphaned session)",
-            members.len()
+            "SessionEnd: Session active (status={session_status}, team={team_name}, phase={last_phase}) -- skipping cleanup"
         ));
-        false
+        true
     }
 
     /// Validate PF7 completion (check for `pathflow-pf-7` sentinel).
@@ -454,7 +452,7 @@ impl<P: ProcessChecker, T: TmuxChecker> SessionEndCleanup<P, T> {
     }
 }
 
-impl<P: ProcessChecker, T: TmuxChecker> HookHandler for SessionEndCleanup<P, T> {
+impl HookHandler for SessionEndCleanup {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
         let project_dir = input.project_dir.as_deref().ok_or_else(|| {
             HookError::Config("project_dir required for session-end cleanup".into())
@@ -570,70 +568,14 @@ fn write_messages(writer: &mut dyn Write, messages: &[String]) -> Result<(), Hoo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::{ProcessChecker, TmuxChecker};
     use crate::types::SessionId;
-
-    struct MockProcessChecker {
-        alive_pids: Vec<u32>,
-    }
-
-    impl ProcessChecker for MockProcessChecker {
-        fn is_alive(&self, pid: u32) -> bool {
-            self.alive_pids.contains(&pid)
-        }
-    }
-
-    struct MockTmuxChecker {
-        alive_panes: Vec<String>,
-    }
-
-    impl MockTmuxChecker {
-        fn new() -> Self {
-            Self {
-                alive_panes: Vec::new(),
-            }
-        }
-
-        fn with_alive_panes(panes: Vec<String>) -> Self {
-            Self { alive_panes: panes }
-        }
-    }
-
-    impl TmuxChecker for MockTmuxChecker {
-        fn is_pane_alive(&self, pane_id: &str) -> bool {
-            self.alive_panes.iter().any(|p| p == pane_id)
-        }
-
-        fn list_panes(&self) -> Result<Vec<String>, HookError> {
-            Ok(self.alive_panes.clone())
-        }
-    }
 
     fn fixed_now() -> String {
         "2026-03-10T01:00:00Z".to_string()
     }
 
-    fn make_cleaner(
-        alive_pids: Vec<u32>,
-        home: PathBuf,
-    ) -> SessionEndCleanup<MockProcessChecker, MockTmuxChecker> {
+    fn make_cleaner(home: PathBuf) -> SessionEndCleanup {
         SessionEndCleanup {
-            process_checker: MockProcessChecker { alive_pids },
-            tmux_checker: MockTmuxChecker::new(),
-            home_dir: home,
-            ppid: 1000,
-            now: fixed_now,
-        }
-    }
-
-    fn make_cleaner_with_tmux(
-        alive_pids: Vec<u32>,
-        alive_panes: Vec<String>,
-        home: PathBuf,
-    ) -> SessionEndCleanup<MockProcessChecker, MockTmuxChecker> {
-        SessionEndCleanup {
-            process_checker: MockProcessChecker { alive_pids },
-            tmux_checker: MockTmuxChecker::with_alive_panes(alive_panes),
             home_dir: home,
             ppid: 1000,
             now: fixed_now,
@@ -705,7 +647,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -730,49 +672,49 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_skip_when_teammate() {
+    fn test_cleanup_skip_when_session_active() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        // Create pathflow-team.json with team name.
-        let team_dir = dir
+        // Create pathflow-session-status.json with active status.
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        let flag_path = team_dir.join("is-pathflow-active");
-        fs::write(&flag_path, b"{}").unwrap();
-
-        let team_info = PathflowTeamInfo {
-            lead_pid: 42,
-            team_name: "test-team".into(),
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "test-team",
+            "status": "pf-in-progress",
+            "last_completed_phase": "pf-4",
+            "last_completed_stage": "WS-DEV",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T00:30:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        // Create Claude Code team config with alive tmux pane.
+        // Create Claude Code team config so the team existence check passes.
         let config_dir = home.path().join(".claude").join("teams").join("test-team");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(
             config_dir.join("config.json"),
-            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%42"}]}"#,
+            r#"{"members": [{"name": "cf-dev"}]}"#,
         )
         .unwrap();
 
-        // Tmux pane %42 is alive.
-        let cleaner = make_cleaner_with_tmux(vec![], vec!["%42".into()], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Cleanup should be skipped (tmux pane alive).
+        // Cleanup should be skipped (session active with team config present).
         assert_eq!(result.sentinels_cleaned, 0);
         assert!(
             result
@@ -792,54 +734,45 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_proceeds_when_all_panes_dead() {
+    fn test_cleanup_proceeds_when_session_complete() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        // Create pathflow-team.json with team name.
-        let team_dir = dir
+        // Create pathflow-session-status.json with pf-complete status.
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        let flag_path = team_dir.join("is-pathflow-active");
-        fs::write(&flag_path, b"{}").unwrap();
-
-        let team_info = PathflowTeamInfo {
-            lead_pid: 99999,
-            team_name: "test-team".into(),
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "test-team",
+            "status": "pf-complete",
+            "last_completed_phase": "pf-7",
+            "last_completed_stage": "WS-QA",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T01:00:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        // Create Claude Code team config with dead tmux panes.
-        let config_dir = home.path().join(".claude").join("teams").join("test-team");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(
-            config_dir.join("config.json"),
-            r#"{"members": [{"name": "cf-dev", "tmuxPaneId": "%dead1"}, {"name": "cf-rev", "tmuxPaneId": "%dead2"}]}"#,
-        )
-        .unwrap();
-
-        // No tmux panes alive.
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Cleanup should proceed (all panes dead = orphaned session).
+        // Cleanup should proceed (session completed normally).
         assert!(
             result
                 .messages
                 .iter()
-                .any(|m| m.contains("orphaned session"))
+                .any(|m| m.contains("pf-complete"))
         );
         assert!(result.sentinels_cleaned > 0);
     }
@@ -860,7 +793,7 @@ mod tests {
         pathflow::sentinel::create_sentinel(&sentinel_dir, crate::types::Sentinel::PathflowPf7)
             .unwrap();
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -899,7 +832,7 @@ mod tests {
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -918,7 +851,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         // No env file exists.
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -931,7 +864,7 @@ mod tests {
     #[test]
     fn test_cleanup_handler_trait_error_on_missing_project_dir() {
         let home = tempfile::tempdir().unwrap();
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = HookInput {
             tool_name: None,
             tool_input: None,
@@ -953,196 +886,231 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_skip_missing_team_config() {
+    fn test_cleanup_proceeds_when_team_config_gone() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        // Create pathflow-team.json but NO team config directory.
-        let team_dir = dir
+        // Create status file claiming active, but NO team config directory.
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        fs::write(team_dir.join("is-pathflow-active"), b"{}").unwrap();
-
-        let team_info = PathflowTeamInfo {
-            team_name: "missing-team".into(),
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "missing-team",
+            "status": "pf-in-progress",
+            "last_completed_phase": "pf-3",
+            "last_completed_stage": "",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T00:15:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Should proceed with cleanup (team config missing).
+        // Should proceed with cleanup (team config gone).
         assert!(
             result
                 .messages
                 .iter()
-                .any(|m| m.contains("team config missing"))
+                .any(|m| m.contains("team config gone"))
         );
         assert!(result.sentinels_cleaned > 0);
     }
 
     #[test]
-    fn test_cleanup_skip_empty_team_name() {
+    fn test_cleanup_proceeds_when_empty_team_name() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        let team_dir = dir
+        // Create status file with active status but empty team_name.
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        fs::write(team_dir.join("is-pathflow-active"), b"{}").unwrap();
-
-        // Team info with empty team_name.
-        let team_info = PathflowTeamInfo {
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "",
+            "status": "pf-started",
+            "last_completed_phase": "",
+            "last_completed_stage": "",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T00:05:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Should proceed with cleanup (team name empty).
+        // Should proceed with cleanup (no team name).
         assert!(
             result
                 .messages
                 .iter()
-                .any(|m| m.contains("team name empty"))
+                .any(|m| m.contains("no team name"))
         );
         assert!(result.sentinels_cleaned > 0);
     }
 
     #[test]
-    fn test_cleanup_skip_no_members_in_config() {
+    fn test_cleanup_proceeds_when_status_created() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        let team_dir = dir
+        // Create status file with "created" status (no team ever created).
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        fs::write(team_dir.join("is-pathflow-active"), b"{}").unwrap();
-
-        let team_info = PathflowTeamInfo {
-            team_name: "empty-team".into(),
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "",
+            "status": "created",
+            "last_completed_phase": "",
+            "last_completed_stage": "",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T00:00:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        // Create team config with empty members array.
-        let config_dir = home.path().join(".claude").join("teams").join("empty-team");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
-
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Empty members means no panes alive -> should proceed with cleanup.
-        // The code will find 0 alive out of 0 total and say "orphaned session".
+        // Should proceed with cleanup (status is "created").
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("created"))
+        );
         assert!(result.sentinels_cleaned > 0);
     }
 
     #[test]
-    fn test_cleanup_skip_mixed_panes_some_alive() {
+    fn test_cleanup_proceeds_when_pf7_stuck_status() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
-        let team_dir = dir
+        // Create status file with active status but last_completed_phase = PF7
+        // (status stuck at pf-in-progress but PF7 already done).
+        let pathflow_dir = dir
             .path()
             .join(".state")
             .join("session")
             .join(&session_id)
             .join("pathflow");
-        fs::write(team_dir.join("is-pathflow-active"), b"{}").unwrap();
-
-        let team_info = PathflowTeamInfo {
-            team_name: "mixed-team".into(),
-            ..Default::default()
-        };
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "stuck-team",
+            "status": "pf-in-progress",
+            "last_completed_phase": "pf-7",
+            "last_completed_stage": "WS-QA",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T01:00:00Z",
+        });
         fs::write(
-            team_dir.join("pathflow-team.json"),
-            serde_json::to_string(&team_info).unwrap(),
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
 
-        // Team config with 3 members, only 1 alive.
-        let config_dir = home.path().join(".claude").join("teams").join("mixed-team");
+        // Team config exists.
+        let config_dir = home.path().join(".claude").join("teams").join("stuck-team");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(
             config_dir.join("config.json"),
-            r#"{"members": [
-                {"name": "cf-dev", "tmuxPaneId": "%alive1"},
-                {"name": "cf-rev", "tmuxPaneId": "%dead1"},
-                {"name": "cf-sec", "tmuxPaneId": "%dead2"}
-            ]}"#,
+            r#"{"members": [{"name": "cf-dev"}]}"#,
         )
         .unwrap();
 
-        // Only %alive1 is alive.
-        let cleaner =
-            make_cleaner_with_tmux(vec![], vec!["%alive1".into()], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Should skip cleanup (1 pane still alive).
-        assert_eq!(result.sentinels_cleaned, 0);
+        // Should proceed with cleanup (PF7 completed, status just stuck).
         assert!(
             result
                 .messages
                 .iter()
-                .any(|m| m.contains("1 tmux pane(s) alive"))
+                .any(|m| m.contains("PF7 completed"))
         );
+        assert!(result.sentinels_cleaned > 0);
     }
 
     #[test]
-    fn test_cleanup_no_pathflow_active_flag() {
+    fn test_cleanup_no_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         setup_session(dir.path());
 
-        // No is-pathflow-active flag -- should proceed normally.
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        // No pathflow-session-status.json and no legacy flag -- should proceed.
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Should proceed with cleanup (no pathflow active).
+        // Should proceed with cleanup (no status file present).
         assert!(result.sentinels_cleaned > 0);
+    }
+
+    #[test]
+    fn test_cleanup_no_status_file_allows_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        // No status file -- cleanup should proceed (no active PathFlow session).
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&session_id)
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // No status file means no active session -- cleanup proceeds.
+        assert_eq!(result.session_id, session_id);
     }
 
     // --- SessionEndLogging tests ---
@@ -1271,7 +1239,7 @@ mod tests {
         fs::write(&lock_path, b"").unwrap();
         assert!(lock_path.exists(), "lock file should exist before cleanup");
 
-        let cleaner = make_cleaner(vec![], home.path().to_path_buf());
+        let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();

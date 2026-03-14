@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 // PrePushResult describes the outcome of the pre-push check.
@@ -157,9 +159,21 @@ func isForcePush(localSHA, remoteSHA string) bool {
 }
 
 func isPathFlowActive(projectDir string) bool {
-	pattern := filepath.Join(projectDir, ".state", "session", "*", "pathflow", "is-pathflow-active")
-	matches, _ := filepath.Glob(pattern)
-	return len(matches) > 0
+	sessionBase := filepath.Join(projectDir, ".state", "session")
+	entries, err := os.ReadDir(sessionBase)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pfDir := filepath.Join(sessionBase, e.Name(), "pathflow")
+		if session.IsPathflowActive(pfDir) {
+			return true
+		}
+	}
+	return false
 }
 
 // tryTTYOverride attempts to open /dev/tty for interactive override.

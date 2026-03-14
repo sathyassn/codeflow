@@ -253,16 +253,17 @@ func TestIsPathFlowActive_WithState(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	stateDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	pfDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := `{"session_id":"ses-123","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if !isPathFlowActive(dir) {
-		t.Error("expected true when pathflow state file exists")
+		t.Error("expected true when session status file is active")
 	}
 }
 
@@ -296,12 +297,13 @@ func TestRunPrePush_ProtectedBranch_PathFlowActive(t *testing.T) {
 	policy := testPolicy()
 	dir := t.TempDir()
 
-	// Create pathflow-active file.
-	stateDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	// Create active session status file.
+	pfDir := filepath.Join(dir, ".state", "session", "ses-123", "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
+	statusJSON := `{"session_id":"ses-123","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

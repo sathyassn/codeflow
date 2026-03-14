@@ -17,13 +17,14 @@ func setupPathFlowFixtures(t *testing.T, sid string) string {
 	t.Helper()
 	root := t.TempDir()
 
-	// Create pathflow-active flag.
-	flagDir := filepath.Join(root, ".state", "session", sid, "pathflow")
-	if err := os.MkdirAll(flagDir, 0o755); err != nil {
-		t.Fatalf("creating flag dir: %v", err)
+	// Create session status file.
+	pfDir := filepath.Join(root, ".state", "session", sid, "pathflow")
+	if err := os.MkdirAll(pfDir, 0o755); err != nil {
+		t.Fatalf("creating pathflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(flagDir, "is-pathflow-active"), []byte("1"), 0o644); err != nil {
-		t.Fatalf("creating flag file: %v", err)
+	statusJSON := `{"session_id":"` + sid + `","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(filepath.Join(pfDir, "pathflow-session-status.json"), []byte(statusJSON), 0o644); err != nil {
+		t.Fatalf("creating status file: %v", err)
 	}
 
 	// Create sentinel directory.

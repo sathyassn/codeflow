@@ -187,11 +187,11 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 
 **Check 5: PathFlow State Consistency**
 
-- If `pathflow-active` flag exists:
+- If `pathflow-session-status.json` exists with status not `"pf-complete"`:
   - Verify `current-session-id` exists and matches
   - Verify `active-task.json` exists and is well-formed
-  - Check that JSONL events are consistent with flag state
-- If no flag: verify no orphaned runtime state exists
+  - Check that JSONL events are consistent with session status
+- If no active session: verify no orphaned runtime state exists
 
 **Check 6: Sentinel Integrity**
 
@@ -206,12 +206,12 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - Verify each registered teammate is reachable (SendMessage ping)
 - Report unresponsive or shut-down teammates
 
-**Check 8: Flag File State**
+**Check 8: Session Status State**
 
-- Check `/tmp/claude/managed/state/pathflow-active`
-- Check `/tmp/claude/managed/state/is-pathflow-active`
-- Verify flags are consistent with session state
-- Detect stale flags from previous sessions
+- Check `.state/session/{SID}/pathflow/pathflow-session-status.json`
+- Verify status field is one of: `created`, `pf-started`, `pf-in-progress`, `pf-complete`
+- Verify status is consistent with active session state
+- Detect stale status from previous sessions
 
 **Check 9: JSONL Integrity**
 
@@ -241,7 +241,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | Issue | Automatic Repair | Manual Fallback |
 |-------|-----------------|-----------------|
 | Missing directory | Create directory | `mkdir -p {path}` |
-| Stale pathflow-active flag | Remove flag file | `rm /tmp/claude/managed/state/pathflow-active` |
+| Stale session status | Set status to `"pf-complete"` in pathflow-session-status.json | Trigger PF7-END flow |
 | Orphaned sentinels | Remove orphaned files | `rm .state/sentinels/{orphan}` |
 | Missing runtime files | Create empty defaults | Manually initialize |
 | Database locked | Copy to backup, recreate | Rebuild from JSONL |
@@ -290,8 +290,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | `.state/runtime/active-task.json` | Runtime state check |
 | `.state/runtime/current-session-id` | Session identity check |
 | `.state/sentinels/*` | Sentinel integrity check |
-| `/tmp/claude/managed/state/pathflow-active` | Flag state check |
-| `/tmp/claude/managed/state/is-pathflow-active` | Mode flag check |
+| `.state/session/{SID}/pathflow/pathflow-session-status.json` | Session status check |
 | `.claude/settings.json` | Settings validation |
 | `.claude/agents/cf-*.md` | Agent definition validation |
 | `.claude/settings.json` (hooks section) | Hook subcommand validation |
@@ -300,7 +299,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 
 | File | Repair Action |
 |------|---------------|
-| `/tmp/claude/managed/state/pathflow-active` | Remove stale flag |
+| `.state/session/{SID}/pathflow/pathflow-session-status.json` | Set status to `"pf-complete"` for stale sessions |
 | `.state/sentinels/*` | Remove orphaned sentinels |
 | `.state/runtime/active-task.json` | Remove stale runtime state |
 
@@ -327,7 +326,7 @@ ON "Database corruption":
   4. If rebuild fails: start with empty database
 
 ON "Stale session state" (with --repair):
-  1. Remove /tmp/claude/managed/state/pathflow-active
+  1. Set status to "pf-complete" in .state/session/{SID}/pathflow/pathflow-session-status.json
   2. Remove .state/runtime/active-task.json
   3. Clear orphaned sentinels from .state/sentinels/
   4. Log cleanup to pathflow-events.jsonl
@@ -394,15 +393,15 @@ CodeFlow Health Check (repair mode)
   Database health         PASS
   Hook subcommands        PASS
   Settings files          PASS
-  PathFlow state          FAIL  Stale pathflow-active flag (no matching session)
+  PathFlow state          FAIL  Stale session status (no matching active session)
   Sentinel integrity      FAIL  2 orphaned sentinels found
   Teammate status         N/A   No active team
-  Flag file state         FAIL  Stale flag files detected
+  Session status state    FAIL  Stale session status detected
   JSONL integrity         PASS
   Agent definitions       PASS
 
 Repairing...
-  Removed stale pathflow-active flag
+  Set stale session status to "pf-complete"
   Removed orphaned sentinel: pathflow:ws-dev-done
   Removed orphaned sentinel: pathflow:pf-3
   Cleaned stale runtime files

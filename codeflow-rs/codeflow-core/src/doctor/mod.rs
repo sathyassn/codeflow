@@ -636,12 +636,20 @@ struct PathflowEvent {
 }
 
 fn pathflow_active(state_dir: &str, session_id: &str) -> bool {
-    let flag = Path::new(state_dir)
+    let pathflow_dir = Path::new(state_dir)
         .join("session")
         .join(session_id)
-        .join("pathflow")
-        .join("is-pathflow-active");
-    flag.exists()
+        .join("pathflow");
+
+    // Check status file (sole authority).
+    let status_path = pathflow_dir.join("pathflow-session-status.json");
+    if let Ok(data) = std::fs::read_to_string(&status_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+            let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            return !status.is_empty() && status != "pf-complete";
+        }
+    }
+    false
 }
 
 fn read_pathflow_events(state_dir: &str) -> Result<Vec<PathflowEvent>, String> {
@@ -1526,7 +1534,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let flag_dir = dir.path().join("session").join("ses-123").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         assert!(pathflow_active(&dir.path().to_string_lossy(), "ses-123"));
     }
@@ -1567,7 +1575,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create recent event
         let logs_dir = state_dir.join("logs");
@@ -1594,7 +1602,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create old event (2 hours ago)
         let logs_dir = state_dir.join("logs");
@@ -1621,7 +1629,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create events file with no phase_transition events
         let logs_dir = state_dir.join("logs");
@@ -1646,7 +1654,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create recent event at PF2-CONTEXT
         let logs_dir = state_dir.join("logs");
@@ -1679,7 +1687,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create event at PF2-CONTEXT
         let logs_dir = state_dir.join("logs");
@@ -1928,7 +1936,7 @@ mod tests {
         // Create active flag
         let flag_dir = state_dir.join("session").join("ses-1").join("pathflow");
         std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("is-pathflow-active"), "").unwrap();
+        std::fs::write(flag_dir.join("pathflow-session-status.json"), r#"{"status":"pf-in-progress"}"#).unwrap();
 
         // Create event with unknown phase
         let logs_dir = state_dir.join("logs");

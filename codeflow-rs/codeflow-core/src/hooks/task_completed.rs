@@ -77,7 +77,30 @@ impl HookHandler for CheckpointComplete {
 
         let cp = Checkpoint::new();
         match cp.complete_task(&checkpoint_path, &sentinel_dir, &task_id) {
-            Ok(()) => Ok(HookOutput::Allow),
+            Ok(()) => {
+                // Extract phase number from task_id (e.g., "PF4-TSK-05" -> "pf-4")
+                // and update session status with last completed phase.
+                if let Some(pf_num) = task_id.split('-').next() {
+                    let session_dir = self
+                        .project_dir
+                        .join(".state")
+                        .join("session")
+                        .join(sid.as_ref())
+                        .join("pathflow");
+                    // Convert "PF4" -> "pf-4" to match Go format.
+                    let phase_normalized = format!("pf-{}", &pf_num[2..]);
+                    if sentinel::check_by_name(&sentinel_dir, &phase_normalized) {
+                        crate::hooks::post_tool_use::update_session_status(
+                            &session_dir,
+                            &serde_json::json!({
+                                "last_completed_phase": phase_normalized,
+                                "status": "pf-in-progress",
+                            }),
+                        );
+                    }
+                }
+                Ok(HookOutput::Allow)
+            }
             Err(e) => {
                 // Non-blocking: warn but allow through.
                 Ok(HookOutput::Warn {

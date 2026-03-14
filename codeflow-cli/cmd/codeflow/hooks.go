@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/codeflow/codeflow-cli/internal/hooks/gate"
 	"github.com/codeflow/codeflow-cli/internal/hooks/ghpr"
@@ -205,14 +206,14 @@ func detectCurrentBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-// detectPathFlowActive checks if a PathFlow session is active.
+// detectPathFlowActive checks if a PathFlow session is active using the
+// session status file (pathflow-session-status.json).
 func detectPathFlowActive(projectDir, sessionID string) bool {
 	if sessionID == "" {
 		return false
 	}
-	flagPath := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow", "is-pathflow-active")
-	_, err := os.Stat(flagPath)
-	return err == nil
+	pathflowDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+	return session.IsPathflowActive(pathflowDir)
 }
 
 // newGateCheckCmd creates the "gate-check" subcommand that enforces
@@ -674,19 +675,17 @@ Stdin format:
 
 // runSentinelWrite implements the stage sentinel creation logic.
 // It handles four event types:
-//   - SendMessage with STAGE-COMPLETE pattern -> creates stage sentinels
-//   - TeamCreate -> creates pathflow-team.json
+//   - SendMessage with STAGE-COMPLETE pattern -> creates stage sentinels + updates status
+//   - TeamCreate -> creates pathflow-team.json + updates status to pf-started
 //   - Task (teammate spawn) -> updates pathflow-team.json
 //   - TeamDelete -> cleans up PathFlow state via HandlePostTeamDelete
 func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	sessionID := resolveSessionID(projectDir)
 	if sessionID == "" {
-		// No session ID — no PathFlow, allow.
 		return nil
 	}
 
-	// Read stdin once — multiple handlers need the data.
 	data, err := io.ReadAll(stdin)
 	if err != nil || len(data) == 0 {
 		return nil
@@ -697,7 +696,6 @@ func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 
 	// Check for TeamDelete — dispatch to post-team-delete cleanup.
 	if isTeamDeleteEvent(data) {
-		// Non-fatal: errors are logged internally.
 		_ = team.HandlePostTeamDelete(sessionDir, projectDir, sessionID)
 		return nil
 	}
@@ -705,12 +703,14 @@ func runSentinelWrite(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	// Dispatch: stage sentinel (SendMessage), team create, or teammate spawn.
 	verdict := sentinel.CheckAndCreateStageSentinelFromData(data, sentinelDir)
 	if verdict.Allow {
-		// Also try TeamCreate and Task handlers (only one will match).
+		// Update session status with last_completed_stage for stage sentinels.
+		sentinel.HandleStageSentinelStatus(data, sessionDir)
+
+		// TeamCreate now also updates status to "pf-started" with team_name.
 		v := sentinel.HandleTeamCreate(data, sessionDir, sessionID)
 		if v.Allow {
 			v = sentinel.HandleTeammateSpawn(data, sessionDir)
 		}
-		// Team handlers never block — ignore their verdicts for blocking.
 		_ = v
 	}
 
@@ -800,6 +800,8 @@ Stdin format:
 }
 
 // runHookCheckpointComplete implements the hook-based checkpoint task completion logic.
+// After phase sentinel creation, updates pathflow-session-status.json with
+// status="pf-in-progress" and last_completed_phase.
 func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	sessionID := resolveSessionID(projectDir)
@@ -810,7 +812,25 @@ func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) err
 	sessionDir := filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 
+	// Snapshot existing phase sentinels before the checkpoint runs.
+	beforeSentinels := listPhaseSentinels(sentinelDir)
+
 	verdict := sentinel.CompleteCheckpointTask(stdin, sessionDir, sentinelDir)
+
+	// Check if a new phase sentinel was created and update status.
+	afterSentinels := listPhaseSentinels(sentinelDir)
+	for phase := range afterSentinels {
+		if !beforeSentinels[phase] {
+			// New phase sentinel created — update session status.
+			_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
+				if s.Status == "created" || s.Status == "pf-started" {
+					s.Status = "pf-in-progress"
+				}
+				s.LastCompletedPhase = phase
+			})
+			break
+		}
+	}
 
 	if !verdict.Allow {
 		fmt.Fprint(errW, verdict.Reason)
@@ -818,6 +838,24 @@ func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) err
 	}
 
 	return nil
+}
+
+// listPhaseSentinels returns a set of phase sentinel names (e.g., "pf-1", "pf-2")
+// that exist in the sentinel directory.
+func listPhaseSentinels(sentinelDir string) map[string]bool {
+	result := make(map[string]bool)
+	entries, err := os.ReadDir(sentinelDir)
+	if err != nil {
+		return result
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "pathflow-pf-") {
+			phase := strings.TrimPrefix(name, "pathflow-")
+			result[phase] = true
+		}
+	}
+	return result
 }
 
 // newHookSessionEndCmd creates the "session-end" subcommand group under hooks.

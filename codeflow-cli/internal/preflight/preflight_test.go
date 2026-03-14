@@ -170,21 +170,22 @@ func TestRunStaleSessionDetected(t *testing.T) {
 	t.Parallel()
 	root := setupProject(t)
 
-	// Create a stale session with an old pathflow-active flag.
+	// Create a stale session with an active status file.
 	sessionDir := filepath.Join(root, SessionDir, "ses-oldsession123")
 	pfDir := filepath.Join(sessionDir, "pathflow")
 	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatalf("creating session dir: %v", err)
 	}
 
-	flagPath := filepath.Join(pfDir, "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte("1"), 0o644); err != nil {
-		t.Fatalf("writing flag: %v", err)
+	statusPath := filepath.Join(pfDir, "pathflow-session-status.json")
+	statusJSON := `{"session_id":"ses-oldsession123","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(statusPath, []byte(statusJSON), 0o644); err != nil {
+		t.Fatalf("writing status file: %v", err)
 	}
 
 	// Set the file modification time to 48 hours ago to make it stale.
 	staleTime := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(flagPath, staleTime, staleTime); err != nil {
+	if err := os.Chtimes(statusPath, staleTime, staleTime); err != nil {
 		t.Fatalf("setting file time: %v", err)
 	}
 
@@ -283,16 +284,17 @@ func TestRunStaleSessionFreshNotDetected(t *testing.T) {
 	t.Parallel()
 	root := setupProject(t)
 
-	// Create a fresh session with a recent pathflow-active flag.
+	// Create a fresh session with a recent status file.
 	sessionDir := filepath.Join(root, SessionDir, "ses-freshsession123")
 	pfDir := filepath.Join(sessionDir, "pathflow")
 	if err := os.MkdirAll(pfDir, 0o755); err != nil {
 		t.Fatalf("creating session dir: %v", err)
 	}
 
-	flagPath := filepath.Join(pfDir, "is-pathflow-active")
-	if err := os.WriteFile(flagPath, []byte("1"), 0o644); err != nil {
-		t.Fatalf("writing flag: %v", err)
+	statusPath := filepath.Join(pfDir, "pathflow-session-status.json")
+	statusJSON := `{"session_id":"ses-freshsession123","status":"pf-in-progress","team_name":"test"}`
+	if err := os.WriteFile(statusPath, []byte(statusJSON), 0o644); err != nil {
+		t.Fatalf("writing status file: %v", err)
 	}
 	// File mod time is "now" -- it should NOT be detected as stale.
 
@@ -448,12 +450,13 @@ func TestRunMultipleStaleSessionsMixed(t *testing.T) {
 		if err := os.MkdirAll(pfDir, 0o755); err != nil {
 			t.Fatalf("creating session dir %s: %v", tc.name, err)
 		}
-		flagPath := filepath.Join(pfDir, "is-pathflow-active")
-		if err := os.WriteFile(flagPath, []byte("1"), 0o644); err != nil {
-			t.Fatalf("writing flag %s: %v", tc.name, err)
+		statusPath := filepath.Join(pfDir, "pathflow-session-status.json")
+		statusJSON := fmt.Sprintf(`{"session_id":"%s","status":"pf-in-progress","team_name":"test"}`, tc.name)
+		if err := os.WriteFile(statusPath, []byte(statusJSON), 0o644); err != nil {
+			t.Fatalf("writing status %s: %v", tc.name, err)
 		}
 		modTime := time.Now().Add(-tc.age)
-		if err := os.Chtimes(flagPath, modTime, modTime); err != nil {
+		if err := os.Chtimes(statusPath, modTime, modTime); err != nil {
 			t.Fatalf("setting time %s: %v", tc.name, err)
 		}
 	}
