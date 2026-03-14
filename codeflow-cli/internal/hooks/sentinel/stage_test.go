@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 )
 
 func TestCheckAndCreateStageSentinel(t *testing.T) {
@@ -875,4 +877,69 @@ func TestAtomicWriteFile_WriteError(t *testing.T) {
 	if string(data) != "updated" {
 		t.Errorf("content = %q, want %q", string(data), "updated")
 	}
+}
+
+func TestHandleStageSentinelStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("updates last_completed_stage on STAGE-COMPLETE", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+
+		// Pre-create status file.
+		status := &session.PathflowSessionStatus{
+			SessionID: "ses-test",
+			Status:    "pf-in-progress",
+			TeamName:  "test-team",
+		}
+		if err := session.WritePathflowSessionStatus(sessionDir, status); err != nil {
+			t.Fatal(err)
+		}
+
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`)
+		HandleStageSentinelStatus(data, sessionDir)
+
+		updated, err := session.ReadPathflowSessionStatus(sessionDir)
+		if err != nil {
+			t.Fatalf("reading status: %v", err)
+		}
+		if updated.LastCompletedStage != "ws-dev" {
+			t.Errorf("LastCompletedStage = %q, want %q", updated.LastCompletedStage, "ws-dev")
+		}
+	})
+
+	t.Run("no-op for non-SendMessage", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+
+		data := []byte(`{"tool_name":"Edit","tool_input":{"file_path":"/tmp/x"}}`)
+		HandleStageSentinelStatus(data, sessionDir)
+
+		// No status file should be created.
+		s, _ := session.ReadPathflowSessionStatus(sessionDir)
+		if s != nil {
+			t.Error("status file should not be created for non-SendMessage")
+		}
+	})
+
+	t.Run("no-op for non-STAGE-COMPLETE message", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := t.TempDir()
+
+		status := &session.PathflowSessionStatus{
+			SessionID: "ses-test",
+			Status:    "pf-in-progress",
+		}
+		if err := session.WritePathflowSessionStatus(sessionDir, status); err != nil {
+			t.Fatal(err)
+		}
+
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"Hello world"}}`)
+		HandleStageSentinelStatus(data, sessionDir)
+
+		updated, _ := session.ReadPathflowSessionStatus(sessionDir)
+		if updated.LastCompletedStage != "" {
+			t.Errorf("LastCompletedStage = %q, want empty", updated.LastCompletedStage)
+		}
+	})
 }

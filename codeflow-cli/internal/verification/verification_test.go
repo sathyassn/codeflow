@@ -60,7 +60,7 @@ func TestPostCutoverLifecycle(t *testing.T) {
 	}
 
 	// Step 3: STAGE-COMPLETE: WS-DEV creates sentinel.
-	devData := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+	devData := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`)
 	v = sentinel.CheckAndCreateStageSentinelFromData(devData, sentinelDir)
 	if !v.Allow {
 		t.Fatalf("WS-DEV blocked: %s", v.Reason)
@@ -68,7 +68,7 @@ func TestPostCutoverLifecycle(t *testing.T) {
 	assertSentinelExists(t, sentinelDir, "pathflow-ws-dev")
 
 	// Step 4: STAGE-COMPLETE: WS-REV (requires ws-dev).
-	revData := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`)
+	revData := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`)
 	v = sentinel.CheckAndCreateStageSentinelFromData(revData, sentinelDir)
 	if !v.Allow {
 		t.Fatalf("WS-REV blocked: %s", v.Reason)
@@ -76,7 +76,7 @@ func TestPostCutoverLifecycle(t *testing.T) {
 	assertSentinelExists(t, sentinelDir, "pathflow-ws-rev")
 
 	// Step 5: STAGE-COMPLETE: WS-QA (requires ws-dev).
-	qaData := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA"}}`)
+	qaData := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA"}}`)
 	v = sentinel.CheckAndCreateStageSentinelFromData(qaData, sentinelDir)
 	if !v.Allow {
 		t.Fatalf("WS-QA blocked: %s", v.Reason)

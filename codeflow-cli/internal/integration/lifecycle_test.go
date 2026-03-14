@@ -332,7 +332,7 @@ func TestFullPathFlowLifecycle(t *testing.T) {
 
 	// ---- Sentinel pipeline: WS-DEV stage sentinel creation ----
 	// Simulate WS-DEV completion via PostToolUse hook.
-	wsDevStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV -- implementation complete"}}`)
+	wsDevStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV -- implementation complete"}}`)
 	wsDevVerdict := sentinel.CheckAndCreateStageSentinel(wsDevStdin, sentDir)
 	if !wsDevVerdict.Allow {
 		t.Errorf("WS-DEV stage sentinel creation blocked: %s", wsDevVerdict.Reason)
@@ -343,7 +343,7 @@ func TestFullPathFlowLifecycle(t *testing.T) {
 
 	// ---- Sentinel pipeline: WS-REV requires prior primary stage ----
 	// WS-REV should be allowed now that ws-dev exists.
-	wsRevStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved"}}`)
+	wsRevStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV -- review approved"}}`)
 	wsRevVerdict := sentinel.CheckAndCreateStageSentinel(wsRevStdin, sentDir)
 	if !wsRevVerdict.Allow {
 		t.Errorf("WS-REV stage sentinel creation blocked: %s", wsRevVerdict.Reason)
@@ -353,7 +353,7 @@ func TestFullPathFlowLifecycle(t *testing.T) {
 	}
 
 	// ---- Sentinel pipeline: WS-QA requires ws-dev or ws-test ----
-	wsQaStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- all tests pass"}}`)
+	wsQaStdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA -- all tests pass"}}`)
 	wsQaVerdict := sentinel.CheckAndCreateStageSentinel(wsQaStdin, sentDir)
 	if !wsQaVerdict.Allow {
 		t.Errorf("WS-QA stage sentinel creation blocked: %s", wsQaVerdict.Reason)
@@ -745,7 +745,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		t.Parallel()
 
 		sentDir := t.TempDir()
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV -- all done"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV -- all done"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("expected Allow=true, got reason: %s", verdict.Reason)
@@ -759,7 +759,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		t.Parallel()
 
 		sentDir := t.TempDir()
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-TEST -- tests implemented"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-TEST -- tests implemented"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("expected Allow=true, got reason: %s", verdict.Reason)
@@ -773,7 +773,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		t.Parallel()
 
 		sentDir := t.TempDir()
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DOCS -- documentation updated"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DOCS -- documentation updated"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("expected Allow=true, got reason: %s", verdict.Reason)
@@ -787,7 +787,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		t.Parallel()
 
 		sentDir := t.TempDir()
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"Task completed successfully"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"Task completed successfully"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("expected Allow=true for non-stage message")
@@ -804,7 +804,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 
 		sentDir := t.TempDir()
 		// No ws-dev/ws-test/ws-docs/ws-plan sentinels exist.
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review done"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV -- review done"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if verdict.Allow {
 			t.Error("WS-REV should be BLOCKED without prior primary stage sentinel")
@@ -822,7 +822,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(sentDir, "pathflow-ws-dev"), []byte("1"), 0o644); err != nil {
 			t.Fatalf("create ws-dev sentinel: %v", err)
 		}
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV -- review approved"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV -- review approved"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("WS-REV should be ALLOWED after ws-dev; reason: %s", verdict.Reason)
@@ -836,7 +836,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		t.Parallel()
 
 		sentDir := t.TempDir()
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- all tests pass"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA -- all tests pass"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if verdict.Allow {
 			t.Error("WS-QA should be BLOCKED without ws-dev or ws-test sentinel")
@@ -851,7 +851,7 @@ func TestSentinelPipelineIndependent(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(sentDir, "pathflow-ws-test"), []byte("1"), 0o644); err != nil {
 			t.Fatalf("create ws-test sentinel: %v", err)
 		}
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA -- tests pass"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA -- tests pass"}}`)
 		verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentDir)
 		if !verdict.Allow {
 			t.Errorf("WS-QA should be ALLOWED after ws-test; reason: %s", verdict.Reason)
