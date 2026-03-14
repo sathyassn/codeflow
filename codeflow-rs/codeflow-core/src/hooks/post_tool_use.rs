@@ -136,12 +136,13 @@ impl SentinelWrite {
             .map_err(|e| HookError::Config(format!("sentinel creation failed: {e}")))?;
 
         // Update session status with completed stage.
+        // Only set last_completed_stage — status is driven by phase checkpoint
+        // completion, not stage completion (matches Go stage.go:170).
         if let Ok((session_dir, _)) = self.session_pathflow_dir() {
             update_session_status(
                 &session_dir,
                 &serde_json::json!({
                     "last_completed_stage": format!("ws-{}", stage_lower),
-                    "status": "pf-in-progress",
                 }),
             );
         }

@@ -90,12 +90,33 @@ impl HookHandler for CheckpointComplete {
                     // Convert "PF4" -> "pf-4" to match Go format.
                     let phase_normalized = format!("pf-{}", &pf_num[2..]);
                     if sentinel::check_by_name(&sentinel_dir, &phase_normalized) {
+                        // Only advance status to "pf-in-progress" if current status
+                        // is "created" or "pf-started". Guard prevents a late
+                        // TaskCompleted from overwriting "pf-complete" in a race
+                        // (matches Go hooks.go:826).
+                        let status_path =
+                            session_dir.join("pathflow-session-status.json");
+                        let should_set_status =
+                            std::fs::read_to_string(&status_path).ok().and_then(|data| {
+                                serde_json::from_str::<serde_json::Value>(&data)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("status")
+                                            .and_then(|s| s.as_str())
+                                            .map(|s| s == "created" || s == "pf-started")
+                                    })
+                            }).unwrap_or(false);
+
+                        let mut updates = serde_json::json!({
+                            "last_completed_phase": phase_normalized,
+                        });
+                        if should_set_status {
+                            updates["status"] =
+                                serde_json::Value::String("pf-in-progress".into());
+                        }
                         crate::hooks::post_tool_use::update_session_status(
                             &session_dir,
-                            &serde_json::json!({
-                                "last_completed_phase": phase_normalized,
-                                "status": "pf-in-progress",
-                            }),
+                            &updates,
                         );
                     }
                 }
