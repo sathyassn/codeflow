@@ -362,7 +362,7 @@ Dual-ID system:
 - `id` (ULID PK): `epic-{ulid}` / `task-{ulid}` -- for DB FK references, internal lookups
 - `format_id`: Human-readable ID for display, filenames, branches
   - Epic format: `{AREA}-EPC-{NNN}` (e.g., INF-EPC-001)
-  - Task format: `{AREA}-TSK-{NNN}-{NNN}` (e.g., INF-TSK-001-001, where first NNN is epic number, second is task sequence)
+  - Task format: `{AREA}-TSK-{epic-NNN}-{seq-NNN}` (e.g., INF-TSK-028-001, where epic-NNN is the parent epic number, seq-NNN is the task sequence within the epic)
   - Note: work_type and domain remain as metadata fields in YAML frontmatter, NOT in the format ID
 
 **ULID Generation:** Generate ULIDs for the `id` field using:

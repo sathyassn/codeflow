@@ -3,10 +3,13 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 )
 
 // GateType classifies the kind of PathFlow gate that applies to a tool operation.
@@ -99,26 +102,74 @@ func (g *GateChecker) Check(toolName string, toolInput json.RawMessage) *Verdict
 		}
 
 	case GateGitPushPR:
-		if !g.hasSentinel("pf-5") {
-			return &Verdict{
-				Allow:    false,
-				GateType: gateType,
-				Reason:   "BLOCKED: PathFlow gate - prerequisite not met\nReason: git_push_pr requires PF5-VERIFY (acceptance criteria verified). No pathflow-pf-5 sentinel found.\nGate: git_push_pr\n",
-			}
-		}
-		if !g.hasSentinel("ws-rev") {
-			return &Verdict{
-				Allow:    false,
-				GateType: gateType,
-				Reason:   "BLOCKED: PathFlow gate - prerequisite not met\nReason: git_push_pr requires WS-REV (review completed). No pathflow-ws-rev sentinel found.\nGate: git_push_pr\n",
-			}
-		}
-		return &Verdict{Allow: true, GateType: gateType}
+		return g.checkCumulativePushPRGate()
 	}
 
 	// Should not reach here, but allow by default.
 	return &Verdict{Allow: true, GateType: gateType}
 }
+
+// checkCumulativePushPRGate verifies ALL pf-1 through pf-5 sentinels
+// AND ALL pipeline stage sentinels before allowing push/PR operations.
+func (g *GateChecker) checkCumulativePushPRGate() *Verdict {
+	// Cumulative phase check: ALL pf-1 through pf-5.
+	ok, missing := sentinel.VerifyCumulativePhaseSentinels(g.SentinelDir, 5)
+	if !ok {
+		return &Verdict{
+			Allow:    false,
+			GateType: GateGitPushPR,
+			Reason: fmt.Sprintf(
+				"BLOCKED: PathFlow gate - prerequisite not met\n"+
+					"Reason: git_push_pr requires all phases through PF5-VERIFY. Missing phase sentinel: pathflow-%s\n"+
+					"Gate: git_push_pr\n", missing),
+		}
+	}
+
+	// Cumulative stage check: ALL pipeline stages.
+	sessionDir := deriveSessionDirFromSentinelDir(g.SentinelDir)
+	workType := sentinel.ReadWorkTypeFromSessionStatus(sessionDir)
+
+	if workType != "" {
+		configDir := deriveConfigDirFromSentinelDir(g.SentinelDir)
+		pipelines, err := sentinel.LoadPipelines(configDir)
+		if err != nil {
+			// Config load failure -- graceful degradation, allow through after phase check.
+			slog.Warn("gate: cannot load pipelines for push/PR gate", "error", err)
+			return &Verdict{Allow: true, GateType: GateGitPushPR}
+		}
+
+		if pipeline, exists := pipelines[workType]; exists {
+			allOk, missingStage := sentinel.VerifyCumulativeStageSentinels(g.SentinelDir, pipeline, len(pipeline)-1)
+			if !allOk {
+				return &Verdict{
+					Allow:    false,
+					GateType: GateGitPushPR,
+					Reason: fmt.Sprintf(
+						"BLOCKED: PathFlow gate - prerequisite not met\n"+
+							"Reason: git_push_pr requires all pipeline stages. Missing stage sentinel: pathflow-%s\n"+
+							"Pipeline for %s: %v\n"+
+							"Gate: git_push_pr\n", missingStage, workType, pipeline),
+				}
+			}
+		}
+	}
+
+	return &Verdict{Allow: true, GateType: GateGitPushPR}
+}
+
+// deriveSessionDirFromSentinelDir derives the session pathflow directory from sentinel dir.
+func deriveSessionDirFromSentinelDir(sentinelDir string) string {
+	projectDir := filepath.Join(sentinelDir, "..", "..", "..", "..")
+	sessionID := filepath.Base(sentinelDir)
+	return filepath.Join(projectDir, ".state", "session", sessionID, "pathflow")
+}
+
+// deriveConfigDirFromSentinelDir derives the pathflow config directory from sentinel dir.
+func deriveConfigDirFromSentinelDir(sentinelDir string) string {
+	projectDir := filepath.Join(sentinelDir, "..", "..", "..", "..")
+	return filepath.Join(projectDir, ".codeflow", "config", "pathflow")
+}
+
 
 // hasSentinel checks whether a sentinel file exists in the sentinel directory.
 // Sentinel files are named "pathflow-{name}" (e.g., "pathflow-pf-3").

@@ -72,10 +72,21 @@ pub struct SessionStartInit {
     pub ppid: u32,
     pub home_dir: PathBuf,
     pub now: NowFn,
+    /// Override env vars for testing. When `Some`, lookups use this map
+    /// instead of the process environment. When `None`, reads `std::env::var`.
+    pub env_override: Option<HashMap<String, String>>,
 }
 
 #[allow(clippy::unused_self)]
 impl SessionStartInit {
+    /// Read an environment variable, checking `env_override` first.
+    fn get_env(&self, name: &str) -> Option<String> {
+        if let Some(overrides) = &self.env_override {
+            return overrides.get(name).cloned();
+        }
+        std::env::var(name).ok().filter(|v| !v.is_empty())
+    }
+
     /// Run the full session-start initialization flow.
     ///
     /// `project_dir` is the absolute path to the repository root.
@@ -243,7 +254,7 @@ impl SessionStartInit {
         }
 
         // STEP 3: Teammate detection (startup/unknown only).
-        let env_sid = std::env::var("CODEFLOW_SESSION_ID").unwrap_or_default();
+        let env_sid = self.get_env("CODEFLOW_SESSION_ID").unwrap_or_default();
 
         if env_sid.is_empty() && existing_sid.as_str().is_empty() {
             return (None, false);
@@ -322,11 +333,9 @@ impl SessionStartInit {
         }
 
         // Priority 2: Check env var.
-        if let Ok(val) = std::env::var("CODEFLOW_SESSION_ID") {
-            if !val.is_empty() {
-                if let Ok(sid) = SessionId::new(&val) {
-                    return Ok(sid);
-                }
+        if let Some(val) = self.get_env("CODEFLOW_SESSION_ID") {
+            if let Ok(sid) = SessionId::new(&val) {
+                return Ok(sid);
             }
         }
 
@@ -377,6 +386,7 @@ impl SessionStartInit {
 
     /// Sweep ALL stale sessions using `pathflow-session-status.json`.
     fn sweep_all_stale_sessions(&self, project_dir: &Path, current_sid: &str) {
+        let mut swept = 0u32;
         let session_base = project_dir.join(".state").join("session");
 
         if let Ok(entries) = fs::read_dir(&session_base) {
@@ -417,6 +427,7 @@ impl SessionStartInit {
                     "pf-complete" => {
                         let tn = if team_name.is_empty() { None } else { Some(team_name) };
                         self.remove_stale_session_artifacts(project_dir, &name, tn);
+                        swept += 1;
                     }
                     "created" if age_hours > 1.0 => {
                         self.remove_stale_session_artifacts(project_dir, &name, None);
@@ -435,6 +446,27 @@ impl SessionStartInit {
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // Log sweep results.
+        if swept > 0 {
+            let log_dir = project_dir.join(".state").join("logs").join("sessions");
+            let _ = fs::create_dir_all(&log_dir);
+            let date = (self.now)().get(..10).unwrap_or("unknown").to_string();
+            let log_path = log_dir.join(format!("cleanup-{date}.jsonl"));
+            let entry = serde_json::json!({
+                "event": "stale_session_sweep",
+                "timestamp": (self.now)(),
+                "current_session": current_sid,
+                "sessions_swept": swept,
+            });
+            if let Ok(line) = serde_json::to_string(&entry) {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .and_then(|mut f| writeln!(f, "{line}"));
             }
         }
 
@@ -663,6 +695,27 @@ impl SessionStartInit {
                         team_name,
                         members.len()
                     ));
+
+                    // Log stale team detection.
+                    let log_dir = self.home_dir.join(".claude").join("logs");
+                    let _ = fs::create_dir_all(&log_dir);
+                    let date = (self.now)().get(..10).unwrap_or("unknown").to_string();
+                    let log_path = log_dir.join(format!("stale-teams-{date}.jsonl"));
+                    let entry = serde_json::json!({
+                        "event": "stale_team_detected",
+                        "timestamp": (self.now)(),
+                        "team_name": team_name,
+                        "panes_alive": 0,
+                        "panes_total": members.len(),
+                        "action": "cleaned",
+                    });
+                    if let Ok(line) = serde_json::to_string(&entry) {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&log_path)
+                            .and_then(|mut f| writeln!(f, "{line}"));
+                    }
                 }
             }
         }
@@ -1146,6 +1199,7 @@ mod tests {
             ppid: 1000,
             home_dir: home,
             now: fixed_now,
+            env_override: Some(HashMap::new()), // Empty map: no env vars visible
         }
     }
 
@@ -1229,17 +1283,19 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
-        let init = make_init(home.path().to_path_buf());
+        let mut env_map = HashMap::new();
+        env_map.insert("CODEFLOW_SESSION_ID".to_string(), sid.as_str().to_string());
+        let init = SessionStartInit {
+            ppid: 1000,
+            home_dir: home.path().to_path_buf(),
+            now: fixed_now,
+            env_override: Some(env_map),
+        };
 
-        // Set CODEFLOW_SESSION_ID to match (simulates teammate).
-        // SAFETY: test-only, single-threaded access to env var.
-        unsafe { std::env::set_var("CODEFLOW_SESSION_ID", sid.as_str()) };
         let input = make_input("startup", dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
         let result = init.run(&input, dir.path(), &mut buf).unwrap();
-        // SAFETY: test-only cleanup.
-        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
 
         assert!(result.is_teammate);
         assert_eq!(result.session_id, sid);
@@ -1573,6 +1629,13 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let teams_dir = home.path().join(".claude").join("teams");
 
+        // Get a real live pane ID from tmux (if available).
+        let live_panes = list_tmux_panes();
+        let alive_pane_id = live_panes
+            .as_ref()
+            .and_then(|panes| panes.first().cloned())
+            .unwrap_or_else(|| "%alive1".to_string());
+
         // Create a team with one alive and one dead pane.
         let team_dir = teams_dir.join("alive-team");
         fs::create_dir_all(&team_dir).unwrap();
@@ -1580,7 +1643,7 @@ mod tests {
             "leadPid": 99999,
             "teamName": "alive-team",
             "members": [
-                {"tmuxPaneId": "%alive1"},
+                {"tmuxPaneId": alive_pane_id},
                 {"tmuxPaneId": "%dead1"}
             ]
         });
@@ -1593,11 +1656,15 @@ mod tests {
         let init = make_init(home.path().to_path_buf());
         let warnings = init.detect_stale_teams();
 
-        assert!(
-            warnings.is_empty(),
-            "team with at least one alive pane should not be cleaned"
-        );
-        assert!(team_dir.exists(), "team dir should still exist");
+        if live_panes.is_some() {
+            // tmux available: team has one alive pane, should NOT be cleaned.
+            assert!(
+                warnings.is_empty(),
+                "team with at least one alive pane should not be cleaned"
+            );
+            assert!(team_dir.exists(), "team dir should still exist");
+        }
+        // If tmux unavailable, detect_stale_teams skips entirely (returns []).
     }
 
     #[test]
@@ -2439,6 +2506,7 @@ mod tests {
         let runtime_dir = dir.path().join(".state").join("runtime");
         fs::create_dir_all(&runtime_dir).unwrap();
 
+        // Uses make_init which injects no_env_var -- no global env var dependency.
         let init = make_init(home.path().to_path_buf());
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-unknown"),
@@ -2578,6 +2646,7 @@ mod tests {
             ppid: 1000,
             home_dir: home_dir.as_ref().clone(),
             now: fixed_now,
+            env_override: Some(HashMap::new()), // Lead has no env var set
         };
         let lead_input = make_input("startup", project_dir.to_str().unwrap());
         let mut buf = Vec::new();
@@ -2602,9 +2671,10 @@ mod tests {
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
         // Phase 2: Multiple teammate agents start concurrently.
-        // Set env var so teammates are detected via env var + status.json match.
-        // SAFETY: test-only, threads haven't started yet.
-        unsafe { std::env::set_var("CODEFLOW_SESSION_ID", lead_sid.as_str()) };
+        // Inject env var via env_override instead of global set_var (avoids test races).
+        let mut teammate_env = HashMap::new();
+        teammate_env.insert("CODEFLOW_SESSION_ID".to_string(), lead_sid.as_str().to_string());
+        let teammate_env = Arc::new(teammate_env);
 
         let num_teammates = 4;
         let barrier = Arc::new(Barrier::new(num_teammates));
@@ -2616,12 +2686,14 @@ mod tests {
                 let project_dir = Arc::clone(&project_dir);
                 let home_dir = Arc::clone(&home_dir);
                 let results = Arc::clone(&results);
+                let teammate_env = Arc::clone(&teammate_env);
 
                 thread::spawn(move || {
                     let init = SessionStartInit {
                         ppid: 2000,
                         home_dir: home_dir.as_ref().clone(),
                         now: fixed_now,
+                        env_override: Some((*teammate_env).clone()),
                     };
                     let input = make_input("startup", project_dir.to_str().unwrap());
 
@@ -2639,8 +2711,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        // SAFETY: test-only cleanup.
-        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
+        // No global env var cleanup needed -- env_var was injected via closure.
 
         let teammate_results = results.lock().unwrap();
         // All teammates should get the same SID as the lead.

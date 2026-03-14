@@ -82,7 +82,7 @@ func TestGateChecker_Check(t *testing.T) {
 			wantGate:  GateGitCommit,
 		},
 
-		// --- Bash git push (dual gate) ---
+		// --- Bash git push (cumulative gate) ---
 		{
 			name:      "Bash git push, no pf-5 -> BLOCK",
 			toolName:  "Bash",
@@ -100,15 +100,15 @@ func TestGateChecker_Check(t *testing.T) {
 			wantGate:  GateGitPushPR,
 		},
 		{
-			name:      "Bash git push, both pf-5 and ws-rev -> ALLOW",
+			name:      "Bash git push, all pf-1..pf-5 and ws-rev -> ALLOW",
 			toolName:  "Bash",
 			toolInput: `{"command":"git push origin main"}`,
-			sentinels: []string{"pf-5", "ws-rev"},
+			sentinels: []string{"pf-1", "pf-2", "pf-3", "pf-4", "pf-5", "ws-rev"},
 			wantAllow: true,
 			wantGate:  GateGitPushPR,
 		},
 
-		// --- Bash gh pr (dual gate) ---
+		// --- Bash gh pr (cumulative gate) ---
 		{
 			name:      "Bash gh pr create, no sentinels -> BLOCK",
 			toolName:  "Bash",
@@ -118,10 +118,10 @@ func TestGateChecker_Check(t *testing.T) {
 			wantGate:  GateGitPushPR,
 		},
 		{
-			name:      "Bash gh pr create, both sentinels -> ALLOW",
+			name:      "Bash gh pr create, all phase sentinels -> ALLOW",
 			toolName:  "Bash",
 			toolInput: `{"command":"gh pr create --title 'fix'"}`,
-			sentinels: []string{"pf-5", "ws-rev"},
+			sentinels: []string{"pf-1", "pf-2", "pf-3", "pf-4", "pf-5", "ws-rev"},
 			wantAllow: true,
 			wantGate:  GateGitPushPR,
 		},
@@ -518,7 +518,7 @@ func TestVerdict_BlockedHasReason(t *testing.T) {
 func TestGateChecker_DualGate_OnlyWSRev(t *testing.T) {
 	t.Parallel()
 
-	// ws-rev exists but pf-5 does not -> should block on pf-5.
+	// ws-rev exists but no phase sentinels -> should block on pf-1 (cumulative check).
 	dir := t.TempDir()
 	createSentinel(t, dir, "ws-rev")
 
@@ -526,12 +526,12 @@ func TestGateChecker_DualGate_OnlyWSRev(t *testing.T) {
 	v := checker.Check("Bash", json.RawMessage(`{"command":"git push origin main"}`))
 
 	if v.Allow {
-		t.Fatal("expected block: ws-rev exists but pf-5 missing")
+		t.Fatal("expected block: ws-rev exists but phase sentinels missing")
 	}
 	if v.GateType != GateGitPushPR {
 		t.Errorf("GateType = %q, want %q", v.GateType, GateGitPushPR)
 	}
-	if !strings.Contains(v.Reason, "pf-5") {
-		t.Errorf("Reason should mention pf-5, got: %s", v.Reason)
+	if !strings.Contains(v.Reason, "pf-1") {
+		t.Errorf("Reason should mention pf-1 (first missing cumulative phase), got: %s", v.Reason)
 	}
 }

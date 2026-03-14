@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,14 +18,12 @@ import (
 var stageCompleteRe = regexp.MustCompile(`STAGE-COMPLETE:\s+WS-(DEV|REV|QA|TEST|PLAN|DOCS)`)
 
 // primaryStages lists the primary work stages that must complete before WS-REV.
+// Used as fallback when config-driven lookup fails.
 var primaryStages = []string{"dev", "plan", "docs", "test"}
 
 // Verdict represents the result of a sentinel hook check.
 type Verdict struct {
-	// Allow is true if the operation is permitted.
-	Allow bool
-
-	// Reason is a human-readable explanation when the operation is blocked.
+	Allow  bool
 	Reason string
 }
 
@@ -43,13 +42,9 @@ type sendMessageInput struct {
 // CheckAndCreateStageSentinel parses PostToolUse stdin for SendMessage calls,
 // pattern-matches "STAGE-COMPLETE: WS-{STAGE}" in the content, validates
 // stage ordering, and creates the corresponding sentinel file.
-//
-// Returns a Verdict. When the verdict blocks (Allow=false), the caller should
-// exit with code 2.
 func CheckAndCreateStageSentinel(stdin io.Reader, sentinelDir string) *Verdict {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		// Read error -- allow through (graceful degradation).
 		return &Verdict{Allow: true}
 	}
 
@@ -57,8 +52,7 @@ func CheckAndCreateStageSentinel(stdin io.Reader, sentinelDir string) *Verdict {
 }
 
 // CheckAndCreateStageSentinelFromData is like CheckAndCreateStageSentinel but
-// operates on pre-read data instead of an io.Reader. This allows the caller to
-// read stdin once and dispatch to multiple handlers.
+// operates on pre-read data instead of an io.Reader.
 func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdict {
 	if len(data) == 0 {
 		return &Verdict{Allow: true}
@@ -66,7 +60,6 @@ func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdi
 
 	var input postToolUseInput
 	if err := json.Unmarshal(data, &input); err != nil {
-		// Parse error -- allow through.
 		return &Verdict{Allow: true}
 	}
 
@@ -87,22 +80,91 @@ func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdi
 		return &Verdict{Allow: true}
 	}
 
-	// Normalize: uppercase + collapse whitespace.
 	normalized := strings.ToUpper(msg.Content)
 	normalized = collapseWhitespace(normalized)
 
 	matches := stageCompleteRe.FindStringSubmatch(normalized)
 	if matches == nil {
-		// No stage completion pattern -- nothing to do.
 		return &Verdict{Allow: true}
 	}
 
 	stageLower := strings.ToLower(matches[1])
 
-	// Stage ordering validation.
+	// Config-driven cumulative stage ordering validation.
+	if v := validateStageOrdering(sentinelDir, stageLower); v != nil {
+		return v
+	}
+
+	if err := createSentinelFile(sentinelDir, "ws-"+stageLower); err != nil {
+		return &Verdict{
+			Allow:  true,
+			Reason: fmt.Sprintf("sentinel creation failed: %v", err),
+		}
+	}
+
+	return &Verdict{Allow: true}
+}
+
+// validateStageOrdering checks that all prior stages in the pipeline exist
+// before allowing the current stage sentinel to be created.
+// Uses config-driven pipeline lookup with fallback to hardcoded rules.
+func validateStageOrdering(sentinelDir, stageLower string) *Verdict {
+	sessionDir := deriveSessionDir(sentinelDir)
+	workType := ReadWorkTypeFromSessionStatus(sessionDir)
+
+	if workType != "" {
+		configDir := deriveConfigDir(sentinelDir)
+		pipelines, err := LoadPipelines(configDir)
+		if err == nil {
+			if pipeline, ok := pipelines[workType]; ok {
+				return validateStageOrderingFromPipeline(sentinelDir, stageLower, pipeline, workType)
+			}
+		} else {
+			slog.Warn("stage: config-driven ordering fallback", "error", err)
+		}
+	}
+
+	return validateStageOrderingFallback(sentinelDir, stageLower)
+}
+
+// validateStageOrderingFromPipeline uses the pipeline definition to verify
+// that all prior stages exist cumulatively.
+func validateStageOrderingFromPipeline(sentinelDir, stageLower string, pipeline []string, workType string) *Verdict {
+	currentStage := "WS-" + strings.ToUpper(stageLower)
+
+	currentIndex := -1
+	for i, s := range pipeline {
+		if s == currentStage {
+			currentIndex = i
+			break
+		}
+	}
+
+	if currentIndex < 0 {
+		return nil
+	}
+
+	if currentIndex > 0 {
+		ok, missing := VerifyCumulativeStageSentinels(sentinelDir, pipeline, currentIndex-1)
+		if !ok {
+			return &Verdict{
+				Allow: false,
+				Reason: fmt.Sprintf(
+					"BLOCKED: ws-%s requires prior stage sentinel '%s' (%s pipeline: %v)",
+					stageLower, missing, workType, pipeline,
+				),
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateStageOrderingFallback applies the legacy hardcoded ordering rules
+// when config-driven validation is not possible.
+func validateStageOrderingFallback(sentinelDir, stageLower string) *Verdict {
 	switch stageLower {
 	case "rev":
-		// WS-REV requires a prior primary stage sentinel.
 		hasPrimary := false
 		for _, ps := range primaryStages {
 			if hasSentinelFile(sentinelDir, "ws-"+ps) {
@@ -118,7 +180,6 @@ func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdi
 		}
 
 	case "qa":
-		// WS-QA requires prior WS-DEV or WS-TEST.
 		if !hasSentinelFile(sentinelDir, "ws-dev") && !hasSentinelFile(sentinelDir, "ws-test") {
 			return &Verdict{
 				Allow:  false,
@@ -127,15 +188,7 @@ func CheckAndCreateStageSentinelFromData(data []byte, sentinelDir string) *Verdi
 		}
 	}
 
-	// Create sentinel file.
-	if err := createSentinelFile(sentinelDir, "ws-"+stageLower); err != nil {
-		return &Verdict{
-			Allow:  true,
-			Reason: fmt.Sprintf("sentinel creation failed: %v", err),
-		}
-	}
-
-	return &Verdict{Allow: true}
+	return nil
 }
 
 // HandleStageSentinelStatus updates pathflow-session-status.json with the
@@ -180,7 +233,6 @@ func hasSentinelFile(sentinelDir, name string) bool {
 }
 
 // createSentinelFile creates a sentinel file in the sentinel directory.
-// It creates the directory if it does not exist.
 func createSentinelFile(sentinelDir, name string) error {
 	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
 		return fmt.Errorf("create sentinel dir: %w", err)
@@ -215,12 +267,7 @@ type PathflowTeam struct {
 	LastSpawnName     *string `json:"last_spawn_name"`
 }
 
-// HandleTeamCreate processes a TeamCreate PostToolUse event, creates
-// pathflow-team.json in the session pathflow directory, and updates the
-// session status to "pf-started" with the team name. It also resets
-// LastCompletedPhase and LastCompletedStage to ensure a fresh session start.
-//
-// The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
+// HandleTeamCreate processes a TeamCreate PostToolUse event.
 func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 	if sessionDir == "" || sessionID == "" {
 		return &Verdict{Allow: true}
@@ -242,7 +289,7 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 
 	team := PathflowTeam{
 		TeamName:          tc.TeamName,
-		LeadPID:           0, // PID tracking removed — status file is the authority
+		LeadPID:           0,
 		CodeflowSessionID: sessionID,
 		TeammateSpawned:   false,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
@@ -272,8 +319,6 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 		}
 	}
 
-	// Update session status to "pf-started" with team name.
-	// Reset phase/stage fields to ensure a fresh session start.
 	_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
 		s.Status = "pf-started"
 		s.TeamName = tc.TeamName
@@ -284,10 +329,7 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 	return &Verdict{Allow: true}
 }
 
-// HandleTeammateSpawn processes a Task PostToolUse event (teammate spawn) and
-// updates pathflow-team.json with teammate_spawned=true and last_spawn_name.
-//
-// The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
+// HandleTeammateSpawn processes a Task PostToolUse event (teammate spawn).
 func HandleTeammateSpawn(data []byte, sessionDir string) *Verdict {
 	if sessionDir == "" {
 		return &Verdict{Allow: true}
@@ -310,7 +352,6 @@ func HandleTeammateSpawn(data []byte, sessionDir string) *Verdict {
 	teamFilePath := filepath.Join(sessionDir, "pathflow-team.json")
 	existing, err := os.ReadFile(teamFilePath)
 	if err != nil {
-		// pathflow-team.json doesn't exist yet -- skip silently.
 		return &Verdict{Allow: true}
 	}
 
@@ -343,7 +384,6 @@ func HandleTeammateSpawn(data []byte, sessionDir string) *Verdict {
 }
 
 // atomicWriteFile writes data to a file atomically via tmp+rename.
-// Uses os.CreateTemp in the same directory for concurrent safety.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".pathflow-*.tmp")

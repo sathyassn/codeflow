@@ -635,7 +635,7 @@ func TestIsPhaseComplete(t *testing.T) {
 	t.Run("empty expected is not complete", func(t *testing.T) {
 		t.Parallel()
 		pc := &PhaseCheckpoint{Expected: nil}
-		if IsPhaseComplete(pc, nil) {
+		if IsPhaseComplete(pc, nil, "", "PF1") {
 			t.Error("IsPhaseComplete() = true for empty expected, want false")
 		}
 	})
@@ -647,7 +647,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Completed: map[string]string{"PF1-TSK-01": "t1", "PF1-TSK-02": "t2"},
 			Skipped:   map[string]string{},
 		}
-		if !IsPhaseComplete(pc, nil) {
+		if !IsPhaseComplete(pc, nil, "", "PF1") {
 			t.Error("IsPhaseComplete() = false, want true")
 		}
 	})
@@ -659,7 +659,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Completed: map[string]string{"PF1-TSK-01": "t1"},
 			Skipped:   map[string]string{"PF1-TSK-02": "t2"},
 		}
-		if !IsPhaseComplete(pc, nil) {
+		if !IsPhaseComplete(pc, nil, "", "PF1") {
 			t.Error("IsPhaseComplete() = false for mixed complete+skip, want true")
 		}
 	})
@@ -673,7 +673,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Skipped:    map[string]string{},
 		}
 		ctx := map[string]string{"origin": "planned"}
-		if !IsPhaseComplete(pc, ctx) {
+		if !IsPhaseComplete(pc, ctx, "", "PF3") {
 			t.Error("IsPhaseComplete() = false with adhoc_only auto-skip, want true")
 		}
 	})
@@ -687,7 +687,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Skipped:    map[string]string{},
 		}
 		ctx := map[string]string{"origin": "adhoc"}
-		if IsPhaseComplete(pc, ctx) {
+		if IsPhaseComplete(pc, ctx, "", "PF3") {
 			t.Error("IsPhaseComplete() = true when adhoc_only should not auto-skip")
 		}
 	})
@@ -703,7 +703,7 @@ func TestIsPhaseComplete(t *testing.T) {
 
 		for _, wt := range []string{"DOCS", "PLAN", "SPKE"} {
 			ctx := map[string]string{"work_type": wt}
-			if !IsPhaseComplete(pc, ctx) {
+			if !IsPhaseComplete(pc, ctx, "", "PF3") {
 				t.Errorf("IsPhaseComplete() = false for work_type=%s, want true (QA auto-skip)", wt)
 			}
 		}
@@ -718,7 +718,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Skipped:    map[string]string{},
 		}
 		ctx := map[string]string{"work_type": "FEAT"}
-		if IsPhaseComplete(pc, ctx) {
+		if IsPhaseComplete(pc, ctx, "", "PF3") {
 			t.Error("IsPhaseComplete() = true for FEAT, want false (QA should not auto-skip)")
 		}
 	})
@@ -731,7 +731,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Completed:  map[string]string{"PF4-TSK-02": "t1"},
 			Skipped:    map[string]string{},
 		}
-		if IsPhaseComplete(pc, nil) {
+		if IsPhaseComplete(pc, nil, "", "PF1") {
 			t.Error("IsPhaseComplete() = true without context, want false")
 		}
 	})
@@ -744,7 +744,7 @@ func TestIsPhaseComplete(t *testing.T) {
 			Completed:  map[string]string{},
 			Skipped:    map[string]string{},
 		}
-		if IsPhaseComplete(pc, map[string]string{"origin": "planned"}) {
+		if IsPhaseComplete(pc, map[string]string{"origin": "planned"}, "", "PF1") {
 			t.Error("IsPhaseComplete() = true for unknown condition")
 		}
 	})

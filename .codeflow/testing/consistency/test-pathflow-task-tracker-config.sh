@@ -366,7 +366,7 @@ assert_equals "0" "$TASKS_MISSING_NOTE" "No tasks missing enforcement_note"
 assert_equals "28" "$TASKS_UNCONDITIONAL" "28 unconditional tasks"
 assert_equals "2" "$TASKS_CONDITIONAL" "2 conditional tasks"
 
-# Verify unconditional notes contain "MUST execute"
+# Verify unconditional notes contain "MUST execute" or "MUST spawn"
 test_section "Enforcement Note Content"
 
 MUST_EXECUTE_COUNT=0
@@ -375,12 +375,12 @@ for phase in $EXPECTED_PHASES; do
     for i in $(seq 0 $((TASK_COUNT - 1))); do
         CONDITION=$(jq -r ".phases.\"$phase\".tasks[$i].condition // empty" "$CONFIG_FILE" 2>/dev/null)
         NOTE=$(jq -r ".phases.\"$phase\".tasks[$i].enforcement_note // empty" "$CONFIG_FILE" 2>/dev/null)
-        if [[ -z "$CONDITION" ]] && [[ "$NOTE" == *"MUST execute"* ]]; then
+        if [[ -z "$CONDITION" ]] && [[ "$NOTE" == *"MUST execute"* || "$NOTE" == *"MUST spawn"* ]]; then
             ((MUST_EXECUTE_COUNT++)) || true
         fi
     done
 done
-assert_equals "28" "$MUST_EXECUTE_COUNT" "All 28 unconditional notes contain 'MUST execute'"
+assert_equals "28" "$MUST_EXECUTE_COUNT" "All 28 unconditional notes contain MUST execute/spawn"
 
 # Verify conditional notes contain "condition field"
 CONDITION_FIELD_COUNT=0

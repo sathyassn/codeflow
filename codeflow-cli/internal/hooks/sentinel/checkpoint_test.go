@@ -256,14 +256,14 @@ func TestCompleteCheckpointTask(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name             string
-		stdin            string
-		checkpoint       map[string]any
-		setupSentinels   []string
-		wantAllow        bool
-		wantReason       string
-		wantPhaseDone    bool   // whether phase sentinel should be created
-		wantPhaseKey     string // sentinel name to check (e.g., "pf-1")
+		name           string
+		stdin          string
+		checkpoint     map[string]any
+		setupSentinels []string
+		wantAllow      bool
+		wantReason     string
+		wantPhaseDone  bool   // whether phase sentinel should be created
+		wantPhaseKey   string // sentinel name to check (e.g., "pf-1")
 	}{
 		{
 			name:      "empty stdin allows",
@@ -424,7 +424,9 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
-		// Create pf-3 sentinel for cross-phase gate.
+		// Create ALL prior phase sentinels for cumulative cross-phase gate.
+		createTestSentinel(t, sentinelDir, "pf-1")
+		createTestSentinel(t, sentinelDir, "pf-2")
 		createTestSentinel(t, sentinelDir, "pf-3")
 
 		// Complete PF4-TSK-02 -- should trigger phase completion because
@@ -465,6 +467,8 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
+		createTestSentinel(t, sentinelDir, "pf-1")
+		createTestSentinel(t, sentinelDir, "pf-2")
 		createTestSentinel(t, sentinelDir, "pf-3")
 
 		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
@@ -502,6 +506,8 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
+		createTestSentinel(t, sentinelDir, "pf-1")
+		createTestSentinel(t, sentinelDir, "pf-2")
 		createTestSentinel(t, sentinelDir, "pf-3")
 
 		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
@@ -540,6 +546,8 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
+		createTestSentinel(t, sentinelDir, "pf-1")
+		createTestSentinel(t, sentinelDir, "pf-2")
 		createTestSentinel(t, sentinelDir, "pf-3")
 
 		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
@@ -577,6 +585,8 @@ func TestCompleteCheckpointTask_AutoSkipConditions(t *testing.T) {
 			},
 		})
 
+		createTestSentinel(t, sentinelDir, "pf-1")
+		createTestSentinel(t, sentinelDir, "pf-2")
 		createTestSentinel(t, sentinelDir, "pf-3")
 
 		stdin := `{"task_subject":"PF4-TSK-05: Execute primary stage"}`
@@ -771,7 +781,9 @@ func TestIsPhaseComplete(t *testing.T) {
 				tt.phase.Skipped = make(map[string]string)
 			}
 
-			got := isPhaseComplete(tt.phase, tt.ctx)
+			// Pass empty sentinelDir and phaseNum 0 for non-PF4 tests
+			// (PF4 stage sentinel check requires valid config path).
+			got := isPhaseComplete(tt.phase, tt.ctx, "", 0)
 			if got != tt.want {
 				t.Errorf("isPhaseComplete() = %v, want %v", got, tt.want)
 			}

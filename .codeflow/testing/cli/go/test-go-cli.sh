@@ -5,7 +5,7 @@ set -euo pipefail
 # Runs build verification, binary smoke tests, Go unit tests, and coverage enforcement.
 
 readonly SCRIPT_NAME="test-go-cli"
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -146,7 +146,6 @@ run_coverage_enforcement() {
 
         local impl
         impl=$(cd "$CLI_DIR" && go tool cover -func=business.out | grep '^total:' | awk '{print $NF}' | tr -d '%')
-        rm -f "$business_cov_file"
 
         echo "  Business package coverage: ${impl}%"
         echo "  Threshold: ${COVERAGE_THRESHOLD}%"
@@ -156,9 +155,134 @@ run_coverage_enforcement() {
         else
             test_pass "Business package coverage ${impl}% meets ${COVERAGE_THRESHOLD}% threshold"
         fi
+
+        # Per-file enforcement (uses business.out for accurate per-file data)
+        run_per_file_coverage "$business_cov_file"
+
+        rm -f "$business_cov_file"
     else
         rm -f "$business_cov_file"
         test_fail "Business package test run failed during coverage check"
+    fi
+}
+
+# run_per_file_coverage parses go tool cover -func output for per-file percentages
+# and enforces the threshold on each file in business packages.
+run_per_file_coverage() {
+    local cov_file="$1"
+
+    test_section "Per-file coverage enforcement"
+
+    if [[ ! -f "$cov_file" ]]; then
+        echo "  WARN: Coverage file not found -- skipping per-file enforcement"
+        return
+    fi
+
+    # Load file-level exceptions from config
+    local exception_files=""
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        exception_files=$(jq -r '.conventions.exceptions[]?.file // empty' "$CONFIG_FILE" 2>/dev/null) || true
+    fi
+
+    local per_file_fail=false
+    local file_count=0
+    local fail_count=0
+    local pass_count=0
+
+    # Parse go tool cover -func output: each line is "file:line:\tfunction\tpercent%"
+    # Aggregate by file: use the last line per file (total for that file).
+    # go tool cover -func groups by file, with a "total:" line at the very end.
+    # We extract per-file totals by looking at each unique file's functions.
+    #
+    # Strategy: parse all lines, collect coverage per function, compute per-file average.
+    # Simpler: use go tool cover -func and group the file-level total.
+    # Actually, go tool cover -func doesn't give per-file totals -- only per-function + grand total.
+    # So we compute per-file coverage by counting covered/total statements from the raw profile.
+
+    # Use go tool cover -func to get per-function coverage, then aggregate per file.
+    local func_output
+    func_output=$(cd "$CLI_DIR" && go tool cover -func="$cov_file" 2>/dev/null) || return
+
+    # Build per-file coverage: sum up covered statements per file.
+    # Format of each line: "github.com/.../file.go:line:\tfunction\t\tpercent%"
+    # We'll track unique files and their average coverage.
+    declare -A file_coverages
+    declare -A file_counts
+
+    while IFS= read -r line; do
+        # Skip the grand total line
+        [[ "$line" == total:* ]] && continue
+
+        # Extract file path and percentage
+        local file_path pct_str
+        file_path=$(echo "$line" | awk '{print $1}' | cut -d: -f1)
+        pct_str=$(echo "$line" | awk '{print $NF}' | tr -d '%')
+
+        [[ -z "$file_path" || -z "$pct_str" ]] && continue
+
+        # Extract short path (relative to module)
+        local short_path="${file_path#*/codeflow-cli/}"
+
+        # Accumulate
+        if [[ -n "${file_coverages[$short_path]+x}" ]]; then
+            file_coverages[$short_path]=$(echo "${file_coverages[$short_path]} + $pct_str" | bc -l)
+            file_counts[$short_path]=$((file_counts[$short_path] + 1))
+        else
+            file_coverages[$short_path]="$pct_str"
+            file_counts[$short_path]=1
+        fi
+    done <<< "$func_output"
+
+    # Check each file against threshold
+    for short_path in "${!file_coverages[@]}"; do
+        # Only check files in business packages
+        local in_business=false
+        IFS=' ' read -ra biz_array <<< "$BUSINESS_PKGS"
+        for pkg in "${biz_array[@]}"; do
+            # Convert "./internal/hooks/..." to "internal/hooks/"
+            local pkg_prefix="${pkg#./}"
+            pkg_prefix="${pkg_prefix%/...}"
+            if [[ "$short_path" == "$pkg_prefix/"* ]]; then
+                in_business=true
+                break
+            fi
+        done
+        [[ "$in_business" == "false" ]] && continue
+
+        # Check exception list
+        local is_excepted=false
+        for exc in $exception_files; do
+            if [[ "$short_path" == "$exc" ]]; then
+                is_excepted=true
+                break
+            fi
+        done
+        [[ "$is_excepted" == "true" ]] && continue
+
+        # Skip test files
+        [[ "$short_path" == *_test.go ]] && continue
+
+        file_count=$((file_count + 1))
+
+        # Compute average coverage for this file
+        local avg
+        avg=$(echo "${file_coverages[$short_path]} / ${file_counts[$short_path]}" | bc -l)
+        local avg_int="${avg%.*}"
+        avg_int="${avg_int:-0}"
+
+        if [[ "$avg_int" -lt "$COVERAGE_THRESHOLD" ]]; then
+            printf "  FAIL: %s -- %.1f%% (below %s%%)\n" "$short_path" "$avg" "$COVERAGE_THRESHOLD"
+            per_file_fail=true
+            fail_count=$((fail_count + 1))
+        else
+            pass_count=$((pass_count + 1))
+        fi
+    done
+
+    if [[ "$per_file_fail" == "true" ]]; then
+        test_fail "Per-file coverage: ${fail_count}/${file_count} files below ${COVERAGE_THRESHOLD}% threshold"
+    else
+        test_pass "Per-file coverage: all ${file_count} files meet ${COVERAGE_THRESHOLD}% threshold"
     fi
 }
 

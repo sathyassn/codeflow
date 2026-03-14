@@ -80,6 +80,9 @@ This is not a guideline -- it is your operating mode. Every piece of work flows 
 | Bypass PathFlow phases | Phase ordering is the session roadmap | Follow the lifecycle (Section 4) |
 | Modify `.state/` files directly | Data ops are cf-knowledge-layer's job | cf-knowledge-layer |
 | Read large files (>50 lines) in lead context | Wastes shared context budget | Explore sub-agent or delegate |
+| Mark stage tasks (PF4-TSK-05/06/07) completed without spawning teammate and receiving verdict | Stages are quality gates; skipping ships unreviewed/untested code | Spawn teammate, wait for STAGE-COMPLETE, THEN mark complete |
+| Skip WS-REV or WS-QA pipeline stages | WS-REV is universal; WS-QA is mandatory when pipeline includes it | Follow pipeline from Section 6 |
+| Stop PathFlow progression mid-pipeline without user approval | The lead MUST drive sessions to PF7 completion | Complete all phases and stages, or escalate blockers to user |
 
 **Permitted read-only actions:** Reading files for verification, reading agent definitions, reading PROJECT.md/CLAUDE.md, team management commands (TeamCreate, SendMessage, TaskCreate).
 
@@ -297,6 +300,25 @@ SESSION END
 - Rework: If WS-REV returns `changes_requested`, re-assign work to primary stage teammate (still active, no re-spawn needed) (max 3 iterations)
 - Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 2 retries)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
+
+🔒 **STAGE COMPLETION INVARIANT (PF4-TSK-05, PF4-TSK-06, PF4-TSK-07):**
+
+These are SPAWN-AND-WAIT tasks. Marking completed requires ALL of:
+1. Stage teammate ACTUALLY SPAWNED
+2. Teammate EXECUTED ITS FULL WORKFLOW
+3. Teammate SENT STAGE-COMPLETE MESSAGE via SendMessage
+4. Corresponding ws-* sentinel created by sentinel-write hook
+5. ALL prior stage sentinels in pipeline also exist (cumulative enforcement)
+
+⛔ **FORBIDDEN (PF4-EXECUTE stage integrity):**
+- Marking PF4-TSK-05/06/07 completed without teammate's STAGE-COMPLETE message
+- Skipping WS-REV for any work type
+- Skipping WS-QA when pipeline includes it
+- The lead deciding review or QA "isn't needed"
+
+🔒 **PATHFLOW COMPLETION MANDATE:**
+The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeline without user approval or a blocking issue is a PROTOCOL VIOLATION.
+
 - **Parallel batch assessment (MANDATORY for PF4-TSK-05):** Before spawning a primary stage teammate, assess whether the work scope involves multiple independent items (files, components, sections). If file count exceeds `batch_size` for the stage OR total scope risks context exhaustion for a single teammate, split into parallel instances per `max_parallel`/`batch_size` (→ See Section 5). Default to parallel when in doubt — context exhaustion wastes more time than coordination overhead.
 - **Legacy task migration:** If the task markdown lacks `### Criteria Status` or `## Stage Reports` sections (legacy task created before stage reporting was added), have cf-knowledge-layer add them before spawning the primary stage teammate using the pipeline-appropriate template from `project-management/templates/task-template.md`.
 - **Stage reporting protocol:** Stage teammates update the task markdown as part of their stage completion protocol — they write their reports directly into the task document before signaling STAGE-COMPLETE. The task doc commit is included as part of the stage commit by cf-git-operations.
@@ -964,6 +986,15 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | Skipped Phase | Why Acceptable |
 |---------------|---------------|
 | Skipping PF6-COMPLETE, going directly to PF7 | TeamDelete (the critical PF7 action) IS gated on `pf-6` sentinel by team-guard hook. Other PF7 cleanup actions (teammate shutdown) are safe regardless. |
+
+**Cumulative Enforcement:**
+All sentinel checks verify the ENTIRE chain, not just the preceding one. Dynamically driven from pathflow-config.json:
+- Phase registration: ALL pf-1 through pf-{N-1} (not just pf-{N-1})
+- PF4 task completion: ALL prior pipeline stage sentinels
+- Stage sentinel creation: ALL prior pipeline stages
+- Push/PR gate: ALL phases (pf-1 through pf-5) + ALL pipeline stages
+- TeamDelete guard: ALL pipeline stage sentinels
+Zero hardcoded phase/stage names in enforcement hooks.
 
 ### Sentinel System
 

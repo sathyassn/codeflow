@@ -50,6 +50,46 @@ impl CheckpointComplete {
         sentinel::resolve_dir(&self.project_dir, session_id)
             .map_err(|e| HookError::Config(format!("sentinel dir: {e}")))
     }
+
+    /// Infer work_type from git branch and write to checkpoint context + session status.
+    /// Mirrors Go `registerWorkType()` in hooks.go:855-877.
+    fn register_work_type(&self, session_dir: &std::path::Path, session_id: &str) {
+        use super::pipeline;
+
+        // Get current git branch.
+        let branch = match std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => return,
+        };
+
+        if branch.is_empty() {
+            return;
+        }
+
+        let work_type = pipeline::infer_work_type_from_branch(&branch);
+        if work_type.is_empty() {
+            eprintln!("checkpoint-complete: cannot infer work type from branch: {branch}");
+            return;
+        }
+
+        // Write to checkpoint context.
+        let checkpoint_path = self.checkpoint_path(session_id);
+        let cp = Checkpoint::new();
+        if let Err(e) = cp.set_context(&checkpoint_path, "work_type", work_type) {
+            eprintln!("checkpoint-complete: failed to set checkpoint work_type: {e}");
+        }
+
+        // Write to session status.
+        crate::hooks::post_tool_use::update_session_status(
+            session_dir,
+            &serde_json::json!({"work_type": work_type}),
+        );
+    }
 }
 
 impl HookHandler for CheckpointComplete {
@@ -118,6 +158,13 @@ impl HookHandler for CheckpointComplete {
                             &session_dir,
                             &updates,
                         );
+
+                        // When pf-3 is newly created, infer work_type from git branch
+                        // and write to checkpoint context + session status.
+                        // Mirrors Go registerWorkType() in hooks.go:855-877.
+                        if phase_normalized == "pf-3" {
+                            self.register_work_type(&session_dir, sid.as_ref());
+                        }
                     }
                 }
                 Ok(HookOutput::Allow)

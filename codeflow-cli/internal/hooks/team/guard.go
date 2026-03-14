@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/codeflow/codeflow-cli/internal/hooks/sentinel"
 	"github.com/codeflow/codeflow-cli/internal/hooks/session"
 	"github.com/codeflow/codeflow-cli/internal/pathflow"
 )
@@ -40,7 +41,7 @@ type teammateInput struct {
 //   - If tool is not TeamDelete or Teammate, allow.
 //   - If Teammate but operation is not "cleanup", allow.
 //   - If pathflow-active flag does not exist, allow (no active session).
-//   - If TeamDelete and pf-6 sentinel exists, allow (PF7-END gate passed).
+//   - If TeamDelete and pf-6 sentinel exists AND all pipeline stage sentinels exist, allow.
 //   - Otherwise, block (PathFlow active, team resources in use).
 //
 // sessionDir is the path to the session directory, e.g.,
@@ -92,10 +93,14 @@ func CheckTeamDelete(stdin io.Reader, sessionDir, sentinelDir string) (*Verdict,
 		return &Verdict{Allow: true}, nil
 	}
 
-	// PF7-END gate: if pf-6 sentinel exists, allow TeamDelete.
+	// PF7-END gate: if pf-6 sentinel exists, check pipeline stages then allow TeamDelete.
 	if isTeamDelete {
 		pf6Path := filepath.Join(sentinelDir, "pathflow-pf-6")
 		if _, err := os.Stat(pf6Path); err == nil {
+			// Also verify ALL pipeline stage sentinels exist.
+			if v := checkPipelineStageSentinels(sessionDir, sentinelDir); v != nil {
+				return v, nil
+			}
 			return &Verdict{Allow: true}, nil
 		}
 	}
@@ -117,6 +122,48 @@ func CheckTeamDelete(stdin io.Reader, sessionDir, sentinelDir string) (*Verdict,
 		),
 	}, nil
 }
+
+// checkPipelineStageSentinels verifies that all pipeline stage sentinels exist
+// for the current work type. Returns a blocking verdict if any are missing.
+func checkPipelineStageSentinels(sessionDir, sentinelDir string) *Verdict {
+	workType := sentinel.ReadWorkTypeFromSessionStatus(sessionDir)
+	if workType == "" {
+		// No work type available — allow through.
+		return nil
+	}
+
+	projectDir := filepath.Join(sentinelDir, "..", "..", "..", "..")
+	configDir := filepath.Join(projectDir, ".codeflow", "config", "pathflow")
+
+	pipelines, err := sentinel.LoadPipelines(configDir)
+	if err != nil {
+		// Config load failure — graceful degradation, allow through.
+		slog.Warn("team-guard: cannot load pipelines for stage check", "error", err)
+		return nil
+	}
+
+	pipeline, exists := pipelines[workType]
+	if !exists {
+		// Unknown work type — allow through.
+		return nil
+	}
+
+	ok, missing := sentinel.VerifyCumulativeStageSentinels(sentinelDir, pipeline, len(pipeline)-1)
+	if !ok {
+		return &Verdict{
+			Allow: false,
+			Reason: fmt.Sprintf(
+				"BLOCKED: TeamDelete blocked — stage sentinel missing: %s\n"+
+					"All pipeline stages must complete before team deletion.\n"+
+					"Pipeline for %s: %v\n",
+				missing, workType, pipeline,
+			),
+		}
+	}
+
+	return nil
+}
+
 
 // HandlePostTeamDelete performs PathFlow cleanup after a successful TeamDelete.
 // This is the PostToolUse counterpart to the PreToolUse guard.
@@ -163,5 +210,36 @@ func HandlePostTeamDelete(sessionDir, projectDir, sessionID string) error {
 			"path", checkpointPath, "error", err)
 	}
 
+	// 5. Log team delete completion to cleanup JSONL.
+	logTeamDeleteCompleted(projectDir, sessionID)
+
 	return nil
+}
+
+// logTeamDeleteCompleted writes a team_delete_completed event to the cleanup JSONL log.
+func logTeamDeleteCompleted(projectDir, sessionID string) {
+	logDir := filepath.Join(projectDir, ".state", "logs", "sessions")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	entry := map[string]any{
+		"event":      "team_delete_completed",
+		"session_id": sessionID,
+		"timestamp":  now.Format(time.RFC3339),
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+
+	date := now.Format("2006-01-02")
+	logFile := filepath.Join(logDir, "cleanup-"+date+".jsonl")
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }

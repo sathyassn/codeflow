@@ -256,7 +256,7 @@
           "assigned_to": "team-lead",
           "operation": "Spawn stage teammate per pipeline",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-04] when creating this task in the tracker.",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+          "enforcement_note": "⛔ SPAWN-AND-WAIT: You MUST spawn the primary stage teammate, wait for STAGE-COMPLETE message, and verify the ws-* sentinel was created. Marking complete without STAGE-COMPLETE is a PROTOCOL VIOLATION. Cumulative: all prior pipeline stage sentinels must exist."
         },
         {
           "id": "PF4-TSK-06",
@@ -268,7 +268,7 @@
           "assigned_to": "team-lead",
           "operation": "Spawn cf-review with mode per work type",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-05] when creating this task in the tracker.",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+          "enforcement_note": "⛔ SPAWN-AND-WAIT: You MUST spawn cf-review and wait for APPROVED or CHANGES_REQUESTED verdict via STAGE-COMPLETE: WS-REV. The ws-rev sentinel can ONLY be created by cf-review's SendMessage. Marking complete without this signal is checkpoint gaming — a CRITICAL PROTOCOL VIOLATION. Cumulative: all prior pipeline stage sentinels must exist."
         },
         {
           "id": "PF4-TSK-07",
@@ -281,7 +281,7 @@
           "operation": "Spawn cf-quality-assurance (if pipeline includes WS-QA)",
           "condition": "if_pipeline_includes_qa",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF4-TSK-06] when creating this task in the tracker.",
-          "enforcement_note": "Evaluate the condition field first. If condition applies: MUST execute, mark completed after success. If condition does not apply: mark skipped. Skipping without evaluating the condition is a PROTOCOL VIOLATION."
+          "enforcement_note": "Evaluate the condition field first. If YES: ⛔ SPAWN-AND-WAIT: spawn cf-quality-assurance, wait for STAGE-COMPLETE: WS-QA with PASS verdict. Cumulative: all prior pipeline stage sentinels must exist. If NO (DOCS, PLAN, SPKE): mark skipped."
         }
       ],
       "required_tasks": [

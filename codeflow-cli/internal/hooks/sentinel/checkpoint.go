@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,9 @@ var pfTaskRe = regexp.MustCompile(`(PF\d+-TSK-\d+)`)
 
 // pfPhaseNumRe extracts the phase number from a PF task ID.
 var pfPhaseNumRe = regexp.MustCompile(`^PF(\d+)-TSK-\d+$`)
+
+// pfTaskNumRe extracts the task number from a PF task ID.
+var pfTaskNumRe = regexp.MustCompile(`^PF\d+-TSK-(\d+)$`)
 
 // CheckpointPhase represents a single phase entry in the checkpoint JSON.
 type CheckpointPhase struct {
@@ -52,11 +56,8 @@ type taskCompletedInput struct {
 }
 
 // RegisterCheckpointTask parses PostToolUse stdin for TaskCreate calls,
-// extracts PF{N}-TSK-{NN} from the subject, validates cross-phase dependencies,
-// and registers the task in the checkpoint file.
-//
-// The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
-// The sentinelDir should be: {projectDir}/.state/sentinels/pathflow/{sessionID}/
+// extracts PF{N}-TSK-{NN} from the subject, validates cross-phase dependencies
+// (cumulative: ALL prior phases must have sentinels), and registers the task.
 func RegisterCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Verdict {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
@@ -92,32 +93,29 @@ func RegisterCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 	// Extract PF task ID from subject.
 	matches := pfTaskRe.FindStringSubmatch(tc.Subject)
 	if matches == nil {
-		// Not a PathFlow task -- ignore silently.
 		return &Verdict{Allow: true}
 	}
 
 	taskID := matches[1]
 
-	// Extract phase number.
 	phaseNum, err := extractPhaseNum(taskID)
 	if err != nil {
 		return &Verdict{Allow: true}
 	}
 
-	// Cross-phase gate: if phase > 1, require previous phase sentinel.
+	// CUMULATIVE cross-phase gate: require ALL prior phase sentinels.
 	if phaseNum > 1 {
-		prevSentinel := fmt.Sprintf("pf-%d", phaseNum-1)
-		if !hasSentinelFile(sentinelDir, prevSentinel) {
+		ok, missing := VerifyCumulativePhaseSentinels(sentinelDir, phaseNum-1)
+		if !ok {
 			phaseID := fmt.Sprintf("PF%d", phaseNum)
-			prevPhaseID := fmt.Sprintf("PF%d", phaseNum-1)
 			return &Verdict{
 				Allow: false,
 				Reason: fmt.Sprintf(
 					"CHECKPOINT BLOCK: Cannot register task '%s' for phase %s.\n"+
-						"Phase %s is not yet complete -- its sentinel (pathflow-%s) does not exist.\n"+
-						"All %s tasks must be registered and completed before %s tasks can be created.\n"+
-						"Action: Complete all %s tasks first, then retry.",
-					taskID, phaseID, prevPhaseID, prevSentinel, prevPhaseID, phaseID, prevPhaseID,
+						"Phase sentinel '%s' does not exist.\n"+
+						"All prior phase sentinels (pf-1 through pf-%d) must exist before %s tasks can be created.\n"+
+						"Action: Complete all prior phases first, then retry.",
+					taskID, phaseID, missing, phaseNum-1, phaseID,
 				),
 			}
 		}
@@ -127,39 +125,32 @@ func RegisterCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 	checkpointFile := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
 	checkpoint, err := readCheckpoint(checkpointFile)
 	if err != nil {
-		// Cannot read checkpoint -- allow through but do not register.
 		return &Verdict{Allow: true}
 	}
 
 	phaseKey := fmt.Sprintf("PF%d", phaseNum)
 	phase, ok := checkpoint.Phases[phaseKey]
 	if !ok {
-		// Phase not initialized in checkpoint -- allow through.
 		return &Verdict{Allow: true}
 	}
 
-	// Check if already registered (idempotent).
 	if _, exists := phase.Registered[taskID]; exists {
 		return &Verdict{Allow: true}
 	}
 
-	// Register with timestamp.
 	phase.Registered[taskID] = time.Now().UTC().Format(time.RFC3339)
 
 	if err := writeCheckpoint(checkpointFile, checkpoint); err != nil {
-		// Write error -- allow through.
 		return &Verdict{Allow: true}
 	}
 
 	return &Verdict{Allow: true}
 }
 
-// CompleteCheckpointTask parses TaskCompleted stdin, extracts PF{N}-TSK-{NN}
-// from task_subject, validates cross-phase dependencies, marks the task
-// complete, and creates a phase sentinel if all tasks in the phase are done.
-//
-// The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
-// The sentinelDir should be: {projectDir}/.state/sentinels/pathflow/{sessionID}/
+// CompleteCheckpointTask parses TaskCompleted stdin, extracts PF{N}-TSK-{NN},
+// validates cumulative cross-phase dependencies, marks the task complete,
+// checks PF4 stage sentinel gates, and creates a phase sentinel if all tasks
+// in the phase are done.
 func CompleteCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Verdict {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
@@ -179,7 +170,6 @@ func CompleteCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 		return &Verdict{Allow: true}
 	}
 
-	// Extract PF task ID from subject.
 	matches := pfTaskRe.FindStringSubmatch(input.TaskSubject)
 	if matches == nil {
 		return &Verdict{Allow: true}
@@ -187,26 +177,24 @@ func CompleteCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 
 	taskID := matches[1]
 
-	// Extract phase number.
 	phaseNum, err := extractPhaseNum(taskID)
 	if err != nil {
 		return &Verdict{Allow: true}
 	}
 
-	// Cross-phase gate: if phase > 1, require previous phase sentinel.
+	// CUMULATIVE cross-phase gate: require ALL prior phase sentinels.
 	if phaseNum > 1 {
-		prevSentinel := fmt.Sprintf("pf-%d", phaseNum-1)
-		if !hasSentinelFile(sentinelDir, prevSentinel) {
+		ok, missing := VerifyCumulativePhaseSentinels(sentinelDir, phaseNum-1)
+		if !ok {
 			phaseID := fmt.Sprintf("PF%d", phaseNum)
-			prevPhaseID := fmt.Sprintf("PF%d", phaseNum-1)
 			return &Verdict{
 				Allow: false,
 				Reason: fmt.Sprintf(
 					"CHECKPOINT BLOCK: Cannot complete task '%s' for phase %s.\n"+
-						"Phase %s is not yet complete -- its sentinel (pathflow-%s) does not exist.\n"+
-						"All %s tasks must be registered and completed before %s tasks can finish.\n"+
-						"Action: Complete all %s tasks first, then retry.",
-					taskID, phaseID, prevPhaseID, prevSentinel, prevPhaseID, phaseID, prevPhaseID,
+						"Phase sentinel '%s' does not exist.\n"+
+						"All prior phase sentinels (pf-1 through pf-%d) must exist before %s tasks can finish.\n"+
+						"Action: Complete all prior phases first, then retry.",
+					taskID, phaseID, missing, phaseNum-1, phaseID,
 				),
 			}
 		}
@@ -225,12 +213,10 @@ func CompleteCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 		return &Verdict{Allow: true}
 	}
 
-	// Check if sentinel already created (phase already done).
 	if phase.SentinelCreated {
 		return &Verdict{Allow: true}
 	}
 
-	// Mark completed with timestamp (idempotent).
 	if _, exists := phase.Completed[taskID]; !exists {
 		phase.Completed[taskID] = time.Now().UTC().Format(time.RFC3339)
 
@@ -239,17 +225,91 @@ func CompleteCheckpointTask(stdin io.Reader, sessionDir, sentinelDir string) *Ve
 		}
 	}
 
+	// PF4 stage task completion gate: verify cumulative stage sentinels.
+	if phaseNum == 4 {
+		if v := checkPF4StageSentinels(taskID, sentinelDir, checkpoint, phase, checkpointFile); v != nil {
+			return v
+		}
+	}
+
 	// Check if phase is now complete.
-	if isPhaseComplete(phase, checkpoint.Context) {
+	if isPhaseComplete(phase, checkpoint.Context, sentinelDir, phaseNum) {
 		sentinelName := fmt.Sprintf("pf-%d", phaseNum)
 		if err := createSentinelFile(sentinelDir, sentinelName); err == nil {
 			phase.SentinelCreated = true
-			// Best-effort write of sentinel_created flag.
 			_ = writeCheckpoint(checkpointFile, checkpoint)
 		}
 	}
 
 	return &Verdict{Allow: true}
+}
+
+// checkPF4StageSentinels verifies cumulative stage sentinels for PF4 stage tasks
+// (PF4-TSK-05 through PF4-TSK-07). If the corresponding pipeline stage sentinel
+// is missing, the completion is undone and a blocking verdict is returned.
+func checkPF4StageSentinels(taskID, sentinelDir string, checkpoint *CheckpointData, phase *CheckpointPhase, checkpointFile string) *Verdict {
+	taskNum, err := extractTaskNum(taskID)
+	if err != nil {
+		return nil
+	}
+
+	if taskNum < 5 {
+		return nil
+	}
+
+	pipelineIndex := taskNum - 5
+
+	configDir := deriveConfigDir(sentinelDir)
+	pipelines, err := LoadPipelines(configDir)
+	if err != nil {
+		slog.Warn("checkpoint: cannot load pipelines for PF4 stage check", "error", err)
+		return nil
+	}
+
+	workType := ""
+	if checkpoint.Context != nil {
+		workType = checkpoint.Context.WorkType
+	}
+	if workType == "" {
+		return nil
+	}
+
+	pipeline, exists := pipelines[workType]
+	if !exists {
+		return nil
+	}
+
+	if pipelineIndex >= len(pipeline) {
+		return nil
+	}
+
+	ok, missing := VerifyCumulativeStageSentinels(sentinelDir, pipeline, pipelineIndex)
+	if !ok {
+		delete(phase.Completed, taskID)
+		_ = writeCheckpoint(checkpointFile, checkpoint)
+
+		return &Verdict{
+			Allow: false,
+			Reason: fmt.Sprintf(
+				"CHECKPOINT BLOCK: Cannot complete %s. Stage sentinel '%s' missing.\n"+
+					"All prior pipeline stages must complete before this task can be marked done.\n"+
+					"Pipeline for %s: %v",
+				taskID, missing, workType, pipeline,
+			),
+		}
+	}
+
+	return nil
+}
+
+// extractTaskNum extracts the task number from a PF task ID.
+// "PF4-TSK-06" -> 6
+func extractTaskNum(taskID string) (int, error) {
+	matches := pfTaskNumRe.FindStringSubmatch(taskID)
+	if matches == nil {
+		return 0, fmt.Errorf("invalid PF task ID: %s", taskID)
+	}
+	return strconv.Atoi(matches[1])
 }
 
 // extractPhaseNum extracts the phase number from a PF task ID.
@@ -264,26 +324,43 @@ func extractPhaseNum(taskID string) (int, error) {
 
 // isPhaseComplete checks whether all expected tasks in a phase are completed,
 // skipped, or auto-skipped by condition.
-func isPhaseComplete(phase *CheckpointPhase, ctx *CheckpointContext) bool {
+// For PF4, additionally verifies ALL pipeline stage sentinels exist.
+func isPhaseComplete(phase *CheckpointPhase, ctx *CheckpointContext, sentinelDir string, phaseNum int) bool {
 	if len(phase.Expected) == 0 {
 		return false
 	}
 
 	for _, taskID := range phase.Expected {
-		// Check if completed.
 		if _, ok := phase.Completed[taskID]; ok {
 			continue
 		}
-		// Check if skipped.
 		if _, ok := phase.Skipped[taskID]; ok {
 			continue
 		}
-		// Check auto-skip via conditions.
 		if autoSkipped(taskID, phase.Conditions, ctx) {
 			continue
 		}
-		// Task is not done.
 		return false
+	}
+
+	// For PF4: additionally require ALL pipeline stage sentinels.
+	if phaseNum == 4 && sentinelDir != "" && ctx != nil && ctx.WorkType != "" {
+		configDir := deriveConfigDir(sentinelDir)
+		pipelines, err := LoadPipelines(configDir)
+		if err != nil {
+			slog.Warn("checkpoint: cannot load pipelines for PF4 completion check", "error", err)
+			return true
+		}
+
+		pipeline, exists := pipelines[ctx.WorkType]
+		if !exists {
+			return true
+		}
+
+		ok, _ := VerifyCumulativeStageSentinels(sentinelDir, pipeline, len(pipeline)-1)
+		if !ok {
+			return false
+		}
 	}
 
 	return true
@@ -303,11 +380,8 @@ func autoSkipped(taskID string, conditions map[string]string, ctx *CheckpointCon
 
 	switch cond {
 	case "adhoc_only":
-		// Skip if origin is "planned".
 		return ctx.Origin == "planned"
-
 	case "if_pipeline_includes_qa":
-		// Skip if work type is DOCS, PLAN, or SPKE (no QA stage).
 		wt := strings.ToUpper(ctx.WorkType)
 		return wt == "DOCS" || wt == "PLAN" || wt == "SPKE"
 	}
@@ -315,8 +389,30 @@ func autoSkipped(taskID string, conditions map[string]string, ctx *CheckpointCon
 	return false
 }
 
+// SetCheckpointContext updates the checkpoint context with a key-value pair.
+func SetCheckpointContext(checkpointFile, key, value string) error {
+	checkpoint, err := readCheckpoint(checkpointFile)
+	if err != nil {
+		return fmt.Errorf("set checkpoint context: %w", err)
+	}
+
+	if checkpoint.Context == nil {
+		checkpoint.Context = &CheckpointContext{}
+	}
+
+	switch key {
+	case "work_type":
+		checkpoint.Context.WorkType = value
+	case "origin":
+		checkpoint.Context.Origin = value
+	default:
+		return fmt.Errorf("set checkpoint context: unknown key %q", key)
+	}
+
+	return writeCheckpoint(checkpointFile, checkpoint)
+}
+
 // readCheckpoint reads and parses the checkpoint JSON file.
-// Returns an empty checkpoint structure if the file does not exist.
 func readCheckpoint(path string) (*CheckpointData, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -332,8 +428,6 @@ func readCheckpoint(path string) (*CheckpointData, error) {
 }
 
 // parseCheckpoint parses checkpoint JSON bytes into a CheckpointData struct.
-// The checkpoint JSON has dynamic keys (PF1, PF2, ..., context), so we
-// unmarshal into a raw map first and then extract typed fields.
 func parseCheckpoint(data []byte) (*CheckpointData, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -353,11 +447,9 @@ func parseCheckpoint(data []byte) (*CheckpointData, error) {
 			continue
 		}
 
-		// Phase keys start with "PF".
 		if strings.HasPrefix(key, "PF") {
 			var phase CheckpointPhase
 			if err := json.Unmarshal(val, &phase); err == nil {
-				// Ensure maps are initialized.
 				if phase.Registered == nil {
 					phase.Registered = make(map[string]string)
 				}
@@ -378,14 +470,12 @@ func parseCheckpoint(data []byte) (*CheckpointData, error) {
 	return result, nil
 }
 
-// writeCheckpoint writes the checkpoint data to a JSON file atomically
-// (write to tmp file, then rename).
+// writeCheckpoint writes the checkpoint data to a JSON file atomically.
 func writeCheckpoint(path string, data *CheckpointData) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create checkpoint dir: %w", err)
 	}
 
-	// Build the output map preserving the expected structure.
 	out := make(map[string]any)
 	for key, phase := range data.Phases {
 		out[key] = phase
@@ -399,7 +489,6 @@ func writeCheckpoint(path string, data *CheckpointData) error {
 		return fmt.Errorf("marshal checkpoint: %w", err)
 	}
 
-	// Atomic write: tmp + rename.
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, b, 0o644); err != nil {
 		return fmt.Errorf("write checkpoint tmp: %w", err)

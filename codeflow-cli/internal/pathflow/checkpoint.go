@@ -139,16 +139,16 @@ func (c *Checkpoint) InitAllPhases(checkpointPath, configPath string) error {
 }
 
 // RegisterTask registers a task in the checkpoint. It extracts the phase from
-// the task ID (e.g., PF1-TSK-01 -> PF1) and verifies that the previous phase
-// sentinel exists (cross-phase gate). Returns ErrCrossPhaseBlock if the gate
-// check fails. Idempotent: registering an already-registered task is a no-op.
+// the task ID (e.g., PF1-TSK-01 -> PF1) and verifies that all prior phase
+// sentinels exist (cumulative cross-phase gate). Returns ErrCrossPhaseBlock if
+// the gate check fails. Idempotent: registering an already-registered task is a no-op.
 func (c *Checkpoint) RegisterTask(checkpointPath, sentinelDir, taskID string) error {
 	phaseID, err := extractPhase(taskID)
 	if err != nil {
 		return err
 	}
 
-	// Cross-phase gate: PF{N} requires PF{N-1} sentinel for N > 1.
+	// CUMULATIVE cross-phase gate: PF{N} requires ALL pf-1 through pf-{N-1} sentinels.
 	if err := c.checkCrossPhaseGate(sentinelDir, phaseID); err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (c *Checkpoint) CompleteTask(checkpointPath, sentinelDir, taskID string) er
 		}
 
 		// Check phase completion and create sentinel if done.
-		if IsPhaseComplete(pc, cf.Context) {
+		if IsPhaseComplete(pc, cf.Context, sentinelDir, phaseID) {
 			sentinelName := phaseSentinelName(phaseID)
 			if err := Create(sentinelDir, sentinelName); err != nil {
 				return fmt.Errorf("checkpoint: creating sentinel: %w", err)
@@ -230,7 +230,7 @@ func (c *Checkpoint) SkipTask(checkpointPath, sentinelDir, taskID string) error 
 			pc.Skipped[taskID] = c.timestamp()
 		}
 
-		if IsPhaseComplete(pc, cf.Context) {
+		if IsPhaseComplete(pc, cf.Context, sentinelDir, phaseID) {
 			sentinelName := phaseSentinelName(phaseID)
 			if err := Create(sentinelDir, sentinelName); err != nil {
 				return fmt.Errorf("checkpoint: creating sentinel: %w", err)
@@ -317,6 +317,18 @@ func (c *Checkpoint) ResetAllPhases(checkpointPath, configPath string) error {
 	return writeCheckpointFileUnlocked(checkpointPath, cf)
 }
 
+// SetContext updates a key-value pair in the checkpoint context.
+// It reads the checkpoint file, updates the context, and writes back atomically.
+func (c *Checkpoint) SetContext(checkpointPath, key, value string) error {
+	return c.withLock(checkpointPath, func(cf *CheckpointFile) error {
+		if cf.Context == nil {
+			cf.Context = make(map[string]string)
+		}
+		cf.Context[key] = value
+		return nil
+	})
+}
+
 // GetStatus returns the checkpoint state for a specific phase.
 func (c *Checkpoint) GetStatus(checkpointPath, phase string) (*PhaseCheckpoint, error) {
 	cf, err := readCheckpointFile(checkpointPath)
@@ -334,7 +346,7 @@ func (c *Checkpoint) GetStatus(checkpointPath, phase string) (*PhaseCheckpoint, 
 // IsPhaseComplete checks if all expected tasks in a phase are completed,
 // skipped, or auto-skipped via conditions. An empty expected list means
 // the phase is NOT complete (safety: uninitialized phases should not pass).
-func IsPhaseComplete(pc *PhaseCheckpoint, ctx map[string]string) bool {
+func IsPhaseComplete(pc *PhaseCheckpoint, ctx map[string]string, sentinelDir string, phaseID string) bool {
 	if len(pc.Expected) == 0 {
 		return false
 	}
@@ -356,6 +368,32 @@ func IsPhaseComplete(pc *PhaseCheckpoint, ctx map[string]string) bool {
 		// Task is neither completed, skipped, nor auto-skippable.
 		return false
 	}
+
+	// For PF4: additionally require ALL pipeline stage sentinels.
+	if phaseID == "PF4" && sentinelDir != "" {
+		workType := ctx["work_type"]
+		if workType != "" {
+			configDir := filepath.Join(sentinelDir, "..", "..", "..", "..", ".codeflow", "config", "pathflow")
+			configPath := filepath.Join(configDir, "pathflow-config.json")
+			if data, err := os.ReadFile(configPath); err == nil {
+				var config struct {
+					Pipelines map[string][]string `json:"pipelines"`
+				}
+				if json.Unmarshal(data, &config) == nil {
+					if pipeline, ok := config.Pipelines[workType]; ok {
+						for i := 0; i < len(pipeline); i++ {
+							name := strings.ToLower(pipeline[i])
+							sentinelPath := filepath.Join(sentinelDir, "pathflow-"+name)
+							if _, err := os.Stat(sentinelPath); os.IsNotExist(err) {
+								return false
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return true
 }
 
@@ -384,7 +422,7 @@ func extractPhase(taskID string) (string, error) {
 	return m[1], nil
 }
 
-// checkCrossPhaseGate verifies that the previous phase sentinel exists.
+// checkCrossPhaseGate verifies that ALL prior phase sentinels exist (cumulative).
 // For PF1, no gate check is needed (it has no predecessor).
 func (c *Checkpoint) checkCrossPhaseGate(sentinelDir, phaseID string) error {
 	// Extract the phase number.
@@ -399,12 +437,15 @@ func (c *Checkpoint) checkCrossPhaseGate(sentinelDir, phaseID string) error {
 		return nil
 	}
 
-	prevPhase := fmt.Sprintf("PF%d", num-1)
-	prevSentinel := phaseSentinelName(prevPhase)
+	// CUMULATIVE: check ALL phases from 1 through num-1.
+	for i := 1; i < num; i++ {
+		prevPhase := fmt.Sprintf("PF%d", i)
+		prevSentinel := phaseSentinelName(prevPhase)
 
-	if !Exists(sentinelDir, prevSentinel) {
-		return fmt.Errorf("%w: phase %s requires sentinel %s (phase %s not complete)",
-			ErrCrossPhaseBlock, phaseID, prevSentinel, prevPhase)
+		if !Exists(sentinelDir, prevSentinel) {
+			return fmt.Errorf("%w: phase %s requires sentinel %s (phase %s not complete)",
+				ErrCrossPhaseBlock, phaseID, prevSentinel, prevPhase)
+		}
 	}
 	return nil
 }

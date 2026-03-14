@@ -196,19 +196,30 @@ func End(ctx context.Context, d *db.DB, ledgerDir string, runtimeDir string) err
 	}
 
 	// Clean up runtime session files (single authoritative cleanup function).
-	CleanRuntimeFiles(runtimeDir)
+	CleanRuntimeFiles(runtimeDir, sessionID)
 
 	return nil
 }
 
 // CleanRuntimeFiles removes session runtime files. This is the single
-// authoritative cleanup function — both session.End() and the SessionEnd
+// authoritative cleanup function -- both session.End() and the SessionEnd
 // hook call this instead of managing file removal independently.
-func CleanRuntimeFiles(runtimeDir string) {
-	// Remove codeflow-env.sh so Current() no longer resolves this session.
+// If sessionID is non-empty, codeflow-env.sh is only removed when its
+// stored session ID matches (race-safe: avoids clobbering a new session).
+func CleanRuntimeFiles(runtimeDir string, sessionID string) {
 	envFile := filepath.Join(runtimeDir, EnvFile)
+	if sessionID != "" {
+		// Only remove env file if it belongs to the session being cleaned.
+		if fileSID, err := parseEnvFileSessionID(envFile); err == nil && fileSID != "" {
+			if fileSID != sessionID {
+				// Different session owns the env file -- skip removal.
+				goto cleanLock
+			}
+		}
+	}
 	_ = os.Remove(envFile)
-	// Remove session lock file.
+
+cleanLock:
 	lockFile := filepath.Join(runtimeDir, "session.lock")
 	_ = os.Remove(lockFile)
 }

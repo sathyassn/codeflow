@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -802,6 +803,8 @@ Stdin format:
 // runHookCheckpointComplete implements the hook-based checkpoint task completion logic.
 // After phase sentinel creation, updates pathflow-session-status.json with
 // status="pf-in-progress" and last_completed_phase.
+// When pf-3 is newly created, infers work_type from the git branch and writes
+// it to both the checkpoint context and pathflow-session-status.json.
 func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) error {
 	projectDir := detectProjectDir()
 	sessionID := resolveSessionID(projectDir)
@@ -828,6 +831,13 @@ func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) err
 				}
 				s.LastCompletedPhase = phase
 			})
+
+			// When pf-3 is newly created, infer work_type from git branch
+			// and write to checkpoint context + session status.
+			if phase == "pf-3" {
+				registerWorkType(projectDir, sessionDir)
+			}
+
 			break
 		}
 	}
@@ -838,6 +848,32 @@ func runHookCheckpointComplete(stdin io.Reader, _ io.Writer, errW io.Writer) err
 	}
 
 	return nil
+}
+
+// registerWorkType reads the current git branch, infers the work type,
+// and writes it to both the checkpoint context and session status.
+func registerWorkType(projectDir, sessionDir string) {
+	branch := detectCurrentBranch()
+	if branch == "" {
+		return
+	}
+
+	workType := sentinel.InferWorkTypeFromBranch(branch)
+	if workType == "" {
+		slog.Warn("checkpoint-complete: cannot infer work type from branch", "branch", branch)
+		return
+	}
+
+	// Write to checkpoint context.
+	checkpointFile := filepath.Join(sessionDir, "pathflow-phase-tasks.json")
+	if err := sentinel.SetCheckpointContext(checkpointFile, "work_type", workType); err != nil {
+		slog.Warn("checkpoint-complete: failed to set checkpoint work_type", "error", err)
+	}
+
+	// Write to session status.
+	_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
+		s.WorkType = workType
+	})
 }
 
 // listPhaseSentinels returns a set of phase sentinel names (e.g., "pf-1", "pf-2")

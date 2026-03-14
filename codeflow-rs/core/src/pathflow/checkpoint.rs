@@ -227,7 +227,18 @@ impl Checkpoint {
                 pc.completed.insert(task_id.to_string(), (self.now)());
             }
 
-            if is_phase_complete(pc, &context) {
+            // PF4 stage task completion gate: verify cumulative stage sentinels.
+            if phase_id == "PF4" {
+                if let Some(err) =
+                    check_pf4_stage_sentinels(task_id, sentinel_dir, &context, pc)
+                {
+                    // Undo the completion -- stage sentinel missing.
+                    pc.completed.remove(task_id);
+                    return Err(err);
+                }
+            }
+
+            if is_phase_complete(pc, &context, sentinel_dir, &phase_id) {
                 let sentinel_name = phase_sentinel_name(&phase_id);
                 super::sentinel::create_by_name(sentinel_dir, &sentinel_name)?;
                 pc.sentinel_created = true;
@@ -268,7 +279,7 @@ impl Checkpoint {
                 pc.skipped.insert(task_id.to_string(), (self.now)());
             }
 
-            if is_phase_complete(pc, &context) {
+            if is_phase_complete(pc, &context, sentinel_dir, &phase_id) {
                 let sentinel_name = phase_sentinel_name(&phase_id);
                 super::sentinel::create_by_name(sentinel_dir, &sentinel_name)?;
                 pc.sentinel_created = true;
@@ -293,6 +304,26 @@ impl Checkpoint {
             .get(phase)
             .cloned()
             .ok_or_else(|| PathflowError::PhaseNotInitialized(phase.to_string()))
+    }
+
+
+    /// Set a key-value pair in the checkpoint context.
+    ///
+    /// Used to store session metadata like `work_type` and `origin`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PathflowError` on I/O or lock errors.
+    pub fn set_context(
+        &self,
+        checkpoint_path: &Path,
+        key: &str,
+        value: &str,
+    ) -> Result<(), PathflowError> {
+        self.with_lock(checkpoint_path, |cf| {
+            cf.context.insert(key.to_string(), value.to_string());
+            Ok(())
+        })
     }
 
     /// Perform an atomic read-modify-write on the checkpoint file with
@@ -336,7 +367,7 @@ impl Checkpoint {
 /// An empty expected list means the phase is NOT complete (safety).
 #[must_use]
 #[allow(clippy::implicit_hasher)]
-pub fn is_phase_complete(pc: &PhaseCheckpoint, ctx: &HashMap<String, String>) -> bool {
+pub fn is_phase_complete(pc: &PhaseCheckpoint, ctx: &HashMap<String, String>, sentinel_dir: &Path, phase_id: &str) -> bool {
     if pc.expected.is_empty() {
         return false;
     }
@@ -355,6 +386,29 @@ pub fn is_phase_complete(pc: &PhaseCheckpoint, ctx: &HashMap<String, String>) ->
         }
         return false;
     }
+
+    // For PF4: additionally require ALL pipeline stage sentinels.
+    if phase_id == "PF4" {
+        let work_type = ctx.get("work_type").cloned().unwrap_or_default();
+        if !work_type.is_empty() {
+            let config_dir = sentinel_dir
+                .join("..").join("..").join("..").join("..")
+                .join(".codeflow").join("config").join("pathflow");
+            if let Ok(pipelines) = crate::hooks::pipeline::load_pipelines(&config_dir) {
+                if let Some(pipeline_stages) = pipelines.get(&work_type) {
+                    let (ok, _) = crate::hooks::pipeline::verify_cumulative_stage_sentinels(
+                        sentinel_dir,
+                        pipeline_stages,
+                        pipeline_stages.len().saturating_sub(1),
+                    );
+                    if !ok {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
     true
 }
 
@@ -386,7 +440,8 @@ fn phase_sentinel_name(phase_id: &str) -> String {
     format!("pf-{num}")
 }
 
-/// Verify the previous phase sentinel exists (cross-phase gate).
+/// Verify ALL prior phase sentinels exist (cumulative cross-phase gate).
+/// Mirrors Go `VerifyCumulativePhaseSentinels` -- checks pf-1 through pf-(N-1).
 fn check_cross_phase_gate(sentinel_dir: &Path, phase_id: &str) -> Result<(), PathflowError> {
     let num_str = phase_id.strip_prefix("PF").unwrap_or(phase_id);
     let num: u32 = num_str
@@ -397,15 +452,75 @@ fn check_cross_phase_gate(sentinel_dir: &Path, phase_id: &str) -> Result<(), Pat
         return Ok(()); // PF1 has no predecessor
     }
 
-    let prev_phase = format!("PF{}", num - 1);
-    let prev_sentinel = phase_sentinel_name(&prev_phase);
-
-    if !super::sentinel::check_by_name(sentinel_dir, &prev_sentinel) {
-        return Err(PathflowError::CrossPhaseBlock(format!(
-            "phase {phase_id} requires sentinel {prev_sentinel} (phase {prev_phase} not complete)"
-        )));
+    // Cumulative: check ALL prior phases, not just the immediate predecessor.
+    for i in 1..num {
+        let sentinel_name = format!("pf-{i}");
+        if !super::sentinel::check_by_name(sentinel_dir, &sentinel_name) {
+            return Err(PathflowError::CrossPhaseBlock(format!(
+                "phase {phase_id} requires sentinel {sentinel_name} (phase PF{i} not complete). All prior phase sentinels (pf-1 through pf-{}) must exist.",
+                num - 1
+            )));
+        }
     }
     Ok(())
+}
+
+
+/// Check PF4 stage sentinels for stage tasks (PF4-TSK-05 through PF4-TSK-07).
+/// If the corresponding pipeline stage sentinel is missing, returns an error
+/// to undo the completion. Mirrors Go `checkPF4StageSentinels()`.
+fn check_pf4_stage_sentinels(
+    task_id: &str,
+    sentinel_dir: &Path,
+    context: &HashMap<String, String>,
+    _pc: &PhaseCheckpoint,
+) -> Option<PathflowError> {
+    // Extract task number from task_id (e.g., "PF4-TSK-06" -> 6)
+    let re = regex::Regex::new(r"^PF\d+-TSK-(\d+)$").expect("valid regex");
+    let task_num: usize = re
+        .captures(task_id)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+
+    if task_num < 5 {
+        return None; // Only stage tasks (TSK-05+) need this check
+    }
+
+    let pipeline_index = task_num - 5;
+
+    let work_type = context.get("work_type").cloned().unwrap_or_default();
+    if work_type.is_empty() {
+        return None;
+    }
+
+    let config_dir = sentinel_dir
+        .join("..").join("..").join("..").join("..")
+        .join(".codeflow").join("config").join("pathflow");
+
+    let Ok(pipelines) = crate::hooks::pipeline::load_pipelines(&config_dir) else {
+        return None; // Config load failure -- allow through
+    };
+
+    let pipeline_stages = pipelines.get(&work_type)?;
+
+    if pipeline_index >= pipeline_stages.len() {
+        return None;
+    }
+
+    let (ok, missing) = crate::hooks::pipeline::verify_cumulative_stage_sentinels(
+        sentinel_dir,
+        pipeline_stages,
+        pipeline_index,
+    );
+
+    if !ok {
+        return Some(PathflowError::CrossPhaseBlock(format!(
+            "Cannot complete {task_id}. Stage sentinel '{missing}' missing. All prior pipeline stages must complete. Pipeline for {work_type}: {pipeline_stages:?}"
+        )));
+    }
+
+    None
 }
 
 fn read_checkpoint_file(path: &Path) -> Result<CheckpointFile, PathflowError> {
@@ -623,7 +738,7 @@ mod tests {
             skipped: HashMap::new(),
             sentinel_created: false,
         };
-        assert!(!is_phase_complete(&pc, &HashMap::new()));
+        assert!(!is_phase_complete(&pc, &HashMap::new(), std::path::Path::new("/tmp"), "PF1"));
     }
 
     #[test]
@@ -684,4 +799,172 @@ mod tests {
         let result = cp.get_status(&checkpoint_path, "PF1");
         assert!(result.is_err());
     }
+    // -- PF4 stage sentinel gate tests --
+
+    fn create_pf4_config(dir: &Path) -> std::path::PathBuf {
+        let config_dir = dir.join(".codeflow").join("config").join("pathflow");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("pathflow-config.json");
+        let config = serde_json::json!({
+            "phases": {
+                "PF1-INIT": {"phase_order": 1, "required_tasks": ["PF1-TSK-01"], "tasks": [{"id": "PF1-TSK-01"}]},
+                "PF4-EXECUTE": {"phase_order": 4, "required_tasks": ["PF4-TSK-05", "PF4-TSK-06", "PF4-TSK-07"], "tasks": [
+                    {"id": "PF4-TSK-05"},
+                    {"id": "PF4-TSK-06"},
+                    {"id": "PF4-TSK-07"}
+                ]}
+            },
+            "pipelines": {
+                "FEAT": ["WS-DEV", "WS-REV", "WS-QA"],
+                "DOCS": ["WS-DOCS", "WS-REV"],
+                "FIX": ["WS-DEV", "WS-REV", "WS-QA"]
+            }
+        });
+        let mut f = fs::File::create(&config_path).unwrap();
+        f.write_all(serde_json::to_string(&config).unwrap().as_bytes()).unwrap();
+        config_path
+    }
+
+    fn create_sentinel(dir: &Path, name: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(format!("pathflow-{name}")), b"").unwrap();
+    }
+
+    #[test]
+    fn test_pf4_tsk06_blocked_when_ws_dev_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let sentinel_dir = project_dir.join(".state").join("sentinels").join("pathflow").join("ses-test");
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        create_pf4_config(project_dir);
+
+        create_sentinel(&sentinel_dir, "ws-rev");
+
+        let mut ctx = HashMap::new();
+        ctx.insert("work_type".to_string(), "FEAT".to_string());
+        let pc = PhaseCheckpoint {
+            expected: vec!["PF4-TSK-05".into(), "PF4-TSK-06".into(), "PF4-TSK-07".into()],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-06", &sentinel_dir, &ctx, &pc);
+        assert!(result.is_some(), "PF4-TSK-06 should be blocked when ws-dev missing");
+        let err = result.unwrap();
+        assert!(err.to_string().contains("ws-dev"), "error should mention ws-dev: {err}");
+    }
+
+    #[test]
+    fn test_pf4_tsk07_blocked_cumulative() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let sentinel_dir = project_dir.join(".state").join("sentinels").join("pathflow").join("ses-test");
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        create_pf4_config(project_dir);
+
+        create_sentinel(&sentinel_dir, "ws-rev");
+        create_sentinel(&sentinel_dir, "ws-qa");
+
+        let mut ctx = HashMap::new();
+        ctx.insert("work_type".to_string(), "FEAT".to_string());
+        let pc = PhaseCheckpoint {
+            expected: vec![],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-07", &sentinel_dir, &ctx, &pc);
+        assert!(result.is_some(), "PF4-TSK-07 should be blocked when ws-dev missing");
+        let err = result.unwrap();
+        assert!(err.to_string().contains("ws-dev"), "error should mention first missing: {err}");
+    }
+
+    #[test]
+    fn test_pf4_tsk05_allowed_when_ws_dev_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let sentinel_dir = project_dir.join(".state").join("sentinels").join("pathflow").join("ses-test");
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        create_pf4_config(project_dir);
+
+        create_sentinel(&sentinel_dir, "ws-dev");
+
+        let mut ctx = HashMap::new();
+        ctx.insert("work_type".to_string(), "FEAT".to_string());
+        let pc = PhaseCheckpoint {
+            expected: vec![],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-05", &sentinel_dir, &ctx, &pc);
+        assert!(result.is_none(), "PF4-TSK-05 should be allowed when ws-dev exists");
+    }
+
+    #[test]
+    fn test_pf4_tsk07_skipped_for_docs_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let sentinel_dir = project_dir.join(".state").join("sentinels").join("pathflow").join("ses-test");
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        create_pf4_config(project_dir);
+
+        let mut ctx = HashMap::new();
+        ctx.insert("work_type".to_string(), "DOCS".to_string());
+        let pc = PhaseCheckpoint {
+            expected: vec![],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-07", &sentinel_dir, &ctx, &pc);
+        assert!(result.is_none(), "PF4-TSK-07 should be skipped for DOCS pipeline");
+    }
+
+    #[test]
+    fn test_pf4_tsk04_not_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = HashMap::new();
+        let pc = PhaseCheckpoint {
+            expected: vec![],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-04", dir.path(), &ctx, &pc);
+        assert!(result.is_none(), "PF4-TSK-04 should not be checked");
+    }
+
+    #[test]
+    fn test_pf4_no_work_type_allows_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = HashMap::new();
+        let pc = PhaseCheckpoint {
+            expected: vec![],
+            conditions: HashMap::new(),
+            registered: HashMap::new(),
+            completed: HashMap::new(),
+            skipped: HashMap::new(),
+            sentinel_created: false,
+        };
+
+        let result = check_pf4_stage_sentinels("PF4-TSK-06", dir.path(), &ctx, &pc);
+        assert!(result.is_none(), "empty work_type should allow through");
+    }
+
 }

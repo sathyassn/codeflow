@@ -399,6 +399,64 @@ impl GateCheck {
     pub fn new(sentinel_dir: PathBuf) -> Self {
         Self { sentinel_dir }
     }
+
+    /// Cumulative push/PR gate: verify ALL pf-1..pf-5 + ALL pipeline stage sentinels.
+    /// Mirrors Go `checkCumulativePushPRGate()` in gate/gate.go.
+    fn check_cumulative_push_pr_gate(&self) -> HookOutput {
+        use super::pipeline;
+
+        // Cumulative phase check: ALL pf-1 through pf-5.
+        let (ok, missing) = pipeline::verify_cumulative_phase_sentinels(&self.sentinel_dir, 5);
+        if !ok {
+            return HookOutput::Block {
+                reason: format!(
+                    "BLOCKED: PathFlow gate - prerequisite not met\n\
+                     Reason: git_push_pr requires all phases through PF5-VERIFY. \
+                     Missing phase sentinel: pathflow-{missing}\n\
+                     Gate: git_push_pr\n"
+                ),
+                category: Some(BlockCategory::Gate),
+            };
+        }
+
+        // Cumulative stage check: ALL pipeline stages.
+        let session_dir = pipeline::derive_session_dir(&self.sentinel_dir);
+        let work_type = pipeline::read_work_type_from_session_status(&session_dir);
+
+        if !work_type.is_empty() {
+            let config_dir = pipeline::derive_config_dir(&self.sentinel_dir);
+            match pipeline::load_pipelines(&config_dir) {
+                Ok(pipelines) => {
+                    if let Some(pipeline_stages) = pipelines.get(&work_type) {
+                        let (all_ok, missing_stage) =
+                            pipeline::verify_cumulative_stage_sentinels(
+                                &self.sentinel_dir,
+                                pipeline_stages,
+                                pipeline_stages.len().saturating_sub(1),
+                            );
+                        if !all_ok {
+                            return HookOutput::Block {
+                                reason: format!(
+                                    "BLOCKED: PathFlow gate - prerequisite not met\n\
+                                     Reason: git_push_pr requires all pipeline stages. \
+                                     Missing stage sentinel: pathflow-{missing_stage}\n\
+                                     Pipeline for {work_type}: {pipeline_stages:?}\n\
+                                     Gate: git_push_pr\n"
+                                ),
+                                category: Some(BlockCategory::Gate),
+                            };
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Config load failure -- graceful degradation, allow through.
+                    eprintln!("gate: cannot load pipelines for push/PR gate");
+                }
+            }
+        }
+
+        HookOutput::Allow
+    }
 }
 
 impl HookHandler for GateCheck {
@@ -425,29 +483,7 @@ impl HookHandler for GateCheck {
                     })
                 }
             }
-            GateType::GitPushPR => {
-                if !sentinel::check_by_name(&self.sentinel_dir, "pf-5") {
-                    return Ok(HookOutput::Block {
-                        reason: "BLOCKED: PathFlow gate - prerequisite not met\n\
-                                 Reason: git_push_pr requires PF5-VERIFY. \
-                                 No pathflow-pf-5 sentinel found.\n\
-                                 Gate: git_push_pr\n"
-                            .to_string(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
-                if !sentinel::check_by_name(&self.sentinel_dir, "ws-rev") {
-                    return Ok(HookOutput::Block {
-                        reason: "BLOCKED: PathFlow gate - prerequisite not met\n\
-                                 Reason: git_push_pr requires WS-REV (review completed). \
-                                 No pathflow-ws-rev sentinel found.\n\
-                                 Gate: git_push_pr\n"
-                            .to_string(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
-                Ok(HookOutput::Allow)
-            }
+            GateType::GitPushPR => Ok(self.check_cumulative_push_pr_gate()),
         }
     }
 
@@ -477,6 +513,42 @@ impl TeamGuard {
             session_dir,
             sentinel_dir,
         }
+    }
+
+    /// Check pipeline stage sentinels before allowing TeamDelete.
+    /// Mirrors Go `checkPipelineStageSentinels()` in team/guard.go.
+    fn check_pipeline_stage_sentinels(&self) -> Option<HookOutput> {
+        use super::pipeline;
+
+        let work_type = pipeline::read_work_type_from_session_status(&self.session_dir);
+        if work_type.is_empty() {
+            return None; // No work type -- allow through
+        }
+
+        let config_dir = pipeline::derive_config_dir(&self.sentinel_dir);
+        let Ok(pipelines) = pipeline::load_pipelines(&config_dir) else {
+            return None; // Config load failure -- graceful degradation
+        };
+
+        let pipeline_stages = pipelines.get(&work_type)?;
+
+        let (ok, missing) = pipeline::verify_cumulative_stage_sentinels(
+            &self.sentinel_dir,
+            pipeline_stages,
+            pipeline_stages.len().saturating_sub(1),
+        );
+        if !ok {
+            return Some(HookOutput::Block {
+                reason: format!(
+                    "BLOCKED: TeamDelete blocked -- stage sentinel missing: {missing}\n\
+                     All pipeline stages must complete before team deletion.\n\
+                     Pipeline for {work_type}: {pipeline_stages:?}\n"
+                ),
+                category: Some(BlockCategory::TeamGuard),
+            });
+        }
+
+        None
     }
 }
 
@@ -517,8 +589,12 @@ impl HookHandler for TeamGuard {
             return Ok(HookOutput::Allow);
         }
 
-        // PF7-END gate: if pf-6 sentinel exists, allow TeamDelete.
+        // PF7-END gate: if pf-6 sentinel exists AND all pipeline stages complete, allow TeamDelete.
         if is_team_delete && sentinel::check_by_name(&self.sentinel_dir, "pf-6") {
+            // Also verify ALL pipeline stage sentinels exist.
+            if let Some(block) = self.check_pipeline_stage_sentinels() {
+                return Ok(block);
+            }
             return Ok(HookOutput::Allow);
         }
 
@@ -1460,7 +1536,10 @@ mod tests {
     #[test]
     fn test_gate_check_dual_gate_push_allows_both() {
         let dir = tempfile::tempdir().unwrap();
-        sentinel::create_by_name(dir.path(), "pf-5").unwrap();
+        // Cumulative: all phase sentinels pf-1 through pf-5 must exist.
+        for i in 1..=5 {
+            sentinel::create_by_name(dir.path(), &format!("pf-{i}")).unwrap();
+        }
         sentinel::create_by_name(dir.path(), "ws-rev").unwrap();
         let handler = GateCheck::new(dir.path().to_path_buf());
         let input = HookInput {

@@ -5,6 +5,7 @@
 //! Session-specific hooks live in submodules.
 
 pub mod logging;
+pub mod pipeline;
 pub mod post_tool_use;
 pub mod pre_tool_use;
 pub mod prompt_validate;

@@ -102,32 +102,9 @@ impl SentinelWrite {
 
         let sentinel_dir = self.sentinel_dir()?;
 
-        // Stage ordering validation.
-        match stage_lower.as_str() {
-            "rev" => {
-                let has_primary = PRIMARY_STAGES
-                    .iter()
-                    .any(|ps| sentinel::check_by_name(&sentinel_dir, &format!("ws-{ps}")));
-                if !has_primary {
-                    return Ok(HookOutput::Block {
-                        reason:
-                            "BLOCKED: ws-rev requires prior primary stage (ws-dev/ws-plan/ws-docs/ws-test)"
-                                .into(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
-            }
-            "qa" => {
-                if !sentinel::check_by_name(&sentinel_dir, "ws-dev")
-                    && !sentinel::check_by_name(&sentinel_dir, "ws-test")
-                {
-                    return Ok(HookOutput::Block {
-                        reason: "BLOCKED: ws-qa requires prior ws-dev or ws-test sentinel".into(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
-            }
-            _ => {}
+        // Config-driven cumulative stage ordering validation.
+        if let Some(block_output) = self.validate_stage_ordering(&sentinel_dir, &stage_lower) {
+            return Ok(block_output);
         }
 
         // Create sentinel file.
@@ -148,6 +125,80 @@ impl SentinelWrite {
         }
 
         Ok(HookOutput::Allow)
+    }
+
+    /// Config-driven cumulative stage ordering validation.
+    /// Mirrors Go `validateStageOrdering()` in sentinel/stage.go.
+    fn validate_stage_ordering(
+        &self,
+        sentinel_dir: &Path,
+        stage_lower: &str,
+    ) -> Option<HookOutput> {
+        use super::pipeline;
+
+        // Try config-driven validation first.
+        if let Ok((session_dir, _)) = self.session_pathflow_dir() {
+            let work_type = pipeline::read_work_type_from_session_status(&session_dir);
+            if !work_type.is_empty() {
+                let config_dir = pipeline::derive_config_dir(sentinel_dir);
+                if let Ok(pipelines) = pipeline::load_pipelines(&config_dir) {
+                    if let Some(pipeline_stages) = pipelines.get(&work_type) {
+                        let current_stage = format!("WS-{}", stage_lower.to_uppercase());
+                        if let Some(current_index) =
+                            pipeline_stages.iter().position(|s| s == &current_stage)
+                        {
+                            if current_index > 0 {
+                                let (ok, missing) =
+                                    pipeline::verify_cumulative_stage_sentinels(
+                                        sentinel_dir,
+                                        pipeline_stages,
+                                        current_index - 1,
+                                    );
+                                if !ok {
+                                    return Some(HookOutput::Block {
+                                        reason: format!(
+                                            "BLOCKED: ws-{stage_lower} requires prior stage sentinel \
+                                             '{missing}' ({work_type} pipeline: {pipeline_stages:?})"
+                                        ),
+                                        category: Some(BlockCategory::Gate),
+                                    });
+                                }
+                            }
+                            return None; // Config-driven check passed
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to hardcoded ordering when config is unavailable.
+        match stage_lower {
+            "rev" => {
+                let has_primary = PRIMARY_STAGES
+                    .iter()
+                    .any(|ps| sentinel::check_by_name(sentinel_dir, &format!("ws-{ps}")));
+                if !has_primary {
+                    return Some(HookOutput::Block {
+                        reason: "BLOCKED: ws-rev requires prior primary stage \
+                                 (ws-dev/ws-plan/ws-docs/ws-test)"
+                            .into(),
+                        category: Some(BlockCategory::Gate),
+                    });
+                }
+            }
+            "qa" => {
+                if !sentinel::check_by_name(sentinel_dir, "ws-dev")
+                    && !sentinel::check_by_name(sentinel_dir, "ws-test")
+                {
+                    return Some(HookOutput::Block {
+                        reason: "BLOCKED: ws-qa requires prior ws-dev or ws-test sentinel".into(),
+                        category: Some(BlockCategory::Gate),
+                    });
+                }
+            }
+            _ => {}
+        }
+        None
     }
 }
 

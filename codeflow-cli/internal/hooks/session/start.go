@@ -32,6 +32,7 @@ type PathflowSessionStatus struct {
 	SessionID          string `json:"session_id"`
 	TeamName           string `json:"team_name"`
 	Status             string `json:"status"`
+	WorkType           string `json:"work_type,omitempty"`
 	LastCompletedPhase string `json:"last_completed_phase"`
 	LastCompletedStage string `json:"last_completed_stage"`
 	CreatedAt          string `json:"created_at"`
@@ -281,8 +282,15 @@ func (init_ *Initializer) StartInit(stdin io.Reader, projectDir string) (*InitRe
 
 	if input.Source == "startup" || input.Source == "unknown" {
 		teamWarnings := init_.detectStaleTeams()
-		for _, w := range teamWarnings {
-			result.warn("%s", w)
+		if len(teamWarnings) > 0 {
+			staleLogger := newCleanupLogger(projectDir, init_.Now)
+			for _, w := range teamWarnings {
+				result.warn("%s", w)
+				staleLogger.log("stale_team_detected", map[string]any{
+					"warning":      w,
+					"action_taken": "cleaned",
+				})
+			}
 		}
 	}
 
@@ -470,6 +478,8 @@ func (init_ *Initializer) createDirectories(projectDir, sessionID string) {
 // sweepAllStaleSessions uses pathflow-session-status.json to determine which
 // old sessions to clean. Replaces the tmux pane-based liveness check.
 func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
+	logger := newCleanupLogger(projectDir, init_.Now)
+	var found, cleaned int
 	sessionBase := filepath.Join(projectDir, ".state", "session")
 	entries, err := os.ReadDir(sessionBase)
 	if err != nil {
@@ -483,6 +493,7 @@ func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
 		if sid == currentSID {
 			continue
 		}
+		found++
 
 		pathflowDir := filepath.Join(sessionBase, sid, "pathflow")
 		status, readErr := ReadPathflowSessionStatus(pathflowDir)
@@ -490,6 +501,7 @@ func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
 		if readErr != nil || status == nil {
 			// Missing status file: clean unconditionally (pre-redesign orphan).
 			init_.removeStaleSessionArtifacts(projectDir, sid, "")
+			cleaned++
 			continue
 		}
 
@@ -497,17 +509,20 @@ func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
 		case "pf-complete":
 			// Session finished — clean.
 			init_.removeStaleSessionArtifacts(projectDir, sid, status.TeamName)
+			cleaned++
 
 		case "created":
 			// Stuck at startup. Check age.
 			if init_.statusFileAge(status) > time.Hour {
 				init_.removeStaleSessionArtifacts(projectDir, sid, "")
+				cleaned++
 			}
 
 		case "pf-started", "pf-in-progress":
 			if status.TeamName == "" {
 				if init_.statusFileAge(status) > time.Hour {
 					init_.removeStaleSessionArtifacts(projectDir, sid, "")
+					cleaned++
 				}
 				continue
 			}
@@ -515,18 +530,27 @@ func (init_ *Initializer) sweepAllStaleSessions(projectDir, currentSID string) {
 			if _, cfgErr := os.Stat(teamCfgPath); cfgErr != nil {
 				// Config missing — team already dissolved.
 				init_.removeStaleSessionArtifacts(projectDir, sid, status.TeamName)
+				cleaned++
 				continue
 			}
 			// Config exists — check age.
 			if init_.statusFileAge(status) > 24*time.Hour {
 				init_.removeStaleSessionArtifacts(projectDir, sid, status.TeamName)
+				cleaned++
 			}
 
 		default:
 			// Unknown status — clean.
 			init_.removeStaleSessionArtifacts(projectDir, sid, status.TeamName)
+			cleaned++
 		}
 	}
+
+	logger.log("stale_session_sweep", map[string]any{
+		"sessions_found":   found,
+		"sessions_cleaned": cleaned,
+		"sessions_skipped": found - cleaned,
+	})
 
 	sentinelBase := filepath.Join(projectDir, ".state", "sentinels", "pathflow")
 	sentinelEntries, err := os.ReadDir(sentinelBase)

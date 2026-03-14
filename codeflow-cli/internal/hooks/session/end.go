@@ -14,39 +14,28 @@ import (
 // endHookInput represents the JSON structure sent by Claude Code on stdin to
 // SessionEnd hooks.
 type endHookInput struct {
-	SessionID      string `json:"session_id"`       // Claude's per-agent UUID (metadata only)
-	TranscriptPath string `json:"transcript_path"`  // Path to session transcript
+	SessionID      string `json:"session_id"`      // Claude's per-agent UUID (metadata only)
+	TranscriptPath string `json:"transcript_path"` // Path to session transcript
 }
 
 // CleanupResult holds the output of a session-end cleanup operation.
 type CleanupResult struct {
-	// SessionID is the CODEFLOW_SESSION_ID used for this session.
-	SessionID string
-
-	// PF7Valid is true when the pathflow-pf-7 sentinel was found.
-	PF7Valid bool
-
-	// SentinelsCleaned is the count of sentinel files removed.
-	SentinelsCleaned int
-
-	// TaskPreserved is true when an active task was kept for the next session.
-	TaskPreserved bool
-
-	// TeamName is the team name read from pathflow-team.json (if any).
-	TeamName string
-
-	// Warnings collects non-fatal messages emitted during cleanup.
-	Warnings []string
-
-	// Messages collects informational messages for stderr output.
-	Messages []string
+	SessionID           string
+	PF7Valid            bool
+	SentinelsCleaned    int
+	TaskPreserved       bool
+	TeamName            string
+	EnvFileRemoved      bool
+	TeamConfigRemoved   bool
+	TeamTasksRemoved    bool
+	SessionStateRemoved bool
+	Warnings            []string
+	Messages            []string
 }
 
 // Cleaner performs session-end cleanup with injectable dependencies.
 type Cleaner struct {
-	// Now returns the current time. Override in tests for deterministic output.
-	Now func() time.Time
-	// HomeDir overrides os.UserHomeDir for testing.
+	Now     func() time.Time
 	HomeDir string
 }
 
@@ -54,72 +43,86 @@ type Cleaner struct {
 func NewCleaner() *Cleaner {
 	home, _ := os.UserHomeDir()
 	return &Cleaner{
-		Now:            func() time.Time { return time.Now().UTC() },
-		HomeDir:        home,
+		Now:     func() time.Time { return time.Now().UTC() },
+		HomeDir: home,
 	}
 }
 
-// EndCleanup performs all session cleanup steps. It reads hook JSON from stdin,
-// validates PF7 completion, cleans up sentinels, archives session state,
-// and removes stale runtime files.
+// EndCleanup performs all session cleanup steps.
 func (c *Cleaner) EndCleanup(stdin io.Reader, projectDir string) (*CleanupResult, error) {
 	if projectDir == "" {
 		return nil, fmt.Errorf("session cleanup: empty project directory")
 	}
 
 	result := &CleanupResult{}
+	logger := newCleanupLogger(projectDir, c.Now)
 
-	// --- Section 1: Parse stdin JSON ---
 	input := parseEndStdin(stdin)
-	_ = input // transcript_path available for future use
 
-	// --- Section 2: Resolve session ID ---
 	sessionID := c.resolveSessionID(projectDir)
 	if sessionID == "" || sessionID == "unknown" {
 		result.warn("no session ID found, skipping cleanup")
+		logger.log("cleanup_skipped", map[string]any{
+			"reason":     "no_session_id",
+			"session_id": sessionID,
+		})
 		return result, nil
 	}
 	result.SessionID = sessionID
 
+	logger.log("cleanup_started", map[string]any{
+		"session_id":       sessionID,
+		"pid":              os.Getpid(),
+		"stdin_session_id": input.SessionID,
+	})
+
 	sessionStateDir := filepath.Join(projectDir, ".state", "session", sessionID)
 
-	// --- Section 3: PathFlow guard ---
-	// Check session status to determine if cleanup should be skipped.
-	// Uses structured status file instead of tmux pane liveness checks.
-	if c.shouldSkipCleanup(sessionStateDir, result) {
+	if c.shouldSkipCleanup(projectDir, sessionStateDir, sessionID, result) {
+		pathflowDir := filepath.Join(sessionStateDir, "pathflow")
+		status, _ := ReadPathflowSessionStatus(pathflowDir)
+		skipFields := map[string]any{
+			"reason":     "active_session",
+			"session_id": sessionID,
+		}
+		if status != nil {
+			skipFields["session_status"] = status.Status
+			skipFields["team_name"] = status.TeamName
+			skipFields["last_completed_phase"] = status.LastCompletedPhase
+			teamCfgPath := filepath.Join(c.HomeDir, ".claude", "teams", status.TeamName, "config.json")
+			_, cfgErr := os.Stat(teamCfgPath)
+			skipFields["team_config_exists"] = cfgErr == nil
+		}
+		logger.log("cleanup_skipped", skipFields)
 		return result, nil
 	}
 
-	// --- Section 4: PF7 diagnostic ---
 	result.PF7Valid = c.validatePF7(projectDir, sessionID, result)
-
-	// --- Section 5: PathFlow sentinel cleanup ---
 	c.cleanPathflowSentinels(projectDir, sessionID, result)
-
-	// --- Section 6: Active task preservation ---
 	c.handleActiveTask(projectDir, result)
 
-	// --- Section 8: Read team info before removing session dir ---
 	teamName := c.readTeamName(sessionStateDir)
 	result.TeamName = teamName
 
-	// --- Section 9: Team config/task list backstop cleanup ---
-	c.cleanTeamArtifacts(teamName, result)
-
-	// --- Section 10: Session state directory cleanup ---
+	c.cleanTeamArtifacts(teamName, sessionStateDir, result)
 	c.cleanSessionState(sessionStateDir, sessionID, result)
-
-	// --- Section 11: Runtime file cleanup ---
-	c.cleanRuntimeFiles(projectDir, result)
-
-	// --- Section 12: Project temp directory cleanup ---
+	c.cleanRuntimeFiles(projectDir, sessionID, result)
 	c.cleanProjectTemp(projectDir)
+
+	logger.log("cleanup_completed", map[string]any{
+		"session_id":            sessionID,
+		"pf7_valid":             result.PF7Valid,
+		"sentinels_cleaned":     result.SentinelsCleaned,
+		"team_config_removed":   result.TeamConfigRemoved,
+		"team_tasks_removed":    result.TeamTasksRemoved,
+		"session_state_removed": result.SessionStateRemoved,
+		"env_file_removed":      result.EnvFileRemoved,
+	})
 
 	return result, nil
 }
 
-// ValidatePF7 checks if the pathflow-pf-7 sentinel exists, indicating a clean
-// PF7 shutdown. Returns true if the sentinel exists, along with any warnings.
+// ValidatePF7 checks if the pathflow-pf-7 sentinel exists.
 func ValidatePF7(sentinelDir string) (bool, []string) {
 	pf7Path := filepath.Join(sentinelDir, "pathflow-pf-7")
 	if _, err := os.Stat(pf7Path); err == nil {
@@ -129,7 +132,6 @@ func ValidatePF7(sentinelDir string) (bool, []string) {
 	var warnings []string
 	warnings = append(warnings, "Incomplete PF7 shutdown (pf-7 sentinel absent -- possible crash or skip)")
 
-	// Check which phase sentinels do exist for diagnostic context.
 	entries, err := os.ReadDir(sentinelDir)
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("could not read sentinel directory: %v", err))
@@ -149,7 +151,6 @@ func ValidatePF7(sentinelDir string) (bool, []string) {
 	return false, warnings
 }
 
-// parseEndStdin reads and parses the hook JSON from stdin.
 func parseEndStdin(r io.Reader) endHookInput {
 	var input endHookInput
 	if r == nil {
@@ -163,8 +164,6 @@ func parseEndStdin(r io.Reader) endHookInput {
 	return input
 }
 
-// resolveSessionID determines the session ID via session.Current()
-// (single authoritative resolution: env var → codeflow-env.sh).
 func (c *Cleaner) resolveSessionID(projectDir string) string {
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	sid, err := session.Current(runtimeDir)
@@ -176,77 +175,77 @@ func (c *Cleaner) resolveSessionID(projectDir string) string {
 
 // shouldSkipCleanup checks the session status to determine whether cleanup
 // should be skipped (teammate shutdown while session is still active).
-//
-// Decision tree (structured status-based, replaces tmux pane liveness checks):
-//   - MISSING status file: proceed with cleanup (no active session state)
-//   - PARSE ERROR: proceed with cleanup (corrupted state)
-//   - status=="created": proceed (no team yet)
-//   - status=="pf-complete": proceed (session finished)
-//   - status=="pf-started" or "pf-in-progress":
-//   - Check team_name is set
-//   - Check ~/.claude/teams/{team_name}/config.json exists (team still registered)
-//   - Check last_completed_phase != "PF7" (not already done)
-//   - If all true: SKIP cleanup (active session, teammate shutdown)
-func (c *Cleaner) shouldSkipCleanup(sessionStateDir string, result *CleanupResult) bool {
+// When team config is missing but sentinels exist, treats as a race condition
+// rather than assuming the team was dissolved.
+func (c *Cleaner) shouldSkipCleanup(projectDir, sessionStateDir, sessionID string, result *CleanupResult) bool {
 	pathflowDir := filepath.Join(sessionStateDir, "pathflow")
 
-	// Try reading the new session status file.
 	status, err := ReadPathflowSessionStatus(pathflowDir)
 	if err != nil {
-		// Parse error -- proceed with cleanup.
 		result.msg("SessionEnd: Session status file unreadable -- proceeding with cleanup")
 		return false
 	}
 
 	if status == nil {
-		// No status file -- proceed with cleanup.
 		return false
 	}
 
-	// Status file exists. Apply decision tree.
 	switch status.Status {
 	case "created":
-		// No team yet -- proceed with cleanup.
 		result.msg("SessionEnd: Session status is 'created' (no team) -- proceeding with cleanup")
 		return false
 
 	case "pf-complete":
-		// Session finished -- proceed with cleanup.
 		result.msg("SessionEnd: Session status is 'pf-complete' -- proceeding with cleanup")
 		return false
 
 	case "pf-started", "pf-in-progress":
-		// Active session -- check if team is still registered.
 		if status.TeamName == "" {
 			result.msg("SessionEnd: Session active but no team name -- proceeding with cleanup")
 			return false
 		}
 
-		// Check if team config exists (team still registered with Claude).
 		teamCfgPath := filepath.Join(c.HomeDir, ".claude", "teams", status.TeamName, "config.json")
 		if _, cfgErr := os.Stat(teamCfgPath); cfgErr != nil {
-			result.msg("SessionEnd: Session active but team %q config missing -- proceeding with cleanup (team dissolved)", status.TeamName)
+			// Config missing -- check for sentinel evidence before assuming dissolved.
+			sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
+			if hasActiveSentinels(sentinelDir) {
+				result.msg("SessionEnd: Team %q config missing but sentinels exist -- skipping cleanup (possible race)", status.TeamName)
+				return true
+			}
+			result.msg("SessionEnd: Session active but team %q config missing and no sentinels -- proceeding with cleanup (team dissolved)", status.TeamName)
 			return false
 		}
 
-		// Check if PF7 is already done (shouldn't happen with pf-started/pf-in-progress, but guard).
 		if status.LastCompletedPhase == "pf-7" {
 			result.msg("SessionEnd: Session active but PF7 already completed -- proceeding with cleanup")
 			return false
 		}
 
-		// All checks pass: active session with live team -- skip cleanup.
 		result.msg("SessionEnd: Session active (status=%q, team=%q) -- skipping cleanup (teammate shutdown)", status.Status, status.TeamName)
 		return true
 
 	default:
-		// Unknown status -- proceed with cleanup.
 		result.msg("SessionEnd: Unknown session status %q -- proceeding with cleanup", status.Status)
 		return false
 	}
 }
 
-// validatePF7 checks for PF7 completion and logs the result.
+// hasActiveSentinels checks if the sentinel directory exists and contains
+// any sentinel files, indicating an active session.
+func hasActiveSentinels(sentinelDir string) bool {
+	entries, err := os.ReadDir(sentinelDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Cleaner) validatePF7(projectDir, sessionID string, result *CleanupResult) bool {
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	valid, warnings := ValidatePF7(sentinelDir)
@@ -262,7 +261,6 @@ func (c *Cleaner) validatePF7(projectDir, sessionID string, result *CleanupResul
 	return valid
 }
 
-// cleanPathflowSentinels removes all PathFlow sentinels for this session.
 func (c *Cleaner) cleanPathflowSentinels(projectDir, sessionID string, result *CleanupResult) {
 	sentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if _, err := os.Stat(sentinelDir); err != nil {
@@ -273,7 +271,6 @@ func (c *Cleaner) cleanPathflowSentinels(projectDir, sessionID string, result *C
 	}
 }
 
-// handleActiveTask preserves active tasks in_progress, removes completed ones.
 func (c *Cleaner) handleActiveTask(projectDir string, result *CleanupResult) {
 	taskPath := filepath.Join(projectDir, ".state", "runtime", "active-task.json")
 	data, err := os.ReadFile(taskPath)
@@ -296,11 +293,9 @@ func (c *Cleaner) handleActiveTask(projectDir string, result *CleanupResult) {
 		return
 	}
 
-	// Not in_progress -- safe to remove.
 	_ = os.Remove(taskPath)
 }
 
-// readTeamName extracts the team_name from pathflow-team.json.
 func (c *Cleaner) readTeamName(sessionStateDir string) string {
 	teamFilePath := filepath.Join(sessionStateDir, "pathflow", "pathflow-team.json")
 	data, err := os.ReadFile(teamFilePath)
@@ -318,25 +313,36 @@ func (c *Cleaner) readTeamName(sessionStateDir string) string {
 }
 
 // cleanTeamArtifacts removes team config and task list directories as a backstop.
-func (c *Cleaner) cleanTeamArtifacts(teamName string, result *CleanupResult) {
+// Re-checks session status before deletion -- if status is still active
+// (pf-started/pf-in-progress), skips deletion to avoid race conditions.
+func (c *Cleaner) cleanTeamArtifacts(teamName, sessionStateDir string, result *CleanupResult) {
 	if teamName == "" {
+		return
+	}
+
+	// Re-check session status before deleting team artifacts.
+	pathflowDir := filepath.Join(sessionStateDir, "pathflow")
+	status, _ := ReadPathflowSessionStatus(pathflowDir)
+	if status != nil && (status.Status == "pf-started" || status.Status == "pf-in-progress") {
+		result.msg("SessionEnd: Skipping team artifact cleanup -- session still active (status=%q)", status.Status)
 		return
 	}
 
 	teamDir := filepath.Join(c.HomeDir, ".claude", "teams", teamName)
 	if _, err := os.Stat(teamDir); err == nil {
 		_ = os.RemoveAll(teamDir)
+		result.TeamConfigRemoved = true
 		result.msg("SessionEnd: Removed team config: %s", teamName)
 	}
 
 	taskDir := filepath.Join(c.HomeDir, ".claude", "tasks", teamName)
 	if _, err := os.Stat(taskDir); err == nil {
 		_ = os.RemoveAll(taskDir)
+		result.TeamTasksRemoved = true
 		result.msg("SessionEnd: Removed task list: %s", teamName)
 	}
 }
 
-// cleanSessionState removes the session state directory.
 func (c *Cleaner) cleanSessionState(sessionStateDir, sessionID string, result *CleanupResult) {
 	if sessionID == "unknown" {
 		return
@@ -346,17 +352,29 @@ func (c *Cleaner) cleanSessionState(sessionStateDir, sessionID string, result *C
 	}
 	if err := os.RemoveAll(sessionStateDir); err != nil {
 		result.warn("session state cleanup error: %v", err)
+	} else {
+		result.SessionStateRemoved = true
 	}
 }
 
-// cleanRuntimeFiles removes runtime session files via the session package
-// (single authoritative owner of session file lifecycle).
-func (c *Cleaner) cleanRuntimeFiles(projectDir string, result *CleanupResult) {
+func (c *Cleaner) cleanRuntimeFiles(projectDir, sessionID string, result *CleanupResult) {
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
-	session.CleanRuntimeFiles(runtimeDir)
+
+	envPath := filepath.Join(runtimeDir, session.EnvFile)
+	envExisted := false
+	if _, err := os.Stat(envPath); err == nil {
+		envExisted = true
+	}
+
+	session.CleanRuntimeFiles(runtimeDir, sessionID)
+
+	if envExisted {
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			result.EnvFileRemoved = true
+		}
+	}
 }
 
-// cleanProjectTemp removes the project temp directory.
 func (c *Cleaner) cleanProjectTemp(projectDir string) {
 	projectName := filepath.Base(projectDir)
 	if projectName == "" {
@@ -364,7 +382,6 @@ func (c *Cleaner) cleanProjectTemp(projectDir string) {
 	}
 	tmpDir := filepath.Join(os.TempDir(), "claude", projectName)
 
-	// Guard: never rm -rf the project root.
 	absProject, _ := filepath.Abs(projectDir)
 	absTmp, _ := filepath.Abs(tmpDir)
 	if absProject != "" && absTmp != "" && absProject == absTmp {
@@ -374,12 +391,51 @@ func (c *Cleaner) cleanProjectTemp(projectDir string) {
 	_ = os.RemoveAll(tmpDir)
 }
 
-// warn adds a warning message.
 func (r *CleanupResult) warn(format string, args ...any) {
 	r.Warnings = append(r.Warnings, fmt.Sprintf(format, args...))
 }
 
-// msg adds an informational message.
 func (r *CleanupResult) msg(format string, args ...any) {
 	r.Messages = append(r.Messages, fmt.Sprintf(format, args...))
+}
+
+// cleanupLogger writes structured JSONL events to .state/logs/sessions/cleanup-{date}.jsonl.
+type cleanupLogger struct {
+	logDir string
+	now    func() time.Time
+}
+
+func newCleanupLogger(projectDir string, now func() time.Time) *cleanupLogger {
+	return &cleanupLogger{
+		logDir: filepath.Join(projectDir, ".state", "logs", "sessions"),
+		now:    now,
+	}
+}
+
+func (l *cleanupLogger) log(event string, fields map[string]any) {
+	if fields == nil {
+		fields = make(map[string]any)
+	}
+	fields["event"] = event
+	fields["timestamp"] = l.now().Format(time.RFC3339)
+
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return
+	}
+
+	if err := os.MkdirAll(l.logDir, 0o755); err != nil {
+		return
+	}
+
+	date := l.now().Format("2006-01-02")
+	logFile := filepath.Join(l.logDir, "cleanup-"+date+".jsonl")
+
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	_, _ = f.Write(append(data, '\n'))
 }

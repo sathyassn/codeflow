@@ -596,7 +596,19 @@ func TestRunGateCheckWithPathFlow(t *testing.T) {
 	})
 
 	t.Run("git push allowed with pf-5 and ws-rev", func(t *testing.T) {
-		// Create both sentinels.
+		// Create ALL cumulative phase sentinels.
+		if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-1"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-2"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-3"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-4"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(sentinelDir, "pathflow-pf-5"), []byte("1"), 0o644); err != nil {
 			t.Fatal(err)
 		}

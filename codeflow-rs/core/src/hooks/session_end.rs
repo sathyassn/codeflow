@@ -11,6 +11,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use chrono;
+
 use crate::error::HookError;
 use crate::hooks::{HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo};
 use crate::pathflow;
@@ -90,8 +92,20 @@ impl SessionEndCleanup {
 
         let session_state_dir = project_dir.join(".state").join("session").join(&session_id);
 
+        // Log cleanup start.
+        write_cleanup_log(project_dir, &serde_json::json!({
+            "event": "cleanup_started",
+            "session_id": session_id,
+            "pid": self.ppid,
+        }));
+
         // --- Section 3: PathFlow guard ---
         if self.should_skip_cleanup(&session_state_dir, &mut result) {
+            write_cleanup_log(project_dir, &serde_json::json!({
+                "event": "cleanup_skipped",
+                "session_id": session_id,
+                "reason": "session_active",
+            }));
             write_messages(writer, &result.messages)?;
             return Ok(result);
         }
@@ -110,7 +124,7 @@ impl SessionEndCleanup {
         result.team_name.clone_from(&team_name);
 
         // --- Section 9: Team config/task list backstop cleanup ---
-        self.clean_team_artifacts(&team_name, &mut result);
+        self.clean_team_artifacts(&team_name, &session_state_dir, &mut result);
 
         // --- Section 10: Session state directory cleanup ---
         self.clean_session_state(&session_state_dir, &session_id, &mut result);
@@ -123,6 +137,17 @@ impl SessionEndCleanup {
 
         // Note: session_end ledger event is written by SessionEndLogging
         // handler (hooks::logging module), not here.
+
+        // Log cleanup completion.
+        write_cleanup_log(project_dir, &serde_json::json!({
+            "event": "cleanup_completed",
+            "session_id": session_id,
+            "pf7_valid": result.pf7_valid,
+            "sentinels_cleaned": result.sentinels_cleaned,
+            "task_preserved": result.task_preserved,
+            "team_name": result.team_name,
+            "warnings_count": result.warnings.len(),
+        }));
 
         write_messages(writer, &result.messages)?;
 
@@ -200,6 +225,29 @@ impl SessionEndCleanup {
             .join("config.json");
 
         if !config_path.exists() {
+            // Config missing -- but check if sentinel dir still has pathflow state.
+            // If sentinels exist, config was likely deleted by a race condition
+            // (e.g., concurrent session cleanup). Preserve the session.
+            let sentinel_dir = session_state_dir
+                .parent() // .state/session/{sid}
+                .and_then(|p| p.parent()) // .state/session
+                .and_then(|p| p.parent()) // .state
+                .map(|state_dir| {
+                    let sid = session_state_dir.file_name().unwrap_or_default();
+                    state_dir.join("sentinels").join("pathflow").join(sid)
+                });
+
+            let has_sentinels = sentinel_dir
+                .as_ref()
+                .is_some_and(|d| d.exists() && fs::read_dir(d).is_ok_and(|mut r| r.next().is_some()));
+
+            if has_sentinels {
+                result.messages.push(format!(
+                    "SessionEnd: Team config gone for '{team_name}' but sentinels exist -- skipping cleanup (possible race)"
+                ));
+                return true;
+            }
+
             result.messages.push(format!(
                 "SessionEnd: Session active but team config gone for '{team_name}' -- proceeding"
             ));
@@ -320,9 +368,28 @@ impl SessionEndCleanup {
     }
 
     /// Remove stale team config and task list directories.
-    fn clean_team_artifacts(&self, team_name: &str, result: &mut CleanupResult) {
+    ///
+    /// Re-checks session status before deleting to guard against race conditions
+    /// where the session became active again between the skip check and this call.
+    fn clean_team_artifacts(&self, team_name: &str, session_state_dir: &Path, result: &mut CleanupResult) {
         if team_name.is_empty() {
             return;
+        }
+
+        // Re-check session status -- guard against race where session reactivated.
+        let status_path = session_state_dir
+            .join("pathflow")
+            .join("pathflow-session-status.json");
+        if let Ok(data) = fs::read_to_string(&status_path) {
+            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&data) {
+                let s = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                if s == "pf-started" || s == "pf-in-progress" {
+                    result.messages.push(format!(
+                        "SessionEnd: Skipping team artifact cleanup -- session still active (status={s})"
+                    ));
+                    return;
+                }
+            }
         }
 
         let teams_dir = self.home_dir.join(".claude").join("teams").join(team_name);
@@ -351,9 +418,32 @@ impl SessionEndCleanup {
     }
 
     /// Remove runtime files (env file, session lock, `current-session-id`).
-    fn clean_runtime_files(&self, project_dir: &Path, _result: &mut CleanupResult) {
+    ///
+    /// Race safety: reads `codeflow-env.sh` and only removes it if the session ID
+    /// inside matches the session being cleaned up. If a different session owns the
+    /// file (concurrent session started between cleanup phases), it is preserved.
+    fn clean_runtime_files(&self, project_dir: &Path, result: &mut CleanupResult) {
         let runtime_dir = project_dir.join(".state").join("runtime");
-        let _ = session::remove_env_file(&runtime_dir);
+
+        // Race-safe env file removal: only remove if owned by this session.
+        match session::read_env_file(&runtime_dir) {
+            Ok(Some(env)) => {
+                let file_sid = env.session_id.as_str().to_string();
+                if file_sid == result.session_id {
+                    let _ = session::remove_env_file(&runtime_dir);
+                } else {
+                    result.warnings.push(format!(
+                        "SessionEnd: env file owned by different session ({file_sid}), preserving"
+                    ));
+                }
+            }
+            Ok(None) => {} // No env file, nothing to remove.
+            Err(_) => {
+                // Unreadable env file -- may belong to another session mid-write.
+                // Preserve it; next SessionStart will overwrite if needed.
+                result.warnings.push("SessionEnd: env file unreadable, preserving".to_string());
+            }
+        }
 
         // Remove session lock file.
         let lock_path = runtime_dir.join("session.lock");
@@ -409,6 +499,31 @@ impl HookHandler for SessionEndCleanup {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Write a structured JSONL cleanup event to `.state/logs/sessions/cleanup-{date}.jsonl`.
+fn write_cleanup_log(project_dir: &Path, event: &serde_json::Value) {
+    let now = chrono::Utc::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    let log_dir = project_dir.join(".state").join("logs").join("sessions");
+    let _ = fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("cleanup-{date}.jsonl"));
+
+    let mut entry = event.clone();
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("timestamp".into(), serde_json::Value::String(now.to_rfc3339()));
+    }
+
+    if let Ok(line) = serde_json::to_string(&entry) {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{line}")
+            });
+    }
+}
 
 fn write_messages(writer: &mut dyn Write, messages: &[String]) -> Result<(), HookError> {
     for msg in messages {
