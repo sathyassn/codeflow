@@ -41,12 +41,6 @@ func setupCleanupFixture(t *testing.T, sessionID string) string {
 		t.Fatal(err)
 	}
 
-	// Create ledger directory.
-	ledgerDir := filepath.Join(projectDir, ".state", "ledger")
-	if err := os.MkdirAll(ledgerDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	// Create sentinel directories.
 	pfSentinelDir := filepath.Join(projectDir, ".state", "sentinels", "pathflow", sessionID)
 	if err := os.MkdirAll(pfSentinelDir, 0o755); err != nil {
@@ -112,17 +106,6 @@ func TestEndCleanup_NormalCleanup(t *testing.T) {
 	envFile := filepath.Join(projectDir, ".state", "runtime", "codeflow-env.sh")
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		t.Error("env file still exists after cleanup")
-	}
-	ledgerPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
-	data, err := os.ReadFile(ledgerPath)
-	if err != nil {
-		t.Fatalf("reading ledger file: %v", err)
-	}
-	if !strings.Contains(string(data), "session_end") {
-		t.Error("ledger file does not contain session_end event")
-	}
-	if !strings.Contains(string(data), sessionID) {
-		t.Error("ledger file does not contain session ID")
 	}
 	if len(result.Warnings) > 0 {
 		t.Errorf("unexpected warnings: %v", result.Warnings)
@@ -686,7 +669,7 @@ func TestEndCleanup_TeamArtifactCleanup(t *testing.T) {
 	}
 }
 
-func TestEndCleanup_LedgerEventContent(t *testing.T) {
+func TestEndCleanup_NoLedgerWrite(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "ses-1234567890123abcdef012345"
@@ -704,33 +687,10 @@ func TestEndCleanup_LedgerEventContent(t *testing.T) {
 		t.Fatalf("EndCleanup() error = %v", err)
 	}
 
+	// Verify no sessions.jsonl file was created (ledger write removed).
 	ledgerPath := filepath.Join(projectDir, ".state", "ledger", "sessions.jsonl")
-	data, err := os.ReadFile(ledgerPath)
-	if err != nil {
-		t.Fatalf("reading ledger: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) == 0 {
-		t.Fatal("no events in ledger")
-	}
-
-	var event map[string]any
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &event); err != nil {
-		t.Fatalf("parsing ledger event: %v", err)
-	}
-
-	if event["event"] != "session_end" {
-		t.Errorf("event type = %v, want session_end", event["event"])
-	}
-	if event["session_id"] != sessionID {
-		t.Errorf("session_id = %v, want %s", event["session_id"], sessionID)
-	}
-	if event["pf7_valid"] != true {
-		t.Errorf("pf7_valid = %v, want true", event["pf7_valid"])
-	}
-	if event["cleanup_completed"] != true {
-		t.Errorf("cleanup_completed = %v, want true", event["cleanup_completed"])
+	if _, err := os.Stat(ledgerPath); !os.IsNotExist(err) {
+		t.Error("sessions.jsonl exists after cleanup (ledger write should be removed)")
 	}
 }
 
@@ -742,9 +702,6 @@ func TestEndCleanup_SessionIDFromEnvVar(t *testing.T) {
 
 	runtimeDir := filepath.Join(projectDir, ".state", "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(projectDir, ".state", "ledger"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

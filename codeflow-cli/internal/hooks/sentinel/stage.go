@@ -217,7 +217,8 @@ type PathflowTeam struct {
 
 // HandleTeamCreate processes a TeamCreate PostToolUse event, creates
 // pathflow-team.json in the session pathflow directory, and updates the
-// session status to "pf-started" with the team name.
+// session status to "pf-started" with the team name. It also resets
+// LastCompletedPhase and LastCompletedStage to ensure a fresh session start.
 //
 // The sessionDir should be: {projectDir}/.state/session/{sessionID}/pathflow/
 func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
@@ -272,9 +273,12 @@ func HandleTeamCreate(data []byte, sessionDir, sessionID string) *Verdict {
 	}
 
 	// Update session status to "pf-started" with team name.
+	// Reset phase/stage fields to ensure a fresh session start.
 	_ = session.UpdatePathflowSessionStatus(sessionDir, func() time.Time { return time.Now().UTC() }, func(s *session.PathflowSessionStatus) {
 		s.Status = "pf-started"
 		s.TeamName = tc.TeamName
+		s.LastCompletedPhase = ""
+		s.LastCompletedStage = ""
 	})
 
 	return &Verdict{Allow: true}

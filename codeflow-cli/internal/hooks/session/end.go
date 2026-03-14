@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/codeflow/codeflow-cli/internal/ledger"
 	"github.com/codeflow/codeflow-cli/internal/session"
 )
 
@@ -62,7 +61,7 @@ func NewCleaner() *Cleaner {
 
 // EndCleanup performs all session cleanup steps. It reads hook JSON from stdin,
 // validates PF7 completion, cleans up sentinels, archives session state,
-// removes stale runtime files, and writes a session_end ledger event.
+// and removes stale runtime files.
 func (c *Cleaner) EndCleanup(stdin io.Reader, projectDir string) (*CleanupResult, error) {
 	if projectDir == "" {
 		return nil, fmt.Errorf("session cleanup: empty project directory")
@@ -115,9 +114,6 @@ func (c *Cleaner) EndCleanup(stdin io.Reader, projectDir string) (*CleanupResult
 
 	// --- Section 12: Project temp directory cleanup ---
 	c.cleanProjectTemp(projectDir)
-
-	// --- Section 13: Write session_end ledger event ---
-	c.writeLedgerEvent(projectDir, sessionID, result)
 
 	return result, nil
 }
@@ -187,10 +183,10 @@ func (c *Cleaner) resolveSessionID(projectDir string) string {
 //   - status=="created": proceed (no team yet)
 //   - status=="pf-complete": proceed (session finished)
 //   - status=="pf-started" or "pf-in-progress":
-//     - Check team_name is set
-//     - Check ~/.claude/teams/{team_name}/config.json exists (team still registered)
-//     - Check last_completed_phase != "PF7" (not already done)
-//     - If all true: SKIP cleanup (active session, teammate shutdown)
+//   - Check team_name is set
+//   - Check ~/.claude/teams/{team_name}/config.json exists (team still registered)
+//   - Check last_completed_phase != "PF7" (not already done)
+//   - If all true: SKIP cleanup (active session, teammate shutdown)
 func (c *Cleaner) shouldSkipCleanup(sessionStateDir string, result *CleanupResult) bool {
 	pathflowDir := filepath.Join(sessionStateDir, "pathflow")
 
@@ -376,33 +372,6 @@ func (c *Cleaner) cleanProjectTemp(projectDir string) {
 	}
 
 	_ = os.RemoveAll(tmpDir)
-}
-
-// writeLedgerEvent writes a session_end event to sessions.jsonl.
-func (c *Cleaner) writeLedgerEvent(projectDir, sessionID string, result *CleanupResult) {
-	ledgerDir := filepath.Join(projectDir, ".state", "ledger")
-	w, err := ledger.NewWriter(ledgerDir)
-	if err != nil {
-		result.warn("ledger writer creation error: %v", err)
-		return
-	}
-
-	now := c.Now()
-	event := ledger.Event{
-		EventType: "session_end",
-		SessionID: sessionID,
-		Timestamp: now.Format(time.RFC3339),
-		Data: map[string]any{
-			"pf7_valid":          result.PF7Valid,
-			"sentinels_cleaned":  result.SentinelsCleaned,
-			"task_preserved":     result.TaskPreserved,
-			"cleanup_completed":  true,
-		},
-	}
-
-	if err := w.AppendEvent(event); err != nil {
-		result.warn("ledger event write error: %v", err)
-	}
 }
 
 // warn adds a warning message.

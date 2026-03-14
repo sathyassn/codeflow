@@ -274,7 +274,7 @@ func TestEndCleansUpEnvFile(t *testing.T) {
 	}
 }
 
-func TestEndWritesJSONL(t *testing.T) {
+func TestEndDoesNotWriteJSONL(t *testing.T) {
 	t.Parallel()
 	d := newTestDB(t)
 	ctx := t.Context()
@@ -293,7 +293,8 @@ func TestEndWritesJSONL(t *testing.T) {
 		t.Fatalf("End: %v", err)
 	}
 
-	// Read the JSONL file and verify there are 2 events (start + end).
+	// Read the JSONL file and verify there is only 1 event (start only).
+	// End() no longer writes session_end to sessions.jsonl.
 	jsonlPath := filepath.Join(ledgerDir, "sessions.jsonl")
 	data, err := os.ReadFile(jsonlPath)
 	if err != nil {
@@ -301,31 +302,21 @@ func TestEndWritesJSONL(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 JSONL lines, got %d", len(lines))
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 JSONL line (start only), got %d", len(lines))
 	}
 
-	// Parse the second event (session_end).
+	// Verify the single event is session_start.
 	var event map[string]any
-	if err := json.Unmarshal([]byte(lines[1]), &event); err != nil {
-		t.Fatalf("parsing end event: %v", err)
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatalf("parsing start event: %v", err)
 	}
 
-	if event["event"] != "session_end" {
-		t.Errorf("event type = %v, want session_end", event["event"])
+	if event["event"] != "session_start" {
+		t.Errorf("event type = %v, want session_start", event["event"])
 	}
 	if event["session_id"] != sessionID {
 		t.Errorf("session_id = %v, want %s", event["session_id"], sessionID)
-	}
-	if event["timestamp"] == nil || event["timestamp"] == "" {
-		t.Error("timestamp should not be empty")
-	}
-	// duration_seconds should be a number >= 0.
-	dur, ok := event["duration_seconds"].(float64)
-	if !ok {
-		t.Errorf("duration_seconds type = %T, want float64", event["duration_seconds"])
-	} else if dur < 0 {
-		t.Errorf("duration_seconds = %v, want >= 0", dur)
 	}
 }
 
@@ -1017,14 +1008,14 @@ func TestMultipleStartEndCycles(t *testing.T) {
 		}
 	}
 
-	// Verify 4 JSONL events (2 starts + 2 ends).
+	// Verify 2 JSONL events (2 starts only; End() no longer writes to JSONL).
 	jsonlPath := filepath.Join(ledgerDir, "sessions.jsonl")
 	data, err := os.ReadFile(jsonlPath)
 	if err != nil {
 		t.Fatalf("reading JSONL: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 4 {
-		t.Errorf("JSONL lines = %d, want 4", len(lines))
+	if len(lines) != 2 {
+		t.Errorf("JSONL lines = %d, want 2", len(lines))
 	}
 }

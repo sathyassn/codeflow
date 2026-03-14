@@ -152,8 +152,8 @@ func Start(ctx context.Context, d *db.DB, claudeID string, ledgerDir string, run
 
 // End completes the current active session. It reads the current session ID
 // from codeflow-env.sh (or CODEFLOW_SESSION_ID env var), updates the session
-// record with ended_at, duration_seconds, and status=completed, writes a
-// session_end event to sessions.jsonl, and removes runtime session files.
+// record with ended_at, duration_seconds, and status=completed, and removes
+// runtime session files.
 func End(ctx context.Context, d *db.DB, ledgerDir string, runtimeDir string) error {
 	sessionID, err := Current(runtimeDir)
 	if err != nil {
@@ -193,16 +193,6 @@ func End(ctx context.Context, d *db.DB, ledgerDir string, runtimeDir string) err
 	)
 	if err != nil {
 		return fmt.Errorf("session: updating session record: %w", err)
-	}
-
-	// Write JSONL event.
-	if err := writeJSONLEvent(ledgerDir, map[string]any{
-		"event":            "session_end",
-		"session_id":       sessionID,
-		"timestamp":        nowStr,
-		"duration_seconds": durationSeconds,
-	}); err != nil {
-		return fmt.Errorf("session: writing JSONL event: %w", err)
 	}
 
 	// Clean up runtime session files (single authoritative cleanup function).

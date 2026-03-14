@@ -427,6 +427,57 @@ func TestHandleTeamCreate(t *testing.T) {
 			t.Fatal("Allow = false for invalid tool_input")
 		}
 	})
+
+	t.Run("resets phase and stage fields on TeamCreate", func(t *testing.T) {
+		t.Parallel()
+		sessionDir := filepath.Join(t.TempDir(), "pathflow")
+		sessionID := "ses-1234567890123abcdef012345"
+
+		// Pre-create a status file with stale phase/stage values
+		// (simulating a session reuse scenario).
+		if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		staleStatus := &session.PathflowSessionStatus{
+			SessionID:          sessionID,
+			Status:             "pf-in-progress",
+			TeamName:           "old-team",
+			LastCompletedPhase: "pf-4",
+			LastCompletedStage: "ws-dev",
+		}
+		if err := session.WritePathflowSessionStatus(sessionDir, staleStatus); err != nil {
+			t.Fatal(err)
+		}
+
+		data := []byte(`{"tool_name":"TeamCreate","tool_input":{"team_name":"new-team"}}`)
+		verdict := HandleTeamCreate(data, sessionDir, sessionID)
+
+		if !verdict.Allow {
+			t.Fatalf("Allow = false, want true; reason: %s", verdict.Reason)
+		}
+
+		// Read the status file and verify fields were reset.
+		updated, err := session.ReadPathflowSessionStatus(sessionDir)
+		if err != nil {
+			t.Fatalf("reading status: %v", err)
+		}
+		if updated == nil {
+			t.Fatal("status file not found after HandleTeamCreate")
+		}
+
+		if updated.Status != "pf-started" {
+			t.Errorf("Status = %q, want %q", updated.Status, "pf-started")
+		}
+		if updated.TeamName != "new-team" {
+			t.Errorf("TeamName = %q, want %q", updated.TeamName, "new-team")
+		}
+		if updated.LastCompletedPhase != "" {
+			t.Errorf("LastCompletedPhase = %q, want empty (should be reset)", updated.LastCompletedPhase)
+		}
+		if updated.LastCompletedStage != "" {
+			t.Errorf("LastCompletedStage = %q, want empty (should be reset)", updated.LastCompletedStage)
+		}
+	})
 }
 
 func TestHandleTeammateSpawn(t *testing.T) {

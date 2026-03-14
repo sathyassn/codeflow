@@ -438,38 +438,19 @@ func TestFullPathFlowLifecycle(t *testing.T) {
 		t.Errorf("CleanupResult.SessionID = %q, want %q", cleanResult.SessionID, sid)
 	}
 	// PF7Valid may be false if sentinels were cleaned before EndCleanup reads them.
-	// The important check is that cleanup ran and session_end was written.
+	// The important check is that cleanup ran successfully.
 
-	// ---- Verify JSONL ledger: session_end event written with canonical schema ----
-	// EndCleanup writes session_end to sessions.jsonl.
+	// ---- Verify JSONL ledger: no session_end event written ----
+	// EndCleanup no longer writes session_end to sessions.jsonl (redundant with activity log).
 	ledgerDir := filepath.Join(projectDir, ".state", "ledger")
 	sessionsFile := filepath.Join(ledgerDir, "sessions.jsonl")
-	assertFileExists(t, sessionsFile, "sessions.jsonl")
-
-	events := readLedgerEvents(t, sessionsFile)
-	var foundSessionEnd bool
-	for _, ev := range events {
-		if ev.EventType == "session_end" {
-			foundSessionEnd = true
-			// Verify canonical schema: event field (not "type"), timestamp field (not "ts").
-			if ev.Timestamp == "" {
-				t.Error("session_end event missing timestamp field")
+	if _, err := os.Stat(sessionsFile); err == nil {
+		events := readLedgerEvents(t, sessionsFile)
+		for _, ev := range events {
+			if ev.EventType == "session_end" {
+				t.Error("sessions.jsonl should NOT contain a session_end event after EndCleanup() (ledger write removed)")
 			}
 		}
-	}
-	if !foundSessionEnd {
-		t.Error("sessions.jsonl should contain a session_end event after EndCleanup()")
-	}
-
-	// Verify no duplicate session_end events.
-	sessionEndCount := 0
-	for _, ev := range events {
-		if ev.EventType == "session_end" {
-			sessionEndCount++
-		}
-	}
-	if sessionEndCount > 1 {
-		t.Errorf("sessions.jsonl has %d session_end events, want exactly 1", sessionEndCount)
 	}
 
 	// Verify session status file was removed (EndCleanup removes the session dir).

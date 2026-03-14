@@ -35,7 +35,6 @@
 //   - Remove session state directory
 //   - Remove runtime files (codeflow-env.sh)
 //   - Remove project temp directory
-//   - Write session_end ledger event to sessions.jsonl
 //
 // It returns a [CleanupResult] containing the session ID, PF7 validity,
 // sentinel counts, and any warnings generated during cleanup.
