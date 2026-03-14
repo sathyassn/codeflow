@@ -83,7 +83,7 @@ impl SentinelWrite {
         let content = input
             .tool_input
             .as_ref()
-            .and_then(|v| v.get("content"))
+            .and_then(|v| v.get("message"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -614,7 +614,7 @@ mod tests {
     fn test_sentinel_write_ignores_empty_content() {
         let dir = tempfile::tempdir().unwrap();
         let handler = SentinelWrite::new(dir.path().to_path_buf());
-        let input = make_input("SendMessage", serde_json::json!({"content": ""}));
+        let input = make_input("SendMessage", serde_json::json!({"message": ""}));
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
     }
@@ -625,7 +625,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "DEV-COMPLETE: all done"}),
+            serde_json::json!({"message": "DEV-COMPLETE: all done"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -772,7 +772,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-DEV"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-DEV"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -793,7 +793,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-REV"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-REV"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(
@@ -815,7 +815,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-REV"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-REV"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -828,7 +828,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-QA"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-QA"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Block { .. }));
@@ -846,7 +846,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-QA"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-QA"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -864,7 +864,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE: WS-QA"}),
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-QA"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -877,7 +877,7 @@ mod tests {
         let handler = SentinelWrite::new(dir.path().to_path_buf());
         let input = make_input(
             "SendMessage",
-            serde_json::json!({"content": "STAGE-COMPLETE:   WS-PLAN"}),
+            serde_json::json!({"message": "STAGE-COMPLETE:   WS-PLAN"}),
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));

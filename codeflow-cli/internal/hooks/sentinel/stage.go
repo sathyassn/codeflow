@@ -37,7 +37,7 @@ type postToolUseInput struct {
 
 // sendMessageInput represents the tool_input for SendMessage tool calls.
 type sendMessageInput struct {
-	Content string `json:"content"`
+	Content string `json:"message"`
 }
 
 // CheckAndCreateStageSentinel parses PostToolUse stdin for SendMessage calls,

@@ -38,12 +38,12 @@ func TestCheckAndCreateStageSentinel(t *testing.T) {
 		},
 		{
 			name:      "SendMessage without stage pattern ignored",
-			stdin:     `{"tool_name":"SendMessage","tool_input":{"content":"Hello world"}}`,
+			stdin:     `{"tool_name":"SendMessage","tool_input":{"message":"Hello world"}}`,
 			wantAllow: true,
 		},
 		{
 			name:      "SendMessage empty content ignored",
-			stdin:     `{"tool_name":"SendMessage","tool_input":{"content":""}}`,
+			stdin:     `{"tool_name":"SendMessage","tool_input":{"message":""}}`,
 			wantAllow: true,
 		},
 		{
@@ -53,97 +53,97 @@ func TestCheckAndCreateStageSentinel(t *testing.T) {
 		},
 		{
 			name:         "STAGE-COMPLETE WS-DEV creates sentinel",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-dev",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-REV with ws-dev creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`,
 			setupSentinels: []string{"ws-dev"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-rev",
 		},
 		{
 			name:       "STAGE-COMPLETE WS-REV without primary stage blocks",
-			stdin:      `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`,
+			stdin:      `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`,
 			wantAllow:  false,
 			wantReason: "ws-rev requires prior primary stage",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-REV with ws-plan creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`,
 			setupSentinels: []string{"ws-plan"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-rev",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-REV with ws-docs creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`,
 			setupSentinels: []string{"ws-docs"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-rev",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-REV with ws-test creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`,
 			setupSentinels: []string{"ws-test"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-rev",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-QA with ws-dev creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA"}}`,
 			setupSentinels: []string{"ws-dev"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-qa",
 		},
 		{
 			name:           "STAGE-COMPLETE WS-QA with ws-test creates sentinel",
-			stdin:          `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA"}}`,
+			stdin:          `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA"}}`,
 			setupSentinels: []string{"ws-test"},
 			wantAllow:      true,
 			wantSentinel:   "pathflow-ws-qa",
 		},
 		{
 			name:       "STAGE-COMPLETE WS-QA without ws-dev or ws-test blocks",
-			stdin:      `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-QA"}}`,
+			stdin:      `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-QA"}}`,
 			wantAllow:  false,
 			wantReason: "ws-qa requires prior ws-dev or ws-test",
 		},
 		{
 			name:         "STAGE-COMPLETE WS-PLAN creates sentinel",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-PLAN"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-PLAN"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-plan",
 		},
 		{
 			name:         "STAGE-COMPLETE WS-DOCS creates sentinel",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DOCS"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DOCS"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-docs",
 		},
 		{
 			name:         "STAGE-COMPLETE WS-TEST creates sentinel",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-TEST"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-TEST"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-test",
 		},
 		{
 			name:         "case insensitive matching",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"stage-complete: ws-dev"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"stage-complete: ws-dev"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-dev",
 		},
 		{
 			name:         "extra whitespace in content",
-			stdin:        `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE:   WS-DEV   and some more text"}}`,
+			stdin:        `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE:   WS-DEV   and some more text"}}`,
 			wantAllow:    true,
 			wantSentinel: "pathflow-ws-dev",
 		},
 		{
 			name:      "partial match does not trigger",
-			stdin:     `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-INVALID"}}`,
+			stdin:     `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-INVALID"}}`,
 			wantAllow: true,
 		},
 		{
@@ -194,7 +194,7 @@ func TestCheckAndCreateStageSentinel_Idempotent(t *testing.T) {
 	sentinelDir := t.TempDir()
 
 	// Create sentinel twice -- second call should succeed without error.
-	stdin1 := `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`
+	stdin1 := `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`
 	v1 := CheckAndCreateStageSentinel(strings.NewReader(stdin1), sentinelDir)
 	if !v1.Allow {
 		t.Fatalf("first call blocked: %s", v1.Reason)
@@ -282,7 +282,7 @@ func TestCheckAndCreateStageSentinelFromData(t *testing.T) {
 	t.Run("creates sentinel from pre-read data", func(t *testing.T) {
 		t.Parallel()
 		sentinelDir := t.TempDir()
-		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`)
 
 		verdict := CheckAndCreateStageSentinelFromData(data, sentinelDir)
 
@@ -371,7 +371,7 @@ func TestHandleTeamCreate(t *testing.T) {
 	t.Run("skips non-TeamCreate events", func(t *testing.T) {
 		t.Parallel()
 		sessionDir := t.TempDir()
-		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"hello"}}`)
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"hello"}}`)
 
 		verdict := HandleTeamCreate(data, sessionDir, "ses-test")
 
@@ -495,7 +495,7 @@ func TestHandleTeammateSpawn(t *testing.T) {
 
 	t.Run("skips non-Task events", func(t *testing.T) {
 		t.Parallel()
-		data := []byte(`{"tool_name":"SendMessage","tool_input":{"content":"hello"}}`)
+		data := []byte(`{"tool_name":"SendMessage","tool_input":{"message":"hello"}}`)
 
 		verdict := HandleTeammateSpawn(data, t.TempDir())
 
@@ -692,7 +692,7 @@ func TestCheckAndCreateStageSentinel_CreateSentinelFails(t *testing.T) {
 	// Point sentinelDir through the blocking file so createSentinelFile fails.
 	sentinelDir := filepath.Join(blockFile, "sentinels")
 
-	stdin := `{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`
+	stdin := `{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`
 	verdict := CheckAndCreateStageSentinel(strings.NewReader(stdin), sentinelDir)
 
 	// Should allow through (graceful degradation) but have a reason about failure.

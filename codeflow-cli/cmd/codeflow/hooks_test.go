@@ -1370,7 +1370,7 @@ func TestRunSentinelWrite(t *testing.T) {
 		},
 		{
 			name:  "SendMessage without stage pattern allowed",
-			stdin: `{"tool_name":"SendMessage","tool_input":{"content":"Hello world"}}`,
+			stdin: `{"tool_name":"SendMessage","tool_input":{"message":"Hello world"}}`,
 		},
 	}
 
@@ -1398,7 +1398,7 @@ func TestRunSentinelWriteCreatesFile(t *testing.T) {
 	// Call the business logic directly (not through runSentinelWrite which
 	// uses env vars) to verify integration between CLI and package.
 	sentinelDir := t.TempDir()
-	stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+	stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`)
 
 	verdict := sentinel.CheckAndCreateStageSentinel(stdin, sentinelDir)
 	if !verdict.Allow {
@@ -1440,7 +1440,7 @@ func TestRunSentinelWriteWithSession(t *testing.T) {
 	t.Setenv("CODEFLOW_SESSION_ID", sessionID)
 
 	t.Run("creates sentinel on STAGE-COMPLETE", func(t *testing.T) {
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`)
 		var stdout, stderr bytes.Buffer
 		err := runSentinelWrite(stdin, &stdout, &stderr)
 		if err != nil {
@@ -1457,7 +1457,7 @@ func TestRunSentinelWriteWithSession(t *testing.T) {
 		// Remove ws-dev sentinel to ensure rev is blocked.
 		_ = os.Remove(filepath.Join(sentinelDir, "pathflow-ws-dev"))
 
-		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-REV"}}`)
+		stdin := strings.NewReader(`{"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-REV"}}`)
 		var stdout, stderr bytes.Buffer
 		err := runSentinelWrite(stdin, &stdout, &stderr)
 		if err == nil {

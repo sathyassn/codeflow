@@ -665,7 +665,7 @@ Stage ordering rules:
   WS-QA  requires prior ws-dev or ws-test
 
 Stdin format:
-  {"tool_name":"SendMessage","tool_input":{"content":"STAGE-COMPLETE: WS-DEV"}}`,
+  {"tool_name":"SendMessage","tool_input":{"message":"STAGE-COMPLETE: WS-DEV"}}`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSentinelWrite(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
