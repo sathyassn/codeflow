@@ -36,7 +36,7 @@ mod tests {
             topic: "Rust test hardening".to_string(),
             status: ActiveWorkStatus::InProgress,
             branch: Some("test/rust-hardening".to_string()),
-            scope: vec!["codeflow-rs/codeflow-core/src/".to_string()],
+            scope: vec!["codeflow-rs/core/src/".to_string()],
             deliverables: vec!["tests".to_string()],
             agent: Some("cf-quality-assurance".to_string()),
             session_id: Some("ses-123".to_string()),

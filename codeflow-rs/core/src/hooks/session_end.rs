@@ -1,19 +1,18 @@
 //! Session-end hook handlers.
 //!
-//! Implements `SessionEndCleanup` and `SessionEndLogging` as `HookHandler`
-//! implementations. These mirror the Go handlers in
-//! `internal/hooks/session/end.go`.
+//! Implements `SessionEndCleanup` as a `HookHandler` implementation.
+//! This mirrors the Go handler in `internal/hooks/session/end.go`.
+//!
+//! Note: `SessionEndLogging` (session-end ledger event) is in
+//! `hooks::logging::SessionEndLogging` -- the logging module handles all
+//! session lifecycle logging.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::HookError;
-use crate::hooks::{
-    HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo, SessionMeta,
-};
-use crate::ledger::{Event, LedgerWriter};
+use crate::hooks::{HookEvent, HookHandler, HookInput, HookOutput, PathflowTeamInfo};
 use crate::pathflow;
 use crate::session;
 
@@ -122,8 +121,8 @@ impl SessionEndCleanup {
         // --- Section 12: Project temp directory cleanup ---
         self.clean_project_temp(project_dir);
 
-        // --- Section 13: Write session_end ledger event ---
-        self.write_ledger_event(project_dir, &session_id, &mut result);
+        // Note: session_end ledger event is written by SessionEndLogging
+        // handler (hooks::logging module), not here.
 
         write_messages(writer, &result.messages)?;
 
@@ -384,72 +383,6 @@ impl SessionEndCleanup {
         }
     }
 
-    /// Write the `session_end` ledger event.
-    fn write_ledger_event(&self, project_dir: &Path, session_id: &str, result: &mut CleanupResult) {
-        let ledger_dir = project_dir.join(".state").join("ledger");
-        if !ledger_dir.exists() {
-            return;
-        }
-
-        // Compute duration from session-meta.json.
-        let duration_seconds = self.compute_duration(project_dir, session_id);
-
-        let mut data = HashMap::new();
-        data.insert(
-            "pf7_valid".into(),
-            serde_json::Value::Bool(result.pf7_valid),
-        );
-        data.insert(
-            "sentinels_cleaned".into(),
-            serde_json::json!(result.sentinels_cleaned),
-        );
-        data.insert(
-            "task_preserved".into(),
-            serde_json::Value::Bool(result.task_preserved),
-        );
-        if let Some(duration) = duration_seconds {
-            data.insert("duration_seconds".into(), serde_json::json!(duration));
-        }
-
-        let event = Event {
-            event_type: "session_end".into(),
-            timestamp: (self.now)(),
-            session_id: Some(session_id.to_string()),
-            data,
-        };
-
-        // Best-effort write -- don't fail cleanup on ledger errors.
-        match crate::ledger::JsonlWriter::new(ledger_dir) {
-            Ok(writer) => {
-                if let Err(e) = writer.append_event(event) {
-                    result.warnings.push(format!("ledger write error: {e}"));
-                }
-            }
-            Err(e) => {
-                result.warnings.push(format!("ledger init error: {e}"));
-            }
-        }
-    }
-
-    /// Compute session duration from `session-meta.json` `created_at`.
-    fn compute_duration(&self, project_dir: &Path, session_id: &str) -> Option<f64> {
-        let meta_path = project_dir
-            .join(".state")
-            .join("session")
-            .join(session_id)
-            .join("session-meta.json");
-
-        let data = fs::read_to_string(&meta_path).ok()?;
-        let meta: SessionMeta = serde_json::from_str(&data).ok()?;
-
-        let start = crate::util::parse_timestamp(&meta.created_at).ok()?;
-        let now_str = (self.now)();
-        let now = crate::util::parse_timestamp(&now_str).ok()?;
-
-        let duration = now.signed_duration_since(start);
-        #[allow(clippy::cast_precision_loss)]
-        Some(duration.num_seconds() as f64)
-    }
 }
 
 impl HookHandler for SessionEndCleanup {
@@ -474,87 +407,6 @@ impl HookHandler for SessionEndCleanup {
 }
 
 // ---------------------------------------------------------------------------
-// SessionEndLogging
-// ---------------------------------------------------------------------------
-
-/// Session-end logging handler.
-///
-/// Computes session duration from the session-meta file and writes a
-/// `session_end` event to the sessions JSONL ledger.
-pub struct SessionEndLogging<L: LedgerWriter> {
-    pub ledger: L,
-    pub now: NowFn,
-}
-
-impl<L: LedgerWriter> SessionEndLogging<L> {
-    /// Write the `session_end` ledger event.
-    ///
-    /// # Errors
-    ///
-    /// Returns `HookError` on ledger write failure.
-    pub fn log_end(&self, session_id: &str, project_dir: &Path) -> Result<(), HookError> {
-        // Compute duration from session-meta.json.
-        let duration_seconds = self.compute_duration(project_dir, session_id);
-
-        let mut data = HashMap::new();
-        if let Some(duration) = duration_seconds {
-            data.insert("duration_seconds".into(), serde_json::json!(duration));
-        }
-
-        let event = Event {
-            event_type: "session_end".into(),
-            timestamp: (self.now)(),
-            session_id: Some(session_id.to_string()),
-            data,
-        };
-
-        self.ledger
-            .append_event(event)
-            .map_err(|e| HookError::Config(format!("ledger write error: {e}")))?;
-
-        Ok(())
-    }
-
-    fn compute_duration(&self, project_dir: &Path, session_id: &str) -> Option<f64> {
-        let meta_path = project_dir
-            .join(".state")
-            .join("session")
-            .join(session_id)
-            .join("session-meta.json");
-
-        let data = fs::read_to_string(&meta_path).ok()?;
-        let meta: SessionMeta = serde_json::from_str(&data).ok()?;
-
-        let start = crate::util::parse_timestamp(&meta.created_at).ok()?;
-        let now_str = (self.now)();
-        let now = crate::util::parse_timestamp(&now_str).ok()?;
-
-        let duration = now.signed_duration_since(start);
-        #[allow(clippy::cast_precision_loss)]
-        Some(duration.num_seconds() as f64)
-    }
-}
-
-impl<L: LedgerWriter> HookHandler for SessionEndLogging<L> {
-    fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
-        let session_id = input.session_id.as_deref().unwrap_or("unknown");
-        let project_dir = input.project_dir.as_deref().unwrap_or(".");
-
-        self.log_end(session_id, Path::new(project_dir))?;
-
-        Ok(HookOutput::Allow)
-    }
-
-    fn name(&self) -> &'static str {
-        "session-end-logging"
-    }
-
-    fn events(&self) -> &[HookEvent] {
-        &[HookEvent::SessionEnd]
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -568,6 +420,7 @@ fn write_messages(writer: &mut dyn Write, messages: &[String]) -> Result<(), Hoo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::SessionMeta;
     use crate::types::SessionId;
 
     fn fixed_now() -> String {
@@ -1111,120 +964,6 @@ mod tests {
 
         // No status file means no active session -- cleanup proceeds.
         assert_eq!(result.session_id, session_id);
-    }
-
-    // --- SessionEndLogging tests ---
-
-    struct MockLedger {
-        events: std::sync::Mutex<Vec<Event>>,
-    }
-
-    impl MockLedger {
-        fn new() -> Self {
-            Self {
-                events: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-
-        fn last_event(&self) -> Option<Event> {
-            self.events.lock().unwrap().last().cloned()
-        }
-    }
-
-    impl LedgerWriter for MockLedger {
-        fn append_event(&self, event: Event) -> Result<(), crate::error::LedgerError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn append_event_to_file(
-            &self,
-            _target_file: &str,
-            event: Event,
-        ) -> Result<(), crate::error::LedgerError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn route_event(&self, _event_type: &str) -> Result<String, crate::error::LedgerError> {
-            Ok("sessions.jsonl".into())
-        }
-
-        fn dir(&self) -> &Path {
-            Path::new("/tmp")
-        }
-    }
-
-    #[test]
-    fn test_end_logging_writes_event() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // Create session-meta.json for duration computation.
-        let session_dir = dir
-            .path()
-            .join(".state")
-            .join("session")
-            .join("ses-log-test");
-        fs::create_dir_all(&session_dir).unwrap();
-        let meta = SessionMeta {
-            session_id: "ses-log-test".into(),
-            created_at: "2026-03-10T00:00:00Z".into(),
-            source: "startup".into(),
-            ppid: 1000,
-            version: "test".into(),
-            permission_mode: None,
-        };
-        fs::write(
-            session_dir.join("session-meta.json"),
-            serde_json::to_string(&meta).unwrap(),
-        )
-        .unwrap();
-
-        let ledger = MockLedger::new();
-        let handler = SessionEndLogging {
-            ledger,
-            now: fixed_now, // 2026-03-10T01:00:00Z
-        };
-
-        handler.log_end("ses-log-test", dir.path()).unwrap();
-
-        let event = handler.ledger.last_event().unwrap();
-        assert_eq!(event.event_type, "session_end");
-        assert_eq!(event.session_id.as_deref(), Some("ses-log-test"));
-
-        // Duration should be 3600 seconds (1 hour).
-        let duration = event.data.get("duration_seconds").unwrap();
-        assert_eq!(duration.as_f64().unwrap(), 3600.0);
-    }
-
-    #[test]
-    fn test_end_logging_no_meta_file() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let ledger = MockLedger::new();
-        let handler = SessionEndLogging {
-            ledger,
-            now: fixed_now,
-        };
-
-        handler.log_end("ses-no-meta", dir.path()).unwrap();
-
-        let event = handler.ledger.last_event().unwrap();
-        assert_eq!(event.event_type, "session_end");
-        // No duration since no meta file exists.
-        assert!(!event.data.contains_key("duration_seconds"));
-    }
-
-    #[test]
-    fn test_end_logging_handler_trait() {
-        let ledger = MockLedger::new();
-        let handler = SessionEndLogging {
-            ledger,
-            now: fixed_now,
-        };
-
-        assert_eq!(handler.name(), "session-end-logging");
-        assert_eq!(handler.events(), &[HookEvent::SessionEnd]);
     }
 
     #[test]

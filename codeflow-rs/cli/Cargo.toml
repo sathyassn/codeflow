@@ -9,7 +9,7 @@ name = "codeflow"
 path = "src/main.rs"
 
 [dependencies]
-codeflow-core = { path = "../codeflow-core" }
+codeflow-core = { path = "../core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

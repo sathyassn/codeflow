@@ -76,7 +76,7 @@ mod tests {
             auto_merge: false,
             target_branch: None,
             acceptance: vec!["All tests pass".to_string()],
-            tests: vec!["codeflow-rs/codeflow-core/src/".to_string()],
+            tests: vec!["codeflow-rs/core/src/".to_string()],
             branch: None,
             pr_number: None,
             external_id: None,

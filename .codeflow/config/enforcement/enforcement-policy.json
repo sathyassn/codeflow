@@ -405,9 +405,9 @@
       "codeflow-cli/internal/hooks/**",
       "codeflow-cli/cmd/codeflow/hooks*",
       "codeflow-cli/cmd/codeflow/githooks*",
-      "codeflow-rs/codeflow-core/src/hooks/**",
-      "codeflow-rs/codeflow-cli/src/cmd/hooks/**",
-      "codeflow-rs/codeflow-cli/src/cmd/git_hooks.rs"
+      "codeflow-rs/core/src/hooks/**",
+      "codeflow-rs/cli/src/cmd/hooks/**",
+      "codeflow-rs/cli/src/cmd/git_hooks.rs"
     ],
     "moderate": [
       "project/mission.md",
@@ -544,9 +544,9 @@
       "Co-Authored-By: Claude",
       "Co-Authored-By: ChatGPT",
       "Co-Authored-By: Copilot",
-      "🤖",
-      "🔮",
-      "✨ Generated"
+      "\ud83e\udd16",
+      "\ud83d\udd2e",
+      "\u2728 Generated"
     ],
     "subject": {
       "max_length": 50,
@@ -576,7 +576,7 @@
     ],
     "retry_config_key": "_verify_work_config.maxRetries",
     "pcv": {
-      "required_marker": "🔍",
+      "required_marker": "\ud83d\udd0d",
       "required_text": "verify-work",
       "output_pattern": "complete|done|finished",
       "tier_patterns": {

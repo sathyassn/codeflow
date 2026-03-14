@@ -282,11 +282,14 @@ pub fn handle_team_create(
     atomic_write_file(&team_file_path, team_json.as_bytes())?;
 
     // Update session status to pf-started with team_name.
+    // Reset phase/stage fields so a new session starts clean.
     update_session_status(
         session_dir,
         &serde_json::json!({
             "status": "pf-started",
             "team_name": team_name,
+            "last_completed_phase": "",
+            "last_completed_stage": "",
         }),
     );
 
@@ -1035,6 +1038,45 @@ mod tests {
 
         let team_file = session_dir.join("pathflow-team.json");
         assert!(!team_file.exists());
+    }
+
+    #[test]
+    fn test_handle_team_create_resets_phase_and_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Pre-create a status file with stale phase/stage from a previous session.
+        let status = serde_json::json!({
+            "status": "created",
+            "team_name": "",
+            "last_completed_phase": "pf-6",
+            "last_completed_stage": "WS-QA",
+            "created_at": "2026-03-14T00:00:00Z",
+            "updated_at": "2026-03-14T00:00:00Z",
+        });
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        let result = handle_team_create("new-team", &session_dir, "ses-newses123").unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Read back the status file and verify phase/stage are cleared.
+        let data = fs::read_to_string(session_dir.join("pathflow-session-status.json")).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(updated["status"], "pf-started");
+        assert_eq!(updated["team_name"], "new-team");
+        assert_eq!(
+            updated["last_completed_phase"], "",
+            "last_completed_phase should be cleared on TeamCreate"
+        );
+        assert_eq!(
+            updated["last_completed_stage"], "",
+            "last_completed_stage should be cleared on TeamCreate"
+        );
     }
 
     // -- TeammateSpawn tests --

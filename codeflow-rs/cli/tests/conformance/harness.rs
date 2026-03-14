@@ -1,7 +1,8 @@
 //! Conformance test harness for binary-level contract verification.
 //!
 //! This harness runs both the Go (`codeflow-cli/bin/codeflow`) and Rust
-//! (`codeflow-rs/target/debug/codeflow`) binaries against identical stdin inputs
+//! (`codeflow-rs/target/debug/codeflow`) binaries against identical stdin
+//! inputs
 //! and diffs the results (stdout, stderr, exit code).
 //!
 //! # Binary Path Resolution
@@ -57,16 +58,16 @@ pub struct BinaryPaths {
 /// Find the workspace root by walking up from this file's location.
 ///
 /// The workspace root is the directory that contains both `codeflow-cli/`
-/// and `codeflow-rs/` subdirectories.
+/// (Go) and `codeflow-rs/` (Rust) subdirectories.
 pub fn workspace_root() -> PathBuf {
-    // This test file is at: codeflow-rs/codeflow-cli/tests/conformance/mod.rs
+    // This test file is at: codeflow-rs/cli/tests/conformance/mod.rs
     // Workspace root is 4 levels up.
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    // CARGO_MANIFEST_DIR points to codeflow-rs/codeflow-cli
-    // workspace root = codeflow-rs/codeflow-cli/../.. = workspace
+    // CARGO_MANIFEST_DIR points to codeflow-rs/cli
+    // workspace root = codeflow-rs/cli/../.. = workspace
     manifest_dir
         .parent() // codeflow-rs/
-        .expect("codeflow-cli parent")
+        .expect("cli parent")
         .parent() // workspace root
         .expect("codeflow-rs parent (workspace root)")
         .to_path_buf()
@@ -561,9 +562,9 @@ pub fn assert_conformance_json_env_fixture(args: &[&str], event_name: &str, dyna
 pub fn load_fixture(event_name: &str) -> String {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .parent() // go up from codeflow-cli to codeflow-rs
-        .expect("parent of codeflow-cli")
-        .join("codeflow-cli")
+        .parent() // go up from cli to codeflow-rs
+        .expect("parent of cli")
+        .join("cli")
         .join("tests")
         .join("fixtures")
         .join(format!("{event_name}.json"));
