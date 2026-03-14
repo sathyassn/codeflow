@@ -13,7 +13,7 @@ TESTING_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly TESTING_DIR
 REPO_ROOT="$(cd "$TESTING_DIR/../.." && pwd)"
 readonly REPO_ROOT
-readonly RS_DIR="$REPO_ROOT/codeflow-rs"
+readonly RS_DIR="$REPO_ROOT/codeflow-cli"
 readonly CONFIG_FILE="$RS_DIR/config/testing/test-config.json"
 
 # Read coverage settings from config (fallback to defaults if jq unavailable)
@@ -122,18 +122,27 @@ run_unit_tests() {
 run_coverage_enforcement() {
     test_section "Coverage enforcement"
 
+    # macOS SIP kills LLVM-instrumented binaries that link native C libraries
+    # (openssl via git2, surrealdb). Coverage enforcement runs in CI (Linux)
+    # where SIP does not apply. Skip locally on macOS.
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "  SKIP: macOS SIP blocks LLVM coverage instrumentation. Coverage enforced in CI."
+        return 0
+    fi
+
     if ! cargo llvm-cov --version &>/dev/null; then
         test_fail "cargo-llvm-cov not installed — coverage enforcement requires it"
         return 1
     fi
 
-    # Build coverage args scoped to business packages
-    local cov_args=("nextest")
+    # Build coverage args scoped to business packages.
+    local cov_args=()
+    if command -v cargo-nextest &>/dev/null; then
+        cov_args+=("nextest")
+    fi
     for pkg in $BUSINESS_PKGS; do
         cov_args+=("--package" "$pkg")
     done
-    # Skip cfg-based coverage instrumentation — blocked by macOS SIP (SIGKILL).
-    # LLVM source-based instrumentation still produces valid coverage data.
     cov_args+=("--no-cfg-coverage")
 
     echo "  Business packages: $BUSINESS_PKGS"
@@ -208,7 +217,7 @@ run_coverage_enforcement() {
 
         if [[ "$pct_int" -lt "$COVERAGE_THRESHOLD" ]]; then
             # Extract short path (crate/src/...) for readability
-            local short_name="${filename##*/codeflow-rs/}"
+            local short_name="${filename##*/codeflow-cli/}"
             echo "  FAIL: ${short_name} — ${pct}% (below ${COVERAGE_THRESHOLD}%)"
             per_file_fail=true
             fail_count=$((fail_count + 1))
@@ -225,8 +234,10 @@ run_coverage_enforcement() {
 }
 
 cleanup() {
-    # Remove test artifacts if needed
-    rm -rf "$RS_DIR/target/llvm-cov-target" 2>/dev/null || true
+    # Clean up instrumentation data but preserve build artifacts to avoid
+    # cold-start rebuilds (OpenSSL vendored build fails under llvm instrumentation
+    # on macOS aarch64 without pre-built artifacts).
+    find "$RS_DIR/target/llvm-cov-target" -name "*.profraw" -delete 2>/dev/null || true
 }
 
 # ============================================================================
@@ -263,7 +274,7 @@ main() {
     # Check Rust workspace exists
     if [[ ! -f "$RS_DIR/Cargo.toml" ]]; then
         test_section "Rust CLI Bridge Tests"
-        echo "  SKIP: codeflow-rs/Cargo.toml not found. Skipping Rust CLI tests."
+        echo "  SKIP: codeflow-cli/Cargo.toml not found. Skipping Rust CLI tests."
         exit 0
     fi
 

@@ -34,7 +34,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 | think-and-act | Before DB writes | PAC-5 structured reasoning |
 | decide | Schema and lifecycle choices | Tier 1/2/3 classification |
 | respond-organized | Status reports | Concise, with IDs and counts |
-| research-quality | Data model claims | Verify against schema.sql |
+| research-quality | Data model claims | Verify against schema.surql |
 
 ## Workflow
 
@@ -114,9 +114,9 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 
 **Network operations:** If database synchronization or external data operations ever require network access, load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound commands.
 
-### Go CLI Fallback
+### CLI Fallback
 
-When Go CLI (`codeflow`) is not available (pre-Phase 7), use these fallbacks:
+When CLI (`codeflow`) is not available, use these fallbacks:
 
 - **DB writes:** `sqlite3 .state/db/codeflow.db "SQL_STATEMENT"`
 - **DB reads:** `sqlite3 -json .state/db/codeflow.db "SELECT ..."`
@@ -126,7 +126,7 @@ When Go CLI (`codeflow`) is not available (pre-Phase 7), use these fallbacks:
 Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
 
 All DB operations execute via: `codeflow db exec` (writes) or `codeflow db query` (reads).
-Schema defined in: `codeflow-cli/internal/db/schema.sql`
+Schema defined in: `codeflow-cli/core/src/store/schema.surql`
 
 ---
 
@@ -179,7 +179,7 @@ Schema defined in: `codeflow-cli/internal/db/schema.sql`
 7. Append `begin_work` event to `.state/logs/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
 8. Write `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
 
-**CONDITIONAL (autorun):** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by Go CLI. Skip steps 3-8, load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
+**CONDITIONAL (autorun):** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by CLI. Skip steps 3-8, load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: begin-work - Registered work-{ulid} for task {format_id} on branch {branch}"`
 
@@ -372,7 +372,7 @@ codeflow internal ulid --prefix epic
 codeflow internal ulid --prefix task
 ```
 
-The Go CLI generates a Crockford base32 ULID with the given prefix. For multiple IDs: run the command multiple times. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic.
+The CLI generates a Crockford base32 ULID with the given prefix. For multiple IDs: run the command multiple times. The generated ULID goes in the `id` field of the markdown YAML frontmatter (e.g., `id: "epic-01ABCDEFGHJKMNPQRSTVWXYZ"`). For tasks, also set `epic_id` to the ULID of the parent epic.
 
 **CHECKLIST (all required unless marked CONDITIONAL):**
 
@@ -695,7 +695,7 @@ Before marking any operation complete, verify:
 | Resource | Path | Purpose |
 |----------|------|---------|
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| DB Schema | `codeflow-cli/internal/db/schema.sql` | Table definitions and constraints |
+| DB Schema | `codeflow-cli/core/src/store/schema.surql` | Table definitions and constraints |
 | PathFlow CLI | `codeflow pathflow <subcommand>` | Phase/stage transition commands |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |

@@ -113,16 +113,12 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 - Naming: Files `snake_case.py` | Variables `snake_case` | Constants `SCREAMING_SNAKE` | Classes `PascalCase`
 - Full reference: [cf-python-standards](../skills/cf-python-standards/SKILL.md)
 
-**Go packages (`.go`):**
+**Rust crates (`.rs`):**
 
-- New packages: Apply Go package template -- `doc.go` with package comment, exported types/functions with godoc comments, `_test.go` with table-driven tests
-- CLI commands: Use `main() -> run() -> os.Exit` pattern, structured logging with `slog`
-- All files: Run `golangci-lint run` and `go vet` after editing. Fix all issues before commit.
-- Error handling: Wrap all errors with context (`fmt.Errorf("context: %w", err)`), use sentinel errors (`var ErrNotFound = errors.New(...)`)
-- Concurrency: Always use `context.Context`, `errgroup.Group` for managed goroutines, run `go test -race ./...`
-- Testing: Table-driven with `t.Run()`, `t.Helper()` on helpers, `t.TempDir()`, `t.Context()` (Go 1.24+), 85% coverage threshold
-- Naming: Packages `lowercase` | Exported `PascalCase` | Unexported `camelCase` | Errors `ErrPrefix`
-- Full reference: [cf-go-standards](../skills/cf-go-standards/SKILL.md)
+- All files: Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check` after editing. Fix all issues before commit.
+- Error handling: Use `thiserror` for library errors, `anyhow` for application errors. Wrap errors with context.
+- Testing: `#[cfg(test)]` modules with `#[test]` functions. Use `tempfile` for temp dirs, `proptest` for property tests, `insta` for snapshots.
+- Coverage: 85% per-file threshold on business packages (`codeflow-core`, `codeflow-cli`). Config in `codeflow-cli/config/testing/test-config.json`.
 
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
@@ -389,7 +385,7 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 | Config schema | "test-config.json has a `tests` array" | `Read` the actual config file — it uses `priorities.{LEVEL}.files` |
 | Source path in test | "`source ../../lib/test-helpers.sh`" | Count directory levels from test file to lib — verify with `ls` |
 | Variable name | "The variable is called `SESSION_ID`" | `Grep` for the actual variable name in the source file |
-| Import path | "`import github.com/codeflow/codeflow-cli/internal/utils`" | `Glob("codeflow-cli/internal/utils/*.go")` — does the package exist? |
+| Import path | "`use codeflow_core::hooks::pipeline`" | `Glob("codeflow-cli/core/src/hooks/pipeline.rs")` — does the module exist? |
 
 **Verification rule:** For every file path, function name, variable name, config key, or directory structure you reference in code, verify it exists using Glob, Grep, or Read. Never write code that references something you haven't confirmed exists.
 
@@ -466,7 +462,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
 - [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
 - [ ] **Tests pass:** `codeflow test` passes with zero failures (actual output captured)
-- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; golangci-lint zero errors on all `.go` files
+- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; cargo clippy zero errors on all `.rs` files
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
 - [ ] **Shared lib usage:** Used existing shared utilities where applicable (check `.codeflow/scripts/security/protection/lib/` for protection-related functions)
 - [ ] **Source paths verified:** Every `source` or `import` statement resolves to an existing file
@@ -481,7 +477,6 @@ Before requesting commit, do a "would I accept this in review?" pass:
 |----------|------|---------|
 | Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
 | Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Shell script template, ShellCheck rules |
-| Go Standards | `.claude/skills/cf-go-standards/SKILL.md` | Go package structure, golangci-lint rules |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |

@@ -533,12 +533,12 @@ Edge cases: {what to watch for, known pitfalls}
 
 ```text
 Task: Add input validation to the session-start hook
-Scope: codeflow-cli/cmd/codeflow/hooks.go (runSessionStartInit function)
+Scope: codeflow-cli/core/src/hooks/session_start.rs (SessionStartInit handler)
 Acceptance:
   1. Hook validates session_id format matches "ses-{13-digit-timestamp}{12-hex-chars}"
   2. Invalid session_id triggers warning to stderr (not block)
-  3. Existing tests in hooks_test.go still pass
-Tests: Add 2 new test cases to hooks_test.go (valid format, invalid format)
+  3. Existing tests in session_start.rs still pass
+Tests: Add 2 new test cases in #[cfg(test)] mod (valid format, invalid format)
 Edge cases: Empty session_id (already handled), non-ASCII characters in stdin
 ```
 
@@ -1096,7 +1096,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test` (1,555+ tests across shell/Python, Go, Rust; WS-QA uses `--mode full --coverage` for coverage enforcement)
+- Test suite: run via `codeflow test` (2,400+ tests across shell/Python and Rust; WS-QA uses `--mode full --coverage` for coverage enforcement)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1267,12 +1267,13 @@ The unified `codeflow test` command routes to all test suites (shell/Python, Go,
 │   └── project/                      #   Project hook scripts (if any)
 ├── commands/                         # 14 slash command definitions (cf-*.md)
 ├── memory/                           # Tier 2: domain-specific work context
-└── settings.json                     # Permissions, hook config (21 hook entries as Go CLI subcommands)
+└── settings.json                     # Permissions, hook config (21 hook entries as Rust CLI subcommands)
 
-codeflow-cli/                         # Go CLI binary source
-├── cmd/codeflow/                     # CLI entry point and hook subcommands
-│   └── hooks.go                      #   Hook event handlers (session-start, pre-tool-use, etc.)
-└── internal/                         # Business logic packages
+codeflow-cli/                         # Rust CLI workspace
+├── Cargo.toml                        #   Workspace root (members: core, cli)
+├── core/                             #   Library crate (codeflow-core): hooks, models, pathflow, session
+├── cli/                              #   Binary crate (codeflow-cli, bin: codeflow)
+└── config/testing/test-config.json   #   Rust test configuration (coverage, business packages)
 
 .codeflow/                            # CodeFlow infrastructure
 ├── config/
@@ -1280,7 +1281,7 @@ codeflow-cli/                         # Go CLI binary source
 │   └── pathflow/                     # pathflow-config.json (phases, stages, pipelines, rework limits)
 ├── scripts/
 │   └── security/                     # Protection scripts (cf-protect-resources.sh, cf-promote-protection.sh, cf-reload-protection.sh + lib/)
-├── testing/                          # Test suite (1,555+ tests)
+├── testing/                          # Test suite (2,400+ tests)
 └── docs/archived/skills/             # 9 archived skills (reference only)
 
 .state/                               # Runtime state (partially gitignored)

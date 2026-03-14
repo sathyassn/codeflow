@@ -59,6 +59,19 @@ run_all_tests_parallel() {
     for i in "${!categories[@]}"; do
         local category="${categories[$i]}"
 
+        # Skip categories marked ci_skip when running in CI
+        if [[ "${CI:-}" == "true" ]] && command -v jq &>/dev/null; then
+            local config_file="${RUNNER_DIR}/../test-config.json"
+            if [[ -f "$config_file" ]]; then
+                local ci_skip
+                ci_skip=$(jq -r --arg cat "$category" '.categories[$cat].ci_skip // false' "$config_file" 2>/dev/null)
+                if [[ "$ci_skip" == "true" ]]; then
+                    echo "  [SKIP] ${category}: skipped in CI (dedicated CI job)"
+                    continue
+                fi
+            fi
+        fi
+
         # Check poison file (stop-on-fail)
         if [[ -f "$stop_file" ]]; then
             SKIPPED_TESTS+=("$category (cancelled)")

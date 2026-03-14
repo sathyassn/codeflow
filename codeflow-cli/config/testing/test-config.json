@@ -2,95 +2,14 @@
   "coverage": {
     "threshold": 85,
     "enforcement": "per_file",
-    "business_packages": [
-      "./internal/db/...",
-      "./internal/idgen/...",
-      "./internal/ledger/...",
-      "./internal/pathflow/...",
-      "./internal/session/...",
-      "./internal/validate/...",
-      "./internal/hooks/...",
-      "./internal/sentinel/...",
-      "./internal/claim/...",
-      "./internal/cliutil/...",
-      "./internal/settings/...",
-      "./internal/workstate/...",
-      "./internal/worktree/...",
-      "./internal/report/...",
-      "./cmd/codeflow/...",
-      "./cmd/autorun/...",
-      "./internal/workgraph/...",
-      "./internal/githooks/...",
-      "./internal/shadowtest/...",
-      "./internal/autorun/...",
-      "./internal/config/...",
-      "./internal/doctor/...",
-      "./internal/initialize/...",
-      "./internal/preflight/...",
-      "./internal/update/...",
-      "./internal/welcome/...",
-      "./internal/verification/..."
-    ]
+    "tool": "cargo-llvm-cov",
+    "business_packages": ["codeflow-core", "codeflow-cli"]
   },
   "conventions": {
-    "test_file_required": true,
-    "test_file_staged_with_source": true,
-    "t_parallel_required": true,
-    "context_background_blocked": true,
-    "exceptions": [
-      {
-        "file": "internal/autorun/worker_real.go",
-        "reason": "Thin wrapper calling real OS commands — untestable without full integration environment"
-      },
-      {
-        "file": "cmd/codeflow/update.go",
-        "function": "runUpdate",
-        "reason": "Calls update.Check (HTTP GET to GitHub releases API), update.Apply (downloads/replaces binary), and update.SyncTemplates — requires network and filesystem integration"
-      },
-      {
-        "file": "cmd/codeflow/main.go",
-        "function": "main",
-        "reason": "Entry point calls os.Exit — standard Go untestable main pattern"
-      },
-      {
-        "file": "internal/settings/sudo.go",
-        "reason": "Thin wrappers around sudo exec.Command calls — requires root privileges to test"
-      },
-      {
-        "file": "internal/githooks/prepush.go",
-        "function": "tryTTYOverride",
-        "reason": "Opens /dev/tty for interactive input — untestable in CI/automated environments"
-      },
-      {
-        "file": "internal/githooks/precommitvalidate.go",
-        "function": "RunPreCommitValidate",
-        "reason": "Orchestrator calling git commands (branch --show-current, diff --cached) — requires live git repo with staged files"
-      },
-      {
-        "file": "internal/githooks/precommitvalidate.go",
-        "function": "getStagedFiles",
-        "reason": "Calls git diff --cached — requires live git repo with staged files"
-      },
-      {
-        "file": "internal/githooks/postcommit.go",
-        "function": "RunPostCommit",
-        "reason": "Orchestrator calling git commands (rev-parse HEAD, log, branch) — requires live git repo with commits"
-      },
-      {
-        "file": "cmd/codeflow/githooks.go",
-        "function": "newGitHooksPrePushCmd",
-        "reason": "RunE reads from os.Stdin (git push ref pipe) — cannot mock os.Stdin in unit tests without refactoring"
-      },
-      {
-        "file": "internal/initialize/wizard.go",
-        "function": "Run",
-        "reason": "Signal handling branch (SIGINT/SIGTERM via signal.Notify) — OS signal delivery untestable in unit tests"
-      },
-      {
-        "file": "internal/doctor/repair.go",
-        "function": "RepairPermissions",
-        "reason": "Calls os.Chmod on live filesystem paths — permission changes require specific OS state"
-      }
-    ]
+    "test_runner": "cargo-nextest",
+    "coverage_tool": "cargo-llvm-cov",
+    "property_testing": "proptest",
+    "snapshot_testing": "insta",
+    "exceptions": []
   }
 }

@@ -107,10 +107,9 @@ This is the unified CLI entry point. It routes to all test suites (shell/Python,
 | Suite | Bridge Script | Coverage | Config |
 |-------|--------------|----------|--------|
 | Shell/Python | `bash .codeflow/testing/run-all-tests.sh --mode full` | Structural coverage via `test-coverage.sh` | `.codeflow/testing/test-config.json` |
-| Go | `cd codeflow-cli && make test-cover` | 85% per-file aggregate on business packages | `codeflow-cli/config/testing/test-config.json` |
-| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via cargo-llvm-cov on business packages | `codeflow-rs/config/testing/test-config.json` |
+| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via cargo-llvm-cov on business packages | `codeflow-cli/config/testing/test-config.json` |
 
-Go business packages: `./internal/db/...`, `./internal/session/...`, `./cmd/codeflow/...`, `./cmd/autorun/...`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in each suite's test-config.json.
+Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in the Rust test-config.json.
 
 #### Step 3: Run Targeted Tests
 
@@ -394,7 +393,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 **Check 3 — Test file location:** For every test file, verify it is in the correct directory under `.codeflow/testing/`:
 
 - Source in `.codeflow/scripts/{area}/` → Test in `.codeflow/testing/scripts/{area}/`
-- Go source in `codeflow-cli/internal/{pkg}/` or `codeflow-cli/cmd/{cmd}/` → Test in same package as `{name}_test.go`
+- Rust source in `codeflow-cli/core/src/` or `codeflow-cli/cli/src/` → Test in same module or `tests/` directory
 - If test is in wrong directory: **FAIL** — "Test file `{test}` should be in `{correct_dir}`, not `{current_dir}`"
 
 **Check 4 — test-config.json registration:** Read `.codeflow/testing/test-config.json`. For every new test file:
@@ -539,7 +538,5 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell assertion library (40+ functions) |
 | Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Isolated repo root for tests |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
-| Go Test Bridge | `.codeflow/testing/cli/test-go-cli.sh` | Integrates Go test results into shell framework |
-| Go Makefile | `codeflow-cli/Makefile` | `make test-cover` (85% coverage threshold) |
 | Rust Test Bridge | `.codeflow/testing/cli/rust/test-rust-cli.sh` | Build verification, unit tests, coverage enforcement |
-| Rust Test Config | `codeflow-rs/config/testing/test-config.json` | Rust coverage threshold, business packages, exceptions |
+| Rust Test Config | `codeflow-cli/config/testing/test-config.json` | Rust coverage threshold, business packages, exceptions |

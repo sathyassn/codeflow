@@ -27,16 +27,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          go-version-file: codeflow-cli/go.mod
-          cache: true
-          cache-dependency-path: codeflow-cli/go.sum
+          toolchain: stable
+          components: llvm-tools-preview
+          cache-shared-key: "ci"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install mold linker
+        run: sudo apt-get install -y mold
 
       - name: Install codeflow binary
         working-directory: codeflow-cli
-        run: go install ./cmd/codeflow/
+        run: cargo build --profile ci && cp target/ci/codeflow "$HOME/.cargo/bin/codeflow"
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Run structural integrity check
         run: |
@@ -45,10 +61,13 @@ jobs:
 
       - name: Run test suite
         run: bash .codeflow/testing/run-all-tests.sh --mode full
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Tests passed
         if: success()
-        run: echo "All tests passed with structural integrity enforcement"
+        run: echo "All tests passed"
 
       - name: Tests failed
         if: failure()
@@ -59,123 +78,10 @@ jobs:
           echo "  bash .codeflow/testing/run-all-tests.sh --mode full"
           exit 1
 
-  test-go:
-    name: Run Go CLI Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: codeflow-cli/go.mod
-          cache: true
-          cache-dependency-path: codeflow-cli/go.sum
-
-      - name: Build codeflow binary
-        working-directory: codeflow-cli
-        run: make build
-
-      - name: Run Go tests with coverage
-        working-directory: codeflow-cli
-        run: make test-cover
-
-      - name: Go tests passed
-        if: success()
-        run: echo "Go CLI tests passed with coverage enforcement"
-
-      - name: Go tests failed
-        if: failure()
-        run: |
-          echo "Go CLI tests failed"
-          echo ""
-          echo "To reproduce locally:"
-          echo "  cd codeflow-cli && make test-cover"
-          exit 1
-
-  test-rust:
-    name: Run Rust CLI Tests
-    runs-on: ubuntu-latest
-    if: vars.SKIP_RUST_TESTS != 'true'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: ${{ vars.SKIP_RUST_COVERAGE != 'true' && 'llvm-tools-preview' || '' }}
-          cache-shared-key: "ci"
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - name: Install cargo-llvm-cov
-        if: vars.SKIP_RUST_COVERAGE != 'true'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Install mold linker
-        run: sudo apt-get install -y mold
-
-      - name: Check formatting
-        working-directory: codeflow-rs
-        run: cargo fmt --check
-
-      - name: Run Clippy lints
-        working-directory: codeflow-rs
-        run: cargo clippy --workspace -- -D warnings
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-
-      - name: Build Rust binary
-        working-directory: codeflow-rs
-        run: cargo build --profile ci
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-
-      - name: Run tests with coverage enforcement
-        if: vars.SKIP_RUST_COVERAGE != 'true'
-        working-directory: codeflow-rs
-        run: cargo llvm-cov nextest --workspace --fail-under-lines 85
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-
-      - name: Run tests (coverage via WS-QA)
-        if: vars.SKIP_RUST_COVERAGE == 'true'
-        working-directory: codeflow-rs
-        run: cargo nextest run --workspace
-
-      - name: Rust tests passed
-        if: success()
-        run: echo "Rust CLI tests passed with coverage and lint enforcement"
-
-      - name: Rust tests failed
-        if: failure()
-        run: |
-          echo "Rust CLI tests failed"
-          echo ""
-          echo "To reproduce locally:"
-          echo "  cd codeflow-rs && cargo fmt --check"
-          echo "  cd codeflow-rs && cargo clippy --workspace -- -D warnings"
-          echo "  cd codeflow-rs && cargo build --profile ci"
-          echo "  cd codeflow-rs && cargo llvm-cov nextest --workspace --fail-under-lines 85"
-          exit 1
-
   build-release:
     name: Build Release (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    if: vars.SKIP_RUST_TESTS != 'true'
+    if: vars.SKIP_RUST_BUILD != 'true'
 
     strategy:
       fail-fast: false
@@ -207,18 +113,18 @@ jobs:
         run: sudo apt-get install -y mold
 
       - name: Build release binary
-        working-directory: codeflow-rs
+        working-directory: codeflow-cli
         run: cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: ${{ runner.os == 'Linux' && 'clang' || '' }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ runner.os == 'Linux' && '-C link-arg=-fuse-ld=mold' || '' }}
 
       - name: Verify binary
-        run: file codeflow-rs/target/${{ matrix.target }}/release/${{ matrix.binary }}
+        run: file codeflow-cli/target/${{ matrix.target }}/release/${{ matrix.binary }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: codeflow-${{ matrix.target }}
-          path: codeflow-rs/target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: codeflow-cli/target/${{ matrix.target }}/release/${{ matrix.binary }}
           retention-days: 7

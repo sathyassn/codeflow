@@ -1,7 +1,7 @@
 {
   "$schema": "./test-config.schema.json",
   "version": "2.0.0",
-  "description": "Config-driven test execution for CodeFlow - Post-cutover (Go CLI hooks)",
+  "description": "Config-driven test execution for CodeFlow - Rust CLI",
   "priorities": {
     "CRITICAL": {
       "description": "Core data layer - consistency checks",
@@ -33,7 +33,6 @@
         "scripts/git-hooks/test-prepare-commit-msg.sh",
         "scripts/git-hooks/test-post-commit.sh",
         "scripts/git-hooks/test-pre-push.sh",
-        "cli/go/test-go-cli.sh",
         "cli/rust/test-rust-cli.sh"
       ]
     },
@@ -97,17 +96,11 @@
       "description": "Git hook tests",
       "language": "bash"
     },
-    "cli-go": {
-      "directory": "cli/go",
-      "description": "Go CLI bridge tests (build, smoke, unit tests, coverage)",
-      "language": "go",
-      "ci_skip": true
-    },
     "cli-rust": {
       "directory": "cli/rust",
       "description": "Rust CLI bridge tests (build, smoke, unit tests, coverage)",
       "language": "rust",
-      "ci_skip": true
+      "ci_skip": false
     }
   },
   "pre_commit": {
@@ -179,10 +172,6 @@
       {
         "pattern": "scripts/commands/*",
         "reason": "Command integration tests (test slash command infrastructure)"
-      },
-      {
-        "pattern": "cli/go/test-go-cli.sh",
-        "reason": "Bridge test for Go CLI binary (no 1:1 shell source mapping — tests Go package code)"
       },
       {
         "pattern": "cli/rust/test-rust-cli.sh",

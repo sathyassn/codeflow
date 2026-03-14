@@ -346,7 +346,7 @@ Path convention: `.git-worktrees/{prefix}-{slug}/`
 1. Verify target branch does not already exist
 2. Check for scope conflicts with active worktrees: `git worktree list`
 3. Create worktree: `git worktree add .git-worktrees/{prefix}-{slug}/ -b {prefix}/{slug}`
-4. Run setup via Go CLI: `codeflow worktree setup --name {prefix}-{slug} --branch {prefix}/{slug}`
+4. Run setup via CLI: `codeflow worktree setup --name {prefix}-{slug} --branch {prefix}/{slug}`
 5. Confirm to requester
 
 **Cleanup worktrees** when no longer needed:
@@ -464,4 +464,4 @@ Before marking any operation complete, verify:
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Branch protection rules |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
-| Worktree CLI | `codeflow worktree setup/status/list/cleanup` | Worktree management via Go CLI |
+| Worktree CLI | `codeflow worktree setup/status/list/cleanup` | Worktree management via CLI |
