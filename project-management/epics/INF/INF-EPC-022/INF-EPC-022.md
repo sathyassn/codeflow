@@ -170,7 +170,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-021 | Pre-cutover Rust binary validation | complete | critical | 0F |
 | INF-TSK-022-022 | Set up CI pipeline for Rust binary | complete | high | 0G |
 | INF-TSK-022-023 | Coverage enforcement and lint pipeline | complete | high | 0G |
-| INF-TSK-022-024 | Cross-compile release builds | todo | normal | 0G |
+| INF-TSK-022-024 | Cross-compile release builds | complete | normal | 0G |
 | INF-TSK-022-025 | Cutover: Go removal and Rust installation | todo | critical | 0G |
 | INF-TSK-022-026 | Update test infrastructure references | todo | high | 0G |
 | INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
