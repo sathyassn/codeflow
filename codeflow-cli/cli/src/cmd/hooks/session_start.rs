@@ -77,7 +77,6 @@ fn build_handler(
                 ppid,
                 home_dir,
                 now,
-                env_override: None, // Production: read real process env vars
             })
         }
         SessionStartHandler::Instructions => {

@@ -45,7 +45,7 @@ fn acquire_session_lock(runtime_dir: &Path) -> Result<std::fs::File, std::io::Er
 /// Output from a successful session initialization.
 #[derive(Debug, Clone)]
 pub struct InitResult {
-    /// The `CODEFLOW_SESSION_ID` used for this session.
+    /// The session ID resolved for this session.
     pub session_id: SessionId,
     /// `true` when an existing `pathflow-active` flag was found.
     pub is_resume: bool,
@@ -70,21 +70,10 @@ pub struct SessionStartInit {
     pub ppid: u32,
     pub home_dir: PathBuf,
     pub now: NowFn,
-    /// Override env vars for testing. When `Some`, lookups use this map
-    /// instead of the process environment. When `None`, reads `std::env::var`.
-    pub env_override: Option<HashMap<String, String>>,
 }
 
 #[allow(clippy::unused_self)]
 impl SessionStartInit {
-    /// Read an environment variable, checking `env_override` first.
-    fn get_env(&self, name: &str) -> Option<String> {
-        if let Some(overrides) = &self.env_override {
-            return overrides.get(name).cloned();
-        }
-        std::env::var(name).ok().filter(|v| !v.is_empty())
-    }
-
     /// Run the full session-start initialization flow.
     ///
     /// `project_dir` is the absolute path to the repository root.
@@ -192,7 +181,7 @@ impl SessionStartInit {
         self.cleanup_active_task(project_dir);
 
         // --- Section 7: PathFlow flag creation ---
-        let is_resume = self.create_pathflow_flag(project_dir, session_id.as_str(), source, &mut result);
+        let is_resume = self.create_pathflow_flag(project_dir, session_id.as_str(), source, result.is_teammate, &mut result);
         result.is_resume = is_resume;
 
         // --- Section 7c: Checkpoint pre-initialization ---
@@ -222,8 +211,12 @@ impl SessionStartInit {
         Ok(result)
     }
 
-    /// Handle stale session cleanup and teammate detection using multi-signal
-    /// approach based on `pathflow-session-status.json` and env var.
+    /// Handle stale session cleanup and teammate detection using three
+    /// file-based signals only (no env var reads):
+    ///
+    /// 1. `codeflow-env.sh` -> existing SID (pointer to current session)
+    /// 2. `pathflow-session-status.json` for that SID -> session state + team_name
+    /// 3. `~/.claude/teams/{team_name}/config.json` -> team alive?
     ///
     /// Returns `(existing_session_id, is_teammate_mode)`.
     fn handle_stale_cleanup(
@@ -233,9 +226,10 @@ impl SessionStartInit {
         source: &str,
         result: &mut InitResult,
     ) -> (Option<SessionId>, bool) {
+        // Signal 1: Read env file for existing SID.
         let env_data = match session::read_env_file(runtime_dir) {
             Ok(Some(env)) => env,
-            Ok(None) => return (None, false),
+            Ok(None) => return (None, false), // No env file -> new lead
             Err(e) => {
                 result
                     .warnings
@@ -246,50 +240,47 @@ impl SessionStartInit {
 
         let existing_sid = env_data.session_id;
 
-        // STEP 2a: Minimal path for compact/resume/clear.
+        // Compact/resume/clear: reuse existing SID, no mutation.
         if source == "compact" || source == "resume" || source == "clear" {
             return (Some(existing_sid), false);
         }
 
-        // STEP 3: Teammate detection (startup/unknown only).
-        let env_sid = self.get_env("CODEFLOW_SESSION_ID").unwrap_or_default();
-
-        if env_sid.is_empty() && existing_sid.as_str().is_empty() {
-            return (None, false);
-        }
-        if !env_sid.is_empty() && env_sid != existing_sid.as_str() {
+        // Startup/unknown: check if an active session exists (teammate detection).
+        if existing_sid.as_str().is_empty() {
             return (None, false);
         }
 
         // Signal 2: pathflow-session-status.json
-        let pathflow_dir = project_dir
+        let status_path = project_dir
             .join(".state")
             .join("session")
             .join(existing_sid.as_str())
-            .join("pathflow");
-        let status_path = pathflow_dir.join("pathflow-session-status.json");
+            .join("pathflow")
+            .join("pathflow-session-status.json");
 
         let status_data = match fs::read_to_string(&status_path) {
             Ok(data) => data,
-            Err(_) => return (None, false),
+            Err(_) => return (None, false), // Missing/unreadable -> new lead
         };
         let status: serde_json::Value = match serde_json::from_str(&status_data) {
             Ok(v) => v,
-            Err(_) => return (None, false),
+            Err(_) => return (None, false), // Unparseable -> new lead
         };
         let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
         if session_status.is_empty() || session_status == "pf-complete" {
-            return (None, false);
+            return (None, false); // No status or completed -> new lead
         }
 
+        // Status is created/pf-started/pf-in-progress.
         let team_name = status
             .get("team_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if team_name.is_empty() {
-            return (None, false);
+            return (None, false); // No team name -> new lead
         }
 
+        // Signal 3: Team config existence.
         let config_path = self
             .home_dir
             .join(".claude")
@@ -297,29 +288,23 @@ impl SessionStartInit {
             .join(team_name)
             .join("config.json");
         if !config_path.exists() {
-            return (None, false);
+            return (None, false); // Config missing -> session dead, new lead
         }
 
-        // Case D: envSID matches existingSID -> teammate confirmed.
-        if !env_sid.is_empty() && env_sid == existing_sid.as_str() {
-            result.messages.push(format!(
-                "TEAMMATE MODE: Detected via status.json + env var match (team: {team_name})"
-            ));
-            return (Some(existing_sid), true);
-        }
-
-        // Case B: envSID="" but active session exists -- new lead.
-        (None, false)
+        // Active session with live team config -> TEAMMATE.
+        result.messages.push(format!(
+            "TEAMMATE MODE: Detected via status.json + team config (team: {team_name})"
+        ));
+        (Some(existing_sid), true)
     }
 
     /// Resolve or generate a session ID based on source type.
     ///
-    /// For `startup`/`unknown`: ALWAYS generate a new SID. This prevents a
-    /// fresh lead from inheriting a crashed session's SID via stale env file
-    /// or lingering env var.
-    ///
+    /// For `startup`/`unknown`: generate a new SID (with safeguard check).
     /// For `compact`/`resume`/`clear`: reuse the existing SID from
-    /// `handle_stale_cleanup` or the env file (the session is continuing).
+    /// `handle_stale_cleanup` (always `Some` for these sources).
+    ///
+    /// No env var reads -- uses only file-based signals.
     fn resolve_or_generate_session_id(
         &self,
         project_dir: &Path,
@@ -335,11 +320,48 @@ impl SessionStartInit {
             return Ok(sid);
         }
 
-        // For startup/unknown: always generate a new SID. Do NOT fall back
-        // to env var or env file -- those may be stale from a crashed session.
+        // New lead path -- about to generate new SID and write env file.
+        // SAFEGUARD: double-check no active session before overwriting env file.
+        if let Ok(Some(env)) = session::read_env_file(runtime_dir) {
+            let status_path = project_dir
+                .join(".state")
+                .join("session")
+                .join(env.session_id.as_str())
+                .join("pathflow")
+                .join("pathflow-session-status.json");
+            if let Ok(data) = fs::read_to_string(&status_path) {
+                if let Ok(status) = serde_json::from_str::<serde_json::Value>(&data) {
+                    let s = status
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let tn = status
+                        .get("team_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if (s == "pf-started" || s == "pf-in-progress") && !tn.is_empty() {
+                        let cfg = self
+                            .home_dir
+                            .join(".claude")
+                            .join("teams")
+                            .join(tn)
+                            .join("config.json");
+                        if cfg.exists() {
+                            // Active session with live config -- do NOT overwrite.
+                            result.is_teammate = true;
+                            result.messages.push(format!(
+                                "SAFEGUARD: Active session detected (team: {tn}), joining as teammate"
+                            ));
+                            return Ok(env.session_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // For startup/unknown: generate a new SID and write env file.
         if source == "startup" || source == "unknown" {
             let sid = session::generate_session_id();
-            // Write env file atomically.
             let project_name = project_dir
                 .file_name()
                 .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
@@ -349,14 +371,9 @@ impl SessionStartInit {
             return Ok(sid);
         }
 
-        // Non-startup source (compact/resume/clear): check env var first.
-        if let Some(val) = self.get_env("CODEFLOW_SESSION_ID") {
-            if let Ok(sid) = SessionId::new(&val) {
-                return Ok(sid);
-            }
-        }
-
-        // Non-startup source: try env file.
+        // Non-startup source (compact/resume/clear) with no existing SID:
+        // handle_stale_cleanup returns (Some, false) for these sources when
+        // an env file exists. If we reach here, the env file was missing.
         if let Ok(Some(env)) = session::read_env_file(runtime_dir) {
             return Ok(env.session_id);
         }
@@ -560,11 +577,15 @@ impl SessionStartInit {
 
     /// Create the `pathflow-session-status.json` file. Returns `true` if the
     /// file already existed (resume scenario).
+    ///
+    /// When `is_teammate` is true, the existing status file is preserved
+    /// unconditionally (a teammate joining should not reset the lead's status).
     fn create_pathflow_flag(
         &self,
         project_dir: &Path,
         session_id: &str,
         source: &str,
+        is_teammate: bool,
         result: &mut InitResult,
     ) -> bool {
         let flag_dir = project_dir
@@ -575,6 +596,13 @@ impl SessionStartInit {
         let status_path = flag_dir.join("pathflow-session-status.json");
 
         if status_path.exists() {
+            if is_teammate {
+                // Teammate joining -- preserve existing status unconditionally.
+                result
+                    .messages
+                    .push("PathFlow: Teammate joining -- preserving existing status.".into());
+                return true;
+            }
             // Defensive check: if source=startup and status file exists for
             // this SID (SID collision or sweep missed it), reset to "created"
             // rather than preserving stale state.
@@ -1228,7 +1256,6 @@ mod tests {
             ppid: 1000,
             home_dir: home,
             now: fixed_now,
-            env_override: Some(HashMap::new()), // Empty map: no env vars visible
         }
     }
 
@@ -1287,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_init_teammate_detection_via_status_json() {
+    fn test_init_teammate_detection_via_file_signals() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
@@ -1319,15 +1346,11 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
-        let mut env_map = HashMap::new();
-        env_map.insert("CODEFLOW_SESSION_ID".to_string(), sid.as_str().to_string());
-        let init = SessionStartInit {
-            ppid: 1000,
-            home_dir: home.path().to_path_buf(),
-            now: fixed_now,
-            env_override: Some(env_map),
-        };
-
+        // No env var needed -- teammate detection uses file signals only:
+        // 1. env file -> existing SID
+        // 2. status.json -> pf-in-progress + team_name
+        // 3. config.json -> team alive
+        let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
@@ -1336,6 +1359,46 @@ mod tests {
         assert!(result.is_teammate);
         assert_eq!(result.session_id, sid);
         assert!(result.messages.iter().any(|m| m.contains("TEAMMATE MODE")));
+    }
+
+    #[test]
+    fn test_init_teammate_detection_no_config_is_new_lead() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7noconfig1234567890a");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // Create pathflow-session-status.json with active status.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(), "status": "pf-in-progress",
+                "team_name": "dead-team", "created_at": "2026-03-10T00:00:00Z",
+                "updated_at": "2026-03-10T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // NO team config -- session is dead, should start as new lead.
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(!result.is_teammate, "no config -> new lead, not teammate");
+        // Should generate a new SID (not reuse the dead session's SID).
+        assert_ne!(result.session_id, sid);
     }
 
     #[test]
@@ -2374,7 +2437,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
         assert!(!is_resume, "new status file should not be resume");
 
         // Verify status file was created.
@@ -2425,7 +2488,7 @@ mod tests {
         };
 
         // Use "compact" source to test the resume path (startup would reset).
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", false, &mut result);
         assert!(is_resume, "existing status file with compact source should indicate resume");
         assert!(result.messages.iter().any(|m| m.contains("Resuming")));
     }
@@ -2558,7 +2621,7 @@ mod tests {
         let runtime_dir = dir.path().join(".state").join("runtime");
         fs::create_dir_all(&runtime_dir).unwrap();
 
-        // Uses make_init which injects no_env_var -- no global env var dependency.
+        // No env file on disk -- non-startup source should error.
         let init = make_init(home.path().to_path_buf());
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-unknown"),
@@ -2681,11 +2744,11 @@ mod tests {
     fn test_concurrent_startup_single_session_id() {
         // Simulates the real race: multiple agents start concurrently.
         // The lead (thread 0) runs first (serialized by lock), generates a
-        // session, writes env file, writes pathflow-team.json (simulating
-        // TeamCreate), and creates team config.
-        // Subsequent threads acquire the lock, see the env file + team file,
-        // and check session status to enter teammate mode -- all converging
-        // on the same SID.
+        // session, writes env file, writes pathflow-session-status.json
+        // (simulating TeamCreate), and creates team config.
+        // Subsequent threads acquire the lock, see the env file + status file
+        // + team config, and enter teammate mode -- all converging on same SID.
+        // No env var needed -- detection is purely file-based.
         use std::sync::{Arc, Barrier, Mutex};
         use std::thread;
 
@@ -2695,13 +2758,10 @@ mod tests {
         let home_dir = Arc::new(home.path().to_path_buf());
 
         // Phase 1: Lead agent creates the session.
-        // SAFETY: test-only, single-threaded at this point.
-        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
         let lead_init = SessionStartInit {
             ppid: 1000,
             home_dir: home_dir.as_ref().clone(),
             now: fixed_now,
-            env_override: Some(HashMap::new()), // Lead has no env var set
         };
         let lead_input = make_input("startup", project_dir.to_str().unwrap());
         let mut buf = Vec::new();
@@ -2731,14 +2791,7 @@ mod tests {
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
         // Phase 2: Multiple teammate agents start concurrently.
-        // Inject env var via env_override instead of global set_var (avoids test races).
-        let mut teammate_env = HashMap::new();
-        teammate_env.insert(
-            "CODEFLOW_SESSION_ID".to_string(),
-            lead_sid.as_str().to_string(),
-        );
-        let teammate_env = Arc::new(teammate_env);
-
+        // Teammate detection is file-based: env file + status.json + config.json.
         let num_teammates = 4;
         let barrier = Arc::new(Barrier::new(num_teammates));
         let results = Arc::new(Mutex::new(Vec::new()));
@@ -2749,14 +2802,12 @@ mod tests {
                 let project_dir = Arc::clone(&project_dir);
                 let home_dir = Arc::clone(&home_dir);
                 let results = Arc::clone(&results);
-                let teammate_env = Arc::clone(&teammate_env);
 
                 thread::spawn(move || {
                     let init = SessionStartInit {
                         ppid: 2000,
                         home_dir: home_dir.as_ref().clone(),
                         now: fixed_now,
-                        env_override: Some((*teammate_env).clone()),
                     };
                     let input = make_input("startup", project_dir.to_str().unwrap());
 
@@ -2773,8 +2824,6 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
-
-        // No global env var cleanup needed -- env_var was injected via closure.
 
         let teammate_results = results.lock().unwrap();
         // All teammates should get the same SID as the lead.
@@ -2907,25 +2956,13 @@ mod tests {
     // --- Bug 4: Startup always generates new SID ---
 
     #[test]
-    fn test_resolve_startup_ignores_env_var() {
+    fn test_resolve_startup_generates_new_sid() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
         fs::create_dir_all(&runtime_dir).unwrap();
 
-        // Set CODEFLOW_SESSION_ID env var to a stale value.
-        let mut env_map = HashMap::new();
-        env_map.insert(
-            "CODEFLOW_SESSION_ID".to_string(),
-            "ses-01jq7staleenvvar000000a".to_string(),
-        );
-        let init = SessionStartInit {
-            ppid: 1000,
-            home_dir: home.path().to_path_buf(),
-            now: fixed_now,
-            env_override: Some(env_map),
-        };
-
+        let init = make_init(home.path().to_path_buf());
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-unknown"),
             is_resume: false,
@@ -2946,14 +2983,80 @@ mod tests {
             )
             .unwrap();
 
-        assert_ne!(
-            sid.as_str(),
-            "ses-01jq7staleenvvar000000a",
-            "startup should generate new SID, not reuse stale env var"
-        );
         assert!(
             sid.as_str().starts_with("ses-"),
-            "generated SID should have correct prefix"
+            "startup should generate new SID with correct prefix"
+        );
+    }
+
+    #[test]
+    fn test_resolve_safeguard_prevents_env_file_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        // Write an existing env file with a known SID.
+        let existing_sid = SessionId::new_unchecked("ses-01jq7safeguard12345678a");
+        session::write_env_file(&runtime_dir, &existing_sid, "codeflow").unwrap();
+
+        // Create active session status.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(existing_sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string(&serde_json::json!({
+                "status": "pf-in-progress",
+                "team_name": "safeguard-team",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Create team config.
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("safeguard-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), "{}").unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // existing_sid=None simulates handle_stale_cleanup returning (None, false),
+        // but the safeguard should detect the active session and prevent overwrite.
+        let sid = init
+            .resolve_or_generate_session_id(
+                dir.path(),
+                &runtime_dir,
+                "startup",
+                "",
+                None,
+                &mut result,
+            )
+            .unwrap();
+
+        assert_eq!(
+            sid, existing_sid,
+            "safeguard should return existing SID, not generate new"
+        );
+        assert!(result.is_teammate, "safeguard should set is_teammate");
+        assert!(
+            result.messages.iter().any(|m| m.contains("SAFEGUARD")),
+            "should log safeguard activation"
         );
     }
 
@@ -2990,7 +3093,7 @@ mod tests {
         };
 
         // source=startup should reset the status file, not resume.
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
         assert!(
             !is_resume,
             "startup with stale status file should NOT resume"
@@ -3041,11 +3144,108 @@ mod tests {
         };
 
         // source=compact should preserve the existing status and return resume.
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", false, &mut result);
         assert!(
             is_resume,
             "compact with active status file should indicate resume"
         );
         assert!(result.messages.iter().any(|m| m.contains("Resuming")));
+    }
+
+    #[test]
+    fn test_create_pathflow_flag_teammate_preserves_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7teammateflag0000000";
+
+        // Pre-create the status file with active status.
+        let flag_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        fs::create_dir_all(&flag_dir).unwrap();
+        let original_content = r#"{"status":"pf-in-progress","session_id":"ses-01jq7teammateflag0000000","team_name":"my-team"}"#;
+        fs::write(
+            flag_dir.join("pathflow-session-status.json"),
+            original_content,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // is_teammate=true should preserve existing status regardless of source.
+        let is_resume =
+            init.create_pathflow_flag(dir.path(), sid, "startup", true, &mut result);
+        assert!(is_resume, "teammate should preserve status (resume=true)");
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Teammate joining")),
+            "should log teammate preserving status"
+        );
+
+        // Verify the status file was NOT overwritten.
+        let status_path = flag_dir.join("pathflow-session-status.json");
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&status_path).unwrap()).unwrap();
+        assert_eq!(
+            data["status"], "pf-in-progress",
+            "teammate should not reset status to 'created'"
+        );
+    }
+
+    #[test]
+    fn test_create_pathflow_flag_not_teammate_startup_resets() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7nonteammate00000000";
+
+        // Pre-create the status file with active status.
+        let flag_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        fs::create_dir_all(&flag_dir).unwrap();
+        fs::write(
+            flag_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","session_id":"ses-01jq7nonteammate00000000"}"#,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // is_teammate=false + source=startup should reset the status.
+        let is_resume =
+            init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
+        assert!(!is_resume, "non-teammate startup should reset status");
+
+        let status_path = flag_dir.join("pathflow-session-status.json");
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&status_path).unwrap()).unwrap();
+        assert_eq!(
+            data["status"], "created",
+            "non-teammate startup should reset to 'created'"
+        );
     }
 }

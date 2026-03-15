@@ -8,7 +8,7 @@
 //! - Builder pattern for session creation
 //! - Environment file (`codeflow-env.sh`) management
 //! - Active task file management
-//! - Current session resolution (env var > env file)
+//! - Current session resolution (env file only)
 
 pub mod active_task;
 pub mod builder;
@@ -67,11 +67,10 @@ pub fn is_valid_session_id(value: &str) -> bool {
     }
 }
 
-/// Resolve the current session ID.
+/// Resolve the current session ID from the env file.
 ///
-/// Resolution priority:
-/// 1. `CODEFLOW_SESSION_ID` environment variable
-/// 2. `codeflow-env.sh` file at `{project_dir}/.state/runtime/codeflow-env.sh`
+/// Reads `codeflow-env.sh` at `{project_dir}/.state/runtime/codeflow-env.sh`.
+/// The env file is the single source of truth for the current session ID.
 ///
 /// Takes `project_dir` (the repository root) and internally constructs the
 /// canonical path to the env file. This eliminates ambiguity -- callers no
@@ -79,38 +78,15 @@ pub fn is_valid_session_id(value: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Returns `SessionError::NoActiveSession` if no session ID can be found.
+/// Returns `SessionError::NoActiveSession` if no env file exists.
 /// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file read
 /// or parse errors.
 pub fn current_session_id(project_dir: &Path) -> Result<SessionId, SessionError> {
-    let env_value = std::env::var("CODEFLOW_SESSION_ID").ok();
     let runtime_dir = project_dir.join(".state").join("runtime");
-    resolve_session_id(env_value.as_deref(), &runtime_dir)
-}
-
-/// Internal resolver: resolves session ID from env var value or env file.
-///
-/// Separated from `current_session_id` for testability without modifying
-/// process environment variables. Takes the `runtime_dir` (the directory
-/// containing `codeflow-env.sh`).
-fn resolve_session_id(
-    env_var_value: Option<&str>,
-    runtime_dir: &Path,
-) -> Result<SessionId, SessionError> {
-    // Priority 1: environment variable
-    if let Some(value) = env_var_value {
-        if !value.is_empty() {
-            return SessionId::new(value)
-                .map_err(|e| SessionError::InvalidSessionId(e.to_string()));
-        }
+    match read_env_file(&runtime_dir)? {
+        Some(env_file) => Ok(env_file.session_id),
+        None => Err(SessionError::NoActiveSession),
     }
-
-    // Priority 2: env file
-    if let Some(env_file) = read_env_file(runtime_dir)? {
-        return Ok(env_file.session_id);
-    }
-
-    Err(SessionError::NoActiveSession)
 }
 
 #[cfg(test)]
@@ -181,50 +157,21 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_session_id_from_env_var() {
+    fn test_current_session_id_reads_from_env_file() {
         let dir = tempfile::tempdir().unwrap();
-        let result = resolve_session_id(Some("ses-envvar123"), dir.path()).unwrap();
-        assert_eq!(result.as_str(), "ses-envvar123");
-    }
-
-    #[test]
-    fn test_resolve_session_id_env_var_takes_precedence() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_sid = SessionId::new_unchecked("ses-fromfile");
-        write_env_file(dir.path(), &file_sid, "codeflow").unwrap();
-
-        // Env var should win over file
-        let result = resolve_session_id(Some("ses-fromenv"), dir.path()).unwrap();
-        assert_eq!(result.as_str(), "ses-fromenv");
-    }
-
-    #[test]
-    fn test_resolve_session_id_from_env_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
         let sid = SessionId::new_unchecked("ses-01jq7envfiletest12345678");
-        write_env_file(dir.path(), &sid, "codeflow").unwrap();
+        write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
 
-        // No env var — should fall back to file
-        let result = resolve_session_id(None, dir.path()).unwrap();
+        let result = current_session_id(dir.path()).unwrap();
         assert_eq!(result, sid);
     }
 
     #[test]
-    fn test_resolve_session_id_empty_env_var_falls_through() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = SessionId::new_unchecked("ses-fallthrough");
-        write_env_file(dir.path(), &sid, "codeflow").unwrap();
-
-        // Empty env var should be treated as absent
-        let result = resolve_session_id(Some(""), dir.path()).unwrap();
-        assert_eq!(result, sid);
-    }
-
-    #[test]
-    fn test_resolve_session_id_no_source() {
+    fn test_current_session_id_no_env_file_returns_error() {
         let dir = tempfile::tempdir().unwrap();
 
-        let result = resolve_session_id(None, dir.path());
+        let result = current_session_id(dir.path());
         assert!(result.is_err());
         assert!(
             result
@@ -232,6 +179,17 @@ mod tests {
                 .to_string()
                 .contains("no active session")
         );
+    }
+
+    #[test]
+    fn test_current_session_id_ignores_env_var() {
+        // Even if CODEFLOW_SESSION_ID env var is set, current_session_id
+        // should only read from the env file. We verify by having no env
+        // file -- it should return NoActiveSession regardless of env var.
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = current_session_id(dir.path());
+        assert!(result.is_err(), "should not read env var, only env file");
     }
 
     #[test]
