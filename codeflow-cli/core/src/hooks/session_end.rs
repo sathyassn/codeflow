@@ -79,8 +79,7 @@ impl SessionEndCleanup {
         };
 
         // --- Section 2: Resolve session ID ---
-        let runtime_dir = project_dir.join(".state").join("runtime");
-        let Ok(sid) = session::current_session_id(&runtime_dir) else {
+        let Ok(sid) = session::current_session_id(project_dir) else {
             result
                 .messages
                 .push("no session ID found, skipping cleanup".into());
@@ -230,29 +229,11 @@ impl SessionEndCleanup {
             .join("config.json");
 
         if !config_path.exists() {
-            // Config missing -- but check if sentinel dir still has pathflow state.
-            // If sentinels exist, config was likely deleted by a race condition
-            // (e.g., concurrent session cleanup). Preserve the session.
-            let sentinel_dir = session_state_dir
-                .parent() // .state/session/{sid}
-                .and_then(|p| p.parent()) // .state/session
-                .and_then(|p| p.parent()) // .state
-                .map(|state_dir| {
-                    let sid = session_state_dir.file_name().unwrap_or_default();
-                    state_dir.join("sentinels").join("pathflow").join(sid)
-                });
-
-            let has_sentinels = sentinel_dir.as_ref().is_some_and(|d| {
-                d.exists() && fs::read_dir(d).is_ok_and(|mut r| r.next().is_some())
-            });
-
-            if has_sentinels {
-                result.messages.push(format!(
-                    "SessionEnd: Team config gone for '{team_name}' but sentinels exist -- skipping cleanup (possible race)"
-                ));
-                return true;
-            }
-
+            // Config is gone and session status is pf-started/pf-in-progress.
+            // This session is dead -- the team was already dissolved or never
+            // fully created. The status file handles the TeamDelete race
+            // (handle_team_delete sets pf-complete BEFORE removing sentinels).
+            // Allow cleanup to proceed.
             result.messages.push(format!(
                 "SessionEnd: Session active but team config gone for '{team_name}' -- proceeding"
             ));
@@ -1104,5 +1085,71 @@ mod tests {
 
         // Verify session_id was resolved correctly (cleanup proceeded).
         assert_eq!(_result.session_id, session_id);
+    }
+
+    #[test]
+    fn test_cleanup_proceeds_when_config_gone_but_sentinels_exist() {
+        // Bug 2 regression test: Previously, when team config was gone but
+        // sentinels existed, should_skip_cleanup returned true (skip), creating
+        // a deadlock for abandoned sessions. Now it returns false (proceed).
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        // Create status file claiming active session.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&session_id)
+            .join("pathflow");
+        let status = serde_json::json!({
+            "session_id": session_id,
+            "team_name": "dead-team",
+            "status": "pf-in-progress",
+            "last_completed_phase": "pf-4",
+            "last_completed_stage": "WS-DEV",
+            "created_at": "2026-03-10T00:00:00Z",
+            "updated_at": "2026-03-10T00:30:00Z",
+        });
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        // Create sentinel files (would have caused deadlock before fix).
+        let sentinel_dir = dir
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(&session_id);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), b"").unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-3"), b"").unwrap();
+        fs::write(sentinel_dir.join("pathflow-ws-dev"), b"").unwrap();
+
+        // NO team config directory -- team was deleted or never existed.
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Should proceed with cleanup (team config gone, sentinels irrelevant).
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("team config gone")),
+            "should proceed with cleanup when config is gone: {:?}",
+            result.messages
+        );
+        assert!(
+            result.sentinels_cleaned > 0,
+            "sentinels should be cleaned up"
+        );
     }
 }

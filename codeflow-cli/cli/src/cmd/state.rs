@@ -15,7 +15,7 @@ fn run_with_dir(project_dir: &Path) -> Result<()> {
     let state_dir = project_dir.join(".state");
 
     // Show current session ID.
-    match helpers::resolve_session_id(&state_dir) {
+    match helpers::resolve_session_id(project_dir) {
         Ok(sid) => println!("session: {sid}"),
         Err(_) => println!("session: none"),
     }
@@ -62,16 +62,14 @@ mod tests {
     fn test_state_with_session_and_active_task() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join(".state");
-        // Create session env file.
-        std::fs::create_dir_all(&state_dir).unwrap();
+        // Create session env file in the canonical runtime directory.
+        let runtime_dir = state_dir.join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             "export CODEFLOW_SESSION_ID='ses-teststatewithtask12345'\nexport CF_PROJECT_ROOT='/tmp/test'\n",
         )
         .unwrap();
-        // Create active task.
-        let runtime_dir = state_dir.join("runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
         std::fs::write(
             runtime_dir.join("active-task.json"),
             r#"{"task_id":"TSK-002"}"#,

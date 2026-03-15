@@ -213,7 +213,7 @@ impl HookHandler for SecurityHandler {
         let current_branch = get_current_branch(&self.project_dir);
 
         // Resolve session ID from environment/filesystem, never stdin UUID.
-        let session_id = session::current_session_id(&self.project_dir.join(".state"))
+        let session_id = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
         let session_id_str = session_id.as_ref();
 
@@ -511,7 +511,7 @@ mod tests {
         // Write codeflow-env.sh so session::current_session_id can find it.
         // Both CODEFLOW_SESSION_ID and CF_PROJECT_ROOT are required by the parser.
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID=\"{fs_session_id}\"\nexport CF_PROJECT_ROOT=\"test-project\"\n"),
         )
         .unwrap();

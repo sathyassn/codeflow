@@ -192,7 +192,7 @@ impl SessionStartInit {
         self.cleanup_active_task(project_dir);
 
         // --- Section 7: PathFlow flag creation ---
-        let is_resume = self.create_pathflow_flag(project_dir, session_id.as_str(), &mut result);
+        let is_resume = self.create_pathflow_flag(project_dir, session_id.as_str(), source, &mut result);
         result.is_resume = is_resume;
 
         // --- Section 7c: Checkpoint pre-initialization ---
@@ -313,6 +313,13 @@ impl SessionStartInit {
     }
 
     /// Resolve or generate a session ID based on source type.
+    ///
+    /// For `startup`/`unknown`: ALWAYS generate a new SID. This prevents a
+    /// fresh lead from inheriting a crashed session's SID via stale env file
+    /// or lingering env var.
+    ///
+    /// For `compact`/`resume`/`clear`: reuse the existing SID from
+    /// `handle_stale_cleanup` or the env file (the session is continuing).
     fn resolve_or_generate_session_id(
         &self,
         project_dir: &Path,
@@ -322,19 +329,14 @@ impl SessionStartInit {
         existing_sid: Option<SessionId>,
         result: &mut InitResult,
     ) -> Result<SessionId, HookError> {
-        // Priority 1: Use existing SID from stale cleanup.
+        // Priority 1: Use existing SID from stale cleanup (teammate detection
+        // or compact/resume/clear path). This is always authoritative.
         if let Some(sid) = existing_sid {
             return Ok(sid);
         }
 
-        // Priority 2: Check env var.
-        if let Some(val) = self.get_env("CODEFLOW_SESSION_ID") {
-            if let Ok(sid) = SessionId::new(&val) {
-                return Ok(sid);
-            }
-        }
-
-        // Priority 3: For startup/unknown, generate new ID.
+        // For startup/unknown: always generate a new SID. Do NOT fall back
+        // to env var or env file -- those may be stale from a crashed session.
         if source == "startup" || source == "unknown" {
             let sid = session::generate_session_id();
             // Write env file atomically.
@@ -347,7 +349,14 @@ impl SessionStartInit {
             return Ok(sid);
         }
 
-        // Priority 4: Non-startup source -- try env file.
+        // Non-startup source (compact/resume/clear): check env var first.
+        if let Some(val) = self.get_env("CODEFLOW_SESSION_ID") {
+            if let Ok(sid) = SessionId::new(&val) {
+                return Ok(sid);
+            }
+        }
+
+        // Non-startup source: try env file.
         if let Ok(Some(env)) = session::read_env_file(runtime_dir) {
             return Ok(env.session_id);
         }
@@ -417,8 +426,8 @@ impl SessionStartInit {
                     .get("team_name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let age_hours = Self::status_age_hours(&status);
 
+                // Deterministic signal-based decisions (no time thresholds).
                 match session_status {
                     "pf-complete" => {
                         let tn = if team_name.is_empty() {
@@ -429,14 +438,26 @@ impl SessionStartInit {
                         self.remove_stale_session_artifacts(project_dir, &name, tn);
                         swept += 1;
                     }
-                    "created" if age_hours > 1.0 => {
-                        self.remove_stale_session_artifacts(project_dir, &name, None);
+                    "created" => {
+                        // "created" means no team was ever created.
+                        // Check if config.json exists (unlikely but defensive).
+                        let has_config = !team_name.is_empty() && self
+                            .home_dir
+                            .join(".claude")
+                            .join("teams")
+                            .join(team_name)
+                            .join("config.json")
+                            .exists();
+                        if !has_config {
+                            self.remove_stale_session_artifacts(project_dir, &name, None);
+                            swept += 1;
+                        }
                     }
                     "pf-started" | "pf-in-progress" => {
                         if team_name.is_empty() {
-                            if age_hours > 1.0 {
-                                self.remove_stale_session_artifacts(project_dir, &name, None);
-                            }
+                            // No team name -- session is dead.
+                            self.remove_stale_session_artifacts(project_dir, &name, None);
+                            swept += 1;
                         } else {
                             let cfg = self
                                 .home_dir
@@ -444,13 +465,16 @@ impl SessionStartInit {
                                 .join("teams")
                                 .join(team_name)
                                 .join("config.json");
-                            if !cfg.exists() || age_hours > 24.0 {
+                            if !cfg.exists() {
+                                // Team config gone -- session is dead.
                                 self.remove_stale_session_artifacts(
                                     project_dir,
                                     &name,
                                     Some(team_name),
                                 );
+                                swept += 1;
                             }
+                            // config exists -> KEEP (session may be alive)
                         }
                     }
                     _ => {}
@@ -500,43 +524,6 @@ impl SessionStartInit {
         }
     }
 
-    /// Calculate status file age in hours.
-    fn status_age_hours(status: &serde_json::Value) -> f64 {
-        let ts_str = status
-            .get("updated_at")
-            .or_else(|| status.get("created_at"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if ts_str.len() < 19 {
-            return f64::MAX;
-        }
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let parts: Vec<&str> = ts_str[..19].split(|c: char| !c.is_ascii_digit()).collect();
-        if parts.len() < 6 {
-            return f64::MAX;
-        }
-        let (Ok(y), Ok(mo), Ok(d), Ok(h), Ok(mi), Ok(s)) = (
-            parts[0].parse::<u64>(),
-            parts[1].parse::<u64>(),
-            parts[2].parse::<u64>(),
-            parts[3].parse::<u64>(),
-            parts[4].parse::<u64>(),
-            parts[5].parse::<u64>(),
-        ) else {
-            return f64::MAX;
-        };
-        let days = days_from_ymd(y, mo, d);
-        let ts_secs = days * 86_400 + h * 3_600 + mi * 60 + s;
-        if now_secs > ts_secs {
-            (now_secs - ts_secs) as f64 / 3_600.0
-        } else {
-            0.0
-        }
-    }
-
     /// Remove all artifacts for a stale session: session dir, sentinel dir, team config/tasks.
     fn remove_stale_session_artifacts(
         &self,
@@ -577,6 +564,7 @@ impl SessionStartInit {
         &self,
         project_dir: &Path,
         session_id: &str,
+        source: &str,
         result: &mut InitResult,
     ) -> bool {
         let flag_dir = project_dir
@@ -587,10 +575,20 @@ impl SessionStartInit {
         let status_path = flag_dir.join("pathflow-session-status.json");
 
         if status_path.exists() {
-            result
-                .messages
-                .push("PathFlow: Resuming active session (status file already exists).".into());
-            return true;
+            // Defensive check: if source=startup and status file exists for
+            // this SID (SID collision or sweep missed it), reset to "created"
+            // rather than preserving stale state.
+            if source == "startup" || source == "unknown" {
+                result
+                    .messages
+                    .push("PathFlow: Status file exists on startup -- resetting to 'created'.".into());
+                // Fall through to overwrite with fresh "created" status.
+            } else {
+                result
+                    .messages
+                    .push("PathFlow: Resuming active session (status file already exists).".into());
+                return true;
+            }
         }
 
         let _ = fs::create_dir_all(&flag_dir);
@@ -992,7 +990,7 @@ impl SessionStartInstructions {
         writer: &mut dyn Write,
     ) -> Result<(), HookError> {
         let state_dir = project_dir.join(".state");
-        let Ok(session_id) = session::current_session_id(&state_dir.join("runtime")) else {
+        let Ok(session_id) = session::current_session_id(project_dir) else {
             return Ok(());
         };
 
@@ -1197,17 +1195,6 @@ impl<L: LedgerWriter> HookHandler for SessionStartLogging<L> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Convert (year, month, day) to days since Unix epoch.
-fn days_from_ymd(year: u64, month: u64, day: u64) -> u64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let m = if month <= 2 { month + 9 } else { month - 3 };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * m + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
 
 /// Write the env JSON output to the writer.
 ///
@@ -1619,20 +1606,6 @@ mod tests {
     }
 
     // --- Status.json and helper tests ---
-
-    #[test]
-    fn test_days_from_ymd_roundtrip() {
-        assert_eq!(days_from_ymd(1970, 1, 1), 0);
-        assert_eq!(days_from_ymd(2026, 3, 10), 20_522);
-    }
-
-    #[test]
-    fn test_status_age_hours_recent() {
-        let now_ts = crate::util::now_rfc3339();
-        let status = serde_json::json!({"updated_at": now_ts});
-        let age = SessionStartInit::status_age_hours(&status);
-        assert!(age < 1.0, "recent timestamp should be < 1h, got {age}");
-    }
 
     /// Helper to create a session status file for stale team tests.
     fn create_session_status(project_dir: &Path, sid: &str, status: &str, team_name: &str) {
@@ -2401,7 +2374,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", &mut result);
         assert!(!is_resume, "new status file should not be resume");
 
         // Verify status file was created.
@@ -2451,8 +2424,9 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let is_resume = init.create_pathflow_flag(dir.path(), sid, &mut result);
-        assert!(is_resume, "existing status file should indicate resume");
+        // Use "compact" source to test the resume path (startup would reset).
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", &mut result);
+        assert!(is_resume, "existing status file with compact source should indicate resume");
         assert!(result.messages.iter().any(|m| m.contains("Resuming")));
     }
 
@@ -2813,5 +2787,265 @@ mod tests {
             );
             assert!(r.is_teammate, "teammate {i} should be in teammate mode");
         }
+    }
+
+    // --- Bug 3: Deterministic sweep tests ---
+
+    #[test]
+    fn test_sweep_created_no_config_cleans() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000010";
+        let session_base = dir.path().join(".state").join("session");
+
+        // Create a "created" session with no team config.
+        let stale_sid = "ses-01jq7stale00000000000010";
+        let stale_pathflow = session_base.join(stale_sid).join("pathflow");
+        fs::create_dir_all(&stale_pathflow).unwrap();
+        fs::write(
+            stale_pathflow.join("pathflow-session-status.json"),
+            r#"{"status":"created","team_name":"","updated_at":"2026-03-10T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        assert!(
+            !session_base.join(stale_sid).exists(),
+            "created session with no config should be cleaned (no time threshold)"
+        );
+    }
+
+    #[test]
+    fn test_sweep_active_no_team_name_cleans() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000011";
+        let session_base = dir.path().join(".state").join("session");
+
+        // pf-in-progress but empty team_name -- dead session.
+        let stale_sid = "ses-01jq7stale00000000000011";
+        let stale_pathflow = session_base.join(stale_sid).join("pathflow");
+        fs::create_dir_all(&stale_pathflow).unwrap();
+        fs::write(
+            stale_pathflow.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"","updated_at":"2026-03-10T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        assert!(
+            !session_base.join(stale_sid).exists(),
+            "active session with empty team_name should be cleaned (no time threshold)"
+        );
+    }
+
+    #[test]
+    fn test_sweep_active_config_gone_cleans() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000012";
+        let session_base = dir.path().join(".state").join("session");
+
+        // pf-in-progress with team_name but config.json missing -- dead session.
+        let stale_sid = "ses-01jq7stale00000000000012";
+        let stale_pathflow = session_base.join(stale_sid).join("pathflow");
+        fs::create_dir_all(&stale_pathflow).unwrap();
+        fs::write(
+            stale_pathflow.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"dead-team","updated_at":"2026-03-10T00:00:00Z"}"#,
+        )
+        .unwrap();
+        // No team config created -- config.json does not exist.
+
+        let init = make_init(home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        assert!(
+            !session_base.join(stale_sid).exists(),
+            "active session with missing config should be cleaned (no time threshold)"
+        );
+    }
+
+    #[test]
+    fn test_sweep_active_config_exists_keeps() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let current_sid = "ses-01jq7current000000000013";
+        let session_base = dir.path().join(".state").join("session");
+
+        // pf-in-progress with team config that EXISTS -- alive session.
+        let alive_sid = "ses-01jq7alive00000000000013";
+        let alive_pathflow = session_base.join(alive_sid).join("pathflow");
+        fs::create_dir_all(&alive_pathflow).unwrap();
+        fs::write(
+            alive_pathflow.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"alive-team","updated_at":"2026-03-10T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("alive-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), "{}").unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        init.sweep_all_stale_sessions(dir.path(), current_sid);
+
+        assert!(
+            session_base.join(alive_sid).exists(),
+            "active session with existing config should be kept"
+        );
+    }
+
+    // --- Bug 4: Startup always generates new SID ---
+
+    #[test]
+    fn test_resolve_startup_ignores_env_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        // Set CODEFLOW_SESSION_ID env var to a stale value.
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "CODEFLOW_SESSION_ID".to_string(),
+            "ses-01jq7staleenvvar000000a".to_string(),
+        );
+        let init = SessionStartInit {
+            ppid: 1000,
+            home_dir: home.path().to_path_buf(),
+            now: fixed_now,
+            env_override: Some(env_map),
+        };
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let sid = init
+            .resolve_or_generate_session_id(
+                dir.path(),
+                &runtime_dir,
+                "startup",
+                "",
+                None,
+                &mut result,
+            )
+            .unwrap();
+
+        assert_ne!(
+            sid.as_str(),
+            "ses-01jq7staleenvvar000000a",
+            "startup should generate new SID, not reuse stale env var"
+        );
+        assert!(
+            sid.as_str().starts_with("ses-"),
+            "generated SID should have correct prefix"
+        );
+    }
+
+    // --- Bug 5: Startup resets stale status file ---
+
+    #[test]
+    fn test_create_pathflow_flag_startup_resets_stale_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7staleflag000000000000";
+
+        // Pre-create the status file with stale active status.
+        let flag_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        fs::create_dir_all(&flag_dir).unwrap();
+        fs::write(
+            flag_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","session_id":"ses-01jq7staleflag000000000000"}"#,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // source=startup should reset the status file, not resume.
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", &mut result);
+        assert!(
+            !is_resume,
+            "startup with stale status file should NOT resume"
+        );
+        assert!(
+            result.messages.iter().any(|m| m.contains("resetting")),
+            "should log that status was reset"
+        );
+
+        // Verify the status file was overwritten with "created".
+        let status_path = flag_dir.join("pathflow-session-status.json");
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&status_path).unwrap()).unwrap();
+        assert_eq!(
+            data["status"], "created",
+            "status should be reset to 'created'"
+        );
+    }
+
+    #[test]
+    fn test_create_pathflow_flag_compact_preserves_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7compctflag00000000000";
+
+        // Pre-create the status file with active status.
+        let flag_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        fs::create_dir_all(&flag_dir).unwrap();
+        fs::write(
+            flag_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","session_id":"ses-01jq7compctflag00000000000"}"#,
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // source=compact should preserve the existing status and return resume.
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", &mut result);
+        assert!(
+            is_resume,
+            "compact with active status file should indicate resume"
+        );
+        assert!(result.messages.iter().any(|m| m.contains("Resuming")));
     }
 }

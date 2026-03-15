@@ -41,9 +41,12 @@ pub fn detect_project_dir() -> Result<PathBuf> {
 }
 
 /// Resolve the current session ID from environment or state files.
-pub fn resolve_session_id(state_dir: &Path) -> Result<String> {
+///
+/// Takes `project_dir` (the repository root). The underlying
+/// `current_session_id` constructs the canonical env file path internally.
+pub fn resolve_session_id(project_dir: &Path) -> Result<String> {
     let sid =
-        codeflow_core::session::current_session_id(state_dir).context("resolving session ID")?;
+        codeflow_core::session::current_session_id(project_dir).context("resolving session ID")?;
     Ok(sid.as_str().to_string())
 }
 
@@ -444,13 +447,13 @@ mod tests {
     #[test]
     fn test_resolve_session_id_with_env_file() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let sid = "ses-testhelpersresolve123456";
         let env_content =
             format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='/tmp/test'\n");
-        std::fs::write(state_dir.join("codeflow-env.sh"), env_content).unwrap();
-        let result = resolve_session_id(&state_dir);
+        std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
+        let result = resolve_session_id(dir.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), sid);
     }

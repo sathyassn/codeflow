@@ -61,14 +61,14 @@ impl SentinelWrite {
     }
 
     fn sentinel_dir(&self) -> Result<PathBuf, HookError> {
-        let sid = session::current_session_id(&self.project_dir.join(".state"))
+        let sid = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
         sentinel::resolve_dir(&self.project_dir, sid.as_ref())
             .map_err(|e| HookError::Config(format!("sentinel dir: {e}")))
     }
 
     fn session_pathflow_dir(&self) -> Result<(PathBuf, String), HookError> {
-        let sid = session::current_session_id(&self.project_dir.join(".state"))
+        let sid = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
         let dir = self
             .project_dir
@@ -514,7 +514,7 @@ impl HookHandler for CheckpointRegister {
         };
 
         // Resolve session ID.
-        let sid = session::current_session_id(&self.project_dir.join(".state"))
+        let sid = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
 
         let checkpoint_path = self.checkpoint_path(sid.as_ref());
@@ -799,10 +799,10 @@ mod tests {
     /// Helper to set up a tempdir with session env so sentinel_dir() works.
     fn setup_sentinel_env(dir: &std::path::Path) -> String {
         let sid = "ses-1234567890abc";
-        let state_dir = dir.join(".state");
-        fs::create_dir_all(state_dir.join("runtime")).unwrap();
+        let runtime_dir = dir.join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
         fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID=\"{sid}\"\nexport CF_PROJECT_ROOT=\"test\"\n"),
         )
         .unwrap();

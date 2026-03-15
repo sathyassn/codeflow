@@ -36,7 +36,7 @@ pub enum PreToolUseHandler {
 /// Resolve the sentinel directory for the current session.
 fn resolve_sentinel_dir(project_dir: &std::path::Path) -> PathBuf {
     let state_dir = project_dir.join(".state");
-    let session_id = codeflow_core::session::current_session_id(&state_dir)
+    let session_id = codeflow_core::session::current_session_id(project_dir)
         .map(|sid| sid.as_str().to_string())
         .unwrap_or_default();
 
@@ -53,7 +53,7 @@ fn resolve_sentinel_dir(project_dir: &std::path::Path) -> PathBuf {
 /// Resolve the session directory for the current session.
 fn resolve_session_dir(project_dir: &std::path::Path) -> PathBuf {
     let state_dir = project_dir.join(".state");
-    let session_id = codeflow_core::session::current_session_id(&state_dir)
+    let session_id = codeflow_core::session::current_session_id(project_dir)
         .map(|sid| sid.as_str().to_string())
         .unwrap_or_default();
 
@@ -315,10 +315,12 @@ mod tests {
     fn test_build_handler_security_handle_bash_with_session() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join(".state");
+        let runtime_dir = state_dir.join("runtime");
         std::fs::create_dir_all(state_dir.join("logs")).unwrap();
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let sid = "ses-testsecuritybashcmd1234";
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='/tmp/test'\n"),
         )
         .unwrap();
@@ -364,11 +366,11 @@ mod tests {
     #[test]
     fn test_resolve_sentinel_dir_with_session_env_file() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let sid = "ses-testsentineldirresolve12";
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='/tmp/test'\n"),
         )
         .unwrap();
@@ -383,11 +385,11 @@ mod tests {
     #[test]
     fn test_resolve_session_dir_with_session_env_file() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let sid = "ses-testsessiondirresolve123";
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='/tmp/test'\n"),
         )
         .unwrap();

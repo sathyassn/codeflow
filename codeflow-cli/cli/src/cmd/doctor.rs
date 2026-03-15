@@ -12,7 +12,7 @@ pub async fn run() -> Result<()> {
 async fn run_with_dir(project_dir: &std::path::Path) -> Result<()> {
     let state_dir = project_dir.join(".state");
 
-    let session_id = helpers::resolve_session_id(&state_dir).unwrap_or_default();
+    let session_id = helpers::resolve_session_id(project_dir).unwrap_or_default();
 
     let opts = codeflow_core::doctor::Options {
         db_path: state_dir

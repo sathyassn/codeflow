@@ -109,7 +109,7 @@ impl HookHandler for CheckpointComplete {
         };
 
         // Resolve session ID.
-        let sid = session::current_session_id(&self.project_dir.join(".state"))
+        let sid = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
 
         let checkpoint_path = self.checkpoint_path(sid.as_ref());
@@ -299,11 +299,11 @@ mod tests {
     fn test_pf_task_with_session_env_warns_no_checkpoint() {
         // Setup session env but no checkpoint file → complete_task returns error → Warn.
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(state_dir.join("runtime")).unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let sid = "ses-1234567890abc";
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID=\"{sid}\"\nexport CF_PROJECT_ROOT=\"test\"\n"),
         )
         .unwrap();

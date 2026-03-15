@@ -234,8 +234,7 @@ pub fn resolve_log_dir(project_dir: &Path, log_dir: &str) -> std::path::PathBuf 
 /// a fallback to `"unknown"` — logging must never fail.
 #[must_use]
 pub fn resolve_session_id(project_dir: &Path) -> String {
-    let state_dir = project_dir.join(".state");
-    match crate::session::current_session_id(&state_dir) {
+    match crate::session::current_session_id(project_dir) {
         Ok(sid) => sid.into_inner(),
         Err(_) => "unknown".to_string(),
     }
@@ -345,10 +344,10 @@ mod tests {
     #[test]
     fn test_resolve_session_id_from_env_file() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         std::fs::write(
-            state_dir.join("codeflow-env.sh"),
+            runtime_dir.join("codeflow-env.sh"),
             "export CODEFLOW_SESSION_ID=\"ses-test123\"\nexport CF_PROJECT_ROOT=\"test\"\n",
         )
         .unwrap();

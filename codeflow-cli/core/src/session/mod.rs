@@ -71,25 +71,31 @@ pub fn is_valid_session_id(value: &str) -> bool {
 ///
 /// Resolution priority:
 /// 1. `CODEFLOW_SESSION_ID` environment variable
-/// 2. `codeflow-env.sh` file in the state directory
+/// 2. `codeflow-env.sh` file at `{project_dir}/.state/runtime/codeflow-env.sh`
+///
+/// Takes `project_dir` (the repository root) and internally constructs the
+/// canonical path to the env file. This eliminates ambiguity -- callers no
+/// longer need to know the internal `.state/runtime` layout.
 ///
 /// # Errors
 ///
 /// Returns `SessionError::NoActiveSession` if no session ID can be found.
 /// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file read
 /// or parse errors.
-pub fn current_session_id(state_dir: &Path) -> Result<SessionId, SessionError> {
+pub fn current_session_id(project_dir: &Path) -> Result<SessionId, SessionError> {
     let env_value = std::env::var("CODEFLOW_SESSION_ID").ok();
-    resolve_session_id(env_value.as_deref(), state_dir)
+    let runtime_dir = project_dir.join(".state").join("runtime");
+    resolve_session_id(env_value.as_deref(), &runtime_dir)
 }
 
 /// Internal resolver: resolves session ID from env var value or env file.
 ///
 /// Separated from `current_session_id` for testability without modifying
-/// process environment variables.
+/// process environment variables. Takes the `runtime_dir` (the directory
+/// containing `codeflow-env.sh`).
 fn resolve_session_id(
     env_var_value: Option<&str>,
-    state_dir: &Path,
+    runtime_dir: &Path,
 ) -> Result<SessionId, SessionError> {
     // Priority 1: environment variable
     if let Some(value) = env_var_value {
@@ -100,7 +106,7 @@ fn resolve_session_id(
     }
 
     // Priority 2: env file
-    if let Some(env_file) = read_env_file(state_dir)? {
+    if let Some(env_file) = read_env_file(runtime_dir)? {
         return Ok(env_file.session_id);
     }
 

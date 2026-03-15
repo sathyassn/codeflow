@@ -12,9 +12,7 @@ pub fn run() -> Result<()> {
 }
 
 fn run_with_dir(project_dir: &Path) -> Result<()> {
-    let state_dir = project_dir.join(".state");
-
-    let sid = helpers::resolve_session_id(&state_dir).context("resolving current session")?;
+    let sid = helpers::resolve_session_id(project_dir).context("resolving current session")?;
 
     println!("{sid}");
     Ok(())
@@ -25,10 +23,11 @@ mod tests {
     use super::*;
 
     fn write_env_file(state_dir: &std::path::Path, sid: &str) {
-        std::fs::create_dir_all(state_dir).unwrap();
+        let runtime_dir = state_dir.join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let env_content =
             format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='/tmp/test'\n");
-        std::fs::write(state_dir.join("codeflow-env.sh"), env_content).unwrap();
+        std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
     }
 
     #[test]
