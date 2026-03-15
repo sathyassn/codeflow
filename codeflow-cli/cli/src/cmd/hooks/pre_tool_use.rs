@@ -50,7 +50,10 @@ fn resolve_sentinel_dir(project_dir: &std::path::Path) -> PathBuf {
     }
 }
 
-/// Resolve the session directory for the current session.
+/// Resolve the session pathflow directory for the current session.
+///
+/// Returns `.state/session/{SID}/pathflow/` which is where
+/// `pathflow-session-status.json` lives.
 fn resolve_session_dir(project_dir: &std::path::Path) -> PathBuf {
     let state_dir = project_dir.join(".state");
     let session_id = codeflow_core::session::current_session_id(project_dir)
@@ -58,9 +61,15 @@ fn resolve_session_dir(project_dir: &std::path::Path) -> PathBuf {
         .unwrap_or_default();
 
     if session_id.is_empty() {
-        state_dir.join("session").join("unknown")
+        state_dir
+            .join("session")
+            .join("unknown")
+            .join("pathflow")
     } else {
-        state_dir.join("session").join(&session_id)
+        state_dir
+            .join("session")
+            .join(&session_id)
+            .join("pathflow")
     }
 }
 
@@ -163,7 +172,9 @@ mod tests {
     fn test_resolve_session_dir_with_unknown_session() {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = resolve_session_dir(dir.path());
-        assert!(session_dir.to_string_lossy().contains("session"));
+        let s = session_dir.to_string_lossy();
+        assert!(s.contains("session"), "expected 'session' in path: {s}");
+        assert!(s.ends_with("pathflow"), "expected path to end with 'pathflow': {s}");
     }
 
     #[test]
@@ -356,10 +367,14 @@ mod tests {
     fn test_resolve_session_dir_falls_back_to_unknown_subpath() {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = resolve_session_dir(dir.path());
+        let s = session_dir.to_string_lossy();
         assert!(
-            session_dir.ends_with("unknown"),
-            "expected 'unknown' fallback in path: {}",
-            session_dir.display()
+            s.contains("unknown"),
+            "expected 'unknown' fallback in path: {s}",
+        );
+        assert!(
+            s.ends_with("unknown/pathflow"),
+            "expected path to end with 'unknown/pathflow': {s}",
         );
     }
 
@@ -394,10 +409,15 @@ mod tests {
         )
         .unwrap();
         let session_dir = resolve_session_dir(dir.path());
+        let s = session_dir.to_string_lossy();
         assert!(
-            session_dir.ends_with(sid),
-            "expected session ID in path: {}",
-            session_dir.display()
+            s.contains(sid),
+            "expected session ID in path: {s}",
+        );
+        let expected_suffix = format!("{sid}/pathflow");
+        assert!(
+            s.ends_with(&expected_suffix),
+            "expected path to end with '{expected_suffix}': {s}",
         );
     }
 }
