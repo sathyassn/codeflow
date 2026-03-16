@@ -45,14 +45,14 @@ fn build_handler(
 ) -> Box<dyn codeflow_core::HookHandler> {
     match handler {
         SessionEndHandler::Cleanup => {
-            let ppid = std::os::unix::process::parent_id();
+            let lead_pid = std::os::unix::process::parent_id();
             let home_dir = std::env::var("HOME").map_or_else(
                 |_| std::path::PathBuf::from("/tmp"),
                 std::path::PathBuf::from,
             );
             Box::new(codeflow_core::hooks::session_end::SessionEndCleanup {
                 home_dir,
-                ppid,
+                lead_pid,
                 now,
             })
         }

@@ -1332,9 +1332,35 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | File | Purpose |
 |------|---------|
 | `.state/runtime/active-task.json` | Bridge file: current task for hook context |
-| `.state/runtime/current-session-id` | Current session ID reference |
+| `.state/runtime/codeflow-env.sh` | Single source of truth for current session ID (`CODEFLOW_SESSION_ID`, `CF_PROJECT_ROOT`) |
 | `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
-|  `.state/session/{SID}/pathflow/pathflow-session-status.json` | Structured JSON: PathFlow session status (status, team_name, last_completed_phase,  last_completed_stage, timestamps) |
+| `.state/session/{SID}/pathflow/pathflow-session-status.json` | Session lifecycle state (see below) |
+| `.state/session/{SID}/pathflow/pathflow-team.json` | Team composition and process tracking (see below) |
+
+**`pathflow-session-status.json` fields:**
+
+| Field | Set by | Purpose |
+|-------|--------|---------|
+| `session_id` | SessionStart | Session identifier |
+| `status` | SessionStart, PostToolUse | `created` → `pf-started` → `pf-in-progress` → `pf-complete` |
+| `lead_pid` | SessionStart | Claude Code PID of lead (via `parent_id()` in hook). Used for teammate detection and stale sweep. |
+| `team_name` | PostToolUse (TeamCreate) | Team name for config lookup |
+| `last_completed_phase` | PostToolUse (checkpoint-complete) | Latest pf-N sentinel |
+| `last_completed_stage` | PostToolUse (sentinel-write) | Latest ws-* sentinel |
+| `source_at_start` | SessionStart | Original source (startup/resume/compact/clear) |
+| `latest_source` | SessionStart (compact/resume/clear path) | Most recent source event |
+| `latest_source_at` | SessionStart (compact/resume/clear path) | When latest source occurred |
+
+**`pathflow-team.json` fields:**
+
+| Field | Set by | Purpose |
+|-------|--------|---------|
+| `team_name` | handle_team_create | Team identifier |
+| `lead_pid` | handle_team_create | Claude Code PID of lead (copy from status file) |
+| `teammates` | handle_teammate_spawn + teammate SessionStart | Array of `{ name, pid, spawned_at }` per teammate |
+| `teammate_spawned` | handle_teammate_spawn | Whether any teammate has been spawned |
+
+**Teammate detection (tmux mode):** In tmux, teammates fire SessionStart (identical payload to lead). Detection uses `lead_pid` from the status file: `kill(lead_pid, 0)` — alive means lead is running, so this caller is a teammate. Dead means lead crashed, so this is a new lead. In non-tmux (in-process), teammates fire SubagentStart instead, so teammate detection is not needed.
 
 ---
 
@@ -1356,7 +1382,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
 | Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-session-status.json stale |  Check status field; if stuck, manually remove `.state/session/{SID}/pathflow/` directory via PF7 flow |
-| Session record missing | Check `.state/runtime/current-session-id` and query DB via cf-knowledge-layer |
+| Session record missing | Check `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and query DB via cf-knowledge-layer |
 
 ### Teammate Recovery
 
@@ -1421,7 +1447,7 @@ FORBIDDEN:
 
 **Recovery procedure:**
 
-1. **Check pathflow state first** -- Read `.state/runtime/current-session-id` for the SID, then check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase.
+1. **Check pathflow state first** -- Read `.state/runtime/codeflow-env.sh` for the SID (`CODEFLOW_SESSION_ID`), then check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase.
 
 2. **Message teammates before assuming dead** -- Send a status message to each expected teammate:
    `SendMessage(type="message", recipient="cf-{role}", content="Context overflow recovery. What is your current state and what were you last working on?")`
@@ -1460,4 +1486,4 @@ FORBIDDEN:
 
    Continue following the mandatory task tracker mirroring rules (Section 7: Task Tracker Mirroring) for all remaining phases.
 
-**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately read `.state/runtime/current-session-id` and check sentinels before sending any teammate messages. Do NOT assume all teammates are dead.
+**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately read `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and check sentinels before sending any teammate messages. Do NOT assume all teammates are dead.

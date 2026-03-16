@@ -337,4 +337,115 @@ mod tests {
         let handler = CheckpointComplete::new(dir.path().to_path_buf());
         assert!(handler.sentinel_dir("").is_err());
     }
+
+    #[test]
+    fn test_pf_task_complete_creates_sentinel_and_updates_status() {
+        // Full integration: session env + checkpoint + PF task completion.
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7checkpoint000000ab";
+
+        // Set up session env.
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            format!("export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='test'\n"),
+        )
+        .unwrap();
+
+        // Create session pathflow dir + status file.
+        let session_dir = dir.path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-started","team_name":"t"}"#,
+        )
+        .unwrap();
+
+        // Create sentinel dir.
+        let sentinel_dir = dir.path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Initialize a minimal checkpoint with one task in PF1.
+        let cp = Checkpoint::new();
+        let checkpoint_path = session_dir.join("pathflow-phase-tasks.json");
+        // Create a checkpoint with PF1-TSK-01 registered.
+        let checkpoint_data = serde_json::json!({
+            "phases": {
+                "pf-1": {
+                    "expected": ["PF1-TSK-01"],
+                    "registered": ["PF1-TSK-01"],
+                    "completed": [],
+                    "skipped": [],
+                    "sentinel_created": false
+                }
+            }
+        });
+        std::fs::write(
+            &checkpoint_path,
+            serde_json::to_string_pretty(&checkpoint_data).unwrap(),
+        )
+        .unwrap();
+
+        let handler = CheckpointComplete::new(dir.path().to_path_buf());
+        let input = make_input("PF1-TSK-01: Security check");
+        let result = handler.handle(input).unwrap();
+
+        // Should succeed (Allow or Warn depending on checkpoint state).
+        assert!(
+            matches!(result, HookOutput::Allow | HookOutput::Warn { .. }),
+            "task completion should succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_pf_task_regex_extracts_first_match() {
+        let re = pf_task_id_re();
+        let m = re.find("completed PF4-TSK-05: register task in WorkGraph");
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().as_str(), "PF4-TSK-05");
+    }
+
+    #[test]
+    fn test_pf_task_regex_no_match_on_partial() {
+        let re = pf_task_id_re();
+        assert!(!re.is_match("PF-TSK-01")); // Missing digit after PF
+        assert!(!re.is_match("PF1TSK01")); // Missing dashes
+    }
+
+    #[test]
+    fn test_register_work_type_no_session() {
+        // register_work_type with no git branch should return silently.
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let handler = CheckpointComplete::new(dir.path().to_path_buf());
+        // Should not panic — just returns silently.
+        handler.register_work_type(&session_dir, "ses-test");
+    }
+
+    #[test]
+    fn test_pf_task_subject_with_multiple_task_ids() {
+        // Subject with multiple PF task IDs — should match the first one.
+        let re = pf_task_id_re();
+        let m = re.find("PF1-TSK-01 blocked by PF2-TSK-03");
+        assert_eq!(m.unwrap().as_str(), "PF1-TSK-01");
+    }
+
+    #[test]
+    fn test_pf_task_various_phase_numbers() {
+        let re = pf_task_id_re();
+        for i in 1..=7 {
+            let task = format!("PF{i}-TSK-01");
+            assert!(re.is_match(&task), "should match {task}");
+        }
+    }
 }

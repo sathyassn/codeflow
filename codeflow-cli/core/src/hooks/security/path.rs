@@ -176,11 +176,23 @@ fn is_cp_destination(segment: &str, path: &str, is_glob: bool) -> bool {
     }
     let last_non_flag = last_non_flag.trim_matches(|c| c == '"' || c == '\'');
 
+    // Staging area exemption: destinations under /tmp/claude/*/managed/protected-edits/
+    // mirror the project structure and contain protected path substrings. These are
+    // staging copies for the auto-staging workflow, not writes to protected paths.
+    if is_staging_destination(last_non_flag) {
+        return false;
+    }
+
     if is_glob {
         Regex::new(&glob_to_regex(path)).is_ok_and(|re| re.is_match(last_non_flag))
     } else {
         last_non_flag.contains(path)
     }
+}
+
+/// Check if a path is within the staging area (protected-edits workflow).
+fn is_staging_destination(path: &str) -> bool {
+    path.contains("/managed/protected-edits/")
 }
 
 fn check_directory_protection(segments: &[String]) -> Option<Verdict> {
@@ -189,6 +201,35 @@ fn check_directory_protection(segments: &[String]) -> Option<Verdict> {
 
     for seg in segments {
         if !dangerous_cmds_re().is_match(seg) {
+            continue;
+        }
+
+        // cp special handling: only block if protected directory is the
+        // destination, not the source. Allows staging copies like:
+        //   cp codeflow-cli/core/src/hooks/mod.rs /tmp/claude/.../mod.rs
+        if cp_cmd_re().is_match(seg) {
+            let is_claude_dest =
+                (claude.dir_end.is_match(seg) || claude.dir_slash.is_match(seg))
+                    && is_cp_destination_dir(seg, ".claude");
+            let is_codeflow_dest =
+                (codeflow.dir_end.is_match(seg) || codeflow.dir_slash.is_match(seg))
+                    && is_cp_destination_dir(seg, ".codeflow");
+
+            if is_claude_dest {
+                return Some(block(
+                    "Protected Directory",
+                    "Cannot copy to .claude directory",
+                    ".claude",
+                ));
+            }
+            if is_codeflow_dest {
+                return Some(block(
+                    "Protected Directory",
+                    "Cannot copy to .codeflow directory",
+                    ".codeflow",
+                ));
+            }
+            // cp with protected dir as source → allowed (read-only copy)
             continue;
         }
 
@@ -209,6 +250,22 @@ fn check_directory_protection(segments: &[String]) -> Option<Verdict> {
     }
 
     None
+}
+
+/// Check if a protected directory pattern appears in the cp destination.
+/// Uses the same last-non-flag heuristic as `is_cp_destination`.
+fn is_cp_destination_dir(segment: &str, dir_pattern: &str) -> bool {
+    let fields: Vec<&str> = segment.split_whitespace().collect();
+    let mut last_non_flag = "";
+    for f in &fields {
+        if !f.starts_with('-') {
+            last_non_flag = f;
+        }
+    }
+    if is_staging_destination(last_non_flag) {
+        return false;
+    }
+    last_non_flag.contains(dir_pattern)
 }
 
 fn check_redirect_protection(segments: &[String], paths: &[String]) -> Option<Verdict> {
@@ -664,6 +721,173 @@ mod tests {
         assert!(
             result.is_some(),
             "Should still block actual eval with protected path"
+        );
+    }
+
+    // -- cp directory protection: source vs destination --
+
+    #[test]
+    fn test_cp_from_claude_dir_to_staging_allowed() {
+        // cp FROM .claude/ directory TO staging area → ALLOWED (read-only copy).
+        // This is the staging workflow: copy protected source to temp for editing.
+        let result = PathModule.check(&ctx(
+            "cp .claude/agents/cf-development.md /tmp/claude/codeflow/managed/protected-edits/.claude/agents/cf-development.md",
+        ));
+        assert!(
+            result.is_none(),
+            "cp FROM .claude dir to staging should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_from_codeflow_hooks_to_staging_allowed() {
+        // cp FROM codeflow-cli/core/src/hooks/ to staging → ALLOWED.
+        // This was the specific bug: cp from hooks dir was blocked by
+        // check_directory_protection because cp was in dangerous_cmds_re.
+        let result = PathModule.check(&ctx(
+            "cp codeflow-cli/core/src/hooks/mod.rs /tmp/claude/codeflow/managed/protected-edits/codeflow-cli/core/src/hooks/mod.rs",
+        ));
+        assert!(
+            result.is_none(),
+            "cp FROM protected hooks dir to staging should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_to_claude_dir_blocked() {
+        // cp TO .claude directory → BLOCKED (write to protected directory).
+        let result = PathModule.check(&ctx(
+            "cp /tmp/evil.md .claude",
+        ));
+        assert!(
+            result.is_some(),
+            "cp TO .claude dir should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_cp_to_claude_slash_dir_blocked() {
+        // cp TO .claude/ directory → BLOCKED.
+        let result = PathModule.check(&ctx(
+            "cp -r /tmp/evil/ .claude/",
+        ));
+        assert!(
+            result.is_some(),
+            "cp TO .claude/ dir should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_cp_to_codeflow_dir_blocked() {
+        // cp TO .codeflow directory → BLOCKED.
+        let result = PathModule.check(&ctx(
+            "cp -r /tmp/evil/ .codeflow/",
+        ));
+        assert!(
+            result.is_some(),
+            "cp TO .codeflow dir should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_cp_between_unprotected_allowed() {
+        // cp between unprotected paths → ALLOWED.
+        let result = PathModule.check(&ctx("cp /tmp/a.txt /tmp/b.txt"));
+        assert!(result.is_none(), "cp between unprotected paths should be allowed");
+    }
+
+    #[test]
+    fn test_rm_claude_dir_still_blocked() {
+        // Regression: rm on .claude directory must still be blocked after cp fix.
+        let result = PathModule.check(&ctx("rm -rf .claude"));
+        assert!(
+            result.is_some(),
+            "rm on .claude dir should still be blocked"
+        );
+    }
+
+    #[test]
+    fn test_rm_codeflow_dir_still_blocked() {
+        // Regression: rm on .codeflow directory must still be blocked.
+        let result = PathModule.check(&ctx("rm -rf .codeflow/"));
+        assert!(
+            result.is_some(),
+            "rm on .codeflow dir should still be blocked"
+        );
+    }
+
+    #[test]
+    fn test_mv_claude_dir_still_blocked() {
+        // mv .claude is destructive — should be blocked.
+        let result = PathModule.check(&ctx("mv .claude /tmp/backup"));
+        assert!(
+            result.is_some(),
+            "mv .claude dir should be blocked (destructive)"
+        );
+    }
+
+    // -- Staging area exemption tests --
+
+    #[test]
+    fn test_cp_protected_file_to_staging_allowed() {
+        // The exact command that was blocked: cp a protected file to the staging
+        // area. The staging path mirrors project structure, so the destination
+        // contains the protected path as a substring.
+        let result = PathModule.check(&ctx(
+            "cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_none(),
+            "cp protected file to staging area should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_protected_hooks_to_staging_allowed() {
+        // Staging hooks source files for editing.
+        let result = PathModule.check(&ctx(
+            "cp codeflow-cli/core/src/hooks/security/path.rs /tmp/claude/codeflow/managed/protected-edits/codeflow-cli/core/src/hooks/security/path.rs",
+        ));
+        assert!(
+            result.is_none(),
+            "cp protected hooks to staging should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_from_staging_to_protected_blocked() {
+        // Reverse direction: copying FROM staging TO a protected path.
+        // The source is staging, but destination is the actual protected path.
+        let result = PathModule.check(&ctx(
+            "cp /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md .claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_some(),
+            "cp from staging TO protected path should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_cp_protected_to_non_staging_tmp_blocked() {
+        // cp to /tmp but NOT the staging area — destination contains the path.
+        let result = PathModule.check(&ctx(
+            "cp /tmp/evil.md .claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_some(),
+            "cp to protected path (non-staging) should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_staging_exemption_does_not_affect_rm() {
+        // Staging exemption is only for cp destination. rm should still block.
+        let result = PathModule.check(&ctx(
+            "rm .claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_some(),
+            "rm on protected path should still be blocked regardless of staging"
         );
     }
 }

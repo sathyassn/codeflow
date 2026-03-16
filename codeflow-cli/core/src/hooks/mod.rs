@@ -19,15 +19,26 @@ use serde::{Deserialize, Serialize};
 use crate::error::HookError;
 
 /// Hook lifecycle events (maps to Claude Code hook events).
+///
+/// Serializes as `snake_case` (internal format). Deserializes from both
+/// `snake_case` (internal/tests) and `PascalCase` (Claude Code stdin sends
+/// `hook_event_name` with PascalCase values like `"SessionStart"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEvent {
+    #[serde(alias = "PreToolUse")]
     PreToolUse,
+    #[serde(alias = "PostToolUse")]
     PostToolUse,
+    #[serde(alias = "TaskCompleted")]
     TaskCompleted,
+    #[serde(alias = "SessionStart")]
     SessionStart,
+    #[serde(alias = "SessionEnd")]
     SessionEnd,
+    #[serde(alias = "Stop")]
     Stop,
+    #[serde(alias = "UserPromptSubmit")]
     UserPromptSubmit,
 }
 
@@ -49,6 +60,10 @@ pub struct HookInput {
     pub tool_input: Option<serde_json::Value>,
 
     /// The hook event type.
+    ///
+    /// Claude Code sends this as `hook_event_name` in stdin JSON.
+    /// Internal tests use `event`. The alias accepts both.
+    #[serde(alias = "hook_event_name")]
     pub event: HookEvent,
 
     /// Session ID (from environment or stdin).
@@ -56,7 +71,10 @@ pub struct HookInput {
     pub session_id: Option<String>,
 
     /// Project root directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Claude Code sends this as `cwd` in stdin JSON.
+    /// Internal tests use `project_dir`. The alias accepts both.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "cwd")]
     pub project_dir: Option<String>,
 
     /// Session source type: startup, resume, compact, clear, or unknown.
@@ -143,7 +161,9 @@ pub trait HookHandler: Send + Sync {
 
 /// JSON structure for `pathflow-team.json`.
 ///
-/// JSON structure for `pathflow-team.json`.
+/// Stores team composition and process tracking. Created at `TeamCreate`,
+/// deleted at `TeamDelete`. The `lead_pid` is the Claude Code process PID
+/// of the lead (obtained via `parent_id()` in the hook process).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PathflowTeamInfo {
     /// Team name for Claude Code teams.
@@ -152,6 +172,10 @@ pub struct PathflowTeamInfo {
     /// The `CODEFLOW_SESSION_ID` at team creation time.
     #[serde(default)]
     pub codeflow_session_id: String,
+    /// Claude Code PID of the team lead (for liveness checking).
+    /// Obtained via `std::os::unix::process::parent_id()` in the hook process.
+    #[serde(default)]
+    pub lead_pid: u32,
     /// Whether at least one teammate has been spawned.
     #[serde(default)]
     pub teammate_spawned: bool,
@@ -161,29 +185,26 @@ pub struct PathflowTeamInfo {
     /// Name of the last spawned teammate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_spawn_name: Option<String>,
+    /// Registry of spawned teammates with name, PID, and spawn time.
+    /// PID is 0 until the teammate's own SessionStart updates it (tmux only).
+    /// In-process teammates never fire SessionStart, so PID stays 0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teammates: Vec<TeammateEntry>,
 }
 
-/// JSON structure for session metadata file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionMeta {
-    /// Session ID.
+/// A single teammate entry in the team registry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeammateEntry {
+    /// Teammate name (e.g., "cf-development", "cf-review").
+    pub name: String,
+    /// Claude Code PID of the teammate process. Set to 0 by the lead at spawn
+    /// time, updated to the actual PID by the teammate's SessionStart hook
+    /// (tmux mode only — in-process teammates don't fire SessionStart).
     #[serde(default)]
-    pub session_id: String,
-    /// Creation timestamp (RFC 3339).
+    pub pid: u32,
+    /// RFC 3339 timestamp of when the teammate was spawned.
     #[serde(default)]
-    pub created_at: String,
-    /// Source type (startup, resume, compact, clear).
-    #[serde(default)]
-    pub source: String,
-    /// Parent process ID.
-    #[serde(default)]
-    pub ppid: u32,
-    /// Binary version.
-    #[serde(default)]
-    pub version: String,
-    /// Permission mode from stdin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_mode: Option<String>,
+    pub spawned_at: String,
 }
 
 #[cfg(test)]
@@ -350,58 +371,15 @@ mod tests {
         let info = PathflowTeamInfo {
             team_name: "t".into(),
             codeflow_session_id: "ses-x".into(),
+            lead_pid: 0,
             teammate_spawned: false,
             created_at: "2026-01-01T00:00:00Z".into(),
             last_spawn_name: None,
+            teammates: vec![],
         };
         let json = serde_json::to_string(&info).expect("serialize");
         assert!(!json.contains("last_spawn_name"));
-    }
-
-    #[test]
-    fn test_session_meta_roundtrip() {
-        let meta = SessionMeta {
-            session_id: "ses-test".into(),
-            created_at: "2026-03-10T00:00:00Z".into(),
-            source: "startup".into(),
-            ppid: 1234,
-            version: "dev".into(),
-            permission_mode: Some("default".into()),
-        };
-        let json = serde_json::to_string(&meta).expect("serialize");
-        let parsed: SessionMeta = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.session_id, "ses-test");
-        assert_eq!(parsed.ppid, 1234);
-        assert_eq!(parsed.permission_mode.as_deref(), Some("default"));
-    }
-
-    #[test]
-    fn test_session_meta_defaults() {
-        let json = r#"{}"#;
-        let meta: SessionMeta = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(meta.session_id, "");
-        assert_eq!(meta.created_at, "");
-        assert_eq!(meta.source, "");
-        assert_eq!(meta.ppid, 0);
-        assert_eq!(meta.version, "");
-        assert!(meta.permission_mode.is_none());
-    }
-
-    #[test]
-    fn test_session_meta_without_permission_mode() {
-        let meta = SessionMeta {
-            session_id: "ses-test".into(),
-            created_at: "2026-03-10T00:00:00Z".into(),
-            source: "startup".into(),
-            ppid: 1234,
-            version: "dev".into(),
-            permission_mode: None,
-        };
-        let json = serde_json::to_string(&meta).expect("serialize");
-        // permission_mode should be skipped entirely in JSON
-        assert!(!json.contains("permission_mode"));
-        let parsed: SessionMeta = serde_json::from_str(&json).expect("deserialize");
-        assert!(parsed.permission_mode.is_none());
+        assert!(!json.contains("teammates"));
     }
 
     #[test]

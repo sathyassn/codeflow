@@ -10,11 +10,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::HookError;
-use crate::hooks::{HookEvent, HookHandler, HookInput, HookOutput, SessionMeta};
+use crate::hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 use crate::ledger::{Event, LedgerWriter};
 use crate::pathflow;
 use crate::session;
 use crate::types::SessionId;
+
+// libc for kill(pid, 0) liveness check in teammate detection.
+extern crate libc;
 
 // ---------------------------------------------------------------------------
 // Session lock
@@ -67,7 +70,9 @@ pub type NowFn = fn() -> String;
 /// Performs the 11-section initialization flow (section 12 auto-rebuild is
 /// skipped in `codeflow-core`; it belongs in the CLI binary).
 pub struct SessionStartInit {
-    pub ppid: u32,
+    /// Claude Code process PID (obtained via `parent_id()` in the hook process).
+    /// Used as `lead_pid` in status file for teammate detection and stale sweep.
+    pub lead_pid: u32,
     pub home_dir: PathBuf,
     pub now: NowFn,
 }
@@ -188,7 +193,8 @@ impl SessionStartInit {
         self.init_checkpoint(project_dir, session_id.as_str(), &mut result);
 
         // --- Section 8: Session metadata ---
-        self.write_session_metadata(project_dir, session_id.as_str(), source, &mut result);
+        // Eliminated: session-meta.json is superseded by pathflow-session-status.json
+        // which now contains lead_pid, source_at_start, and latest_source fields.
 
         // --- Section 9: Stale team detection ---
         // Only detect stale teams on startup. On compact/resume/clear the lead's
@@ -240,8 +246,21 @@ impl SessionStartInit {
 
         let existing_sid = env_data.session_id;
 
-        // Compact/resume/clear: reuse existing SID, no mutation.
+        // Compact/resume/clear: reuse existing SID, update source tracking only.
         if source == "compact" || source == "resume" || source == "clear" {
+            // Update latest_source in status file for recovery context.
+            let session_dir = project_dir
+                .join(".state")
+                .join("session")
+                .join(existing_sid.as_str())
+                .join("pathflow");
+            crate::hooks::post_tool_use::update_session_status(
+                &session_dir,
+                &serde_json::json!({
+                    "latest_source": source,
+                    "latest_source_at": (self.now)(),
+                }),
+            );
             return (Some(existing_sid), false);
         }
 
@@ -291,20 +310,47 @@ impl SessionStartInit {
             return (None, false); // Config missing -> session dead, new lead
         }
 
-        // Active session with live team config -> TEAMMATE.
+        // Signal 4: Lead process liveness via PID.
+        // The lead_pid is the Claude Code process PID stored at session creation.
+        // If the lead is alive, this caller is a teammate joining the session.
+        // If the lead is dead, the session crashed and this is a new lead.
+        let lead_pid = status
+            .get("lead_pid")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        if lead_pid == 0 {
+            // No lead_pid recorded (pre-PID session) — cannot verify liveness.
+            // Default to new lead (safe: avoids trapping a new lead as teammate).
+            return (None, false);
+        }
+
+        // kill(pid, 0) checks process existence without sending a signal.
+        // Returns 0 if process exists (alive), -1/ESRCH if not.
+        let is_alive = unsafe { libc::kill(lead_pid as i32, 0) } == 0;
+        if !is_alive {
+            result.messages.push(format!(
+                "STALE SESSION: lead_pid {lead_pid} is dead (team: {team_name}) — new lead"
+            ));
+            return (None, false); // Lead crashed -> new lead
+        }
+
+        // Active session with live lead process -> TEAMMATE.
         result.messages.push(format!(
-            "TEAMMATE MODE: Detected via status.json + team config (team: {team_name})"
+            "TEAMMATE MODE: Detected via status + config + lead_pid {lead_pid} alive (team: {team_name})"
         ));
         (Some(existing_sid), true)
     }
 
     /// Resolve or generate a session ID based on source type.
     ///
-    /// For `startup`/`unknown`: generate a new SID (with safeguard check).
+    /// For `startup`/`unknown`: generate a new SID and write env file.
     /// For `compact`/`resume`/`clear`: reuse the existing SID from
     /// `handle_stale_cleanup` (always `Some` for these sources).
     ///
-    /// No env var reads -- uses only file-based signals.
+    /// Teammate detection is fully handled by `handle_stale_cleanup` (PID-based).
+    /// No duplicate detection here — the SAFEGUARD block was removed because it
+    /// had the same false-positive bug (concluded "teammate" for a new lead after
+    /// crash when status was active + config existed, without checking PID liveness).
     fn resolve_or_generate_session_id(
         &self,
         project_dir: &Path,
@@ -318,45 +364,6 @@ impl SessionStartInit {
         // or compact/resume/clear path). This is always authoritative.
         if let Some(sid) = existing_sid {
             return Ok(sid);
-        }
-
-        // New lead path -- about to generate new SID and write env file.
-        // SAFEGUARD: double-check no active session before overwriting env file.
-        if let Ok(Some(env)) = session::read_env_file(runtime_dir) {
-            let status_path = project_dir
-                .join(".state")
-                .join("session")
-                .join(env.session_id.as_str())
-                .join("pathflow")
-                .join("pathflow-session-status.json");
-            if let Ok(data) = fs::read_to_string(&status_path) {
-                if let Ok(status) = serde_json::from_str::<serde_json::Value>(&data) {
-                    let s = status
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let tn = status
-                        .get("team_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if (s == "pf-started" || s == "pf-in-progress") && !tn.is_empty() {
-                        let cfg = self
-                            .home_dir
-                            .join(".claude")
-                            .join("teams")
-                            .join(tn)
-                            .join("config.json");
-                        if cfg.exists() {
-                            // Active session with live config -- do NOT overwrite.
-                            result.is_teammate = true;
-                            result.messages.push(format!(
-                                "SAFEGUARD: Active session detected (team: {tn}), joining as teammate"
-                            ));
-                            return Ok(env.session_id);
-                        }
-                    }
-                }
-            }
         }
 
         // For startup/unknown: generate a new SID and write env file.
@@ -490,8 +497,29 @@ impl SessionStartInit {
                                     Some(team_name),
                                 );
                                 swept += 1;
+                            } else {
+                                // Config exists — check lead_pid liveness.
+                                let lead_pid = status
+                                    .get("lead_pid")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0)
+                                    as u32;
+                                if lead_pid > 0 {
+                                    let is_alive =
+                                        unsafe { libc::kill(lead_pid as i32, 0) } == 0;
+                                    if !is_alive {
+                                        // Lead process dead — crashed session.
+                                        self.remove_stale_session_artifacts(
+                                            project_dir,
+                                            &name,
+                                            Some(team_name),
+                                        );
+                                        swept += 1;
+                                    }
+                                    // lead_pid alive → KEEP (session genuinely active)
+                                }
+                                // no lead_pid → KEEP (pre-PID session, safe default)
                             }
-                            // config exists -> KEEP (session may be alive)
                         }
                     }
                     _ => {}
@@ -624,8 +652,12 @@ impl SessionStartInit {
             "session_id": session_id,
             "team_name": "",
             "status": "created",
+            "lead_pid": self.lead_pid,
             "last_completed_phase": "",
             "last_completed_stage": "",
+            "source_at_start": source,
+            "latest_source": source,
+            "latest_source_at": (self.now)(),
             "created_at": (self.now)(),
             "updated_at": (self.now)(),
         });
@@ -666,38 +698,8 @@ impl SessionStartInit {
         }
     }
 
-    /// Write session metadata file.
-    fn write_session_metadata(
-        &self,
-        project_dir: &Path,
-        session_id: &str,
-        source: &str,
-        result: &mut InitResult,
-    ) {
-        let meta = SessionMeta {
-            session_id: session_id.to_string(),
-            created_at: (self.now)(),
-            source: source.to_string(),
-            ppid: self.ppid,
-            version: "rust-dev".to_string(),
-            permission_mode: None,
-        };
-
-        let meta_dir = project_dir.join(".state").join("session").join(session_id);
-        let _ = fs::create_dir_all(&meta_dir);
-        let meta_path = meta_dir.join("session-meta.json");
-
-        match serde_json::to_string_pretty(&meta) {
-            Ok(json) => {
-                if let Err(e) = fs::write(&meta_path, format!("{json}\n")) {
-                    result.warnings.push(format!("metadata write error: {e}"));
-                }
-            }
-            Err(e) => result
-                .warnings
-                .push(format!("metadata serialize error: {e}")),
-        }
-    }
+    // session-meta.json ELIMINATED: all fields now in pathflow-session-status.json
+    // (lead_pid, source_at_start, latest_source, latest_source_at)
 
     /// Detect stale team directories under `~/.claude/teams/` and clean them up.
     ///
@@ -1253,7 +1255,7 @@ mod tests {
 
     fn make_init(home: PathBuf) -> SessionStartInit {
         SessionStartInit {
-            ppid: 1000,
+            lead_pid: 1000,
             home_dir: home,
             now: fixed_now,
         }
@@ -1322,7 +1324,9 @@ mod tests {
         let sid = SessionId::new_unchecked("ses-01jq7teammate12345678abc");
         session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
 
-        // Create pathflow-session-status.json with active status.
+        // Create pathflow-session-status.json with active status and lead_pid.
+        // Use current process PID as lead_pid (alive during test).
+        let lead_pid = std::process::id();
         let pathflow_dir = dir
             .path()
             .join(".state")
@@ -1334,7 +1338,8 @@ mod tests {
             pathflow_dir.join("pathflow-session-status.json"),
             serde_json::to_string_pretty(&serde_json::json!({
                 "session_id": sid.as_str(), "status": "pf-in-progress",
-                "team_name": "test-team", "created_at": "2026-03-10T00:00:00Z",
+                "team_name": "test-team", "lead_pid": lead_pid,
+                "created_at": "2026-03-10T00:00:00Z",
                 "updated_at": "2026-03-10T00:00:00Z",
             }))
             .unwrap(),
@@ -1346,10 +1351,11 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
-        // No env var needed -- teammate detection uses file signals only:
+        // Teammate detection uses 4 signals:
         // 1. env file -> existing SID
         // 2. status.json -> pf-in-progress + team_name
         // 3. config.json -> team alive
+        // 4. lead_pid -> alive (current process PID)
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
 
@@ -2493,40 +2499,8 @@ mod tests {
         assert!(result.messages.iter().any(|m| m.contains("Resuming")));
     }
 
-    #[test]
-    fn test_write_session_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let sid = "ses-01jq7metadata00000000000";
-
-        let init = make_init(home.path().to_path_buf());
-        let mut result = InitResult {
-            session_id: SessionId::new_unchecked(sid),
-            is_resume: false,
-            is_teammate: false,
-            env_vars: HashMap::new(),
-            warnings: Vec::new(),
-            messages: Vec::new(),
-        };
-
-        init.write_session_metadata(dir.path(), sid, "startup", &mut result);
-
-        let meta_path = dir
-            .path()
-            .join(".state")
-            .join("session")
-            .join(sid)
-            .join("session-meta.json");
-        assert!(meta_path.exists(), "metadata file should be created");
-
-        let data = fs::read_to_string(&meta_path).unwrap();
-        let meta: SessionMeta = serde_json::from_str(&data).unwrap();
-        assert_eq!(meta.session_id, sid);
-        assert_eq!(meta.source, "startup");
-        assert_eq!(meta.ppid, 1000);
-        assert_eq!(meta.version, "rust-dev");
-        assert!(result.warnings.is_empty(), "no warnings expected");
-    }
+    // test_write_session_metadata REMOVED: session-meta.json eliminated,
+    // fields moved to pathflow-session-status.json.
 
     #[test]
     fn test_create_project_temp_dir() {
@@ -2759,7 +2733,7 @@ mod tests {
 
         // Phase 1: Lead agent creates the session.
         let lead_init = SessionStartInit {
-            ppid: 1000,
+            lead_pid: 1000,
             home_dir: home_dir.as_ref().clone(),
             now: fixed_now,
         };
@@ -2769,6 +2743,8 @@ mod tests {
         let lead_sid = lead_result.session_id.clone();
 
         // Lead writes pathflow-session-status.json (simulates TeamCreate PostToolUse).
+        // Use current process PID as lead_pid so kill(pid, 0) succeeds in test.
+        let test_pid = std::process::id();
         let pathflow_dir = project_dir
             .join(".state")
             .join("session")
@@ -2779,7 +2755,8 @@ mod tests {
             pathflow_dir.join("pathflow-session-status.json"),
             serde_json::to_string_pretty(&serde_json::json!({
                 "session_id": lead_sid.as_str(), "status": "pf-in-progress",
-                "team_name": "test-team", "updated_at": fixed_now(),
+                "team_name": "test-team", "lead_pid": test_pid,
+                "updated_at": fixed_now(),
             }))
             .unwrap(),
         )
@@ -2805,7 +2782,7 @@ mod tests {
 
                 thread::spawn(move || {
                     let init = SessionStartInit {
-                        ppid: 2000,
+                        lead_pid: 2000,
                         home_dir: home_dir.as_ref().clone(),
                         now: fixed_now,
                     };
@@ -2990,41 +2967,14 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_safeguard_prevents_env_file_overwrite() {
+    fn test_resolve_generates_new_sid_when_no_existing() {
+        // After SAFEGUARD removal: when handle_stale_cleanup returns (None, false),
+        // resolve_or_generate should always generate a new SID for startup.
+        // Teammate detection is fully handled by handle_stale_cleanup (PID-based).
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
-
-        // Write an existing env file with a known SID.
-        let existing_sid = SessionId::new_unchecked("ses-01jq7safeguard12345678a");
-        session::write_env_file(&runtime_dir, &existing_sid, "codeflow").unwrap();
-
-        // Create active session status.
-        let pathflow_dir = dir
-            .path()
-            .join(".state")
-            .join("session")
-            .join(existing_sid.as_str())
-            .join("pathflow");
-        fs::create_dir_all(&pathflow_dir).unwrap();
-        fs::write(
-            pathflow_dir.join("pathflow-session-status.json"),
-            serde_json::to_string(&serde_json::json!({
-                "status": "pf-in-progress",
-                "team_name": "safeguard-team",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        // Create team config.
-        let config_dir = home
-            .path()
-            .join(".claude")
-            .join("teams")
-            .join("safeguard-team");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config.json"), "{}").unwrap();
+        fs::create_dir_all(&runtime_dir).unwrap();
 
         let init = make_init(home.path().to_path_buf());
         let mut result = InitResult {
@@ -3036,8 +2986,6 @@ mod tests {
             messages: Vec::new(),
         };
 
-        // existing_sid=None simulates handle_stale_cleanup returning (None, false),
-        // but the safeguard should detect the active session and prevent overwrite.
         let sid = init
             .resolve_or_generate_session_id(
                 dir.path(),
@@ -3049,15 +2997,12 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(
-            sid, existing_sid,
-            "safeguard should return existing SID, not generate new"
-        );
-        assert!(result.is_teammate, "safeguard should set is_teammate");
         assert!(
-            result.messages.iter().any(|m| m.contains("SAFEGUARD")),
-            "should log safeguard activation"
+            sid.as_str().starts_with("ses-"),
+            "should generate a new SID: {}",
+            sid.as_str()
         );
+        assert!(!result.is_teammate, "should not be teammate");
     }
 
     // --- Bug 5: Startup resets stale status file ---

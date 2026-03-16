@@ -51,7 +51,8 @@ pub struct CleanupResult {
 /// and ledger event writing.
 pub struct SessionEndCleanup {
     pub home_dir: PathBuf,
-    pub ppid: u32,
+    /// Claude Code process PID of this agent (via `parent_id()` in hook).
+    pub lead_pid: u32,
     pub now: NowFn,
 }
 
@@ -97,7 +98,7 @@ impl SessionEndCleanup {
             &serde_json::json!({
                 "event": "cleanup_started",
                 "session_id": session_id,
-                "pid": self.ppid,
+                "pid": self.lead_pid,
             }),
         );
 
@@ -408,7 +409,7 @@ impl SessionEndCleanup {
         }
     }
 
-    /// Remove runtime files (env file, session lock, `current-session-id`).
+    /// Remove runtime files (env file, session lock).
     ///
     /// Race safety: reads `codeflow-env.sh` and only removes it if the session ID
     /// inside matches the session being cleaned up. If a different session owns the
@@ -444,10 +445,11 @@ impl SessionEndCleanup {
             let _ = fs::remove_file(&lock_path);
         }
 
-        // Also remove current-session-id if it exists (legacy cleanup).
-        let current_sid_path = runtime_dir.join("current-session-id");
-        if current_sid_path.exists() {
-            let _ = fs::remove_file(&current_sid_path);
+        // Legacy: remove current-session-id if it exists (no longer written,
+        // kept for one-time cleanup of old installations).
+        let legacy_sid_path = runtime_dir.join("current-session-id");
+        if legacy_sid_path.exists() {
+            let _ = fs::remove_file(&legacy_sid_path);
         }
     }
 
@@ -530,7 +532,6 @@ fn write_messages(writer: &mut dyn Write, messages: &[String]) -> Result<(), Hoo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::SessionMeta;
     use crate::types::SessionId;
 
     fn fixed_now() -> String {
@@ -540,7 +541,7 @@ mod tests {
     fn make_cleaner(home: PathBuf) -> SessionEndCleanup {
         SessionEndCleanup {
             home_dir: home,
-            ppid: 1000,
+            lead_pid: 1000,
             now: fixed_now,
         }
     }
@@ -579,22 +580,6 @@ mod tests {
             .join(sid.as_str());
         fs::create_dir_all(&sentinel_dir).unwrap();
         fs::write(sentinel_dir.join("pathflow-pf-1"), b"").unwrap();
-
-        // Create session meta.
-        let meta = SessionMeta {
-            session_id: sid.as_str().to_string(),
-            created_at: "2026-03-10T00:00:00Z".into(),
-            source: "startup".into(),
-            ppid: 1000,
-            version: "test".into(),
-            permission_mode: None,
-        };
-        let meta_path = dir
-            .join(".state")
-            .join("session")
-            .join(sid.as_str())
-            .join("session-meta.json");
-        fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
 
         // Create ledger directory.
         fs::create_dir_all(dir.join(".state").join("ledger")).unwrap();

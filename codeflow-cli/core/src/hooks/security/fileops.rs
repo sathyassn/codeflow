@@ -30,6 +30,16 @@ fn tmp_claude_redirect_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r">/tmp/claude($|/)").expect("valid"))
 }
 
+/// Matches cp/rsync commands whose destination is the staging area.
+/// The staging area mirrors the project structure under protected-edits/,
+/// so destination paths contain protected path substrings.
+fn staging_dest_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(cp|rsync)\s.*\s/tmp/claude/\S*/managed/protected-edits/").expect("valid")
+    })
+}
+
 fn dd_cmd_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(^|\s)(dd)\s").expect("valid"))
@@ -85,14 +95,21 @@ impl SecurityModule for FileOpsModule {
 }
 
 fn check_indirect_file_ops(cmd: &str, paths: &[String]) -> Option<Verdict> {
-    // Skip if the final destination is /tmp/claude.
+    // Skip if the final destination is /tmp/claude (no command chains).
     let skip_section9 = (tmp_claude_final_dest_re().is_match(cmd)
         && !cmd.contains("&&")
         && !cmd.contains("||")
         && !cmd.contains(';'))
         || tmp_claude_redirect_re().is_match(cmd);
 
-    if !skip_section9 {
+    // Staging area exemption: commands whose cp/write destination is
+    // /tmp/claude/*/managed/protected-edits/ are staging copies for the
+    // auto-staging workflow. Allow even in command chains (e.g.,
+    // "mkdir -p /tmp/claude/.../dir && cp source /tmp/claude/.../dir/file").
+    let is_staging_workflow = cmd.contains("/managed/protected-edits/")
+        && staging_dest_re().is_match(cmd);
+
+    if !skip_section9 && !is_staging_workflow {
         for path in paths {
             if is_path_or_glob_targeted(cmd, path) && indirect_write_cmds_re().is_match(cmd) {
                 return Some(block(
@@ -466,5 +483,56 @@ mod tests {
             policy: &empty_policy,
         };
         assert!(FileOpsModule.check(&empty_ctx).is_none());
+    }
+
+    // -- Staging area exemption tests --
+
+    #[test]
+    fn test_cp_to_staging_with_chain_allowed() {
+        // mkdir && cp to staging area — the exact workflow that was blocked.
+        let result = FileOpsModule.check(&ctx(
+            "mkdir -p /tmp/claude/codeflow/managed/protected-edits/.claude && cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_none(),
+            "mkdir && cp to staging area should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_to_staging_simple_allowed() {
+        // Simple cp to staging without chain.
+        let result = FileOpsModule.check(&ctx(
+            "cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md",
+        ));
+        assert!(
+            result.is_none(),
+            "cp to staging area should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_cp_chain_to_non_staging_blocked() {
+        // cp with chain to a non-staging destination — should still be blocked.
+        let result = FileOpsModule.check(&ctx(
+            "mkdir -p /tmp/evil && cp .claude/settings.json /tmp/evil/settings.json",
+        ));
+        assert!(
+            result.is_some(),
+            "cp with chain to non-staging dest should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_staging_exemption_only_for_cp_rsync() {
+        // tee is in indirect_write_cmds but NOT covered by staging exemption
+        // (staging_dest_re only matches cp|rsync).
+        let result = FileOpsModule.check(&ctx(
+            "echo evil | tee .claude/settings.json",
+        ));
+        assert!(
+            result.is_some(),
+            "tee to protected path should still be blocked"
+        );
     }
 }

@@ -505,11 +505,8 @@ mod tests {
         let state_dir = dir.path().join(".state");
         let runtime_dir = state_dir.join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
-        // Write a known session ID to the filesystem.
+        // Write a known session ID via codeflow-env.sh (sole source of truth).
         let fs_session_id = "ses-1234567890abc";
-        std::fs::write(runtime_dir.join("current-session-id"), fs_session_id).unwrap();
-        // Write codeflow-env.sh so session::current_session_id can find it.
-        // Both CODEFLOW_SESSION_ID and CF_PROJECT_ROOT are required by the parser.
         std::fs::write(
             runtime_dir.join("codeflow-env.sh"),
             format!("export CODEFLOW_SESSION_ID=\"{fs_session_id}\"\nexport CF_PROJECT_ROOT=\"test-project\"\n"),

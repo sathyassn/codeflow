@@ -71,10 +71,10 @@ fn build_handler(
 ) -> Box<dyn codeflow_core::HookHandler> {
     match handler {
         SessionStartHandler::Init => {
-            let ppid = std::process::id();
+            let lead_pid = std::os::unix::process::parent_id();
             let home_dir = dirs_home();
             Box::new(codeflow_core::hooks::session_start::SessionStartInit {
-                ppid,
+                lead_pid,
                 home_dir,
                 now,
             })

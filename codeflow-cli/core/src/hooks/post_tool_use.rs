@@ -312,12 +312,15 @@ pub fn handle_team_create(
         return Ok(HookOutput::Allow);
     }
 
+    let lead_pid = std::os::unix::process::parent_id();
     let team = PathflowTeamInfo {
         team_name: team_name.to_string(),
         codeflow_session_id: session_id.to_string(),
+        lead_pid,
         teammate_spawned: false,
         created_at: crate::util::now_rfc3339(),
         last_spawn_name: None,
+        teammates: vec![],
     };
 
     let team_json = serde_json::to_string_pretty(&team)
@@ -378,6 +381,14 @@ pub fn handle_teammate_spawn(
     team.teammate_spawned = true;
     if !agent_name.is_empty() {
         team.last_spawn_name = Some(agent_name.to_string());
+        // Add teammate entry with pid=0 placeholder.
+        // The teammate's own SessionStart (tmux) updates pid to its Claude Code PID.
+        // In-process teammates never fire SessionStart, so pid stays 0.
+        team.teammates.push(crate::hooks::TeammateEntry {
+            name: agent_name.to_string(),
+            pid: 0,
+            spawned_at: crate::util::now_rfc3339(),
+        });
     }
 
     let updated = serde_json::to_string_pretty(&team)
@@ -1131,9 +1142,11 @@ mod tests {
         let team = PathflowTeamInfo {
             team_name: "my-team".into(),
             codeflow_session_id: "ses-abc".into(),
+            lead_pid: 0,
             teammate_spawned: false,
             created_at: "2026-03-10T00:00:00Z".into(),
             last_spawn_name: None,
+            teammates: vec![],
         };
         let team_file = session_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
