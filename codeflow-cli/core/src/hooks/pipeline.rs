@@ -124,10 +124,16 @@ pub fn verify_cumulative_phase_sentinels(
     (true, String::new())
 }
 
+/// Default work type when the branch prefix is not recognized.
+/// `FIX` uses the most thorough pipeline (WS-DEV → WS-REV → WS-QA),
+/// ensuring review and QA run before shipping unclassified work.
+pub const DEFAULT_WORK_TYPE: &str = "FIX";
+
 /// Map git branch prefix to work type.
 ///
 /// `feat/` -> `FEAT`, `fix/` -> `FIX`, `refactor/` -> `RFCT`, etc.
-/// Returns empty string if the branch prefix is not recognized.
+/// Falls back to `DEFAULT_WORK_TYPE` (`FIX`) when the branch prefix
+/// is not recognized, ensuring the safest pipeline (DEV → REV → QA).
 #[must_use]
 pub fn infer_work_type_from_branch(branch_name: &str) -> &'static str {
     const PREFIX_MAP: &[(&str, &str)] = &[
@@ -148,7 +154,7 @@ pub fn infer_work_type_from_branch(branch_name: &str) -> &'static str {
             return work_type;
         }
     }
-    ""
+    DEFAULT_WORK_TYPE
 }
 
 /// Convert a pipeline entry to its sentinel name: `"WS-DEV"` -> `"ws-dev"`.
@@ -452,10 +458,14 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_work_type_unrecognized() {
-        assert_eq!(infer_work_type_from_branch("main"), "");
-        assert_eq!(infer_work_type_from_branch("unknown/branch"), "");
-        assert_eq!(infer_work_type_from_branch(""), "");
+    fn test_infer_work_type_unrecognized_defaults_to_fix() {
+        // Unrecognized branch prefixes fall back to DEFAULT_WORK_TYPE ("FIX")
+        // to ensure the safest pipeline (DEV → REV → QA).
+        assert_eq!(infer_work_type_from_branch("main"), DEFAULT_WORK_TYPE);
+        assert_eq!(infer_work_type_from_branch("unknown/branch"), DEFAULT_WORK_TYPE);
+        assert_eq!(infer_work_type_from_branch(""), DEFAULT_WORK_TYPE);
+        assert_eq!(infer_work_type_from_branch("develop"), DEFAULT_WORK_TYPE);
+        assert_eq!(DEFAULT_WORK_TYPE, "FIX");
     }
 
     // -- StageSentinelName tests --

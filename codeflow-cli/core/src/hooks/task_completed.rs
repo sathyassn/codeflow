@@ -71,11 +71,9 @@ impl CheckpointComplete {
             return;
         }
 
+        // infer_work_type_from_branch falls back to DEFAULT_WORK_TYPE ("FIX")
+        // when the branch prefix is not recognized, so work_type is never empty.
         let work_type = pipeline::infer_work_type_from_branch(&branch);
-        if work_type.is_empty() {
-            eprintln!("checkpoint-complete: cannot infer work type from branch: {branch}");
-            return;
-        }
 
         // Write to checkpoint context.
         let checkpoint_path = self.checkpoint_path(session_id);
