@@ -423,34 +423,47 @@ impl GateCheck {
         let session_dir = pipeline::derive_session_dir(&self.sentinel_dir);
         let work_type = pipeline::read_work_type_from_session_status(&session_dir);
 
-        if !work_type.is_empty() {
-            let config_dir = pipeline::derive_config_dir(&self.sentinel_dir);
-            match pipeline::load_pipelines(&config_dir) {
-                Ok(pipelines) => {
-                    if let Some(pipeline_stages) = pipelines.get(&work_type) {
-                        let (all_ok, missing_stage) = pipeline::verify_cumulative_stage_sentinels(
-                            &self.sentinel_dir,
-                            pipeline_stages,
-                            pipeline_stages.len().saturating_sub(1),
-                        );
-                        if !all_ok {
-                            return HookOutput::Block {
-                                reason: format!(
-                                    "BLOCKED: PathFlow gate - prerequisite not met\n\
-                                     Reason: git_push_pr requires all pipeline stages. \
-                                     Missing stage sentinel: pathflow-{missing_stage}\n\
-                                     Pipeline for {work_type}: {pipeline_stages:?}\n\
-                                     Gate: git_push_pr\n"
-                                ),
-                                category: Some(BlockCategory::Gate),
-                            };
-                        }
+        // work_type must be set if pf-3+ exists (set by register_work_type
+        // at checkpoint-complete for pf-3). If missing, the checkpoint system
+        // was bypassed (e.g., manual sentinel creation). Block to prevent
+        // pushing unreviewed/unverified work.
+        if work_type.is_empty() {
+            return HookOutput::Block {
+                reason: "BLOCKED: PathFlow gate - prerequisite not met\n\
+                     Reason: git_push_pr requires work_type in session status. \
+                     work_type is not set (checkpoint system may have been bypassed).\n\
+                     Gate: git_push_pr\n"
+                    .to_string(),
+                category: Some(BlockCategory::Gate),
+            };
+        }
+
+        let config_dir = pipeline::derive_config_dir(&self.sentinel_dir);
+        match pipeline::load_pipelines(&config_dir) {
+            Ok(pipelines) => {
+                if let Some(pipeline_stages) = pipelines.get(&work_type) {
+                    let (all_ok, missing_stage) = pipeline::verify_cumulative_stage_sentinels(
+                        &self.sentinel_dir,
+                        pipeline_stages,
+                        pipeline_stages.len().saturating_sub(1),
+                    );
+                    if !all_ok {
+                        return HookOutput::Block {
+                            reason: format!(
+                                "BLOCKED: PathFlow gate - prerequisite not met\n\
+                                 Reason: git_push_pr requires all pipeline stages. \
+                                 Missing stage sentinel: pathflow-{missing_stage}\n\
+                                 Pipeline for {work_type}: {pipeline_stages:?}\n\
+                                 Gate: git_push_pr\n"
+                            ),
+                            category: Some(BlockCategory::Gate),
+                        };
                     }
                 }
-                Err(_) => {
-                    // Config load failure -- graceful degradation, allow through.
-                    eprintln!("gate: cannot load pipelines for push/PR gate");
-                }
+            }
+            Err(_) => {
+                // Config load failure -- graceful degradation, allow through.
+                eprintln!("gate: cannot load pipelines for push/PR gate");
             }
         }
 
@@ -1533,13 +1546,70 @@ mod tests {
     }
 
     #[test]
-    fn test_gate_check_dual_gate_push_allows_both() {
+    fn test_gate_check_dual_gate_push_allows_with_all_sentinels() {
+        // To pass the push/PR gate, we need:
+        // 1. All phase sentinels pf-1..pf-5
+        // 2. work_type set in session status
+        // 3. All pipeline stage sentinels for that work_type
+        //
+        // This test uses a sentinel dir that doesn't have a real session
+        // directory tree, so derive_session_dir returns a non-existent path,
+        // read_work_type returns "", and the gate blocks on missing work_type.
+        // To make it pass, we need to set up the full session structure.
         let dir = tempfile::tempdir().unwrap();
-        // Cumulative: all phase sentinels pf-1 through pf-5 must exist.
+
+        // Sentinel dir: {dir}/sentinels/pathflow/{SID}/
+        let sid = "ses-testpushgate1234567890";
+        let sentinel_dir = dir.path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Create cumulative phase sentinels pf-1..pf-5.
+        for i in 1..=5 {
+            sentinel::create_by_name(&sentinel_dir, &format!("pf-{i}")).unwrap();
+        }
+        // Create stage sentinels for HTFX pipeline: ws-dev, ws-rev, ws-qa.
+        sentinel::create_by_name(&sentinel_dir, "ws-dev").unwrap();
+        sentinel::create_by_name(&sentinel_dir, "ws-rev").unwrap();
+        sentinel::create_by_name(&sentinel_dir, "ws-qa").unwrap();
+
+        // Create session status with work_type.
+        let session_dir = dir.path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","work_type":"HTFX"}"#,
+        )
+        .unwrap();
+
+        let handler = GateCheck::new(sentinel_dir);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "git push origin feat/test"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0, "push should be allowed with all sentinels + work_type");
+    }
+
+    #[test]
+    fn test_gate_check_push_blocks_missing_work_type() {
+        // All phase sentinels present but work_type empty → BLOCK.
+        let dir = tempfile::tempdir().unwrap();
         for i in 1..=5 {
             sentinel::create_by_name(dir.path(), &format!("pf-{i}")).unwrap();
         }
-        sentinel::create_by_name(dir.path(), "ws-rev").unwrap();
         let handler = GateCheck::new(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Bash".into()),
@@ -1551,7 +1621,7 @@ mod tests {
             transcript_path: None,
         };
         let result = handler.handle(input).unwrap();
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 2, "push should be blocked when work_type is missing");
     }
 
     // -- TeamGuard tests --

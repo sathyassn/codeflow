@@ -375,7 +375,7 @@ mod tests {
         std::fs::create_dir_all(&sentinel_dir).unwrap();
 
         // Initialize a minimal checkpoint with one task in PF1.
-        let cp = Checkpoint::new();
+        let _cp = Checkpoint::new();
         let checkpoint_path = session_dir.join("pathflow-phase-tasks.json");
         // Create a checkpoint with PF1-TSK-01 registered.
         let checkpoint_data = serde_json::json!({
