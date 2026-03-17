@@ -4,7 +4,7 @@
 //! Creates phase sentinels automatically when all expected tasks complete.
 //! Uses shared `file_lock` module for atomic read-modify-write.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -17,13 +17,13 @@ use crate::error::PathflowError;
 pub struct PhaseCheckpoint {
     pub expected: Vec<String>,
     #[serde(default)]
-    pub conditions: HashMap<String, String>,
+    pub conditions: BTreeMap<String, String>,
     #[serde(default)]
-    pub registered: HashMap<String, String>,
+    pub registered: BTreeMap<String, String>,
     #[serde(default)]
-    pub completed: HashMap<String, String>,
+    pub completed: BTreeMap<String, String>,
     #[serde(default)]
-    pub skipped: HashMap<String, String>,
+    pub skipped: BTreeMap<String, String>,
     #[serde(default)]
     pub sentinel_created: bool,
 }
@@ -33,8 +33,8 @@ pub struct PhaseCheckpoint {
 /// Serialized as a flat JSON object with `"context"` alongside `"PF1"`, `"PF2"`, etc.
 #[derive(Debug, Clone, Default)]
 pub struct CheckpointFile {
-    pub context: HashMap<String, String>,
-    pub phases: HashMap<String, PhaseCheckpoint>,
+    pub context: BTreeMap<String, String>,
+    pub phases: BTreeMap<String, PhaseCheckpoint>,
 }
 
 impl Serialize for CheckpointFile {
@@ -53,7 +53,7 @@ impl Serialize for CheckpointFile {
 
 impl<'de> Deserialize<'de> for CheckpointFile {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+        let raw: BTreeMap<String, serde_json::Value> = BTreeMap::deserialize(deserializer)?;
         let mut cf = CheckpointFile::default();
 
         for (k, v) in raw {
@@ -132,7 +132,7 @@ impl Checkpoint {
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
 
-                let mut conditions = HashMap::new();
+                let mut conditions = BTreeMap::new();
                 if let Some(tasks) = phase_val.get("tasks").and_then(|v| v.as_array()) {
                     for task in tasks {
                         if let (Some(id), Some(cond)) = (
@@ -151,9 +151,9 @@ impl Checkpoint {
                     PhaseCheckpoint {
                         expected: required_tasks,
                         conditions,
-                        registered: HashMap::new(),
-                        completed: HashMap::new(),
-                        skipped: HashMap::new(),
+                        registered: BTreeMap::new(),
+                        completed: BTreeMap::new(),
+                        skipped: BTreeMap::new(),
                         sentinel_created: false,
                     },
                 );
@@ -341,10 +341,9 @@ impl Checkpoint {
 ///
 /// An empty expected list means the phase is NOT complete (safety).
 #[must_use]
-#[allow(clippy::implicit_hasher)]
 pub fn is_phase_complete(
     pc: &PhaseCheckpoint,
-    ctx: &HashMap<String, String>,
+    ctx: &BTreeMap<String, String>,
     sentinel_dir: &Path,
     phase_id: &str,
 ) -> bool {
@@ -398,7 +397,7 @@ pub fn is_phase_complete(
 }
 
 /// Evaluate whether a conditional task should be auto-skipped.
-fn is_condition_auto_skipped(condition: &str, ctx: &HashMap<String, String>) -> bool {
+fn is_condition_auto_skipped(condition: &str, ctx: &BTreeMap<String, String>) -> bool {
     match condition {
         "adhoc_only" => ctx.get("origin").is_some_and(|v| v == "planned"),
         "if_pipeline_includes_qa" => ctx
@@ -456,7 +455,7 @@ fn check_cross_phase_gate(sentinel_dir: &Path, phase_id: &str) -> Result<(), Pat
 fn check_pf4_stage_sentinels(
     task_id: &str,
     sentinel_dir: &Path,
-    context: &HashMap<String, String>,
+    context: &BTreeMap<String, String>,
     _pc: &PhaseCheckpoint,
 ) -> Option<PathflowError> {
     // Extract task number from task_id (e.g., "PF4-TSK-06" -> 6)
@@ -711,15 +710,15 @@ mod tests {
     fn test_is_phase_complete_empty_expected() {
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
         assert!(!is_phase_complete(
             &pc,
-            &HashMap::new(),
+            &BTreeMap::new(),
             std::path::Path::new("/tmp"),
             "PF1"
         ));
@@ -829,7 +828,7 @@ mod tests {
 
         create_sentinel(&sentinel_dir, "ws-rev");
 
-        let mut ctx = HashMap::new();
+        let mut ctx = BTreeMap::new();
         ctx.insert("work_type".to_string(), "FEAT".to_string());
         let pc = PhaseCheckpoint {
             expected: vec![
@@ -837,10 +836,10 @@ mod tests {
                 "PF4-TSK-06".into(),
                 "PF4-TSK-07".into(),
             ],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 
@@ -871,14 +870,14 @@ mod tests {
         create_sentinel(&sentinel_dir, "ws-rev");
         create_sentinel(&sentinel_dir, "ws-qa");
 
-        let mut ctx = HashMap::new();
+        let mut ctx = BTreeMap::new();
         ctx.insert("work_type".to_string(), "FEAT".to_string());
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 
@@ -908,14 +907,14 @@ mod tests {
 
         create_sentinel(&sentinel_dir, "ws-dev");
 
-        let mut ctx = HashMap::new();
+        let mut ctx = BTreeMap::new();
         ctx.insert("work_type".to_string(), "FEAT".to_string());
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 
@@ -938,14 +937,14 @@ mod tests {
         fs::create_dir_all(&sentinel_dir).unwrap();
         create_pf4_config(project_dir);
 
-        let mut ctx = HashMap::new();
+        let mut ctx = BTreeMap::new();
         ctx.insert("work_type".to_string(), "DOCS".to_string());
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 
@@ -959,13 +958,13 @@ mod tests {
     #[test]
     fn test_pf4_tsk04_not_checked() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = HashMap::new();
+        let ctx = BTreeMap::new();
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 
@@ -976,13 +975,13 @@ mod tests {
     #[test]
     fn test_pf4_no_work_type_allows_through() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = HashMap::new();
+        let ctx = BTreeMap::new();
         let pc = PhaseCheckpoint {
             expected: vec![],
-            conditions: HashMap::new(),
-            registered: HashMap::new(),
-            completed: HashMap::new(),
-            skipped: HashMap::new(),
+            conditions: BTreeMap::new(),
+            registered: BTreeMap::new(),
+            completed: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             sentinel_created: false,
         };
 

@@ -82,6 +82,39 @@ pub fn release_all(
     Ok(count)
 }
 
+/// Validate that a session's expected fencing token matches the current token
+/// for a claimed path.
+///
+/// Returns `Ok(())` if the token matches or no claim exists for the path.
+/// Returns `Err(CoordinationError::TokenMismatch)` if the current claim has a
+/// different token (indicating a superseding acquisition by another session).
+///
+/// # Errors
+///
+/// Returns `CoordinationError::TokenMismatch` if the stored token differs from
+/// `expected_token`.
+pub fn validate_token(
+    coordinator: &LoroCoordinator,
+    path: &str,
+    session_id: &SessionId,
+    expected_token: FencingToken,
+) -> Result<(), CoordinationError> {
+    match coordinator.check(path) {
+        Some(claim) => {
+            if claim.owner != *session_id && claim.token != expected_token {
+                Err(CoordinationError::TokenMismatch {
+                    expected: expected_token.value(),
+                    found: claim.token.value(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+        // No active claim — nothing to validate against.
+        None => Ok(()),
+    }
+}
+
 /// List all active (non-expired) claims.
 ///
 /// Returns `(path, claim)` pairs for all non-expired claims in the coordinator.
@@ -189,6 +222,54 @@ mod tests {
         let paths: Vec<&str> = active.iter().map(|(p, _)| p.as_str()).collect();
         assert!(paths.contains(&"src/a.rs"));
         assert!(paths.contains(&"src/b.rs"));
+    }
+
+    // -- validate_token tests --
+
+    #[test]
+    fn validate_token_matches() {
+        let mut coord = LoroCoordinator::in_memory();
+        let sid = session("ses-001");
+        let token = coord.acquire("src/a.rs", &sid).unwrap();
+
+        // Same session, same token — should pass.
+        assert!(validate_token(&coord, "src/a.rs", &sid, token).is_ok());
+    }
+
+    #[test]
+    fn validate_token_mismatch_different_session() {
+        let mut coord = LoroCoordinator::in_memory();
+        let s1 = session("ses-001");
+        let s2 = session("ses-002");
+
+        // s1 acquires with TTL=0 so it immediately expires.
+        coord.set_ttl_secs(0);
+        let _t1 = coord.acquire("src/a.rs", &s1).unwrap();
+
+        // s2 acquires (s1's claim is expired, so no conflict).
+        // Use normal TTL so s2's claim is active for validation.
+        coord.set_ttl_secs(300);
+        let t2 = coord.acquire("src/a.rs", &s2).unwrap();
+
+        // s1 tries to validate with its old token — mismatch.
+        let stale_token = FencingToken::new(1);
+        let err = validate_token(&coord, "src/a.rs", &s1, stale_token).unwrap_err();
+        assert!(
+            err.to_string().contains("token mismatch"),
+            "expected token mismatch, got: {err}",
+        );
+        // Confirm the stored token is the newer one.
+        assert_eq!(t2.value(), 2);
+    }
+
+    #[test]
+    fn validate_token_no_claim_is_ok() {
+        let coord = LoroCoordinator::in_memory();
+        let sid = session("ses-001");
+        let token = FencingToken::new(42);
+
+        // No claim exists — validation passes.
+        assert!(validate_token(&coord, "src/nonexistent.rs", &sid, token).is_ok());
     }
 
     // -- Edge cases --

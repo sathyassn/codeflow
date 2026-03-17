@@ -425,16 +425,23 @@ impl GateCheck {
 
     /// Attempt to acquire a Loro CRDT claim on the given file path.
     ///
-    /// The entire load-acquire-persist cycle is wrapped in a sidecar file lock
-    /// (`state.loro.lock`) to prevent concurrent hook invocations from racing.
+    /// The entire load-check-acquire-persist cycle is wrapped in a sidecar file
+    /// lock (`state.loro.lock`) to prevent concurrent hook invocations from
+    /// racing.
+    ///
+    /// **Fencing token validation (Phase 1 — advisory):** Before acquiring,
+    /// checks if the path already has an active claim by a *different* session.
+    /// If so, this session's prior claim was superseded (stale token). In
+    /// advisory mode this produces `HookOutput::Warn`; in enforcing mode
+    /// (Phase 2, future) it would produce `HookOutput::Block`.
     ///
     /// Returns `HookOutput::Allow` on success, `HookOutput::Warn` on conflict
-    /// (advisory mode per Decision #5).
+    /// or stale token (advisory mode per Decision #5).
     fn try_acquire_claim(&self, file_path: &str) -> HookOutput {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
 
-        // Capture the conflict info across the locked_binary_rmw boundary.
+        // Capture warning info across the locked_binary_rmw boundary.
         let mut conflict_warning: Option<String> = None;
         let fp = file_path.to_string();
         let sid = self.session_id.clone();
@@ -448,6 +455,25 @@ impl GateCheck {
             },
             |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
             |coord| {
+                // -- Fencing token validation --
+                // Before acquiring, check if another session already holds a
+                // non-expired claim on this path. If so, our session's prior
+                // claim was superseded — warn (advisory) or block (enforcing).
+                if let Some(existing) = coord.check(&fp) {
+                    if existing.owner != sid {
+                        // Stale token: another session superseded our claim.
+                        // Phase 1 (advisory): HookOutput::Warn (EXIT_ADVISORY).
+                        // Phase 2 (enforcing, future): switch to HookOutput::Block (EXIT_BLOCKING).
+                        conflict_warning = Some(format!(
+                            "STALE CLAIM (advisory): file '{}' was claimed by session {} \
+                             with token {}. Your session's claim has been superseded. \
+                             Proceeding anyway (advisory mode).",
+                            fp, existing.owner, existing.token,
+                        ));
+                        return Ok(());
+                    }
+                }
+
                 match coord.acquire(&fp, &sid) {
                     Ok(_token) => Ok(()),
                     Err(crate::error::CoordinationError::ClaimConflict { path, owner }) => {
@@ -1806,7 +1832,8 @@ mod tests {
             coord.persist().unwrap();
         }
 
-        // Session B tries to edit the same file.
+        // Session B tries to edit the same file — fencing token validation
+        // detects the stale claim before acquire() is reached.
         let handler = GateCheck::new(
             dir.path().to_path_buf(),
             state_path,
@@ -1829,8 +1856,8 @@ mod tests {
         match &result {
             HookOutput::Warn { message } => {
                 assert!(
-                    message.contains("CLAIM CONFLICT"),
-                    "warning should mention claim conflict"
+                    message.contains("STALE CLAIM"),
+                    "warning should mention STALE CLAIM (fencing token validation), got: {message}"
                 );
                 assert!(
                     message.contains("ses-session-a"),
@@ -1919,6 +1946,190 @@ mod tests {
             assert!(
                 err.to_string().contains("claim conflict"),
                 "error should be a claim conflict: {err}"
+            );
+        }
+    }
+
+    // -- Fencing token validation tests (INF-TSK-023-005) --
+
+    #[test]
+    fn test_gate_check_same_session_reacquire_allowed() {
+        // Same session re-acquiring the same file should succeed (token increments).
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path.clone(),
+            SessionId::new_unchecked("ses-reacquire"),
+        );
+
+        // First acquire.
+        let input1 = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-reacquire".into()),
+            ..Default::default()
+        };
+        let r1 = handler.handle(input1).unwrap();
+        assert!(
+            matches!(r1, HookOutput::Allow),
+            "first acquire should allow"
+        );
+
+        // Second acquire — same session should still be allowed with incremented token.
+        let input2 = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-reacquire".into()),
+            ..Default::default()
+        };
+        let r2 = handler.handle(input2).unwrap();
+        assert!(
+            matches!(r2, HookOutput::Allow),
+            "same session reacquire should allow"
+        );
+
+        // Verify token incremented.
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+        let coord = LoroCoordinator::new(&state_path).unwrap();
+        let claim = coord.check("src/main.rs").unwrap();
+        assert!(
+            claim.token.value() >= 2,
+            "token should have incremented, got {}",
+            claim.token.value()
+        );
+    }
+
+    #[test]
+    fn test_gate_check_stale_claim_warns_advisory() {
+        // Session A claims a file, then session B supersedes it (via expired TTL
+        // simulation). When session A tries again, validation detects the stale
+        // claim and warns.
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        // Session A acquires with TTL=0 so its stored claim immediately expires.
+        {
+            use crate::coordination::Coordinator;
+            use crate::coordination::loro::LoroCoordinator;
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            coord.set_ttl_secs(0); // A's claim stored with TTL=0 (immediately expired).
+            let sid_a = SessionId::new_unchecked("ses-stale-a");
+            coord.acquire("src/main.rs", &sid_a).unwrap();
+            coord.persist().unwrap();
+        }
+
+        // Session B supersedes: A's claim is expired (TTL=0), so B acquires
+        // successfully with default TTL (non-expired, visible to later checks).
+        {
+            use crate::coordination::Coordinator;
+            use crate::coordination::loro::LoroCoordinator;
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            let sid_b = SessionId::new_unchecked("ses-stale-b");
+            coord.acquire("src/main.rs", &sid_b).unwrap();
+            coord.persist().unwrap();
+        }
+
+        // Session A tries to edit again — should detect stale claim.
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path,
+            SessionId::new_unchecked("ses-stale-a"),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-stale-a".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            EXIT_ADVISORY,
+            "stale claim should warn (advisory), not block"
+        );
+        match &result {
+            HookOutput::Warn { message } => {
+                assert!(
+                    message.contains("STALE CLAIM"),
+                    "warning should mention STALE CLAIM, got: {message}"
+                );
+                assert!(
+                    message.contains("ses-stale-b"),
+                    "warning should identify the superseding session, got: {message}"
+                );
+            }
+            other => panic!("expected HookOutput::Warn for stale claim, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_gate_check_fencing_token_concurrency() {
+        // Two sessions race on the same state.loro file via persist/load.
+        // Session A acquires, persists. Session B loads, acquires (superseding
+        // via expired TTL). Session A reloads and detects the stale claim.
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        let sid_a = SessionId::new_unchecked("ses-race-a");
+        let sid_b = SessionId::new_unchecked("ses-race-b");
+
+        // Session A acquires with TTL=0 (immediately expired) and persists.
+        let token_a = {
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            coord.set_ttl_secs(0); // A's claim stored with TTL=0 (immediately expired).
+            let t = coord.acquire("src/contested.rs", &sid_a).unwrap();
+            coord.persist().unwrap();
+            t
+        };
+
+        // Session B loads same state — A's claim is expired (stored TTL=0),
+        // so B acquires successfully with default TTL (visible to later checks).
+        let token_b = {
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            let t = coord.acquire("src/contested.rs", &sid_b).unwrap();
+            coord.persist().unwrap();
+            t
+        };
+
+        // Token B must be higher than token A (monotonically increasing).
+        assert!(
+            token_b.value() > token_a.value(),
+            "token_b ({}) should be greater than token_a ({})",
+            token_b.value(),
+            token_a.value()
+        );
+
+        // Session A reloads and checks — should detect mismatch.
+        {
+            let coord = LoroCoordinator::new(&state_path).unwrap();
+            let claim = coord.check("src/contested.rs").unwrap();
+            assert_eq!(
+                claim.owner.as_str(),
+                "ses-race-b",
+                "session B should now own the claim"
+            );
+            assert_ne!(
+                claim.token, token_a,
+                "stored token should differ from session A's original"
+            );
+
+            // Validate using the claims module.
+            use crate::coordination::claims::validate_token;
+            let result = validate_token(&coord, "src/contested.rs", &sid_a, token_a);
+            assert!(
+                result.is_err(),
+                "session A's stale token should fail validation"
             );
         }
     }
