@@ -71,8 +71,8 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | ID | Title | Status | Estimate | Priority | Phase |
 |----|-------|--------|----------|----------|-------|
 | INF-TSK-023-001 | Plan: Epic A -- Parallel Execution Core | complete | M | normal | Planning |
-| INF-TSK-023-002 | Fix worktree base directory default | todo | S | high | A: Loro CRDT Foundation |
-| INF-TSK-023-003 | Replace state.json with state.loro using Loro Map CRDT | todo | L | critical | A: Loro CRDT Foundation |
+| INF-TSK-023-002 | Fix worktree base directory default | complete | S | high | A: Loro CRDT Foundation |
+| INF-TSK-023-003 | Replace state.json with state.loro using Loro Map CRDT | complete | L | critical | A: Loro CRDT Foundation |
 | INF-TSK-023-004 | Wire claims into PreToolUse hooks | todo | L | critical | A: Loro CRDT Foundation |
 | INF-TSK-023-005 | Fencing token validation via Loro Map | todo | M | high | A: Loro CRDT Foundation |
 | INF-TSK-023-006 | Implement sync daemon logic (codeflow sync daemon) | todo | L | high | A: Loro CRDT Foundation |

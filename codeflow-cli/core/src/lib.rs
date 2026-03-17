@@ -4,6 +4,7 @@
 
 pub mod autorun;
 pub mod config;
+pub mod coordination;
 pub mod doctor;
 pub mod error;
 pub mod hooks;
@@ -22,8 +23,9 @@ pub mod worktree;
 
 // Re-export commonly used items at crate root.
 pub use error::{
-    AutorunError, ConfigError, DbError, DoctorError, HookError, IdgenError, LedgerError,
-    PathflowError, SessionError, SettingsError, ValidateError, WorkgraphError, WorktreeError,
+    AutorunError, ConfigError, CoordinationError, DbError, DoctorError, HookError, IdgenError,
+    LedgerError, PathflowError, SessionError, SettingsError, ValidateError, WorkgraphError,
+    WorktreeError,
 };
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, JsonlWriter, LedgerWriter};

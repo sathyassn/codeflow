@@ -22,6 +22,7 @@ regex = { workspace = true }
 url = "2"
 sha2 = "0.10"
 tokio = { workspace = true }
+loro = { workspace = true }
 which = "7"
 
 [dev-dependencies]

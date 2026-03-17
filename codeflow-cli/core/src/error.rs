@@ -280,6 +280,34 @@ pub enum SettingsError {
     Config(#[from] ConfigError),
 }
 
+/// CRDT coordination errors.
+#[derive(Debug, Error)]
+pub enum CoordinationError {
+    #[error("claim conflict: path '{path}' already owned by {owner}")]
+    ClaimConflict {
+        path: String,
+        owner: crate::types::SessionId,
+    },
+
+    #[error("fencing token mismatch: expected {expected}, found {found}")]
+    TokenMismatch { expected: u64, found: u64 },
+
+    #[error("container not found: {0}")]
+    ContainerNotFound(String),
+
+    #[error("loro error: {0}")]
+    Loro(#[from] loro::LoroError),
+
+    #[error("loro encode error: {0}")]
+    LoroEncode(#[from] loro::LoroEncodeError),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
 /// Autorun batch parsing and orchestration errors.
 #[derive(Debug, Error)]
 pub enum AutorunError {
@@ -775,5 +803,37 @@ mod tests {
             err.to_string(),
             "yaml parse error: unexpected key at line 5"
         );
+    }
+
+    // -- CoordinationError --
+
+    #[test]
+    fn test_coordination_error_claim_conflict() {
+        let err = CoordinationError::ClaimConflict {
+            path: "src/main.rs".into(),
+            owner: crate::types::SessionId::new_unchecked("ses-123"),
+        };
+        assert_eq!(
+            err.to_string(),
+            "claim conflict: path 'src/main.rs' already owned by ses-123"
+        );
+    }
+
+    #[test]
+    fn test_coordination_error_token_mismatch() {
+        let err = CoordinationError::TokenMismatch {
+            expected: 5,
+            found: 3,
+        };
+        assert_eq!(
+            err.to_string(),
+            "fencing token mismatch: expected 5, found 3"
+        );
+    }
+
+    #[test]
+    fn test_coordination_error_container_not_found() {
+        let err = CoordinationError::ContainerNotFound("claims".into());
+        assert_eq!(err.to_string(), "container not found: claims");
     }
 }
