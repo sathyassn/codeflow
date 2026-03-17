@@ -65,6 +65,7 @@ mod tests {
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = h.handle(input);
         // Logging handlers always Allow.
@@ -104,6 +105,7 @@ mod tests {
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: Some("user".into()),
             transcript_path: None,
+            ..Default::default()
         };
         let result = h.handle(input);
         assert!(result.is_ok(), "handle should succeed with session id");

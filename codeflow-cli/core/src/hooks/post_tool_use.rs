@@ -264,30 +264,18 @@ impl HookHandler for SentinelWrite {
 /// back atomically. Non-fatal: returns silently on any I/O or parse error.
 pub fn update_session_status(session_dir: &Path, updates: &serde_json::Value) {
     let status_path = session_dir.join("pathflow-session-status.json");
-    let mut status: serde_json::Value = match fs::read_to_string(&status_path) {
-        Ok(data) => match serde_json::from_str(&data) {
-            Ok(v) => v,
-            Err(_) => return,
-        },
-        Err(_) => return,
-    };
-
-    if let (Some(obj), Some(upd)) = (status.as_object_mut(), updates.as_object()) {
-        for (k, v) in upd {
-            obj.insert(k.clone(), v.clone());
+    let updates = updates.clone();
+    let _ = crate::pathflow::file_lock::locked_rmw(&status_path, |status| {
+        if let (Some(obj), Some(upd)) = (status.as_object_mut(), updates.as_object()) {
+            for (k, v) in upd {
+                obj.insert(k.clone(), v.clone());
+            }
+            obj.insert(
+                "updated_at".to_string(),
+                serde_json::Value::String(crate::util::now_rfc3339()),
+            );
         }
-        obj.insert(
-            "updated_at".to_string(),
-            serde_json::Value::String(crate::util::now_rfc3339()),
-        );
-    }
-
-    let _ = atomic_write_file(
-        &status_path,
-        serde_json::to_string_pretty(&status)
-            .unwrap_or_default()
-            .as_bytes(),
-    );
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -364,37 +352,42 @@ pub fn handle_teammate_spawn(
 ) -> Result<HookOutput, HookError> {
     let team_file_path = session_dir.join("pathflow-team.json");
 
-    let existing = match fs::read_to_string(&team_file_path) {
-        Ok(data) => data,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // pathflow-team.json doesn't exist yet -- skip silently.
-            return Ok(HookOutput::Allow);
-        }
-        Err(_) => return Ok(HookOutput::Allow),
-    };
-
-    let mut team: PathflowTeamInfo = match serde_json::from_str(&existing) {
-        Ok(t) => t,
-        Err(_) => return Ok(HookOutput::Allow),
-    };
-
-    team.teammate_spawned = true;
-    if !agent_name.is_empty() {
-        team.last_spawn_name = Some(agent_name.to_string());
-        // Add teammate entry with pid=0 placeholder.
-        // The teammate's own SessionStart (tmux) updates pid to its Claude Code PID.
-        // In-process teammates never fire SessionStart, so pid stays 0.
-        team.teammates.push(crate::hooks::TeammateEntry {
-            name: agent_name.to_string(),
-            pid: 0,
-            spawned_at: crate::util::now_rfc3339(),
-        });
+    if !team_file_path.exists() {
+        // pathflow-team.json doesn't exist yet -- skip silently.
+        return Ok(HookOutput::Allow);
     }
 
-    let updated = serde_json::to_string_pretty(&team)
-        .map_err(|e| HookError::Config(format!("pathflow-team.json marshal failed: {e}")))?;
-
-    atomic_write_file(&team_file_path, updated.as_bytes())?;
+    let agent_name = agent_name.to_string();
+    crate::pathflow::file_lock::locked_rmw(&team_file_path, |team| {
+        if let Some(obj) = team.as_object_mut() {
+            obj.insert(
+                "teammate_spawned".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            if !agent_name.is_empty() {
+                obj.insert(
+                    "last_spawn_name".to_string(),
+                    serde_json::Value::String(agent_name.clone()),
+                );
+                // Add teammate entry with pid=0 placeholder.
+                // The teammate's own SessionStart (tmux) updates pid to its Claude Code PID.
+                // In-process teammates never fire SessionStart, so pid stays 0.
+                let entry = serde_json::json!({
+                    "name": agent_name,
+                    "pid": 0,
+                    "spawned_at": crate::util::now_rfc3339(),
+                });
+                if let Some(arr) = obj
+                    .entry("teammates")
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                {
+                    arr.push(entry);
+                }
+            }
+        }
+    })
+    .map_err(|e| HookError::Config(format!("pathflow-team.json locked_rmw failed: {e}")))?;
 
     Ok(HookOutput::Allow)
 }
@@ -651,6 +644,7 @@ mod tests {
             project_dir: Some("/tmp/test-project".into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         }
     }
 
@@ -957,6 +951,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));

@@ -106,8 +106,8 @@ fn check_indirect_file_ops(cmd: &str, paths: &[String]) -> Option<Verdict> {
     // /tmp/claude/*/managed/protected-edits/ are staging copies for the
     // auto-staging workflow. Allow even in command chains (e.g.,
     // "mkdir -p /tmp/claude/.../dir && cp source /tmp/claude/.../dir/file").
-    let is_staging_workflow = cmd.contains("/managed/protected-edits/")
-        && staging_dest_re().is_match(cmd);
+    let is_staging_workflow =
+        cmd.contains("/managed/protected-edits/") && staging_dest_re().is_match(cmd);
 
     if !skip_section9 && !is_staging_workflow {
         for path in paths {
@@ -505,10 +505,7 @@ mod tests {
         let result = FileOpsModule.check(&ctx(
             "cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md",
         ));
-        assert!(
-            result.is_none(),
-            "cp to staging area should be allowed"
-        );
+        assert!(result.is_none(), "cp to staging area should be allowed");
     }
 
     #[test]
@@ -527,9 +524,7 @@ mod tests {
     fn test_staging_exemption_only_for_cp_rsync() {
         // tee is in indirect_write_cmds but NOT covered by staging exemption
         // (staging_dest_re only matches cp|rsync).
-        let result = FileOpsModule.check(&ctx(
-            "echo evil | tee .claude/settings.json",
-        ));
+        let result = FileOpsModule.check(&ctx("echo evil | tee .claude/settings.json"));
         assert!(
             result.is_some(),
             "tee to protected path should still be blocked"

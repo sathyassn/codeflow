@@ -23,9 +23,10 @@ use crate::error::HookError;
 /// Serializes as `snake_case` (internal format). Deserializes from both
 /// `snake_case` (internal/tests) and `PascalCase` (Claude Code stdin sends
 /// `hook_event_name` with PascalCase values like `"SessionStart"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEvent {
+    #[default]
     #[serde(alias = "PreToolUse")]
     PreToolUse,
     #[serde(alias = "PostToolUse")]
@@ -47,7 +48,7 @@ pub enum HookEvent {
 /// Tool-use fields (`tool_name`, `tool_input`) are optional because session
 /// events do not carry tool context. The `source` field is session-specific
 /// (startup, resume, compact, clear).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct HookInput {
     /// The tool name from Claude Code (e.g., "Bash", "Edit", "Write", "Task").
     /// `None` for session events that have no tool context.
@@ -85,6 +86,19 @@ pub struct HookInput {
     /// Path to session transcript (`SessionEnd` only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+
+    /// Task subject (`TaskCompleted` events).
+    /// Claude Code sends this as a top-level field, not nested in `tool_input`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_subject: Option<String>,
+
+    /// Task ID (`TaskCompleted` events).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+
+    /// Task description (`TaskCompleted` events).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_description: Option<String>,
 }
 
 /// Result of a hook handler evaluation.
@@ -249,6 +263,9 @@ mod tests {
             project_dir: Some("/project".into()),
             source: None,
             transcript_path: None,
+            task_subject: Some("PF1-TSK-01: Init".into()),
+            task_id: Some("task-42".into()),
+            task_description: Some("Initialize session".into()),
         };
         let json = serde_json::to_string(&input).expect("serialize");
         let parsed: HookInput = serde_json::from_str(&json).expect("deserialize");
@@ -473,6 +490,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&input).expect("serialize");
         // None fields with skip_serializing_if should not appear.
@@ -482,6 +500,9 @@ mod tests {
         assert!(!json.contains("project_dir"));
         assert!(!json.contains("source"));
         assert!(!json.contains("transcript_path"));
+        assert!(!json.contains("task_subject"));
+        assert!(!json.contains("task_id"));
+        assert!(!json.contains("task_description"));
         // But event should always be present.
         assert!(json.contains("session_start"));
     }

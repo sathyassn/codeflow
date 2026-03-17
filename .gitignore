@@ -22,6 +22,9 @@
 .state/session/*
 !.state/session/.gitkeep
 
+# Rust workspace runtime state (created by cargo test or binary when cwd is codeflow-cli/)
+codeflow-cli/.state/
+
 # Node.js
 node_modules/
 npm-debug.log*

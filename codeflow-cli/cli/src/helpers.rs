@@ -189,6 +189,7 @@ mod tests {
             project_dir: Some("/tmp/test".into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         }
     }
 
@@ -480,6 +481,7 @@ mod tests {
                 project_dir: project_dir.clone(),
                 source: None,
                 transcript_path: None,
+            ..Default::default()
             };
             let json = serde_json::to_string(&input).expect("serialize");
             let result = parse_hook_input(&json);
@@ -542,6 +544,7 @@ mod tests {
             project_dir: Some("/project".into()),
             source: Some("startup".into()),
             transcript_path: None,
+            ..Default::default()
         };
         let json = serde_json::to_string_pretty(&input).expect("serialize");
         insta::assert_snapshot!(json);
@@ -557,6 +560,7 @@ mod tests {
             project_dir: Some("/project".into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let json = serde_json::to_string_pretty(&input).expect("serialize");
         insta::assert_snapshot!(json);
@@ -572,6 +576,7 @@ mod tests {
             project_dir: Some("/project".into()),
             source: Some("compact".into()),
             transcript_path: Some("/project/.state/transcripts/session.jsonl".into()),
+            ..Default::default()
         };
         let json = serde_json::to_string_pretty(&input).expect("serialize");
         insta::assert_snapshot!(json);
@@ -587,6 +592,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let json = serde_json::to_string_pretty(&input).expect("serialize");
         insta::assert_snapshot!(json);

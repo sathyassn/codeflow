@@ -807,7 +807,6 @@ dependencies = [
  "fs2",
  "git2",
  "insta",
- "libc",
  "proptest",
  "regex",
  "serde",

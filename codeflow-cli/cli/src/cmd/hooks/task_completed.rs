@@ -77,6 +77,7 @@ mod tests {
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = h.handle(input);
         assert!(result.is_ok());

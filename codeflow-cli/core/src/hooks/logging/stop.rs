@@ -146,6 +146,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -186,6 +187,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -204,6 +206,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -277,6 +280,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         handler.handle(input).unwrap();
 

@@ -462,7 +462,10 @@ mod tests {
         // Unrecognized branch prefixes fall back to DEFAULT_WORK_TYPE ("FIX")
         // to ensure the safest pipeline (DEV → REV → QA).
         assert_eq!(infer_work_type_from_branch("main"), DEFAULT_WORK_TYPE);
-        assert_eq!(infer_work_type_from_branch("unknown/branch"), DEFAULT_WORK_TYPE);
+        assert_eq!(
+            infer_work_type_from_branch("unknown/branch"),
+            DEFAULT_WORK_TYPE
+        );
         assert_eq!(infer_work_type_from_branch(""), DEFAULT_WORK_TYPE);
         assert_eq!(infer_work_type_from_branch("develop"), DEFAULT_WORK_TYPE);
         assert_eq!(DEFAULT_WORK_TYPE, "FIX");

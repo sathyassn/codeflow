@@ -3,7 +3,7 @@ id: "epic-01kk09r9yqn9hb7v8pa1zsa4gc"
 format_id: "INF-EPC-022"
 title: "Rust CLI -- Idiomatic Redesign (Epic 0)"
 summary: "Replace the Go CLI with a pure Rust implementation using SurrealDB as the sole database, modular crate structure, and trait-based abstractions"
-status: complete
+status: in_progress
 area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
@@ -76,67 +76,67 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 
 ### Phase 0A (Analysis + Tooling) -- Tasks 001-004
 
-- [ ] Go CLI audit document produced with DRY violations, coupling analysis, and Rust redesign opportunities
-- [ ] Trait hierarchy and module map documented, matching `data-layer-protection.md` Section 6
-- [ ] `cf-rust-standards` skill created with all required sections (workspace, errors, traits, serde, async, testing, naming, clippy, unsafe, crates, builders, modules)
-- [ ] `cf-surrealdb-standards` skill created with all required sections (embedded, SurrealQL, graph, vector, schema, connection, testing, data model)
-- [ ] MCP servers (Context7, rust-analyzer) configured and verified
+- [x] Go CLI audit document produced with DRY violations, coupling analysis, and Rust redesign opportunities
+- [x] Trait hierarchy and module map documented, matching `data-layer-protection.md` Section 6
+- [x] `cf-rust-standards` skill created with all required sections (workspace, errors, traits, serde, async, testing, naming, clippy, unsafe, crates, builders, modules)
+- [x] `cf-surrealdb-standards` skill created with all required sections (embedded, SurrealQL, graph, vector, schema, connection, testing, data model)
+- [x] MCP servers (Context7, rust-analyzer) configured and verified
 
 ### Phase 0B (Foundation + Testing) -- Tasks 005-008
 
-- [ ] Rust workspace initializes and builds (`cargo build` succeeds)
-- [ ] Core domain types compile with serde derive and Display impls
-- [ ] Error enums compile with `thiserror` derives
-- [ ] `cargo test` runs with 85% coverage threshold enforced
-- [ ] `proptest`, `insta`, `cargo-nextest` configured and functional
-- [ ] Shell integration test bridge script runs existing tests against Rust binary
+- [x] Rust workspace initializes and builds (`cargo build` succeeds)
+- [x] Core domain types compile with serde derive and Display impls
+- [x] Error enums compile with `thiserror` derives
+- [x] `cargo test` runs with 85% coverage threshold enforced
+- [x] `proptest`, `insta`, `cargo-nextest` configured and functional
+- [x] Shell integration test bridge script runs existing tests against Rust binary
 
 ### Phase 0C (Core Library) -- Tasks 009-014
 
-- [ ] `DataStore` trait defined with CRUD operations for sessions, tasks, epics, workgraph
-- [ ] `SurrealStore` implements `DataStore` using embedded `surrealkv://`
-- [ ] `LedgerWriter` trait defined; `JsonlWriter` implements it with flock + serde
-- [ ] Session management ported with builder pattern and enum state machine
-- [ ] Worktree manager ported via `git2` crate
-- [ ] Workgraph operations ported with `DataStore` trait (not `SurrealStore` directly)
-- [ ] All Phase 0C modules have unit tests achieving 85% coverage
+- [x] `DataStore` trait defined with CRUD operations for sessions, tasks, epics, workgraph
+- [x] `SurrealStore` implements `DataStore` using embedded `surrealkv://`
+- [x] `LedgerWriter` trait defined; `JsonlWriter` implements it with flock + serde
+- [x] Session management ported with builder pattern and enum state machine
+- [x] Worktree manager ported via `git2` crate
+- [x] Workgraph operations ported with `DataStore` trait (not `SurrealStore` directly)
+- [x] All Phase 0C modules have unit tests achieving 85% coverage
 
 ### Phase 0D (Hook Handlers) -- Tasks 015-017
 
-- [ ] `HookHandler` trait defined with `fn handle(&self, input: HookInput) -> Result<HookOutput, HookError>`
-- [ ] All session hooks (start, end) ported as `HookHandler` impls
-- [ ] All pre-tool-use gates (gate-check, team-guard, edit-write-guard, etc.) ported
-- [ ] All post-tool-use handlers (sentinel-write, checkpoint-register, etc.) ported
-- [ ] Logging and autorun modules ported
-- [ ] All hook handlers maintain exit code contract (0/1/2)
+- [x] `HookHandler` trait defined with `fn handle(&self, input: HookInput) -> Result<HookOutput, HookError>`
+- [x] All session hooks (start, end) ported as `HookHandler` impls
+- [x] All pre-tool-use gates (gate-check, team-guard, edit-write-guard, etc.) ported
+- [x] All post-tool-use handlers (sentinel-write, checkpoint-register, etc.) ported
+- [x] Logging and autorun modules ported
+- [x] All hook handlers maintain exit code contract (0/1/2)
 
 ### Phase 0E (CLI Commands) -- Task 018
 
-- [ ] All Go subcommands ported to Clap commands in `codeflow-cli` crate
-- [ ] Each command is a thin dispatch to `codeflow-core` functions
-- [ ] `codeflow test` orchestrates the shell test suite from the Rust binary
-- [ ] `codeflow doctor` validates infrastructure from the Rust binary
+- [x] All Go subcommands ported to Clap commands in `codeflow-cli` crate
+- [x] Each command is a thin dispatch to `codeflow-core` functions
+- [x] `codeflow test` orchestrates the shell test suite from the Rust binary
+- [x] `codeflow doctor` validates infrastructure from the Rust binary
 
 ### Phase 0F (Integration Testing) -- Tasks 019-021
 
-- [ ] Go unit tests ported to Rust `#[test]` and `#[tokio::test]`
-- [ ] Contract conformance suite verifies identical output between Go and Rust binaries
-- [ ] Full test suite passes with Rust binary on PATH (shell integration tests, conformance tests at 93/93, git hook dispatch verified)
-- [ ] Property-based tests with `proptest` for serialization roundtrips
-- [ ] Snapshot tests with `insta` for JSON output verification
+- [x] Go unit tests ported to Rust `#[test]` and `#[tokio::test]`
+- [x] Contract conformance suite verifies identical output between Go and Rust binaries
+- [x] Full test suite passes with Rust binary on PATH (shell integration tests, conformance tests at 93/93, git hook dispatch verified)
+- [x] Property-based tests with `proptest` for serialization roundtrips
+- [x] Snapshot tests with `insta` for JSON output verification
 
 ### Phase 0G (CI/CD + Cutover) -- Tasks 022-027
 
-- [ ] CI pipeline has `test-rust` job alongside existing Go jobs
-- [ ] `cargo build --release` produces binaries for darwin-arm64, darwin-amd64, linux-amd64
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] `cargo fmt --check` passes
-- [ ] Coverage gate: 85% threshold via `cargo-llvm-cov`
-- [ ] Cutover: `codeflow-cli/` (Go) removed, `codeflow-rs/` renamed to `codeflow-cli/`
-- [ ] All references updated (CI, test scripts, docs)
-- [ ] Final validation: full test suite passes with Rust binary as sole codeflow binary at final location
-- [ ] Go-specific CI jobs, Makefile targets, `.golangci.yml` removed
-- [ ] Go CLI binary (`codeflow-cli/`) retained throughout Phases 0A-0F; removal only in Phase 0G after contract conformance verification
+- [x] CI pipeline has `test-rust` job alongside existing Go jobs
+- [x] `cargo build --release` produces binaries for darwin-arm64, darwin-amd64, linux-amd64
+- [x] `cargo clippy -- -D warnings` passes
+- [x] `cargo fmt --check` passes
+- [x] Coverage gate: 85% threshold via `cargo-llvm-cov`
+- [x] Cutover: `codeflow-cli/` (Go) removed, `codeflow-rs/` renamed to `codeflow-cli/`
+- [x] All references updated (CI, test scripts, docs)
+- [x] Final validation: full test suite passes with Rust binary as sole codeflow binary at final location
+- [x] Go-specific CI jobs, Makefile targets, `.golangci.yml` removed
+- [x] Go CLI binary (`codeflow-cli/`) retained throughout Phases 0A-0F; removal only in Phase 0G after contract conformance verification
 
 ### PII Handling Review
 
@@ -173,7 +173,7 @@ Replace the existing Go CLI (`codeflow-cli/`) with a pure Rust implementation (`
 | INF-TSK-022-024 | Cross-compile release builds | complete | normal | 0G |
 | INF-TSK-022-025 | Cutover: Go removal and Rust installation | complete | critical | 0G |
 | INF-TSK-022-026 | Update test infrastructure references | complete | high | 0G |
-| INF-TSK-022-027 | Final validation and cleanup | todo | high | 0G |
+| INF-TSK-022-027 | Final validation and cleanup | in_progress | high | 0G |
 | INF-TSK-022-028 | Audit and fix INF-EPC-022 task docs against completed source documents | complete | normal | adhoc |
 | INF-TSK-022-029 | Add pre-push test hook to enforce tests + coverage before PR | cancelled | high | deferred-to-rust-hooks-epic |
 | INF-TSK-022-030 | Fix session startup stale cleanup and PID management | complete | high | adhoc |

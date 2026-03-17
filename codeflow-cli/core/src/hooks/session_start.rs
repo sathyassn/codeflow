@@ -16,9 +16,6 @@ use crate::pathflow;
 use crate::session;
 use crate::types::SessionId;
 
-// libc for kill(pid, 0) liveness check in teammate detection.
-extern crate libc;
-
 // ---------------------------------------------------------------------------
 // Session lock
 // ---------------------------------------------------------------------------
@@ -75,6 +72,20 @@ pub struct SessionStartInit {
     pub lead_pid: u32,
     pub home_dir: PathBuf,
     pub now: NowFn,
+}
+
+/// Check if a process with the given PID is alive.
+///
+/// Uses `kill -0 <pid>` which sends no signal but exits 0 if the process
+/// exists (equivalent to `libc::kill(pid, 0)` without requiring `unsafe`).
+fn is_process_alive(pid: u32) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[allow(clippy::unused_self)]
@@ -186,7 +197,13 @@ impl SessionStartInit {
         self.cleanup_active_task(project_dir);
 
         // --- Section 7: PathFlow flag creation ---
-        let is_resume = self.create_pathflow_flag(project_dir, session_id.as_str(), source, result.is_teammate, &mut result);
+        let is_resume = self.create_pathflow_flag(
+            project_dir,
+            session_id.as_str(),
+            source,
+            result.is_teammate,
+            &mut result,
+        );
         result.is_resume = is_resume;
 
         // --- Section 7c: Checkpoint pre-initialization ---
@@ -277,14 +294,11 @@ impl SessionStartInit {
             .join("pathflow")
             .join("pathflow-session-status.json");
 
-        let status_data = match fs::read_to_string(&status_path) {
-            Ok(data) => data,
-            Err(_) => return (None, false), // Missing/unreadable -> new lead
-        };
-        let status: serde_json::Value = match serde_json::from_str(&status_data) {
-            Ok(v) => v,
-            Err(_) => return (None, false), // Unparseable -> new lead
-        };
+        let status: serde_json::Value =
+            match crate::pathflow::file_lock::locked_read_critical(&status_path, 3) {
+                Ok(v) => v,
+                Err(_) => return (None, false), // Missing/unreadable/unparseable -> new lead
+            };
         let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
         if session_status.is_empty() || session_status == "pf-complete" {
             return (None, false); // No status or completed -> new lead
@@ -316,18 +330,16 @@ impl SessionStartInit {
         // If the lead is dead, the session crashed and this is a new lead.
         let lead_pid = status
             .get("lead_pid")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
         if lead_pid == 0 {
             // No lead_pid recorded (pre-PID session) — cannot verify liveness.
             // Default to new lead (safe: avoids trapping a new lead as teammate).
             return (None, false);
         }
 
-        // kill(pid, 0) checks process existence without sending a signal.
-        // Returns 0 if process exists (alive), -1/ESRCH if not.
-        let is_alive = unsafe { libc::kill(lead_pid as i32, 0) } == 0;
-        if !is_alive {
+        if !is_process_alive(lead_pid) {
             result.messages.push(format!(
                 "STALE SESSION: lead_pid {lead_pid} is dead (team: {team_name}) — new lead"
             ));
@@ -432,18 +444,13 @@ impl SessionStartInit {
                     .join("pathflow")
                     .join("pathflow-session-status.json");
 
-                let status_data = if let Ok(data) = fs::read_to_string(&status_path) {
-                    data
-                } else {
-                    self.remove_stale_session_artifacts(project_dir, &name, None);
-                    continue;
-                };
-                let status: serde_json::Value = if let Ok(v) = serde_json::from_str(&status_data) {
-                    v
-                } else {
-                    self.remove_stale_session_artifacts(project_dir, &name, None);
-                    continue;
-                };
+                let status: serde_json::Value =
+                    if let Ok(v) = crate::pathflow::file_lock::locked_read(&status_path) {
+                        v
+                    } else {
+                        self.remove_stale_session_artifacts(project_dir, &name, None);
+                        continue;
+                    };
 
                 let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
                 let team_name = status
@@ -465,13 +472,14 @@ impl SessionStartInit {
                     "created" => {
                         // "created" means no team was ever created.
                         // Check if config.json exists (unlikely but defensive).
-                        let has_config = !team_name.is_empty() && self
-                            .home_dir
-                            .join(".claude")
-                            .join("teams")
-                            .join(team_name)
-                            .join("config.json")
-                            .exists();
+                        let has_config = !team_name.is_empty()
+                            && self
+                                .home_dir
+                                .join(".claude")
+                                .join("teams")
+                                .join(team_name)
+                                .join("config.json")
+                                .exists();
                         if !has_config {
                             self.remove_stale_session_artifacts(project_dir, &name, None);
                             swept += 1;
@@ -489,26 +497,35 @@ impl SessionStartInit {
                                 .join("teams")
                                 .join(team_name)
                                 .join("config.json");
-                            if !cfg.exists() {
-                                // Team config gone -- session is dead.
-                                self.remove_stale_session_artifacts(
-                                    project_dir,
-                                    &name,
-                                    Some(team_name),
-                                );
-                                swept += 1;
-                            } else {
+                            if cfg.exists() {
                                 // Config exists — check lead_pid liveness.
                                 let lead_pid = status
                                     .get("lead_pid")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0)
-                                    as u32;
-                                if lead_pid > 0 {
-                                    let is_alive =
-                                        unsafe { libc::kill(lead_pid as i32, 0) } == 0;
-                                    if !is_alive {
-                                        // Lead process dead — crashed session.
+                                    .and_then(serde_json::Value::as_u64)
+                                    .and_then(|v| u32::try_from(v).ok())
+                                    .unwrap_or(0);
+                                if lead_pid > 0 && !is_process_alive(lead_pid) {
+                                    // Lead process dead — check if any teammate is still alive
+                                    // before sweeping (teammate may still be finishing work).
+                                    let team_path = session_base
+                                        .join(&name)
+                                        .join("pathflow")
+                                        .join("pathflow-team.json");
+                                    let any_teammate_alive =
+                                        crate::pathflow::file_lock::locked_read(&team_path)
+                                            .ok()
+                                            .and_then(|tv| tv.get("teammates")?.as_array().cloned())
+                                            .is_some_and(|arr| {
+                                                arr.iter().any(|t| {
+                                                    let pid = t
+                                                        .get("pid")
+                                                        .and_then(serde_json::Value::as_u64)
+                                                        .and_then(|v| u32::try_from(v).ok())
+                                                        .unwrap_or(0);
+                                                    pid > 0 && is_process_alive(pid)
+                                                })
+                                            });
+                                    if !any_teammate_alive {
                                         self.remove_stale_session_artifacts(
                                             project_dir,
                                             &name,
@@ -516,9 +533,18 @@ impl SessionStartInit {
                                         );
                                         swept += 1;
                                     }
-                                    // lead_pid alive → KEEP (session genuinely active)
+                                    // If any teammate alive, KEEP — let teammate finish gracefully.
                                 }
+                                // lead_pid alive → KEEP (session genuinely active)
                                 // no lead_pid → KEEP (pre-PID session, safe default)
+                            } else {
+                                // Team config gone -- session is dead.
+                                self.remove_stale_session_artifacts(
+                                    project_dir,
+                                    &name,
+                                    Some(team_name),
+                                );
+                                swept += 1;
                             }
                         }
                     }
@@ -635,9 +661,9 @@ impl SessionStartInit {
             // this SID (SID collision or sweep missed it), reset to "created"
             // rather than preserving stale state.
             if source == "startup" || source == "unknown" {
-                result
-                    .messages
-                    .push("PathFlow: Status file exists on startup -- resetting to 'created'.".into());
+                result.messages.push(
+                    "PathFlow: Status file exists on startup -- resetting to 'created'.".into(),
+                );
                 // Fall through to overwrite with fresh "created" status.
             } else {
                 result
@@ -1270,6 +1296,7 @@ mod tests {
             project_dir: Some(project_dir.into()),
             source: Some(source.into()),
             transcript_path: None,
+            ..Default::default()
         }
     }
 
@@ -1476,6 +1503,7 @@ mod tests {
             project_dir: None,
             source: Some("startup".into()),
             transcript_path: None,
+            ..Default::default()
         };
         let result = init.handle(input);
         assert!(result.is_err());
@@ -1649,6 +1677,7 @@ mod tests {
             project_dir: None,
             source: Some("startup".into()),
             transcript_path: None,
+            ..Default::default()
         };
 
         let output = handler.handle(input).unwrap();
@@ -2495,7 +2524,10 @@ mod tests {
 
         // Use "compact" source to test the resume path (startup would reset).
         let is_resume = init.create_pathflow_flag(dir.path(), sid, "compact", false, &mut result);
-        assert!(is_resume, "existing status file with compact source should indicate resume");
+        assert!(
+            is_resume,
+            "existing status file with compact source should indicate resume"
+        );
         assert!(result.messages.iter().any(|m| m.contains("Resuming")));
     }
 
@@ -2545,6 +2577,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input);
         assert!(result.is_err());
@@ -2913,11 +2946,7 @@ mod tests {
         )
         .unwrap();
 
-        let config_dir = home
-            .path()
-            .join(".claude")
-            .join("teams")
-            .join("alive-team");
+        let config_dir = home.path().join(".claude").join("teams").join("alive-team");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), "{}").unwrap();
 
@@ -3129,8 +3158,7 @@ mod tests {
         };
 
         // is_teammate=true should preserve existing status regardless of source.
-        let is_resume =
-            init.create_pathflow_flag(dir.path(), sid, "startup", true, &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", true, &mut result);
         assert!(is_resume, "teammate should preserve status (resume=true)");
         assert!(
             result
@@ -3181,8 +3209,7 @@ mod tests {
         };
 
         // is_teammate=false + source=startup should reset the status.
-        let is_resume =
-            init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
+        let is_resume = init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
         assert!(!is_resume, "non-teammate startup should reset status");
 
         let status_path = flag_dir.join("pathflow-session-status.json");

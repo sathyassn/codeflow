@@ -61,6 +61,7 @@ mod tests {
             project_dir: Some(dir.to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         }
     }
 

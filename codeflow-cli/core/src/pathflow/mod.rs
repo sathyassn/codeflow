@@ -5,5 +5,6 @@
 //! and transition event writing.
 
 pub mod checkpoint;
+pub mod file_lock;
 pub mod sentinel;
 pub mod transitions;

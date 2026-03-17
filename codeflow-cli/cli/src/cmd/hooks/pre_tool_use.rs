@@ -61,15 +61,9 @@ fn resolve_session_dir(project_dir: &std::path::Path) -> PathBuf {
         .unwrap_or_default();
 
     if session_id.is_empty() {
-        state_dir
-            .join("session")
-            .join("unknown")
-            .join("pathflow")
+        state_dir.join("session").join("unknown").join("pathflow")
     } else {
-        state_dir
-            .join("session")
-            .join(&session_id)
-            .join("pathflow")
+        state_dir.join("session").join(&session_id).join("pathflow")
     }
 }
 
@@ -174,7 +168,10 @@ mod tests {
         let session_dir = resolve_session_dir(dir.path());
         let s = session_dir.to_string_lossy();
         assert!(s.contains("session"), "expected 'session' in path: {s}");
-        assert!(s.ends_with("pathflow"), "expected path to end with 'pathflow': {s}");
+        assert!(
+            s.ends_with("pathflow"),
+            "expected path to end with 'pathflow': {s}"
+        );
     }
 
     #[test]
@@ -199,6 +196,7 @@ mod tests {
             project_dir: Some(dir.to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         }
     }
 
@@ -316,6 +314,7 @@ mod tests {
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = h.handle(input);
         assert!(result.is_ok());
@@ -410,10 +409,7 @@ mod tests {
         .unwrap();
         let session_dir = resolve_session_dir(dir.path());
         let s = session_dir.to_string_lossy();
-        assert!(
-            s.contains(sid),
-            "expected session ID in path: {s}",
-        );
+        assert!(s.contains(sid), "expected session ID in path: {s}",);
         let expected_suffix = format!("{sid}/pathflow");
         assert!(
             s.ends_with(&expected_suffix),

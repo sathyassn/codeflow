@@ -479,6 +479,7 @@ mod tests {
             project_dir: Some(dir.path().to_string_lossy().into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         // handle() writes to real stdout, which we can't capture in unit tests,
         // but we can verify it returns Allow.

@@ -172,23 +172,21 @@ impl SessionEndCleanup {
         let pathflow_dir = session_state_dir.join("pathflow");
         let status_path = pathflow_dir.join("pathflow-session-status.json");
 
-        // Read the status file -- sole authority for session state.
-        let status_data = match fs::read_to_string(&status_path) {
-            Ok(data) => data,
-            Err(_) => {
-                // No status file -- no active PathFlow session, allow cleanup.
-                return false;
-            }
-        };
-
-        let status: serde_json::Value = if let Ok(v) = serde_json::from_str(&status_data) {
-            v
-        } else {
-            result
-                .messages
-                .push("SessionEnd: pathflow-session-status.json unreadable -- proceeding".into());
-            return false;
-        };
+        // Read under critical retry -- cleanup is destructive; avoid false-negative on transient read.
+        let status: serde_json::Value =
+            match crate::pathflow::file_lock::locked_read_critical(&status_path, 2) {
+                Ok(v) => v,
+                Err(e) => {
+                    if e.contains("read:") {
+                        // No status file -- no active PathFlow session, allow cleanup.
+                        return false;
+                    }
+                    result.messages.push(format!(
+                        "SessionEnd: pathflow-session-status.json unreadable ({e}) -- proceeding"
+                    ));
+                    return false;
+                }
+            };
 
         let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -368,19 +366,17 @@ impl SessionEndCleanup {
             return;
         }
 
-        // Re-check session status -- guard against race where session reactivated.
+        // Re-check session status under shared lock -- guard against race where session reactivated.
         let status_path = session_state_dir
             .join("pathflow")
             .join("pathflow-session-status.json");
-        if let Ok(data) = fs::read_to_string(&status_path) {
-            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&data) {
-                let s = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                if s == "pf-started" || s == "pf-in-progress" {
-                    result.messages.push(format!(
-                        "SessionEnd: Skipping team artifact cleanup -- session still active (status={s})"
-                    ));
-                    return;
-                }
+        if let Ok(status) = crate::pathflow::file_lock::locked_read(&status_path) {
+            let s = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            if s == "pf-started" || s == "pf-in-progress" {
+                result.messages.push(format!(
+                    "SessionEnd: Skipping team artifact cleanup -- session still active (status={s})"
+                ));
+                return;
             }
         }
 
@@ -555,6 +551,7 @@ mod tests {
             project_dir: Some(project_dir.into()),
             source: None,
             transcript_path: None,
+            ..Default::default()
         }
     }
 
@@ -816,6 +813,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
 
         let result = cleaner.handle(input);

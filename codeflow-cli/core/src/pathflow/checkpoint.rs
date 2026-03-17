@@ -2,13 +2,12 @@
 //!
 //! Tracks task registration, completion, and skip status per phase.
 //! Creates phase sentinels automatically when all expected tasks complete.
-//! Uses file locking (`fs2`) for atomic read-modify-write.
+//! Uses shared `file_lock` module for atomic read-modify-write.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PathflowError;
@@ -324,38 +323,17 @@ impl Checkpoint {
     }
 
     /// Perform an atomic read-modify-write on the checkpoint file with
-    /// exclusive file locking.
+    /// exclusive file locking. Delegates to the shared `file_lock` module.
     #[allow(clippy::unused_self)]
     fn with_lock(
         &self,
         checkpoint_path: &Path,
         f: impl FnOnce(&mut CheckpointFile) -> Result<(), PathflowError>,
     ) -> Result<(), PathflowError> {
-        if let Some(dir) = checkpoint_path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-
-        let lock_path = checkpoint_path.with_extension("lock");
-        let lock_file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)?;
-
-        lock_file
-            .lock_exclusive()
-            .map_err(|e| PathflowError::Lock(format!("acquiring lock: {e}")))?;
-
-        let result = (|| {
-            let mut cf = read_checkpoint_file(checkpoint_path)?;
-            f(&mut cf)?;
-            write_checkpoint_file(checkpoint_path, &cf)
-        })();
-
-        // Drop the lock file to release the lock (fs2 releases on drop).
-        drop(lock_file);
-
-        result
+        super::file_lock::locked_rmw_typed(checkpoint_path, CheckpointFile::default, |cf| {
+            f(cf).map_err(|e| e.to_string())
+        })
+        .map_err(PathflowError::Lock)
     }
 }
 
@@ -543,16 +521,6 @@ fn read_checkpoint_file(path: &Path) -> Result<CheckpointFile, PathflowError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(CheckpointFile::default()),
         Err(e) => Err(PathflowError::Io(e)),
     }
-}
-
-fn write_checkpoint_file(path: &Path, cf: &CheckpointFile) -> Result<(), PathflowError> {
-    let data = serde_json::to_string_pretty(cf)?;
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, format!("{data}\n"))?;
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        PathflowError::Io(e)
-    })
 }
 
 #[cfg(test)]

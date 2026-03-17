@@ -1486,6 +1486,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1504,6 +1505,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1522,6 +1524,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1540,6 +1543,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1560,7 +1564,8 @@ mod tests {
 
         // Sentinel dir: {dir}/sentinels/pathflow/{SID}/
         let sid = "ses-testpushgate1234567890";
-        let sentinel_dir = dir.path()
+        let sentinel_dir = dir
+            .path()
             .join(".state")
             .join("sentinels")
             .join("pathflow")
@@ -1577,7 +1582,8 @@ mod tests {
         sentinel::create_by_name(&sentinel_dir, "ws-qa").unwrap();
 
         // Create session status with work_type.
-        let session_dir = dir.path()
+        let session_dir = dir
+            .path()
             .join(".state")
             .join("session")
             .join(sid)
@@ -1598,9 +1604,14 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
-        assert_eq!(result.exit_code(), 0, "push should be allowed with all sentinels + work_type");
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "push should be allowed with all sentinels + work_type"
+        );
     }
 
     #[test]
@@ -1619,9 +1630,14 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
-        assert_eq!(result.exit_code(), 2, "push should be blocked when work_type is missing");
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "push should be blocked when work_type is missing"
+        );
     }
 
     // -- TeamGuard tests --
@@ -1638,6 +1654,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1664,6 +1681,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1691,6 +1709,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1708,6 +1727,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1728,6 +1748,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1746,6 +1767,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1764,6 +1786,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1784,6 +1807,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
@@ -1816,6 +1840,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1835,6 +1860,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1854,6 +1880,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1873,6 +1900,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1893,6 +1921,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1913,6 +1942,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -1931,6 +1961,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
@@ -1949,6 +1980,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1969,6 +2001,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -1987,6 +2020,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2003,6 +2037,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2020,6 +2055,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2036,6 +2072,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2052,6 +2089,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2068,6 +2106,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
@@ -2084,6 +2123,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2247,6 +2287,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2273,6 +2314,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2293,6 +2335,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2311,6 +2354,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2329,6 +2373,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
@@ -2347,6 +2392,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Warn { .. }));
@@ -2365,6 +2411,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2393,6 +2440,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         // Can't resolve → allow through.
@@ -2413,6 +2461,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2459,6 +2508,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2477,6 +2527,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2495,6 +2546,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2511,6 +2563,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2527,6 +2580,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2543,6 +2597,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
@@ -2559,6 +2614,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
@@ -2603,6 +2659,7 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
+            ..Default::default()
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);

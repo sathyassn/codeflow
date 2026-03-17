@@ -208,12 +208,11 @@ fn check_directory_protection(segments: &[String]) -> Option<Verdict> {
         // destination, not the source. Allows staging copies like:
         //   cp codeflow-cli/core/src/hooks/mod.rs /tmp/claude/.../mod.rs
         if cp_cmd_re().is_match(seg) {
-            let is_claude_dest =
-                (claude.dir_end.is_match(seg) || claude.dir_slash.is_match(seg))
-                    && is_cp_destination_dir(seg, ".claude");
-            let is_codeflow_dest =
-                (codeflow.dir_end.is_match(seg) || codeflow.dir_slash.is_match(seg))
-                    && is_cp_destination_dir(seg, ".codeflow");
+            let is_claude_dest = (claude.dir_end.is_match(seg) || claude.dir_slash.is_match(seg))
+                && is_cp_destination_dir(seg, ".claude");
+            let is_codeflow_dest = (codeflow.dir_end.is_match(seg)
+                || codeflow.dir_slash.is_match(seg))
+                && is_cp_destination_dir(seg, ".codeflow");
 
             if is_claude_dest {
                 return Some(block(
@@ -756,44 +755,32 @@ mod tests {
     #[test]
     fn test_cp_to_claude_dir_blocked() {
         // cp TO .claude directory → BLOCKED (write to protected directory).
-        let result = PathModule.check(&ctx(
-            "cp /tmp/evil.md .claude",
-        ));
-        assert!(
-            result.is_some(),
-            "cp TO .claude dir should be blocked"
-        );
+        let result = PathModule.check(&ctx("cp /tmp/evil.md .claude"));
+        assert!(result.is_some(), "cp TO .claude dir should be blocked");
     }
 
     #[test]
     fn test_cp_to_claude_slash_dir_blocked() {
         // cp TO .claude/ directory → BLOCKED.
-        let result = PathModule.check(&ctx(
-            "cp -r /tmp/evil/ .claude/",
-        ));
-        assert!(
-            result.is_some(),
-            "cp TO .claude/ dir should be blocked"
-        );
+        let result = PathModule.check(&ctx("cp -r /tmp/evil/ .claude/"));
+        assert!(result.is_some(), "cp TO .claude/ dir should be blocked");
     }
 
     #[test]
     fn test_cp_to_codeflow_dir_blocked() {
         // cp TO .codeflow directory → BLOCKED.
-        let result = PathModule.check(&ctx(
-            "cp -r /tmp/evil/ .codeflow/",
-        ));
-        assert!(
-            result.is_some(),
-            "cp TO .codeflow dir should be blocked"
-        );
+        let result = PathModule.check(&ctx("cp -r /tmp/evil/ .codeflow/"));
+        assert!(result.is_some(), "cp TO .codeflow dir should be blocked");
     }
 
     #[test]
     fn test_cp_between_unprotected_allowed() {
         // cp between unprotected paths → ALLOWED.
         let result = PathModule.check(&ctx("cp /tmp/a.txt /tmp/b.txt"));
-        assert!(result.is_none(), "cp between unprotected paths should be allowed");
+        assert!(
+            result.is_none(),
+            "cp between unprotected paths should be allowed"
+        );
     }
 
     #[test]
@@ -870,9 +857,7 @@ mod tests {
     #[test]
     fn test_cp_protected_to_non_staging_tmp_blocked() {
         // cp to /tmp but NOT the staging area — destination contains the path.
-        let result = PathModule.check(&ctx(
-            "cp /tmp/evil.md .claude/CLAUDE.md",
-        ));
+        let result = PathModule.check(&ctx("cp /tmp/evil.md .claude/CLAUDE.md"));
         assert!(
             result.is_some(),
             "cp to protected path (non-staging) should be blocked"
@@ -882,9 +867,7 @@ mod tests {
     #[test]
     fn test_staging_exemption_does_not_affect_rm() {
         // Staging exemption is only for cp destination. rm should still block.
-        let result = PathModule.check(&ctx(
-            "rm .claude/CLAUDE.md",
-        ));
+        let result = PathModule.check(&ctx("rm .claude/CLAUDE.md"));
         assert!(
             result.is_some(),
             "rm on protected path should still be blocked regardless of staging"
