@@ -8,7 +8,7 @@ area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
 is_ongoing: false
-file_scope: ["codeflow-rs/codeflow-cli/src/coordination/", "codeflow-rs/codeflow-cli/src/worktree/", "codeflow-rs/codeflow-cli/src/hooks/", "codeflow-rs/codeflow-cli/src/session/", "codeflow-rs/codeflow-cli/src/autorun/", "codeflow-rs/codeflow-cli/src/commands/", "codeflow-rs/codeflow-cli/src/store/", "codeflow-rs/codeflow-cli/src/transport/", "codeflow-rs/codeflow-cli/src/traits/", ".state/"]
+file_scope: ["codeflow-cli/core/src/coordination/", "codeflow-cli/core/src/worktree/", "codeflow-cli/core/src/hooks/", "codeflow-cli/core/src/session/", "codeflow-cli/core/src/autorun/", "codeflow-cli/cli/src/cmd/", "codeflow-cli/core/src/store/", "codeflow-cli/core/src/transport/", ".state/"]
 priority: high
 pr_number: null
 external_id: null
@@ -71,54 +71,54 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | ID | Title | Status | Estimate | Priority | Phase |
 |----|-------|--------|----------|----------|-------|
 | INF-TSK-023-001 | Plan: Epic A -- Parallel Execution Core | complete | M | normal | Planning |
-| INF-TSK-023-042 | Fix worktree base directory default | todo | S | high | A: Loro CRDT Foundation |
-| INF-TSK-023-043 | Replace state.json with state.loro using Loro Map CRDT | todo | L | critical | A: Loro CRDT Foundation |
-| INF-TSK-023-044 | Wire claims into PreToolUse hooks | todo | L | critical | A: Loro CRDT Foundation |
-| INF-TSK-023-045 | Fencing token validation via Loro Map | todo | M | high | A: Loro CRDT Foundation |
-| INF-TSK-023-046 | Implement sync daemon logic (codeflow sync daemon) | todo | L | high | A: Loro CRDT Foundation |
-| INF-TSK-023-047 | Clean up unused state.loro artifact | todo | S | normal | A: Loro CRDT Foundation |
-| INF-TSK-023-048 | Add SetupDetached method to worktree manager | todo | M | critical | B: Worktree + Singleton |
-| INF-TSK-023-049 | Integrate worktree creation into SessionStart hook | todo | L | critical | B: Worktree + Singleton |
-| INF-TSK-023-050 | Scope codeflow-env.sh per worktree | todo | M | critical | B: Worktree + Singleton |
-| INF-TSK-023-051 | Scope active-task.json per worktree | todo | M | high | B: Worktree + Singleton |
-| INF-TSK-023-052 | Scope project temp dir per worktree | todo | S | high | B: Worktree + Singleton |
-| INF-TSK-023-053 | Scope team config by session | todo | S | normal | B: Worktree + Singleton |
-| INF-TSK-023-054 | Add worktree cleanup to SessionEnd hook | todo | M | high | B: Worktree + Singleton |
-| INF-TSK-023-055 | Pre-created worktree detection in SessionStart | todo | S | normal | B: Worktree + Singleton |
-| INF-TSK-023-056 | Autorun worker worktree integration | todo | L | high | C: Autorun + Coordination |
-| INF-TSK-023-057 | Merge conflict detection before PR creation | todo | M | normal | C: Autorun + Coordination |
-| INF-TSK-023-058 | Parallel session coordination (worktree registry, FIFO merge queue) | todo | L | high | C: Autorun + Coordination |
-| INF-TSK-023-059 | SurrealDB parallel access tuning | todo | S | normal | C: Autorun + Coordination |
-| INF-TSK-023-060 | Add worktree field to pathflow-events.jsonl events | todo | S | normal | B: Worktree + Singleton |
-| INF-TSK-023-061 | Cross-Epic Review Handoff: Complete Fix List | complete | M | normal | Cross-Epic |
+| INF-TSK-023-002 | Fix worktree base directory default | todo | S | high | A: Loro CRDT Foundation |
+| INF-TSK-023-003 | Replace state.json with state.loro using Loro Map CRDT | todo | L | critical | A: Loro CRDT Foundation |
+| INF-TSK-023-004 | Wire claims into PreToolUse hooks | todo | L | critical | A: Loro CRDT Foundation |
+| INF-TSK-023-005 | Fencing token validation via Loro Map | todo | M | high | A: Loro CRDT Foundation |
+| INF-TSK-023-006 | Implement sync daemon logic (codeflow sync daemon) | todo | L | high | A: Loro CRDT Foundation |
+| INF-TSK-023-007 | Clean up unused state.loro artifact | todo | S | normal | A: Loro CRDT Foundation |
+| INF-TSK-023-008 | Add SetupDetached method to worktree manager | todo | M | critical | B: Worktree + Singleton |
+| INF-TSK-023-009 | Integrate worktree creation into SessionStart hook | todo | L | critical | B: Worktree + Singleton |
+| INF-TSK-023-010 | Scope codeflow-env.sh per worktree | todo | M | critical | B: Worktree + Singleton |
+| INF-TSK-023-011 | Scope active-task.json per worktree | todo | M | high | B: Worktree + Singleton |
+| INF-TSK-023-012 | Scope project temp dir per worktree | todo | S | high | B: Worktree + Singleton |
+| INF-TSK-023-013 | Scope team config by session | todo | S | normal | B: Worktree + Singleton |
+| INF-TSK-023-014 | Add worktree cleanup to SessionEnd hook | todo | M | high | B: Worktree + Singleton |
+| INF-TSK-023-015 | Pre-created worktree detection in SessionStart | todo | S | normal | B: Worktree + Singleton |
+| INF-TSK-023-016 | Autorun worker worktree integration | todo | L | high | C: Autorun + Coordination |
+| INF-TSK-023-017 | Merge conflict detection before PR creation | todo | M | normal | C: Autorun + Coordination |
+| INF-TSK-023-018 | Parallel session coordination (worktree registry, FIFO merge queue) | todo | L | high | C: Autorun + Coordination |
+| INF-TSK-023-019 | SurrealDB parallel access tuning | todo | S | normal | C: Autorun + Coordination |
+| INF-TSK-023-020 | Add worktree field to pathflow-events.jsonl events | todo | S | normal | B: Worktree + Singleton |
+| INF-TSK-023-021 | Cross-Epic Review Handoff: Complete Fix List | complete | M | normal | Cross-Epic |
 
 ### Dependency DAG
 
 ```text
 Phase A: Loro CRDT Foundation
   Epic 0 (INF-EPC-022)
-    └── 042 (worktree base dir fix)
-    └── 043 (state.loro migration)
-          ├── 044 (wire claims) ── 045 (fencing tokens)
-          ├── 046 (sync daemon)
-          └── 047 (cleanup artifact)
+    └── 002 (worktree base dir fix)
+    └── 003 (state.loro migration)
+          ├── 004 (wire claims) ── 005 (fencing tokens)
+          ├── 006 (sync daemon)
+          └── 007 (cleanup artifact)
 
 Phase B: Worktree Integration + Singleton Scoping
-  042 ── 048 (SetupDetached)
-           └── 049 (SessionStart integration)
-                 ├── 050 (scope codeflow-env.sh)
-                 ├── 051 (scope active-task.json)
-                 ├── 052 (scope temp dir)
-                 ├── 054 (SessionEnd cleanup)
-                 ├── 055 (pre-created detection)
-                 └── 060 (worktree field in events)
-  Epic 0 ── 053 (scope team config)
+  002 ── 008 (SetupDetached)
+           └── 009 (SessionStart integration)
+                 ├── 010 (scope codeflow-env.sh)
+                 ├── 011 (scope active-task.json)
+                 ├── 012 (scope temp dir)
+                 ├── 014 (SessionEnd cleanup)
+                 ├── 015 (pre-created detection)
+                 └── 020 (worktree field in events)
+  Epic 0 ── 013 (scope team config)
 
 Phase C: Autorun + Coordination
-  048 + 055 + 044 ── 056 (autorun worker)
-  Epic 0 ── 057 (merge conflict detection)
-  043 + 048 ── 058 (parallel coordination)
-  Epic 0 ── 059 (SurrealDB tuning)
+  008 + 015 + 004 ── 016 (autorun worker)
+  Epic 0 ── 017 (merge conflict detection)
+  003 + 008 ── 018 (parallel coordination)
+  Epic 0 ── 019 (SurrealDB tuning)
 ```
 
 ### Effort Summary
@@ -146,21 +146,21 @@ Key architectural decisions from `.codeflow/docs/analysis/parallel-work/decision
 
 | # | Decision | Conclusion | Epic A Task |
 |---|----------|-----------|-------------|
-| 1 | Worktree lifecycle | Ephemeral -- create at SessionStart, destroy at SessionEnd | INF-TSK-023-049, 054 |
-| 2 | Worktree creation timing | SessionStart hook, NOT PF1-INIT | INF-TSK-023-049 |
-| 3 | Shared vs per-worktree DB | Shared SurrealDB embedded | INF-TSK-023-059 |
-| 4 | Team name convention | `{project}-{task-format-id}-{SID-short}` planned / `{project}-{SID-short}` adhoc | INF-TSK-023-053 |
-| 5 | Claim conflict UX | Two-phase: advisory then enforcing | INF-TSK-023-044 |
-| 6 | Merge queue ordering | FIFO -- first-completed-first-merged | INF-TSK-023-058 |
-| 7 | Interactive visibility | Minimal: worker count + claim conflicts only | INF-TSK-023-058 criterion #5 |
-| 8 | Loro CRDT role | Sole coordination mechanism from day one -- `use loro::LoroDoc;` | INF-TSK-023-043 |
+| 1 | Worktree lifecycle | Ephemeral -- create at SessionStart, destroy at SessionEnd | INF-TSK-023-009, 014 |
+| 2 | Worktree creation timing | SessionStart hook, NOT PF1-INIT | INF-TSK-023-009 |
+| 3 | Shared vs per-worktree DB | Shared SurrealDB embedded | INF-TSK-023-019 |
+| 4 | Team name convention | `{project}-{task-format-id}-{SID-short}` planned / `{project}-{SID-short}` adhoc | INF-TSK-023-013 |
+| 5 | Claim conflict UX | Two-phase: advisory then enforcing | INF-TSK-023-004 |
+| 6 | Merge queue ordering | FIFO -- first-completed-first-merged | INF-TSK-023-018 |
+| 7 | Interactive visibility | Minimal: worker count + claim conflicts only | INF-TSK-023-018 criterion #5 |
+| 8 | Loro CRDT role | Sole coordination mechanism from day one -- `use loro::LoroDoc;` | INF-TSK-023-003 |
 | 9 | Memory file coordination | Git merge only -- no CRDT needed | N/A (no task needed) |
-| 10 | Maximum concurrent workers | 3 | INF-TSK-023-058 criterion #6 |
-| 11 | SurrealDB approach | Embedded surrealkv:// engine | INF-TSK-023-059 |
+| 10 | Maximum concurrent workers | 3 | INF-TSK-023-018 criterion #6 |
+| 11 | SurrealDB approach | Embedded surrealkv:// engine | INF-TSK-023-019 |
 | 12 | Documentation structure | Out of scope -- covered by Epic B |
 | 13 | Epic organization | Out of scope -- structure decision (Decision #22 supersedes) |
 | 14 | Rust data layer architecture | Out of scope -- covered by Epic 0 (INF-EPC-022) |
-| 15 | Worktree base directory | `.git-worktrees/` -- update Rust worktree manager default | INF-TSK-023-042 |
+| 15 | Worktree base directory | `.git-worktrees/` -- update Rust worktree manager default | INF-TSK-023-002 |
 | 16 | Rust CLI migration strategy | Out of scope -- covered by Epic 0 (INF-EPC-022) |
 | 17 | SurrealDB as single DB platform | Out of scope -- covered by Epic 0 (INF-EPC-022) |
 | 18 | Global database architecture | Out of scope -- covered by Epic B (INF-EPC-024) |
@@ -168,7 +168,7 @@ Key architectural decisions from `.codeflow/docs/analysis/parallel-work/decision
 | 20 | Cross-project visibility model | Out of scope -- covered by Epic E |
 | 21 | Multi-model orchestration strategy | Out of scope -- covered by Epic D |
 | 22 | Revised epic structure | Applied -- 6-epic structure (A-E + Epic 0) |
-| 23 | Knowledge graph synchronization | LoroDoc namespace reserves KG containers for Epic C | INF-TSK-023-043 criterion #9 |
+| 23 | Knowledge graph synchronization | LoroDoc namespace reserves KG containers for Epic C | INF-TSK-023-003 criterion #13 |
 
 Three critical singletons blocking parallelism (from worktree-architecture.md):
 1. `codeflow-env.sh` — session ID singleton (written at SessionStart, destructive)

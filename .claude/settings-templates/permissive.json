@@ -390,7 +390,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "TeamCreate|TeamDelete|Task|SendMessage|Bash",
+        "matcher": "TeamCreate|TeamDelete|Task|Agent|SendMessage|Bash",
         "hooks": [
           {
             "type": "command",

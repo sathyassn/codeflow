@@ -2,7 +2,7 @@
 //!
 //! Four handler types that run after tool invocations:
 //! - `SentinelWrite`: Creates stage sentinels on `STAGE-COMPLETE` messages,
-//!   handles `TeamCreate`/`Task`/`TeamDelete` for pathflow-team.json
+//!   handles `TeamCreate`/`Task`/`Agent`/`TeamDelete` for pathflow-team.json
 //! - `CheckpointRegister`: Registers `PF{N}-TSK-{NN}` tasks in checkpoint
 //! - `SettingsValidate`: Validates settings.json consistency
 //!
@@ -231,7 +231,36 @@ impl HookHandler for SentinelWrite {
                     .unwrap_or("");
 
                 match self.session_pathflow_dir() {
-                    Ok((session_dir, _)) => handle_teammate_spawn(agent_name, &session_dir),
+                    Ok((session_dir, _)) => handle_teammate_spawn(agent_name, &session_dir, None),
+                    Err(_) => Ok(HookOutput::Allow),
+                }
+            }
+            Some("Agent") => {
+                let tool_input = input.tool_input.as_ref();
+                let agent_name = tool_input
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if agent_name.is_empty() {
+                    return Ok(HookOutput::Allow);
+                }
+
+                let model = tool_input
+                    .and_then(|v| v.get("model"))
+                    .and_then(|v| v.as_str());
+                let subagent_type = tool_input
+                    .and_then(|v| v.get("subagent_type"))
+                    .and_then(|v| v.as_str());
+                let meta = TeammateSpawnMeta {
+                    model,
+                    subagent_type,
+                };
+
+                match self.session_pathflow_dir() {
+                    Ok((session_dir, _)) => {
+                        handle_teammate_spawn(agent_name, &session_dir, Some(&meta))
+                    }
                     Err(_) => Ok(HookOutput::Allow),
                 }
             }
@@ -338,7 +367,14 @@ pub fn handle_team_create(
 // TeammateSpawn handler
 // ---------------------------------------------------------------------------
 
-/// Handle a `Task` (teammate spawn) post-tool-use event. Updates
+/// Optional metadata for teammate spawn entries.
+/// Populated from `Agent` tool inputs; `Task` tool spawns pass `None`.
+pub struct TeammateSpawnMeta<'a> {
+    pub model: Option<&'a str>,
+    pub subagent_type: Option<&'a str>,
+}
+
+/// Handle a `Task` or `Agent` (teammate spawn) post-tool-use event. Updates
 /// `pathflow-team.json` with `teammate_spawned=true` and `last_spawn_name`.
 ///
 /// Mirrors Go's `HandleTeammateSpawn` in `sentinel/stage.go`.
@@ -349,6 +385,7 @@ pub fn handle_team_create(
 pub fn handle_teammate_spawn(
     agent_name: &str,
     session_dir: &Path,
+    meta: Option<&TeammateSpawnMeta<'_>>,
 ) -> Result<HookOutput, HookError> {
     let team_file_path = session_dir.join("pathflow-team.json");
 
@@ -358,6 +395,8 @@ pub fn handle_teammate_spawn(
     }
 
     let agent_name = agent_name.to_string();
+    let model = meta.and_then(|m| m.model).map(String::from);
+    let subagent_type = meta.and_then(|m| m.subagent_type).map(String::from);
     crate::pathflow::file_lock::locked_rmw(&team_file_path, |team| {
         if let Some(obj) = team.as_object_mut() {
             obj.insert(
@@ -372,11 +411,17 @@ pub fn handle_teammate_spawn(
                 // Add teammate entry with pid=0 placeholder.
                 // The teammate's own SessionStart (tmux) updates pid to its Claude Code PID.
                 // In-process teammates never fire SessionStart, so pid stays 0.
-                let entry = serde_json::json!({
+                let mut entry = serde_json::json!({
                     "name": agent_name,
                     "pid": 0,
                     "spawned_at": crate::util::now_rfc3339(),
                 });
+                if let Some(m) = &model {
+                    entry["model"] = serde_json::Value::String(m.clone());
+                }
+                if let Some(st) = &subagent_type {
+                    entry["subagent_type"] = serde_json::Value::String(st.clone());
+                }
                 if let Some(arr) = obj
                     .entry("teammates")
                     .or_insert_with(|| serde_json::json!([]))
@@ -1146,7 +1191,7 @@ mod tests {
         let team_file = session_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
 
-        let result = handle_teammate_spawn("cf-development", &session_dir).unwrap();
+        let result = handle_teammate_spawn("cf-development", &session_dir, None).unwrap();
         assert!(matches!(result, HookOutput::Allow));
 
         // Verify updates.
@@ -1165,7 +1210,7 @@ mod tests {
         fs::create_dir_all(&session_dir).unwrap();
 
         // No pathflow-team.json exists.
-        let result = handle_teammate_spawn("cf-review", &session_dir).unwrap();
+        let result = handle_teammate_spawn("cf-review", &session_dir, None).unwrap();
         assert!(matches!(result, HookOutput::Allow));
     }
 
@@ -1182,7 +1227,7 @@ mod tests {
         let team_file = session_dir.join("pathflow-team.json");
         fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
 
-        let result = handle_teammate_spawn("", &session_dir).unwrap();
+        let result = handle_teammate_spawn("", &session_dir, None).unwrap();
         assert!(matches!(result, HookOutput::Allow));
 
         let data = fs::read_to_string(&team_file).unwrap();
@@ -1206,14 +1251,147 @@ mod tests {
         fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
 
         // First spawn.
-        handle_teammate_spawn("cf-development", &session_dir).unwrap();
+        handle_teammate_spawn("cf-development", &session_dir, None).unwrap();
         // Second spawn should update last_spawn_name.
-        handle_teammate_spawn("cf-review", &session_dir).unwrap();
+        handle_teammate_spawn("cf-review", &session_dir, None).unwrap();
 
         let data = fs::read_to_string(&team_file).unwrap();
         let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
         assert!(updated.teammate_spawned);
         assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-review"));
+    }
+
+    // -- Agent tool spawn tests --
+
+    #[test]
+    fn test_handle_teammate_spawn_agent_with_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            team_name: "my-team".into(),
+            codeflow_session_id: "ses-abc".into(),
+            lead_pid: 0,
+            teammate_spawned: false,
+            created_at: "2026-03-10T00:00:00Z".into(),
+            last_spawn_name: None,
+            teammates: vec![],
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        let meta = TeammateSpawnMeta {
+            model: Some("opus"),
+            subagent_type: Some("general-purpose"),
+        };
+        let result = handle_teammate_spawn("cf-development", &session_dir, Some(&meta)).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
+        assert_eq!(updated.teammates.len(), 1);
+        assert_eq!(updated.teammates[0].name, "cf-development");
+        assert_eq!(updated.teammates[0].model.as_deref(), Some("opus"));
+        assert_eq!(
+            updated.teammates[0].subagent_type.as_deref(),
+            Some("general-purpose")
+        );
+        assert_eq!(updated.teammates[0].pid, 0);
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_agent_partial_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        // Only model, no subagent_type.
+        let meta = TeammateSpawnMeta {
+            model: Some("sonnet"),
+            subagent_type: None,
+        };
+        let result = handle_teammate_spawn("cf-security", &session_dir, Some(&meta)).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(updated.teammates.len(), 1);
+        assert_eq!(updated.teammates[0].model.as_deref(), Some("sonnet"));
+        assert!(updated.teammates[0].subagent_type.is_none());
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_agent_no_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        // No metadata (like Task tool).
+        let result = handle_teammate_spawn("cf-git-operations", &session_dir, None).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(updated.teammates.len(), 1);
+        assert!(updated.teammates[0].model.is_none());
+        assert!(updated.teammates[0].subagent_type.is_none());
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_mixed_task_and_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            team_name: "my-team".into(),
+            ..Default::default()
+        };
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, serde_json::to_string_pretty(&team).unwrap()).unwrap();
+
+        // First spawn via Task (no metadata).
+        handle_teammate_spawn("cf-security", &session_dir, None).unwrap();
+
+        // Second spawn via Agent (with metadata).
+        let meta = TeammateSpawnMeta {
+            model: Some("opus"),
+            subagent_type: Some("general-purpose"),
+        };
+        handle_teammate_spawn("cf-development", &session_dir, Some(&meta)).unwrap();
+
+        let data = fs::read_to_string(&team_file).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(updated.teammates.len(), 2);
+        // First entry: Task-spawned, no metadata.
+        assert_eq!(updated.teammates[0].name, "cf-security");
+        assert!(updated.teammates[0].model.is_none());
+        // Second entry: Agent-spawned, with metadata.
+        assert_eq!(updated.teammates[1].name, "cf-development");
+        assert_eq!(updated.teammates[1].model.as_deref(), Some("opus"));
+        assert_eq!(
+            updated.teammates[1].subagent_type.as_deref(),
+            Some("general-purpose")
+        );
+        // last_spawn_name should be the most recent.
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
     }
 
     // -- TeamDelete tests --
@@ -1383,6 +1561,129 @@ mod tests {
         let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
         assert!(updated.teammate_spawned);
         assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
+    }
+
+    #[test]
+    fn test_sentinel_write_dispatches_agent_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Pre-create team file.
+        let team = PathflowTeamInfo {
+            team_name: "t".into(),
+            ..Default::default()
+        };
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            serde_json::to_string(&team).unwrap(),
+        )
+        .unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input(
+            "Agent",
+            serde_json::json!({
+                "name": "cf-development",
+                "model": "opus",
+                "subagent_type": "general-purpose"
+            }),
+        );
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.last_spawn_name.as_deref(), Some("cf-development"));
+        assert_eq!(updated.teammates.len(), 1);
+        assert_eq!(updated.teammates[0].model.as_deref(), Some("opus"));
+        assert_eq!(
+            updated.teammates[0].subagent_type.as_deref(),
+            Some("general-purpose")
+        );
+    }
+
+    #[test]
+    fn test_sentinel_write_dispatches_agent_spawn_without_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Pre-create team file.
+        let team = PathflowTeamInfo {
+            team_name: "t".into(),
+            ..Default::default()
+        };
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            serde_json::to_string(&team).unwrap(),
+        )
+        .unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        // Agent without name field -- should skip without error.
+        let input = make_input("Agent", serde_json::json!({"model": "opus"}));
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        // Should not have modified the file.
+        assert!(!updated.teammate_spawned);
+        assert!(updated.teammates.is_empty());
+    }
+
+    #[test]
+    fn test_sentinel_write_dispatches_agent_spawn_no_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = setup_sentinel_env(dir.path());
+
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(&sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let team = PathflowTeamInfo {
+            team_name: "t".into(),
+            ..Default::default()
+        };
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            serde_json::to_string(&team).unwrap(),
+        )
+        .unwrap();
+
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        // Agent with name but no model or subagent_type.
+        let input = make_input("Agent", serde_json::json!({"name": "cf-security"}));
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let updated: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(updated.teammate_spawned);
+        assert_eq!(updated.teammates.len(), 1);
+        assert_eq!(updated.teammates[0].name, "cf-security");
+        assert!(updated.teammates[0].model.is_none());
+        assert!(updated.teammates[0].subagent_type.is_none());
     }
 
     #[test]

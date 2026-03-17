@@ -219,6 +219,14 @@ pub struct TeammateEntry {
     /// RFC 3339 timestamp of when the teammate was spawned.
     #[serde(default)]
     pub spawned_at: String,
+    /// Model used for the teammate (e.g., "opus", "sonnet").
+    /// Only populated for Agent tool spawns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Subagent type (e.g., "general-purpose").
+    /// Only populated for Agent tool spawns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
 }
 
 #[cfg(test)]
@@ -478,6 +486,103 @@ mod tests {
             input.transcript_path.as_deref(),
             Some("/tmp/transcript.jsonl")
         );
+    }
+
+    #[test]
+    fn test_teammate_entry_with_optional_fields() {
+        let json = r#"{
+            "name": "cf-development",
+            "pid": 0,
+            "spawned_at": "2026-03-10T00:00:00Z",
+            "model": "opus",
+            "subagent_type": "general-purpose"
+        }"#;
+        let entry: TeammateEntry = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(entry.name, "cf-development");
+        assert_eq!(entry.model.as_deref(), Some("opus"));
+        assert_eq!(entry.subagent_type.as_deref(), Some("general-purpose"));
+    }
+
+    #[test]
+    fn test_teammate_entry_without_optional_fields() {
+        let json = r#"{
+            "name": "cf-security",
+            "pid": 1234,
+            "spawned_at": "2026-03-10T00:00:00Z"
+        }"#;
+        let entry: TeammateEntry = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(entry.name, "cf-security");
+        assert_eq!(entry.pid, 1234);
+        assert!(entry.model.is_none());
+        assert!(entry.subagent_type.is_none());
+    }
+
+    #[test]
+    fn test_teammate_entry_skip_serializing_none_optional_fields() {
+        let entry = TeammateEntry {
+            name: "cf-review".into(),
+            pid: 0,
+            spawned_at: "2026-03-10T00:00:00Z".into(),
+            model: None,
+            subagent_type: None,
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(!json.contains("model"));
+        assert!(!json.contains("subagent_type"));
+    }
+
+    #[test]
+    fn test_teammate_entry_serialize_with_optional_fields() {
+        let entry = TeammateEntry {
+            name: "cf-development".into(),
+            pid: 0,
+            spawned_at: "2026-03-10T00:00:00Z".into(),
+            model: Some("opus".into()),
+            subagent_type: Some("general-purpose".into()),
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(json.contains("\"model\":\"opus\""));
+        assert!(json.contains("\"subagent_type\":\"general-purpose\""));
+    }
+
+    #[test]
+    fn test_teammate_entry_backward_compat_roundtrip() {
+        // Old format without new fields should deserialize and re-serialize cleanly.
+        let old_json = r#"{"name":"cf-git","pid":42,"spawned_at":"2026-01-01T00:00:00Z"}"#;
+        let entry: TeammateEntry = serde_json::from_str(old_json).expect("deserialize");
+        assert_eq!(entry.name, "cf-git");
+        assert_eq!(entry.pid, 42);
+        assert!(entry.model.is_none());
+        assert!(entry.subagent_type.is_none());
+        let reserialized = serde_json::to_string(&entry).expect("serialize");
+        assert!(!reserialized.contains("model"));
+        assert!(!reserialized.contains("subagent_type"));
+    }
+
+    #[test]
+    fn test_pathflow_team_info_with_enriched_teammates() {
+        let json = r#"{
+            "team_name": "test-team",
+            "teammate_spawned": true,
+            "teammates": [
+                {
+                    "name": "cf-development",
+                    "pid": 0,
+                    "spawned_at": "2026-03-10T00:00:00Z",
+                    "model": "opus",
+                    "subagent_type": "general-purpose"
+                },
+                {
+                    "name": "cf-security",
+                    "pid": 1234,
+                    "spawned_at": "2026-03-10T00:00:00Z"
+                }
+            ]
+        }"#;
+        let info: PathflowTeamInfo = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(info.teammates.len(), 2);
+        assert_eq!(info.teammates[0].model.as_deref(), Some("opus"));
+        assert!(info.teammates[1].model.is_none());
     }
 
     #[test]
