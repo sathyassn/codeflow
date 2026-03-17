@@ -66,6 +66,12 @@ pub enum HookError {
     #[error("configuration error: {0}")]
     Config(String),
 
+    #[error("claim conflict: {0}")]
+    ClaimConflict(String),
+
+    #[error("token mismatch: expected {expected}, found {found}")]
+    TokenMismatch { expected: u64, found: u64 },
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -464,6 +470,24 @@ mod tests {
             err.to_string(),
             "configuration error: missing hook configuration"
         );
+    }
+
+    #[test]
+    fn test_hook_error_claim_conflict() {
+        let err = HookError::ClaimConflict("path 'src/main.rs' held by ses-other".into());
+        assert_eq!(
+            err.to_string(),
+            "claim conflict: path 'src/main.rs' held by ses-other"
+        );
+    }
+
+    #[test]
+    fn test_hook_error_token_mismatch() {
+        let err = HookError::TokenMismatch {
+            expected: 5,
+            found: 3,
+        };
+        assert_eq!(err.to_string(), "token mismatch: expected 5, found 3");
     }
 
     // -- SessionError --

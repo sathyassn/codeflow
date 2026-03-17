@@ -124,7 +124,65 @@ impl SentinelWrite {
             );
         }
 
+        // Release all claims held by the completing session (AC #6).
+        self.release_claims_on_stage_complete();
+
         Ok(HookOutput::Allow)
+    }
+
+    /// Release all Loro CRDT claims held by the current session.
+    ///
+    /// Called on STAGE-COMPLETE to ensure claims are released when a work
+    /// stage finishes. The entire load-release-save cycle is wrapped in a
+    /// sidecar file lock (`state.loro.lock`) to prevent races.
+    /// Errors are logged but do not block sentinel creation.
+    fn release_claims_on_stage_complete(&self) {
+        use crate::coordination::claims::release_all;
+        use crate::coordination::loro::LoroCoordinator;
+
+        let state_path = self
+            .project_dir
+            .join(".state")
+            .join("coordination")
+            .join("state.loro");
+
+        if !state_path.exists() {
+            return; // No coordination state — nothing to release.
+        }
+
+        let sid = match session::current_session_id(&self.project_dir) {
+            Ok(sid) => sid,
+            Err(_) => return, // No session — nothing to release.
+        };
+
+        let result = crate::file_lock::locked_binary_rmw(
+            &state_path,
+            LoroCoordinator::in_memory,
+            |bytes| {
+                LoroCoordinator::from_bytes(bytes, &state_path)
+                    .map_err(|e| format!("loro load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
+            |coord| {
+                match release_all(coord, &sid) {
+                    Ok(count) => {
+                        if count > 0 {
+                            eprintln!(
+                                "sentinel-write: released {count} claim(s) for session {sid}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("sentinel-write: claim release failed: {e}");
+                    }
+                }
+                Ok(())
+            },
+        );
+
+        if let Err(e) = result {
+            eprintln!("sentinel-write: claim release failed (lock/io): {e}");
+        }
     }
 
     /// Config-driven cumulative stage ordering validation.
@@ -878,6 +936,60 @@ mod tests {
             .join(&sid)
             .join("pathflow-ws-dev");
         assert!(sentinel_path.exists(), "ws-dev sentinel should exist");
+    }
+
+    #[test]
+    fn test_sentinel_write_releases_claims_on_stage_complete() {
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+        use crate::types::SessionId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sid_str = setup_sentinel_env(dir.path());
+
+        // Pre-populate a claim for this session.
+        let coord_state_path = dir
+            .path()
+            .join(".state")
+            .join("coordination")
+            .join("state.loro");
+        let session_id = SessionId::new_unchecked(&sid_str);
+        {
+            let mut coord = LoroCoordinator::new(&coord_state_path).unwrap();
+            coord.acquire("src/main.rs", &session_id).unwrap();
+            coord.acquire("src/lib.rs", &session_id).unwrap();
+            coord.persist().unwrap();
+
+            // Verify claims exist before STAGE-COMPLETE.
+            assert!(
+                coord.check("src/main.rs").is_some(),
+                "claim should exist before release"
+            );
+            assert!(
+                coord.check("src/lib.rs").is_some(),
+                "claim should exist before release"
+            );
+        }
+
+        // Trigger STAGE-COMPLETE: WS-DEV via handle().
+        let handler = SentinelWrite::new(dir.path().to_path_buf());
+        let input = make_input(
+            "SendMessage",
+            serde_json::json!({"message": "STAGE-COMPLETE: WS-DEV"}),
+        );
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Verify claims were released.
+        let coord_after = LoroCoordinator::new(&coord_state_path).unwrap();
+        assert!(
+            coord_after.check("src/main.rs").is_none(),
+            "claim on src/main.rs should be released after STAGE-COMPLETE"
+        );
+        assert!(
+            coord_after.check("src/lib.rs").is_none(),
+            "claim on src/lib.rs should be released after STAGE-COMPLETE"
+        );
     }
 
     #[test]

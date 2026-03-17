@@ -7,6 +7,7 @@ pub mod config;
 pub mod coordination;
 pub mod doctor;
 pub mod error;
+pub mod file_lock;
 pub mod hooks;
 pub mod idgen;
 pub mod ledger;

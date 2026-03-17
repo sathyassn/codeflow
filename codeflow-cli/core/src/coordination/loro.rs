@@ -112,6 +112,58 @@ impl LoroCoordinator {
         })
     }
 
+    /// Create a `LoroCoordinator` from a raw snapshot byte slice.
+    ///
+    /// Used by [`crate::file_lock::locked_binary_rmw`] to load the coordinator
+    /// under an exclusive sidecar lock, eliminating TOCTOU races between
+    /// `new()` (read) and `persist()` (write).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot cannot be decoded.
+    pub fn from_bytes(
+        bytes: &[u8],
+        state_path: impl Into<PathBuf>,
+    ) -> Result<Self, CoordinationError> {
+        let state_path = state_path.into();
+        let ttl_secs = configured_ttl_secs();
+
+        let (doc, next_token) = if bytes.is_empty() {
+            (Self::init_doc(), 1)
+        } else {
+            match LoroDoc::from_snapshot(bytes) {
+                Ok(doc) => {
+                    let next_token = Self::compute_next_token(&doc);
+                    (doc, next_token)
+                }
+                Err(_) => {
+                    // Legacy or corrupt data — start fresh.
+                    (Self::init_doc(), 1)
+                }
+            }
+        };
+
+        Ok(Self {
+            doc,
+            next_token,
+            state_path,
+            ttl_secs,
+        })
+    }
+
+    /// Export the coordinator state as a Loro snapshot byte vector.
+    ///
+    /// Used by [`crate::file_lock::locked_binary_rmw`] to serialize the state
+    /// for atomic write-back under the sidecar lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot export fails.
+    pub fn export_bytes(&self) -> Result<Vec<u8>, CoordinationError> {
+        let snapshot = self.doc.export(ExportMode::Snapshot)?;
+        Ok(snapshot)
+    }
+
     /// Create a new `LoroCoordinator` with an empty document (no disk state).
     ///
     /// Useful for testing.

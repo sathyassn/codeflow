@@ -5,6 +5,10 @@
 //! and transition event writing.
 
 pub mod checkpoint;
-pub mod file_lock;
 pub mod sentinel;
 pub mod transitions;
+
+/// Re-export for backward compatibility. New code should use `crate::file_lock` directly.
+pub mod file_lock {
+    pub use crate::file_lock::*;
+}

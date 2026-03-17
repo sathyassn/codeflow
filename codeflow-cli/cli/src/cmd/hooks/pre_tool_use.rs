@@ -92,8 +92,16 @@ fn build_handler(
     match handler {
         PreToolUseHandler::GateCheck => {
             let sentinel_dir = resolve_sentinel_dir(&project_dir);
+            let state_path = project_dir
+                .join(".state")
+                .join("coordination")
+                .join("state.loro");
+            let session_id = codeflow_core::session::current_session_id(&project_dir)
+                .unwrap_or_else(|_| codeflow_core::types::SessionId::new_unchecked("unknown"));
             Box::new(codeflow_core::hooks::pre_tool_use::GateCheck::new(
                 sentinel_dir,
+                state_path,
+                session_id,
             ))
         }
         PreToolUseHandler::TeamGuard => {

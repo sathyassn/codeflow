@@ -330,7 +330,7 @@ impl Checkpoint {
         checkpoint_path: &Path,
         f: impl FnOnce(&mut CheckpointFile) -> Result<(), PathflowError>,
     ) -> Result<(), PathflowError> {
-        super::file_lock::locked_rmw_typed(checkpoint_path, CheckpointFile::default, |cf| {
+        crate::file_lock::locked_rmw_typed(checkpoint_path, CheckpointFile::default, |cf| {
             f(cf).map_err(|e| e.to_string())
         })
         .map_err(PathflowError::Lock)

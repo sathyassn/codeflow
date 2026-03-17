@@ -16,6 +16,17 @@ use regex::Regex;
 use super::{BlockCategory, HookEvent, HookHandler, HookInput, HookOutput};
 use crate::error::HookError;
 use crate::pathflow::sentinel;
+use crate::types::SessionId;
+
+// ---------------------------------------------------------------------------
+// Exit code constants for claim enforcement
+// ---------------------------------------------------------------------------
+
+/// Advisory exit code: warn but do not block (Phase 1, Decision #5).
+pub const EXIT_ADVISORY: i32 = 0;
+
+/// Blocking exit code: hard-block the tool call (Phase 2, future).
+pub const EXIT_BLOCKING: i32 = 2;
 
 // ---------------------------------------------------------------------------
 // Shared regex patterns (compiled once)
@@ -390,14 +401,83 @@ fn classify_task_gate(tool_input: &serde_json::Value) -> GateType {
 /// Blocks Edit/Write before pf-3, git commit before pf-3,
 /// git push/PR before pf-5 AND ws-rev (dual gate),
 /// role teammate spawn before pf-3.
+///
+/// For Edit/Write tools, also acquires a Loro CRDT claim on the target
+/// file path. In advisory mode (Phase 1), conflicts produce a warning
+/// but do not block the operation.
 pub struct GateCheck {
     sentinel_dir: PathBuf,
+    /// Path to the Loro coordination state file (e.g., `.state/coordination/state.loro`).
+    state_path: PathBuf,
+    /// Session ID of the current session, used as claim owner.
+    session_id: SessionId,
 }
 
 impl GateCheck {
     #[must_use]
-    pub fn new(sentinel_dir: PathBuf) -> Self {
-        Self { sentinel_dir }
+    pub fn new(sentinel_dir: PathBuf, state_path: PathBuf, session_id: SessionId) -> Self {
+        Self {
+            sentinel_dir,
+            state_path,
+            session_id,
+        }
+    }
+
+    /// Attempt to acquire a Loro CRDT claim on the given file path.
+    ///
+    /// The entire load-acquire-persist cycle is wrapped in a sidecar file lock
+    /// (`state.loro.lock`) to prevent concurrent hook invocations from racing.
+    ///
+    /// Returns `HookOutput::Allow` on success, `HookOutput::Warn` on conflict
+    /// (advisory mode per Decision #5).
+    fn try_acquire_claim(&self, file_path: &str) -> HookOutput {
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+
+        // Capture the conflict info across the locked_binary_rmw boundary.
+        let mut conflict_warning: Option<String> = None;
+        let fp = file_path.to_string();
+        let sid = self.session_id.clone();
+
+        let result = crate::file_lock::locked_binary_rmw(
+            &self.state_path,
+            LoroCoordinator::in_memory,
+            |bytes| {
+                LoroCoordinator::from_bytes(bytes, &self.state_path)
+                    .map_err(|e| format!("loro load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
+            |coord| {
+                match coord.acquire(&fp, &sid) {
+                    Ok(_token) => Ok(()),
+                    Err(crate::error::CoordinationError::ClaimConflict { path, owner }) => {
+                        // Capture conflict for advisory warning; still allow the RMW
+                        // to complete (no state change needed since acquire failed).
+                        conflict_warning = Some(format!(
+                            "CLAIM CONFLICT (advisory): file '{path}' is claimed by session {owner}. \
+                             Proceeding anyway (advisory mode)."
+                        ));
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("gate-check: claim acquisition error: {e}");
+                        Ok(())
+                    }
+                }
+            },
+        );
+
+        if let Err(e) = result {
+            // Graceful degradation: lock/load/save failure → warn and allow.
+            eprintln!("gate-check: claim coordinator unavailable: {e}");
+            return HookOutput::Allow;
+        }
+
+        if let Some(message) = conflict_warning {
+            return HookOutput::Warn { message };
+        }
+
+        HookOutput::Allow
     }
 
     /// Cumulative push/PR gate: verify ALL pf-1..pf-5 + ALL pipeline stage sentinels.
@@ -480,7 +560,29 @@ impl HookHandler for GateCheck {
 
         match gate_type {
             GateType::Ungated => Ok(HookOutput::Allow),
-            GateType::EditWrite | GateType::GitCommit | GateType::RoleTeammateSpawn => {
+            GateType::EditWrite => {
+                if !sentinel::check_by_name(&self.sentinel_dir, "pf-3") {
+                    return Ok(HookOutput::Block {
+                        reason: format!(
+                            "BLOCKED: PathFlow gate - prerequisite not met\n\
+                             Reason: {gate_type:?} requires PF3-CLASSIFY (branch creation). \
+                             No pathflow-pf-3 sentinel found.\n\
+                             Gate: {gate_type:?}\n"
+                        ),
+                        category: Some(BlockCategory::Gate),
+                    });
+                }
+                // pf-3 passed — attempt claim acquisition on the file path.
+                let file_path = tool_input
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if file_path.is_empty() {
+                    return Ok(HookOutput::Allow);
+                }
+                Ok(self.try_acquire_claim(file_path))
+            }
+            GateType::GitCommit | GateType::RoleTeammateSpawn => {
                 if sentinel::check_by_name(&self.sentinel_dir, "pf-3") {
                     Ok(HookOutput::Allow)
                 } else {
@@ -1412,6 +1514,18 @@ fn capitalize_first(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Helper: build a `GateCheck` with a sentinel dir and in-memory coordinator.
+    fn make_gate_check(sentinel_dir: PathBuf) -> GateCheck {
+        // Use /dev/null as state_path — LoroCoordinator::new will create a fresh doc
+        // since /dev/null is empty. For tests that need real claim state, construct
+        // GateCheck directly with a proper state_path.
+        GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-gate-test"),
+        )
+    }
+
     // -- GateCheck tests --
 
     #[test]
@@ -1477,7 +1591,7 @@ mod tests {
     #[test]
     fn test_gate_check_blocks_edit_without_pf3() {
         let dir = tempfile::tempdir().unwrap();
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Edit".into()),
             tool_input: Some(serde_json::json!({"file_path": "test.rs"})),
@@ -1496,7 +1610,7 @@ mod tests {
     fn test_gate_check_allows_edit_with_pf3() {
         let dir = tempfile::tempdir().unwrap();
         sentinel::create_by_name(dir.path(), "pf-3").unwrap();
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Edit".into()),
             tool_input: Some(serde_json::json!({"file_path": "test.rs"})),
@@ -1515,7 +1629,7 @@ mod tests {
     fn test_gate_check_dual_gate_push_blocks_missing_pf5() {
         let dir = tempfile::tempdir().unwrap();
         sentinel::create_by_name(dir.path(), "ws-rev").unwrap();
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git push origin feat/test"})),
@@ -1534,7 +1648,7 @@ mod tests {
     fn test_gate_check_dual_gate_push_blocks_missing_ws_rev() {
         let dir = tempfile::tempdir().unwrap();
         sentinel::create_by_name(dir.path(), "pf-5").unwrap();
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git push origin feat/test"})),
@@ -1595,7 +1709,7 @@ mod tests {
         )
         .unwrap();
 
-        let handler = GateCheck::new(sentinel_dir);
+        let handler = make_gate_check(sentinel_dir);
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git push origin feat/test"})),
@@ -1621,7 +1735,7 @@ mod tests {
         for i in 1..=5 {
             sentinel::create_by_name(dir.path(), &format!("pf-{i}")).unwrap();
         }
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git push origin feat/test"})),
@@ -1638,6 +1752,187 @@ mod tests {
             2,
             "push should be blocked when work_type is missing"
         );
+    }
+
+    // -- GateCheck claim tests (AC #9) --
+
+    #[test]
+    fn test_gate_check_edit_acquires_claim_successfully() {
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let state_path = dir.path().join("state.loro");
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path.clone(),
+            SessionId::new_unchecked("ses-claim-test-001"),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-claim-test-001".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            EXIT_ADVISORY,
+            "successful acquire should allow (exit 0)"
+        );
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Verify claim was persisted.
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+        let coord = LoroCoordinator::new(&state_path).unwrap();
+        let claim = coord.check("src/main.rs");
+        assert!(claim.is_some(), "claim should be persisted after acquire");
+        assert_eq!(claim.unwrap().owner.as_str(), "ses-claim-test-001");
+    }
+
+    #[test]
+    fn test_gate_check_edit_conflict_produces_advisory_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        // Pre-populate a claim by session A.
+        {
+            use crate::coordination::Coordinator;
+            use crate::coordination::loro::LoroCoordinator;
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            let sid_a = SessionId::new_unchecked("ses-session-a");
+            coord.acquire("src/main.rs", &sid_a).unwrap();
+            coord.persist().unwrap();
+        }
+
+        // Session B tries to edit the same file.
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path,
+            SessionId::new_unchecked("ses-session-b"),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-session-b".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        // Advisory mode: exit 0 (Warn), not exit 2 (Block).
+        assert_eq!(
+            result.exit_code(),
+            EXIT_ADVISORY,
+            "conflict should warn, not block (advisory mode)"
+        );
+        match &result {
+            HookOutput::Warn { message } => {
+                assert!(
+                    message.contains("CLAIM CONFLICT"),
+                    "warning should mention claim conflict"
+                );
+                assert!(
+                    message.contains("ses-session-a"),
+                    "warning should identify the owner"
+                );
+            }
+            other => panic!("expected HookOutput::Warn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_gate_check_release_then_reacquire() {
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        // Session A acquires a claim.
+        {
+            use crate::coordination::Coordinator;
+            use crate::coordination::loro::LoroCoordinator;
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            let sid_a = SessionId::new_unchecked("ses-session-a");
+            coord.acquire("src/main.rs", &sid_a).unwrap();
+            coord.persist().unwrap();
+        }
+
+        // Release session A's claims.
+        {
+            use crate::coordination::Coordinator;
+            use crate::coordination::claims::release_all;
+            use crate::coordination::loro::LoroCoordinator;
+            let mut coord = LoroCoordinator::new(&state_path).unwrap();
+            let sid_a = SessionId::new_unchecked("ses-session-a");
+            let released = release_all(&mut coord, &sid_a).unwrap();
+            assert_eq!(released, 1, "should release one claim");
+            coord.persist().unwrap();
+        }
+
+        // Session B should now be able to acquire without conflict.
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path,
+            SessionId::new_unchecked("ses-session-b"),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-session-b".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            EXIT_ADVISORY,
+            "should allow after release"
+        );
+        assert!(matches!(result, HookOutput::Allow));
+    }
+
+    // -- GateCheck claim integration test (AC #10) --
+
+    #[test]
+    fn test_gate_check_integration_two_coordinators_shared_state() {
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state.loro");
+
+        // Session A acquires and persists.
+        let sid_a = SessionId::new_unchecked("ses-integ-a");
+        {
+            let mut coord_a = LoroCoordinator::new(&state_path).unwrap();
+            coord_a.acquire("src/contested.rs", &sid_a).unwrap();
+            coord_a.persist().unwrap();
+        }
+
+        // Session B loads the same state and attempts acquire — should get conflict.
+        let sid_b = SessionId::new_unchecked("ses-integ-b");
+        {
+            let mut coord_b = LoroCoordinator::new(&state_path).unwrap();
+            let result = coord_b.acquire("src/contested.rs", &sid_b);
+            assert!(result.is_err(), "session B should get a conflict");
+            let err = result.unwrap_err();
+            assert!(
+                err.to_string().contains("claim conflict"),
+                "error should be a claim conflict: {err}"
+            );
+        }
+    }
+
+    // -- EXIT_ADVISORY / EXIT_BLOCKING constant tests (AC #4) --
+
+    #[test]
+    fn test_exit_advisory_constant() {
+        assert_eq!(EXIT_ADVISORY, 0, "advisory should be exit 0 (Warn)");
+    }
+
+    #[test]
+    fn test_exit_blocking_constant() {
+        assert_eq!(EXIT_BLOCKING, 2, "blocking should be exit 2 (Block)");
     }
 
     // -- TeamGuard tests --
@@ -2479,7 +2774,7 @@ mod tests {
     #[test]
     fn test_gate_check_name_and_events() {
         let dir = tempfile::tempdir().unwrap();
-        let handler = GateCheck::new(dir.path().to_path_buf());
+        let handler = make_gate_check(dir.path().to_path_buf());
         assert_eq!(handler.name(), "gate-check");
         assert_eq!(handler.events(), &[HookEvent::PreToolUse]);
     }
