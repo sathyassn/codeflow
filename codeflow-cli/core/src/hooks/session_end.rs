@@ -407,18 +407,57 @@ impl SessionEndCleanup {
 
     /// Remove runtime files (env file, session lock).
     ///
+    /// Worktree-aware: checks `CODEFLOW_WORKTREE_PATH` env var. If set, cleans
+    /// the worktree-local env file first, then the main project env file.
+    ///
     /// Race safety: reads `codeflow-env.sh` and only removes it if the session ID
     /// inside matches the session being cleaned up. If a different session owns the
     /// file (concurrent session started between cleanup phases), it is preserved.
     fn clean_runtime_files(&self, project_dir: &Path, result: &mut CleanupResult) {
-        let runtime_dir = project_dir.join(".state").join("runtime");
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        self.clean_runtime_files_inner(project_dir, worktree_path.as_deref(), result);
+    }
 
-        // Race-safe env file removal: only remove if owned by this session.
-        match session::read_env_file(&runtime_dir) {
+    /// Inner implementation with explicit worktree path for testability.
+    fn clean_runtime_files_inner(
+        &self,
+        project_dir: &Path,
+        worktree_path: Option<&str>,
+        result: &mut CleanupResult,
+    ) {
+        // Clean worktree-local env file first (if worktree is active).
+        if let Some(wt_path) = worktree_path {
+            let wp = crate::worktree::WorktreePaths::new(wt_path);
+            let wt_runtime_dir = wp.runtime_dir();
+            self.race_safe_env_cleanup(&wt_runtime_dir, result);
+        }
+
+        // Clean main project env file.
+        let runtime_dir = project_dir.join(".state").join("runtime");
+        self.race_safe_env_cleanup(&runtime_dir, result);
+
+        // Remove session lock file (always in main project).
+        let lock_path = runtime_dir.join("session.lock");
+        if lock_path.exists() {
+            let _ = fs::remove_file(&lock_path);
+        }
+
+        // Legacy: remove current-session-id if it exists (no longer written,
+        // kept for one-time cleanup of old installations).
+        let legacy_sid_path = runtime_dir.join("current-session-id");
+        if legacy_sid_path.exists() {
+            let _ = fs::remove_file(&legacy_sid_path);
+        }
+    }
+
+    /// Race-safe env file removal: reads the file and only removes it if the
+    /// session ID matches the session being cleaned up.
+    fn race_safe_env_cleanup(&self, runtime_dir: &Path, result: &mut CleanupResult) {
+        match session::read_env_file(runtime_dir) {
             Ok(Some(env)) => {
                 let file_sid = env.session_id.as_str().to_string();
                 if file_sid == result.session_id {
-                    let _ = session::remove_env_file(&runtime_dir);
+                    let _ = session::remove_env_file(runtime_dir);
                 } else {
                     result.warnings.push(format!(
                         "SessionEnd: env file owned by different session ({file_sid}), preserving"
@@ -433,19 +472,6 @@ impl SessionEndCleanup {
                     .warnings
                     .push("SessionEnd: env file unreadable, preserving".to_string());
             }
-        }
-
-        // Remove session lock file.
-        let lock_path = runtime_dir.join("session.lock");
-        if lock_path.exists() {
-            let _ = fs::remove_file(&lock_path);
-        }
-
-        // Legacy: remove current-session-id if it exists (no longer written,
-        // kept for one-time cleanup of old installations).
-        let legacy_sid_path = runtime_dir.join("current-session-id");
-        if legacy_sid_path.exists() {
-            let _ = fs::remove_file(&legacy_sid_path);
         }
     }
 
@@ -1133,6 +1159,140 @@ mod tests {
         assert!(
             result.sentinels_cleaned > 0,
             "sentinels should be cleaned up"
+        );
+    }
+
+    // --- Worktree-aware cleanup tests ---
+
+    #[test]
+    fn test_cleanup_removes_worktree_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+        let sid = SessionId::new_unchecked(&session_id);
+
+        // Write env file to worktree location too.
+        let wt_runtime = worktree_dir.path().join(".state").join("runtime");
+        session::write_env_file_with_worktree(
+            &wt_runtime,
+            &sid,
+            "codeflow",
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: session_id.clone(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // Call inner with explicit worktree path.
+        cleaner.clean_runtime_files_inner(
+            dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+            &mut result,
+        );
+
+        // Both env files should be removed.
+        let project_runtime = dir.path().join(".state").join("runtime");
+        assert!(
+            session::read_env_file(&project_runtime).unwrap().is_none(),
+            "project env file should be removed"
+        );
+        assert!(
+            session::read_env_file(&wt_runtime).unwrap().is_none(),
+            "worktree env file should be removed"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_preserves_worktree_env_owned_by_other_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        // Write env file to worktree with a DIFFERENT session ID.
+        let other_sid = SessionId::new_unchecked("ses-01jq7othersid12345678901");
+        let wt_runtime = worktree_dir.path().join(".state").join("runtime");
+        session::write_env_file_with_worktree(
+            &wt_runtime,
+            &other_sid,
+            "codeflow",
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: session_id.clone(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        cleaner.clean_runtime_files_inner(
+            dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+            &mut result,
+        );
+
+        // Worktree env file should be preserved (different session).
+        assert!(
+            session::read_env_file(&wt_runtime).unwrap().is_some(),
+            "worktree env file owned by other session should be preserved"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("different session")),
+            "should warn about different session ownership"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_without_worktree_only_cleans_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: session_id.clone(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // No worktree path -- only project cleanup.
+        cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
+
+        let project_runtime = dir.path().join(".state").join("runtime");
+        assert!(
+            session::read_env_file(&project_runtime).unwrap().is_none(),
+            "project env file should be removed"
+        );
+        assert!(
+            result.warnings.is_empty(),
+            "no warnings expected: {:?}",
+            result.warnings
         );
     }
 }

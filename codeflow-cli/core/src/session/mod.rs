@@ -8,7 +8,7 @@
 //! - Builder pattern for session creation
 //! - Environment file (`codeflow-env.sh`) management
 //! - Active task file management
-//! - Current session resolution (env file only)
+//! - Current session resolution (worktree-aware, env file only)
 
 pub mod active_task;
 pub mod builder;
@@ -19,6 +19,7 @@ use std::path::Path;
 
 use crate::error::SessionError;
 use crate::types::SessionId;
+use crate::worktree::WorktreePaths;
 
 pub use active_task::{ActiveTask, clear_active_task, get_active_task, set_active_task};
 pub use builder::SessionBuilder;
@@ -69,10 +70,11 @@ pub fn is_valid_session_id(value: &str) -> bool {
     }
 }
 
-/// Resolve the current session ID from the env file.
+/// Resolve the current session ID from the env file (worktree-aware).
 ///
-/// Reads `codeflow-env.sh` at `{project_dir}/.state/runtime/codeflow-env.sh`.
-/// The env file is the single source of truth for the current session ID.
+/// Checks `CODEFLOW_WORKTREE_PATH` env var first. If set and a valid env file
+/// exists at `{worktree}/.state/runtime/codeflow-env.sh`, reads from there.
+/// Otherwise falls back to `{project_dir}/.state/runtime/codeflow-env.sh`.
 ///
 /// Takes `project_dir` (the repository root) and internally constructs the
 /// canonical path to the env file. This eliminates ambiguity -- callers no
@@ -84,11 +86,62 @@ pub fn is_valid_session_id(value: &str) -> bool {
 /// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file read
 /// or parse errors.
 pub fn current_session_id(project_dir: &Path) -> Result<SessionId, SessionError> {
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    current_session_id_inner(project_dir, worktree_path.as_deref())
+}
+
+/// Inner implementation of `current_session_id` with explicit worktree path
+/// parameter for testability (avoids `std::env::set_var` in tests).
+fn current_session_id_inner(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+) -> Result<SessionId, SessionError> {
+    // Check worktree-local env file first.
+    if let Some(wt_path) = worktree_path {
+        let wp = WorktreePaths::new(wt_path);
+        if let Ok(Some(env_file)) = read_env_file(&wp.runtime_dir()) {
+            return Ok(env_file.session_id);
+        }
+    }
+    // Fallback: main project runtime dir.
     let runtime_dir = project_dir.join(".state").join("runtime");
     match read_env_file(&runtime_dir)? {
         Some(env_file) => Ok(env_file.session_id),
         None => Err(SessionError::NoActiveSession),
     }
+}
+
+/// Resolve the current env file (worktree-aware).
+///
+/// Same resolution logic as `current_session_id` but returns the full
+/// `EnvFile` struct. Needed by `SessionEnd` cleanup which checks env file
+/// ownership before removal.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file
+/// read or parse errors.
+pub fn current_env_file(project_dir: &Path) -> Result<Option<EnvFile>, SessionError> {
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    current_env_file_inner(project_dir, worktree_path.as_deref())
+}
+
+/// Inner implementation of `current_env_file` with explicit worktree path
+/// parameter for testability.
+fn current_env_file_inner(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+) -> Result<Option<EnvFile>, SessionError> {
+    // Check worktree-local env file first.
+    if let Some(wt_path) = worktree_path {
+        let wp = WorktreePaths::new(wt_path);
+        if let Ok(Some(env_file)) = read_env_file(&wp.runtime_dir()) {
+            return Ok(Some(env_file));
+        }
+    }
+    // Fallback: main project runtime dir.
+    let runtime_dir = project_dir.join(".state").join("runtime");
+    read_env_file(&runtime_dir)
 }
 
 #[cfg(test)]
@@ -165,7 +218,8 @@ mod tests {
         let sid = SessionId::new_unchecked("ses-01jq7envfiletest12345678");
         write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
 
-        let result = current_session_id(dir.path()).unwrap();
+        // No worktree -- reads from project dir.
+        let result = current_session_id_inner(dir.path(), None).unwrap();
         assert_eq!(result, sid);
     }
 
@@ -173,7 +227,7 @@ mod tests {
     fn test_current_session_id_no_env_file_returns_error() {
         let dir = tempfile::tempdir().unwrap();
 
-        let result = current_session_id(dir.path());
+        let result = current_session_id_inner(dir.path(), None);
         assert!(result.is_err());
         assert!(
             result
@@ -190,7 +244,7 @@ mod tests {
         // file -- it should return NoActiveSession regardless of env var.
         let dir = tempfile::tempdir().unwrap();
 
-        let result = current_session_id(dir.path());
+        let result = current_session_id_inner(dir.path(), None);
         assert!(result.is_err(), "should not read env var, only env file");
     }
 
@@ -199,5 +253,141 @@ mod tests {
         // Crockford Base32 excludes i, l, o, u — these should fail validation
         // Construct a 26-char string with an excluded char
         assert!(!is_valid_session_id("ses-01jq7abcdef0123456789il0a"));
+    }
+
+    // --- Worktree-aware current_session_id tests ---
+
+    #[test]
+    fn test_current_session_id_prefers_worktree_env() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let project_sid = SessionId::new_unchecked("ses-01jq7projectsid123456789");
+        let worktree_sid = SessionId::new_unchecked("ses-01jq7worktreesid12345678");
+
+        // Write env file to both locations.
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
+
+        let wt_paths = WorktreePaths::new(worktree_dir.path());
+        write_env_file_with_worktree(
+            &wt_paths.runtime_dir(),
+            &worktree_sid,
+            "codeflow",
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+
+        // With worktree path set, should prefer worktree env file.
+        let result = current_session_id_inner(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            result, worktree_sid,
+            "should read session ID from worktree env file"
+        );
+    }
+
+    #[test]
+    fn test_current_session_id_falls_back_without_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let project_sid = SessionId::new_unchecked("ses-01jq7fallbacksid12345678");
+
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
+
+        // No worktree path -- falls back to project dir.
+        let result = current_session_id_inner(project_dir.path(), None).unwrap();
+        assert_eq!(
+            result, project_sid,
+            "should fall back to project env file when no worktree"
+        );
+    }
+
+    #[test]
+    fn test_current_session_id_worktree_missing_file_falls_back() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let project_sid = SessionId::new_unchecked("ses-01jq7missingwt1234567890");
+
+        // Write env file only to project dir (NOT worktree).
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
+
+        // Worktree dir exists but has no env file -- should fall back.
+        let result = current_session_id_inner(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            result, project_sid,
+            "should fall back to project env file when worktree env missing"
+        );
+    }
+
+    // --- current_env_file tests ---
+
+    #[test]
+    fn test_current_env_file_returns_full_struct() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let wt_sid = SessionId::new_unchecked("ses-01jq7envfilefull12345678");
+        let wt_path_str = worktree_dir.path().to_str().unwrap();
+
+        let wt_paths = WorktreePaths::new(worktree_dir.path());
+        write_env_file_with_worktree(
+            &wt_paths.runtime_dir(),
+            &wt_sid,
+            "codeflow",
+            Some(wt_path_str),
+        )
+        .unwrap();
+
+        let env = current_env_file_inner(project_dir.path(), Some(wt_path_str))
+            .unwrap()
+            .expect("should return Some(EnvFile)");
+
+        assert_eq!(env.session_id, wt_sid);
+        assert_eq!(env.project_root, "codeflow");
+        assert_eq!(
+            env.worktree_path.as_deref(),
+            Some(wt_path_str),
+            "worktree_path field should be populated"
+        );
+    }
+
+    #[test]
+    fn test_current_env_file_falls_back_to_project() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let project_sid = SessionId::new_unchecked("ses-01jq7envfallback12345678");
+
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
+
+        let env = current_env_file_inner(project_dir.path(), None)
+            .unwrap()
+            .expect("should return Some(EnvFile)");
+
+        assert_eq!(env.session_id, project_sid);
+        assert!(
+            env.worktree_path.is_none(),
+            "project env file should not have worktree_path"
+        );
+    }
+
+    #[test]
+    fn test_current_env_file_none_when_no_env_file() {
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let result = current_env_file_inner(project_dir.path(), None).unwrap();
+        assert!(
+            result.is_none(),
+            "should return None when no env file exists"
+        );
     }
 }

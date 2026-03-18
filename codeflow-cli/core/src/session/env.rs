@@ -375,4 +375,62 @@ mod tests {
             Some("/project/.git-worktrees/wt-1")
         );
     }
+
+    #[test]
+    fn test_two_worktrees_independent_env_files() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let wt1 = tempfile::tempdir().unwrap();
+        let wt2 = tempfile::tempdir().unwrap();
+
+        let sid1 = SessionId::new_unchecked("ses-01jq7concwt1test12345678");
+        let sid2 = SessionId::new_unchecked("ses-01jq7concwt2test12345678");
+
+        let wt1_runtime = wt1.path().join(".state").join("runtime");
+        let wt2_runtime = wt2.path().join(".state").join("runtime");
+
+        // Pre-create directories so both threads can start writing immediately.
+        fs::create_dir_all(&wt1_runtime).unwrap();
+        fs::create_dir_all(&wt2_runtime).unwrap();
+
+        let wt1_path = Arc::new(wt1_runtime.clone());
+        let wt2_path = Arc::new(wt2_runtime.clone());
+        let sid1_c = sid1.clone();
+        let sid2_c = sid2.clone();
+        let wt1_str = wt1.path().to_str().unwrap().to_string();
+        let wt2_str = wt2.path().to_str().unwrap().to_string();
+
+        // Write env files from two threads concurrently.
+        let h1 = thread::spawn(move || {
+            write_env_file_with_worktree(&wt1_path, &sid1_c, "codeflow", Some(&wt1_str)).unwrap();
+        });
+        let h2 = thread::spawn(move || {
+            write_env_file_with_worktree(&wt2_path, &sid2_c, "codeflow", Some(&wt2_str)).unwrap();
+        });
+
+        h1.join().expect("thread 1 panicked");
+        h2.join().expect("thread 2 panicked");
+
+        // Verify each worktree retained its own session ID.
+        let env1 = read_env_file(&wt1_runtime)
+            .unwrap()
+            .expect("wt1 env missing");
+        let env2 = read_env_file(&wt2_runtime)
+            .unwrap()
+            .expect("wt2 env missing");
+
+        assert_eq!(env1.session_id, sid1, "worktree 1 should have its own SID");
+        assert_eq!(env2.session_id, sid2, "worktree 2 should have its own SID");
+        assert_ne!(
+            env1.session_id, env2.session_id,
+            "two worktrees must have different SIDs"
+        );
+
+        // Verify worktree_path fields are distinct.
+        assert_ne!(
+            env1.worktree_path, env2.worktree_path,
+            "worktree paths must differ"
+        );
+    }
 }
