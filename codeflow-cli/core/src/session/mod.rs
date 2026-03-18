@@ -21,7 +21,11 @@ use crate::error::SessionError;
 use crate::types::SessionId;
 use crate::worktree::WorktreePaths;
 
-pub use active_task::{ActiveTask, clear_active_task, get_active_task, set_active_task};
+pub use active_task::{
+    ActiveTask, active_task_path_resolved, clear_active_task, clear_active_task_worktree_aware,
+    get_active_task, get_active_task_worktree_aware, set_active_task,
+    set_active_task_worktree_aware,
+};
 pub use builder::SessionBuilder;
 pub use env::{
     EnvFile, read_env_file, remove_env_file, write_env_file, write_env_file_with_worktree,

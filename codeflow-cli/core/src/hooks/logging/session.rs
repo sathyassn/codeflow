@@ -197,12 +197,10 @@ fn git_short_commit(project_dir: &Path) -> Option<String> {
     }
 }
 
-/// Read the active task ID from `active-task.json`.
+/// Read the active task ID from `active-task.json` (worktree-aware).
 fn read_active_task_id(project_dir: &Path) -> Option<String> {
-    let path = project_dir
-        .join(".state")
-        .join("runtime")
-        .join("active-task.json");
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    let path = crate::session::active_task_path_resolved(project_dir, worktree_path.as_deref());
     let data = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
     v.get("task_id")?

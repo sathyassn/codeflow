@@ -3,15 +3,21 @@
 //! The active task file is a bridge between the session runtime and hook
 //! context. It stores the currently active task details at
 //! `.state/runtime/active-task.json`.
+//!
+//! Worktree-aware wrappers (`get_active_task_worktree_aware`,
+//! `set_active_task_worktree_aware`, `clear_active_task_worktree_aware`)
+//! resolve the runtime directory from `CODEFLOW_WORKTREE_PATH` when set,
+//! falling back to the project-level `.state/runtime/` directory.
 
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::SessionError;
 use crate::types::{EpicId, FormatId, SessionId, TaskId};
+use crate::worktree::WorktreePaths;
 
 /// Default filename for the active task file.
 const ACTIVE_TASK_FILENAME: &str = "active-task.json";
@@ -116,6 +122,124 @@ pub fn clear_active_task(runtime_dir: &Path) -> Result<(), SessionError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(SessionError::Io(e)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree-aware wrappers
+// ---------------------------------------------------------------------------
+
+/// Resolve the runtime directory, preferring worktree-local when available.
+fn resolve_runtime_dir(project_dir: &Path, worktree_path: Option<&str>) -> PathBuf {
+    if let Some(wt_path) = worktree_path {
+        let wp = WorktreePaths::new(wt_path);
+        return wp.runtime_dir();
+    }
+    project_dir.join(".state").join("runtime")
+}
+
+/// Read active task, resolving worktree path from env var.
+///
+/// Checks `CODEFLOW_WORKTREE_PATH` first. If set, reads from
+/// `{worktree}/.state/runtime/active-task.json`. If that file is missing,
+/// falls back to the project-level `.state/runtime/`.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on read failure, `SessionError::Serialization`
+/// on JSON parse failure.
+pub fn get_active_task_worktree_aware(
+    project_dir: &Path,
+) -> Result<Option<ActiveTask>, SessionError> {
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    get_active_task_resolved(project_dir, worktree_path.as_deref())
+}
+
+/// Inner: testable with explicit worktree path.
+pub(crate) fn get_active_task_resolved(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+) -> Result<Option<ActiveTask>, SessionError> {
+    // Check worktree-local active task first.
+    if let Some(wt_path) = worktree_path {
+        let wp = WorktreePaths::new(wt_path);
+        let result = get_active_task(&wp.runtime_dir());
+        if let Ok(Some(_)) = &result {
+            return result;
+        }
+    }
+    // Fallback: main project runtime dir.
+    let runtime_dir = project_dir.join(".state").join("runtime");
+    get_active_task(&runtime_dir)
+}
+
+/// Write active task, resolving worktree path from env var.
+///
+/// When `CODEFLOW_WORKTREE_PATH` is set, writes to the worktree-local
+/// runtime directory. Otherwise writes to the project-level directory.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on write failure, `SessionError::Serialization`
+/// on JSON serialization failure.
+pub fn set_active_task_worktree_aware(
+    project_dir: &Path,
+    task: &ActiveTask,
+) -> Result<(), SessionError> {
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    set_active_task_resolved(project_dir, task, worktree_path.as_deref())
+}
+
+/// Inner: testable with explicit worktree path.
+pub(crate) fn set_active_task_resolved(
+    project_dir: &Path,
+    task: &ActiveTask,
+    worktree_path: Option<&str>,
+) -> Result<(), SessionError> {
+    let runtime_dir = resolve_runtime_dir(project_dir, worktree_path);
+    set_active_task(&runtime_dir, task)
+}
+
+/// Clear active task, resolving worktree path from env var.
+///
+/// When `CODEFLOW_WORKTREE_PATH` is set, clears from the worktree-local
+/// runtime directory. Otherwise clears from the project-level directory.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on removal failure (other than not-found).
+pub fn clear_active_task_worktree_aware(project_dir: &Path) -> Result<(), SessionError> {
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+    clear_active_task_resolved(project_dir, worktree_path.as_deref())
+}
+
+/// Inner: testable with explicit worktree path.
+pub(crate) fn clear_active_task_resolved(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+) -> Result<(), SessionError> {
+    let runtime_dir = resolve_runtime_dir(project_dir, worktree_path);
+    clear_active_task(&runtime_dir)
+}
+
+/// Read the active task file path, resolving worktree when available.
+///
+/// Used by logging hooks that read the file directly (not via
+/// `get_active_task`). Returns the path to `active-task.json` in the
+/// worktree-local runtime directory when the worktree env var is set,
+/// falling back to the project-level path if the worktree file is missing.
+#[must_use]
+pub fn active_task_path_resolved(project_dir: &Path, worktree_path: Option<&str>) -> PathBuf {
+    if let Some(wt_path) = worktree_path {
+        let wp = WorktreePaths::new(wt_path);
+        let wt_file = wp.runtime_dir().join(ACTIVE_TASK_FILENAME);
+        if wt_file.exists() {
+            return wt_file;
+        }
+    }
+    project_dir
+        .join(".state")
+        .join("runtime")
+        .join(ACTIVE_TASK_FILENAME)
 }
 
 #[cfg(test)]
@@ -260,5 +384,280 @@ mod tests {
 
         let parsed: ActiveTask = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, task);
+    }
+
+    // --- Worktree-aware wrapper tests ---
+
+    #[test]
+    fn test_get_active_task_prefers_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let project_task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-project"),
+            ..make_test_task()
+        };
+        let worktree_task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-worktree"),
+            ..make_test_task()
+        };
+
+        // Write to both locations.
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        set_active_task(&project_runtime, &project_task).unwrap();
+
+        let wp = WorktreePaths::new(worktree_dir.path());
+        set_active_task(&wp.runtime_dir(), &worktree_task).unwrap();
+
+        // With worktree path, should prefer worktree task.
+        let result = get_active_task_resolved(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            result.task_id.as_str(),
+            "task-worktree",
+            "should read from worktree"
+        );
+    }
+
+    #[test]
+    fn test_get_active_task_falls_back_without_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let project_task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-fallback"),
+            ..make_test_task()
+        };
+
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        set_active_task(&project_runtime, &project_task).unwrap();
+
+        // No worktree -- falls back to project dir.
+        let result = get_active_task_resolved(project_dir.path(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.task_id.as_str(),
+            "task-fallback",
+            "should fall back to project"
+        );
+    }
+
+    #[test]
+    fn test_get_active_task_worktree_missing_file_falls_back() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let project_task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-project-only"),
+            ..make_test_task()
+        };
+
+        // Write only to project dir (NOT worktree).
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        set_active_task(&project_runtime, &project_task).unwrap();
+
+        // Worktree dir exists but has no active-task.json -- should fall back.
+        let result = get_active_task_resolved(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            result.task_id.as_str(),
+            "task-project-only",
+            "should fall back when worktree file missing"
+        );
+    }
+
+    #[test]
+    fn test_set_active_task_writes_to_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-wt-write"),
+            ..make_test_task()
+        };
+
+        // Set with worktree path -- should write to worktree.
+        set_active_task_resolved(
+            project_dir.path(),
+            &task,
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+
+        // Verify written to worktree runtime dir.
+        let wp = WorktreePaths::new(worktree_dir.path());
+        let loaded = get_active_task(&wp.runtime_dir()).unwrap().unwrap();
+        assert_eq!(loaded.task_id.as_str(), "task-wt-write");
+
+        // Verify NOT written to project dir.
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        let project_result = get_active_task(&project_runtime).unwrap();
+        assert!(
+            project_result.is_none(),
+            "should not write to project dir when worktree is active"
+        );
+    }
+
+    #[test]
+    fn test_set_active_task_falls_back_without_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-proj-write"),
+            ..make_test_task()
+        };
+
+        // Set without worktree -- should write to project dir.
+        set_active_task_resolved(project_dir.path(), &task, None).unwrap();
+
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        let loaded = get_active_task(&project_runtime).unwrap().unwrap();
+        assert_eq!(loaded.task_id.as_str(), "task-proj-write");
+    }
+
+    #[test]
+    fn test_clear_active_task_clears_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        let task = make_test_task();
+
+        // Write to worktree.
+        let wp = WorktreePaths::new(worktree_dir.path());
+        set_active_task(&wp.runtime_dir(), &task).unwrap();
+        assert!(wp.active_task().exists());
+
+        // Clear with worktree path.
+        clear_active_task_resolved(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+        assert!(
+            !wp.active_task().exists(),
+            "should clear worktree active task"
+        );
+    }
+
+    #[test]
+    fn test_clear_active_task_falls_back_without_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let task = make_test_task();
+
+        let project_runtime = project_dir.path().join(".state").join("runtime");
+        set_active_task(&project_runtime, &task).unwrap();
+        assert!(project_runtime.join(ACTIVE_TASK_FILENAME).exists());
+
+        // Clear without worktree -- should clear project dir.
+        clear_active_task_resolved(project_dir.path(), None).unwrap();
+        assert!(!project_runtime.join(ACTIVE_TASK_FILENAME).exists());
+    }
+
+    #[test]
+    fn test_two_worktrees_independent_active_tasks() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_a = tempfile::tempdir().unwrap();
+        let worktree_b = tempfile::tempdir().unwrap();
+
+        let task_a = ActiveTask {
+            task_id: TaskId::new_unchecked("task-session-a"),
+            title: Some("Session A work".into()),
+            ..make_test_task()
+        };
+        let task_b = ActiveTask {
+            task_id: TaskId::new_unchecked("task-session-b"),
+            title: Some("Session B work".into()),
+            ..make_test_task()
+        };
+
+        // Write to each worktree independently.
+        set_active_task_resolved(
+            project_dir.path(),
+            &task_a,
+            Some(worktree_a.path().to_str().unwrap()),
+        )
+        .unwrap();
+        set_active_task_resolved(
+            project_dir.path(),
+            &task_b,
+            Some(worktree_b.path().to_str().unwrap()),
+        )
+        .unwrap();
+
+        // Read from each -- should see their own task.
+        let read_a = get_active_task_resolved(
+            project_dir.path(),
+            Some(worktree_a.path().to_str().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+        let read_b = get_active_task_resolved(
+            project_dir.path(),
+            Some(worktree_b.path().to_str().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(read_a.task_id.as_str(), "task-session-a");
+        assert_eq!(read_b.task_id.as_str(), "task-session-b");
+        assert_ne!(
+            read_a.task_id, read_b.task_id,
+            "two worktrees should have independent tasks"
+        );
+    }
+
+    #[test]
+    fn test_active_task_path_resolved_prefers_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        // Write to worktree so the file exists.
+        let wp = WorktreePaths::new(worktree_dir.path());
+        set_active_task(&wp.runtime_dir(), &make_test_task()).unwrap();
+
+        let path = active_task_path_resolved(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        );
+        assert!(
+            path.starts_with(worktree_dir.path()),
+            "should resolve to worktree path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn test_active_task_path_resolved_falls_back() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let worktree_dir = tempfile::tempdir().unwrap();
+
+        // No file in worktree -- should fall back to project.
+        let path = active_task_path_resolved(
+            project_dir.path(),
+            Some(worktree_dir.path().to_str().unwrap()),
+        );
+        assert!(
+            path.starts_with(project_dir.path()),
+            "should fall back to project path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn test_active_task_path_resolved_no_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let path = active_task_path_resolved(project_dir.path(), None);
+        let expected = project_dir
+            .path()
+            .join(".state")
+            .join("runtime")
+            .join(ACTIVE_TASK_FILENAME);
+        assert_eq!(path, expected);
     }
 }

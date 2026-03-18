@@ -671,14 +671,24 @@ impl SessionStartInit {
         }
     }
 
-    /// Clean up expired active task context.
+    /// Clean up expired active task context (worktree-aware).
     fn cleanup_active_task(&self, project_dir: &Path) {
-        let runtime_dir = project_dir.join(".state").join("runtime");
-        if let Ok(Some(task)) = session::get_active_task(&runtime_dir) {
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        self.cleanup_active_task_inner(project_dir, worktree_path.as_deref());
+    }
+
+    /// Inner implementation with explicit worktree path for testability.
+    fn cleanup_active_task_inner(&self, project_dir: &Path, worktree_path: Option<&str>) {
+        if let Ok(Some(task)) =
+            session::active_task::get_active_task_resolved(project_dir, worktree_path)
+        {
             // If the task is complete or cancelled, remove it.
             if let Some(status) = &task.status {
                 if status == "complete" || status == "cancelled" {
-                    let _ = session::clear_active_task(&runtime_dir);
+                    let _ = session::active_task::clear_active_task_resolved(
+                        project_dir,
+                        worktree_path,
+                    );
                 }
             }
         }
@@ -783,13 +793,13 @@ impl SessionStartInit {
     // (lead_pid, source_at_start, latest_source, latest_source_at)
 
     /// Detect compact recovery (when `source=compact/resume/clear` and active work exists).
+    /// Worktree-aware: reads active task from worktree-local path when available.
     fn detect_compact_recovery(&self, project_dir: &Path, source: &str, result: &mut InitResult) {
         if source != "compact" && source != "resume" && source != "clear" {
             return;
         }
 
-        let runtime_dir = project_dir.join(".state").join("runtime");
-        if let Ok(Some(task)) = session::get_active_task(&runtime_dir) {
+        if let Ok(Some(task)) = session::get_active_task_worktree_aware(project_dir) {
             result.messages.push(format!(
                 "COMPACT RECOVERY: Active task {} detected. Context was compacted.",
                 task.task_id.as_str()
@@ -1045,10 +1055,9 @@ impl SessionStartInstructions {
     }
 
     /// Output active task context or "None" fallback with register-work reminder.
+    /// Worktree-aware: reads active task from worktree-local path when available.
     fn output_active_task(project_dir: &Path, writer: &mut dyn Write) -> Result<(), HookError> {
-        let runtime_dir = project_dir.join(".state").join("runtime");
-
-        if let Ok(Some(task)) = session::get_active_task(&runtime_dir) {
+        if let Ok(Some(task)) = session::get_active_task_worktree_aware(project_dir) {
             let task_id = task
                 .task_format_id
                 .as_ref()

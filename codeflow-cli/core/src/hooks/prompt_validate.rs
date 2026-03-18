@@ -186,10 +186,9 @@ impl<G: GitRunner, P: PathFlowChecker> PromptValidator<G, P> {
         false
     }
 
-    /// Read the active task ID from `.state/runtime/active-task.json`.
+    /// Read the active task ID (worktree-aware).
     fn active_task_id(&self) -> Option<String> {
-        let runtime_dir = self.project_dir.join(".state").join("runtime");
-        let task = session::get_active_task(&runtime_dir).ok()??;
+        let task = session::get_active_task_worktree_aware(&self.project_dir).ok()??;
         // Prefer format_id, fall back to task_id (matches Go logic).
         if let Some(ref fmt_id) = task.task_format_id {
             let s = fmt_id.as_str();

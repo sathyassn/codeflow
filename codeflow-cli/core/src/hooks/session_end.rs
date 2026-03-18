@@ -315,9 +315,21 @@ impl SessionEndCleanup {
     }
 
     /// Handle active task preservation (keep `in_progress`, remove completed).
+    /// Worktree-aware: checks worktree-local path first, then project-level.
+    /// On cleanup, clears BOTH locations (dual-cleanup pattern).
     fn handle_active_task(&self, project_dir: &Path, result: &mut CleanupResult) {
-        let runtime_dir = project_dir.join(".state").join("runtime");
-        match session::get_active_task(&runtime_dir) {
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        self.handle_active_task_inner(project_dir, worktree_path.as_deref(), result);
+    }
+
+    /// Inner implementation with explicit worktree path for testability.
+    fn handle_active_task_inner(
+        &self,
+        project_dir: &Path,
+        worktree_path: Option<&str>,
+        result: &mut CleanupResult,
+    ) {
+        match session::active_task::get_active_task_resolved(project_dir, worktree_path) {
             Ok(Some(task)) => {
                 if let Some(status) = &task.status {
                     if status == "in_progress" {
@@ -329,12 +341,23 @@ impl SessionEndCleanup {
                         return;
                     }
                 }
-                let _ = session::clear_active_task(&runtime_dir);
+                // Dual-cleanup: clear from both worktree and project dir.
+                if let Some(wt_path) = worktree_path {
+                    let wp = crate::worktree::WorktreePaths::new(wt_path);
+                    let _ = session::clear_active_task(&wp.runtime_dir());
+                }
+                let project_runtime = project_dir.join(".state").join("runtime");
+                let _ = session::clear_active_task(&project_runtime);
             }
             Ok(None) => {}
             Err(_) => {
-                // Unreadable -- clean it.
-                let _ = session::clear_active_task(&runtime_dir);
+                // Unreadable -- clean both locations.
+                if let Some(wt_path) = worktree_path {
+                    let wp = crate::worktree::WorktreePaths::new(wt_path);
+                    let _ = session::clear_active_task(&wp.runtime_dir());
+                }
+                let project_runtime = project_dir.join(".state").join("runtime");
+                let _ = session::clear_active_task(&project_runtime);
             }
         }
     }
