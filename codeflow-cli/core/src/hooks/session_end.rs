@@ -499,17 +499,43 @@ impl SessionEndCleanup {
     }
 
     /// Remove the project temp directory.
+    ///
+    /// Reads `CODEFLOW_WORKTREE_PATH` to scope cleanup. Delegates to the
+    /// inner function for testability (avoids env-var dependency in tests).
     fn clean_project_temp(&self, project_dir: &Path) {
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        Self::clean_project_temp_inner(project_dir, worktree_path.as_deref());
+    }
+
+    /// Testable inner function for temp directory cleanup.
+    ///
+    /// With a worktree path: removes only `/tmp/claude/{project}/{wt-name}/`.
+    /// Without: removes `/tmp/claude/{project}/managed/` (legacy fallback).
+    /// NEVER removes `/tmp/claude/{project}/` — only the subdirectory.
+    fn clean_project_temp_inner(project_dir: &Path, worktree_path: Option<&str>) {
         let project_name = project_dir
             .file_name()
             .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
 
-        let tmp_dir = PathBuf::from("/tmp/claude")
-            .join(&project_name)
-            .join("managed");
-
-        if tmp_dir.exists() {
-            let _ = fs::remove_dir_all(&tmp_dir);
+        if let Some(wt_path) = worktree_path {
+            // Scoped cleanup: remove only this worktree's subdirectory.
+            let wt_name = Path::new(wt_path)
+                .file_name()
+                .map_or_else(|| "default".into(), |n| n.to_string_lossy().to_string());
+            let scoped_dir = PathBuf::from("/tmp/claude")
+                .join(&project_name)
+                .join(&wt_name);
+            if scoped_dir.exists() {
+                let _ = fs::remove_dir_all(&scoped_dir);
+            }
+        } else {
+            // Legacy fallback: remove managed/ only (no worktree).
+            let tmp_dir = PathBuf::from("/tmp/claude")
+                .join(&project_name)
+                .join("managed");
+            if tmp_dir.exists() {
+                let _ = fs::remove_dir_all(&tmp_dir);
+            }
         }
     }
 }
@@ -1317,5 +1343,125 @@ mod tests {
             "no warnings expected: {:?}",
             result.warnings
         );
+    }
+
+    // --- clean_project_temp_inner tests ---
+
+    #[test]
+    fn test_clean_project_temp_scoped_to_worktree() {
+        let base = tempfile::tempdir().unwrap();
+        let project_name = base
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        // Create two worktree temp dirs under /tmp/claude/{project}/.
+        let wt_a_dir = PathBuf::from("/tmp/claude")
+            .join(&project_name)
+            .join("worktree-ses-aaa")
+            .join("managed");
+        let wt_b_dir = PathBuf::from("/tmp/claude")
+            .join(&project_name)
+            .join("worktree-ses-bbb")
+            .join("managed");
+        fs::create_dir_all(&wt_a_dir).unwrap();
+        fs::create_dir_all(&wt_b_dir).unwrap();
+
+        // Clean session A only.
+        SessionEndCleanup::clean_project_temp_inner(
+            base.path(),
+            Some("/proj/.git-worktrees/worktree-ses-aaa"),
+        );
+
+        // Session A's dir is gone (parent worktree-ses-aaa removed).
+        assert!(
+            !PathBuf::from("/tmp/claude")
+                .join(&project_name)
+                .join("worktree-ses-aaa")
+                .exists(),
+            "session A's worktree dir should be removed"
+        );
+        // Session B's dir is untouched.
+        assert!(
+            wt_b_dir.exists(),
+            "session B's temp dir should be preserved"
+        );
+
+        // Cleanup.
+        let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
+    }
+
+    #[test]
+    fn test_clean_project_temp_preserves_other_worktrees() {
+        let base = tempfile::tempdir().unwrap();
+        let project_name = base
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        // Create three worktree temp dirs.
+        for name in &["worktree-ses-111", "worktree-ses-222", "worktree-ses-333"] {
+            let d = PathBuf::from("/tmp/claude")
+                .join(&project_name)
+                .join(name)
+                .join("managed")
+                .join("protected-edits");
+            fs::create_dir_all(&d).unwrap();
+        }
+
+        // Clean only session 222.
+        SessionEndCleanup::clean_project_temp_inner(
+            base.path(),
+            Some("/proj/.git-worktrees/worktree-ses-222"),
+        );
+
+        let base_tmp = PathBuf::from("/tmp/claude").join(&project_name);
+        assert!(
+            !base_tmp.join("worktree-ses-222").exists(),
+            "cleaned worktree should be gone"
+        );
+        assert!(
+            base_tmp.join("worktree-ses-111").exists(),
+            "other worktree 111 should survive"
+        );
+        assert!(
+            base_tmp.join("worktree-ses-333").exists(),
+            "other worktree 333 should survive"
+        );
+
+        // Cleanup.
+        let _ = fs::remove_dir_all(base_tmp);
+    }
+
+    #[test]
+    fn test_clean_project_temp_fallback_no_worktree() {
+        let base = tempfile::tempdir().unwrap();
+        let project_name = base
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        // Create legacy managed/ dir.
+        let managed = PathBuf::from("/tmp/claude")
+            .join(&project_name)
+            .join("managed");
+        fs::create_dir_all(&managed).unwrap();
+
+        // Clean without worktree path (legacy behavior).
+        SessionEndCleanup::clean_project_temp_inner(base.path(), None);
+
+        assert!(!managed.exists(), "legacy managed/ dir should be removed");
+
+        // Project dir itself should still exist (we never remove it).
+        // (It may or may not exist depending on whether managed/ was the only child.)
+
+        // Cleanup.
+        let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
     }
 }

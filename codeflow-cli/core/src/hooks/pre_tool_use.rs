@@ -1082,6 +1082,9 @@ pub struct ProtectionGuard {
     policy: EnforcementPolicy,
     project_dir: PathBuf,
     project_root: String,
+    /// Worktree name extracted from `CODEFLOW_WORKTREE_PATH` (if set).
+    /// Used to scope staging paths per worktree.
+    worktree_name: Option<String>,
 }
 
 impl ProtectionGuard {
@@ -1094,10 +1097,53 @@ impl ProtectionGuard {
                 .unwrap_or("codeflow")
                 .to_string()
         });
+        let worktree_name = Self::read_worktree_name();
         Self {
             policy,
             project_dir,
             project_root,
+            worktree_name,
+        }
+    }
+
+    /// Testable constructor that accepts worktree_name directly.
+    #[cfg(test)]
+    fn new_with_worktree(
+        policy: EnforcementPolicy,
+        project_dir: PathBuf,
+        worktree_name: Option<String>,
+    ) -> Self {
+        let project_root = project_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("codeflow")
+            .to_string();
+        Self {
+            policy,
+            project_dir,
+            project_root,
+            worktree_name,
+        }
+    }
+
+    /// Read worktree name from `CODEFLOW_WORKTREE_PATH` env var.
+    fn read_worktree_name() -> Option<String> {
+        std::env::var("CODEFLOW_WORKTREE_PATH").ok().and_then(|p| {
+            Path::new(&p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
+    }
+
+    /// Build the staging directory path, scoped by worktree when available.
+    fn staging_dir(&self) -> String {
+        if let Some(ref wt_name) = self.worktree_name {
+            format!(
+                "/tmp/claude/{}/{}/managed/protected-edits",
+                self.project_root, wt_name
+            )
+        } else {
+            format!("/tmp/claude/{}/managed/protected-edits", self.project_root)
         }
     }
 
@@ -1114,7 +1160,7 @@ impl ProtectionGuard {
     }
 
     fn is_staging_path(&self, path: &str) -> bool {
-        let base = format!("/tmp/claude/{}/managed/protected-edits", self.project_root);
+        let base = self.staging_dir();
         path.starts_with(&format!("{base}/"))
             || (path.starts_with("/tmp/claude/") && path.contains("/managed/protected-edits/"))
     }
@@ -1147,7 +1193,7 @@ impl ProtectionGuard {
     }
 
     fn block_verdict(&self, tier: &str, rel_path: &str) -> HookOutput {
-        let staging_dir = format!("/tmp/claude/{}/managed/protected-edits", self.project_root);
+        let staging_dir = self.staging_dir();
         let staged_path = format!("{staging_dir}/{rel_path}");
 
         HookOutput::Block {
@@ -3037,6 +3083,66 @@ mod tests {
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
+    }
+
+    // -- ProtectionGuard worktree-scoped staging path tests --
+
+    #[test]
+    fn test_block_verdict_staging_path_includes_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            Some("worktree-ses-abc".to_string()),
+        );
+
+        let staging = handler.staging_dir();
+        let dir_name = dir.path().file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            staging,
+            format!("/tmp/claude/{dir_name}/worktree-ses-abc/managed/protected-edits")
+        );
+    }
+
+    #[test]
+    fn test_block_verdict_staging_path_no_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+
+        let staging = handler.staging_dir();
+        let dir_name = dir.path().file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            staging,
+            format!("/tmp/claude/{dir_name}/managed/protected-edits")
+        );
+    }
+
+    #[test]
+    fn test_is_staging_path_worktree_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            Some("worktree-ses-xyz".to_string()),
+        );
+
+        let dir_name = dir.path().file_name().unwrap().to_string_lossy();
+
+        // Exact match with worktree-scoped path.
+        assert!(handler.is_staging_path(&format!(
+            "/tmp/claude/{dir_name}/worktree-ses-xyz/managed/protected-edits/some/file.rs"
+        )));
+
+        // Generic fallback (contains pattern) — still allowed.
+        assert!(handler.is_staging_path(
+            "/tmp/claude/other-project/worktree-ses-other/managed/protected-edits/file.rs"
+        ));
+
+        // Non-staging path — rejected.
+        assert!(!handler.is_staging_path("/tmp/claude/other/file.rs"));
     }
 
     // -- WebFetchGuard: Bash tool path, from_policy, name/events --

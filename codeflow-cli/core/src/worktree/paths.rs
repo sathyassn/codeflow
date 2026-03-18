@@ -54,10 +54,14 @@ impl WorktreePaths {
         self.runtime_dir().join("active-task.json")
     }
 
-    /// Project-scoped temp directory for the worktree.
+    /// Worktree-scoped temp directory.
     ///
-    /// Uses `/tmp/claude/{project_name}/managed/` where `project_name` is
-    /// derived from the worktree root's parent directory name (the project).
+    /// Returns `/tmp/claude/{project_name}/{worktree_name}/managed/` where
+    /// `project_name` is derived from the worktree root's grandparent
+    /// directory and `worktree_name` from the root's own directory name.
+    ///
+    /// Each worktree gets its own temp subdirectory so concurrent sessions
+    /// never destroy each other's staged protected edits on cleanup.
     #[must_use]
     pub fn temp_dir(&self) -> PathBuf {
         let project_name = self
@@ -66,8 +70,13 @@ impl WorktreePaths {
             .and_then(|p| p.parent())
             .and_then(|p| p.file_name())
             .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+        let wt_name = self
+            .root
+            .file_name()
+            .map_or_else(|| "default".into(), |n| n.to_string_lossy().to_string());
         PathBuf::from("/tmp/claude")
             .join(project_name)
+            .join(wt_name)
             .join("managed")
     }
 
@@ -165,8 +174,35 @@ mod tests {
     #[test]
     fn test_worktree_paths_temp_dir() {
         let wp = make_paths();
-        // Parent of .git-worktrees is /project -> project_name = "project"
-        assert_eq!(wp.temp_dir(), PathBuf::from("/tmp/claude/project/managed"));
+        // project_name = "project", wt_name = "worktree-ses-abc123"
+        assert_eq!(
+            wp.temp_dir(),
+            PathBuf::from("/tmp/claude/project/worktree-ses-abc123/managed")
+        );
+    }
+
+    #[test]
+    fn test_temp_dir_includes_worktree_name() {
+        let wp = WorktreePaths::new("/myproject/.git-worktrees/worktree-ses-111");
+        assert_eq!(
+            wp.temp_dir(),
+            PathBuf::from("/tmp/claude/myproject/worktree-ses-111/managed")
+        );
+    }
+
+    #[test]
+    fn test_temp_dir_different_worktrees_different_paths() {
+        let wp_a = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-aaa");
+        let wp_b = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-bbb");
+        assert_ne!(wp_a.temp_dir(), wp_b.temp_dir());
+        assert_eq!(
+            wp_a.temp_dir(),
+            PathBuf::from("/tmp/claude/proj/worktree-ses-aaa/managed")
+        );
+        assert_eq!(
+            wp_b.temp_dir(),
+            PathBuf::from("/tmp/claude/proj/worktree-ses-bbb/managed")
+        );
     }
 
     #[test]
@@ -211,9 +247,13 @@ mod tests {
 
     #[test]
     fn test_worktree_paths_temp_dir_fallback() {
-        // If the path doesn't have enough parents, falls back to "codeflow".
+        // If the path doesn't have enough parents, falls back to "codeflow"
+        // for project_name, but still uses the root's file_name for wt_name.
         let wp = WorktreePaths::new("/single");
-        assert_eq!(wp.temp_dir(), PathBuf::from("/tmp/claude/codeflow/managed"));
+        assert_eq!(
+            wp.temp_dir(),
+            PathBuf::from("/tmp/claude/codeflow/single/managed")
+        );
     }
 
     #[test]

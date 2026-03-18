@@ -259,7 +259,7 @@ impl SessionStartInit {
         self.detect_compact_recovery(project_dir, source, &mut result);
 
         // --- Section 10: Project temp directory ---
-        self.create_project_temp_dir(project_dir, &mut result);
+        self.create_project_temp_dir(project_dir, worktree_paths.as_ref(), &mut result);
 
         // Write env file inside worktree with CODEFLOW_WORKTREE_PATH.
         if let Some(ref wp) = worktree_paths {
@@ -808,15 +808,32 @@ impl SessionStartInit {
     }
 
     /// Create the project-scoped temp directory.
-    fn create_project_temp_dir(&self, project_dir: &Path, _result: &mut InitResult) {
-        let project_name = project_dir
-            .file_name()
-            .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
-
-        let tmp_dir = PathBuf::from("/tmp/claude")
-            .join(&project_name)
-            .join("managed");
+    ///
+    /// When a worktree is available, creates the worktree-scoped path via
+    /// `WorktreePaths::temp_dir()` so each session gets its own subdirectory.
+    /// Without a worktree, falls back to the project-level path.
+    fn create_project_temp_dir(
+        &self,
+        project_dir: &Path,
+        worktree_paths: Option<&WorktreePaths>,
+        _result: &mut InitResult,
+    ) {
+        let tmp_dir = Self::resolve_temp_dir(project_dir, worktree_paths);
         let _ = fs::create_dir_all(&tmp_dir);
+    }
+
+    /// Pure path resolver for the temp directory (testable without env vars).
+    fn resolve_temp_dir(project_dir: &Path, worktree_paths: Option<&WorktreePaths>) -> PathBuf {
+        if let Some(wp) = worktree_paths {
+            wp.temp_dir()
+        } else {
+            let project_name = project_dir
+                .file_name()
+                .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+            PathBuf::from("/tmp/claude")
+                .join(&project_name)
+                .join("managed")
+        }
     }
 
     /// Create a detached worktree for the current session.
@@ -2430,7 +2447,7 @@ mod tests {
     // fields moved to pathflow-session-status.json.
 
     #[test]
-    fn test_create_project_temp_dir() {
+    fn test_create_project_temp_dir_without_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
 
@@ -2444,7 +2461,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        init.create_project_temp_dir(dir.path(), &mut result);
+        init.create_project_temp_dir(dir.path(), None, &mut result);
 
         let project_name = dir
             .path()
@@ -2458,6 +2475,105 @@ mod tests {
         assert!(expected.exists(), "project temp dir should be created");
 
         // Cleanup.
+        let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
+    }
+
+    #[test]
+    fn test_create_project_temp_dir_with_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        // Create a fake worktree structure: {dir}/.git-worktrees/worktree-ses-test
+        let wt_parent = dir.path().join(".git-worktrees");
+        fs::create_dir_all(&wt_parent).unwrap();
+        let wt_root = wt_parent.join("worktree-ses-test");
+        fs::create_dir_all(&wt_root).unwrap();
+
+        let wp = WorktreePaths::new(&wt_root);
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.create_project_temp_dir(dir.path(), Some(&wp), &mut result);
+
+        let expected = wp.temp_dir();
+        assert!(
+            expected.exists(),
+            "worktree-scoped temp dir should be created"
+        );
+        assert!(
+            expected.to_string_lossy().contains("worktree-ses-test"),
+            "path should contain worktree name"
+        );
+
+        // Cleanup.
+        let project_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
+    }
+
+    #[test]
+    fn test_resolve_temp_dir_with_worktree() {
+        let wt = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-abc");
+        let result = SessionStartInit::resolve_temp_dir(Path::new("/proj"), Some(&wt));
+        assert_eq!(
+            result,
+            PathBuf::from("/tmp/claude/proj/worktree-ses-abc/managed")
+        );
+    }
+
+    #[test]
+    fn test_resolve_temp_dir_without_worktree() {
+        let result = SessionStartInit::resolve_temp_dir(Path::new("/myproject"), None);
+        assert_eq!(result, PathBuf::from("/tmp/claude/myproject/managed"));
+    }
+
+    #[test]
+    fn test_resolve_temp_dir_creates_all_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let wt_parent = dir.path().join(".git-worktrees");
+        fs::create_dir_all(&wt_parent).unwrap();
+        let wt_root = wt_parent.join("worktree-ses-parents");
+        fs::create_dir_all(&wt_root).unwrap();
+
+        let wp = WorktreePaths::new(&wt_root);
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // The temp dir shouldn't exist yet.
+        let expected = wp.temp_dir();
+        assert!(!expected.exists());
+
+        init.create_project_temp_dir(dir.path(), Some(&wp), &mut result);
+
+        // Now it should exist (create_dir_all creates parents).
+        assert!(expected.exists());
+
+        // Cleanup.
+        let project_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
     }
 
