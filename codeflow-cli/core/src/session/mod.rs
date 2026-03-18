@@ -42,6 +42,50 @@ pub fn generate_session_id() -> SessionId {
     SessionId::new_unchecked(id)
 }
 
+/// Generate a session-scoped team name for Claude Agent Teams.
+///
+/// For planned tasks (with a known task format ID from an epic):
+///   `{project}-{task_format_id}-{sid_short}`
+///   e.g., `codeflow-inf-tsk-023-008-01kk0t08`
+///
+/// For adhoc tasks (no task format ID yet):
+///   `{project}-{sid_short}`
+///   e.g., `codeflow-01kk0t08`
+///
+/// `sid_short` is the first 8 characters of the ULID portion of the session ID
+/// (characters 4..12, skipping the `ses-` prefix).
+///
+/// All components are lowercased for filesystem compatibility.
+#[must_use]
+pub fn generate_team_name(project: &str, task_format_id: Option<&str>, session_id: &str) -> String {
+    let sid_short = extract_sid_short(session_id);
+    match task_format_id {
+        Some(fmt_id) => format!(
+            "{}-{}-{}",
+            project.to_lowercase(),
+            fmt_id.to_lowercase(),
+            sid_short
+        ),
+        None => format!("{}-{}", project.to_lowercase(), sid_short),
+    }
+}
+
+/// Extract the short session ID (first 8 chars of the ULID portion).
+///
+/// Strips the `ses-` prefix and takes the first 8 characters. If the session
+/// ID is non-standard (no `ses-` prefix or too short), falls back to the last
+/// 8 characters of the full ID (or the entire ID if shorter than 8).
+fn extract_sid_short(session_id: &str) -> String {
+    if let Some(ulid) = session_id.strip_prefix("ses-") {
+        if ulid.len() >= 8 {
+            return ulid[..8].to_lowercase();
+        }
+    }
+    // Fallback: use last 8 chars (or entire string if shorter).
+    let start = session_id.len().saturating_sub(8);
+    session_id[start..].to_lowercase()
+}
+
 /// Validate that a string matches the session ID format.
 ///
 /// Accepts both:
@@ -393,5 +437,189 @@ mod tests {
             result.is_none(),
             "should return None when no env file exists"
         );
+    }
+
+    // --- generate_team_name tests ---
+
+    #[test]
+    fn test_generate_team_name_planned() {
+        let name = generate_team_name(
+            "codeflow",
+            Some("INF-TSK-023-008"),
+            "ses-01kk0t08ggabcdef12345678",
+        );
+        assert_eq!(name, "codeflow-inf-tsk-023-008-01kk0t08");
+    }
+
+    #[test]
+    fn test_generate_team_name_adhoc() {
+        let name = generate_team_name("codeflow", None, "ses-01kk0t08ggabcdef12345678");
+        assert_eq!(name, "codeflow-01kk0t08");
+    }
+
+    #[test]
+    fn test_generate_team_name_lowercase() {
+        let name = generate_team_name(
+            "CodeFlow",
+            Some("INF-TSK-023-013"),
+            "ses-01KK0T08GGABCDEF12345678",
+        );
+        // All components must be lowercased.
+        assert_eq!(name, name.to_lowercase(), "team name must be all lowercase");
+        assert!(
+            name.starts_with("codeflow-"),
+            "project should be lowercased: {name}"
+        );
+        assert!(
+            name.contains("inf-tsk-023-013"),
+            "format ID should be lowercased: {name}"
+        );
+    }
+
+    #[test]
+    fn test_generate_team_name_uniqueness() {
+        let name1 = generate_team_name("codeflow", None, "ses-01kk0t08ggabcdef12345678");
+        let name2 = generate_team_name("codeflow", None, "ses-01kk0t09ggabcdef12345678");
+        assert_ne!(
+            name1, name2,
+            "different session IDs must produce different team names"
+        );
+    }
+
+    #[test]
+    fn test_generate_team_name_empty_project() {
+        let name = generate_team_name("", Some("TSK-001"), "ses-01kk0t08ggabcdef12345678");
+        assert_eq!(name, "-tsk-001-01kk0t08");
+    }
+
+    #[test]
+    fn test_extract_sid_short_standard() {
+        let short = extract_sid_short("ses-01kk0t08ggabcdef12345678");
+        assert_eq!(short, "01kk0t08");
+    }
+
+    #[test]
+    fn test_extract_sid_short_no_prefix() {
+        // Non-standard ID without ses- prefix: fallback to last 8 chars.
+        let short = extract_sid_short("abcdef1234567890");
+        assert_eq!(short, "34567890");
+    }
+
+    #[test]
+    fn test_extract_sid_short_short_id() {
+        // Very short ID: return entire string.
+        let short = extract_sid_short("abc");
+        assert_eq!(short, "abc");
+    }
+
+    #[test]
+    fn test_extract_sid_short_ses_prefix_short_ulid() {
+        // ses- prefix but ULID portion is less than 8 chars: fallback.
+        let short = extract_sid_short("ses-abc");
+        assert_eq!(short, "ses-abc");
+    }
+
+    #[test]
+    fn test_generate_team_name_with_real_session_id() {
+        // Use a real generated session ID to verify integration.
+        let sid = generate_session_id();
+        let name = generate_team_name("myproject", Some("FIX-001"), sid.as_str());
+        assert!(
+            name.starts_with("myproject-fix-001-"),
+            "should start with project-format_id-: {name}"
+        );
+        // sid_short should be 8 chars after the last hyphen.
+        let parts: Vec<&str> = name.rsplitn(2, '-').collect();
+        assert_eq!(
+            parts[0].len(),
+            8,
+            "sid_short should be 8 chars: {}",
+            parts[0]
+        );
+    }
+
+    #[test]
+    fn test_generate_team_name_filesystem_compatible() {
+        let name = generate_team_name(
+            "codeflow",
+            Some("INF-TSK-023-013"),
+            "ses-01kk0t08ggabcdef12345678",
+        );
+        // Team name should only contain lowercase alphanumerics and hyphens.
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            "team name must be filesystem-compatible (lowercase alphanum + hyphens): {name}"
+        );
+    }
+
+    // --- Additional coverage tests for is_valid_session_id ---
+
+    #[test]
+    fn test_is_valid_session_id_legacy_invalid_timestamp() {
+        // Legacy format with non-digit in timestamp portion (first 13 chars).
+        // 13 chars timestamp + 12 hex = 25 suffix chars.
+        assert!(!is_valid_session_id("ses-177137202131xa9e89b2d5688"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_legacy_uppercase_hex() {
+        // Legacy format with uppercase hex chars (should fail).
+        assert!(!is_valid_session_id("ses-1771372021317A9E89B2D5688"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_wrong_length_suffix() {
+        // Suffix is neither 25 (legacy) nor 26 (ULID) -- should fail.
+        // 24-char suffix:
+        assert!(!is_valid_session_id("ses-abcdefghijklmnopqrstuvwx"));
+        // 27-char suffix:
+        assert!(!is_valid_session_id("ses-abcdefghijklmnopqrstuvwxyz0"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_ulid_with_excluded_i() {
+        // Crockford Base32 excludes 'i' — must be exactly 26-char suffix.
+        //                    1234567890123456789012345 6
+        assert!(!is_valid_session_id("ses-01jq7abcdef012345678901iab"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_ulid_with_excluded_l() {
+        assert!(!is_valid_session_id("ses-01jq7abcdef012345678901lab"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_ulid_with_excluded_o() {
+        assert!(!is_valid_session_id("ses-01jq7abcdef012345678901oab"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_ulid_with_excluded_u() {
+        assert!(!is_valid_session_id("ses-01jq7abcdef012345678901uab"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_valid_ulid_all_digits() {
+        // 26-char all-digit suffix is valid Crockford Base32.
+        assert!(is_valid_session_id("ses-01234567890123456789012345"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_valid_ulid_mixed() {
+        // Valid 26-char lowercase Crockford (no i/l/o/u).
+        assert!(is_valid_session_id("ses-01jq7abcdef0123456789abcde"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_prefix_only() {
+        // Just "ses-" with empty suffix.
+        assert!(!is_valid_session_id("ses-"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_legacy_valid_boundary() {
+        // Exactly 25-char suffix: 13 digits + 12 lowercase hex.
+        assert!(is_valid_session_id("ses-1234567890123abcdef012345"));
     }
 }

@@ -82,7 +82,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-010 | Scope codeflow-env.sh per worktree | complete | M | critical | B: Worktree + Singleton |
 | INF-TSK-023-011 | Scope active-task.json per worktree | complete | M | high | B: Worktree + Singleton |
 | INF-TSK-023-012 | Scope project temp dir per worktree | complete | S | high | B: Worktree + Singleton |
-| INF-TSK-023-013 | Scope team config by session | todo | S | normal | B: Worktree + Singleton |
+| INF-TSK-023-013 | Scope team config by session | complete | S | normal | B: Worktree + Singleton |
 | INF-TSK-023-014 | Add worktree cleanup to SessionEnd hook | todo | M | high | B: Worktree + Singleton |
 | INF-TSK-023-015 | Pre-created worktree detection in SessionStart | todo | S | normal | B: Worktree + Singleton |
 | INF-TSK-023-016 | Autorun worker worktree integration | todo | L | high | C: Autorun + Coordination |
