@@ -16,6 +16,7 @@ pub mod session;
 pub mod settings;
 pub mod shadow_test;
 pub mod state;
+pub mod sync;
 pub mod test;
 pub mod uninstall;
 pub mod update;

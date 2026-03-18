@@ -6,6 +6,7 @@
 
 pub mod claims;
 pub mod loro;
+pub mod sync;
 
 use std::fmt;
 

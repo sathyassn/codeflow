@@ -80,6 +80,11 @@ enum Command {
     Normalize,
     /// Run test suite
     Test,
+    /// Sync daemon operations
+    Sync {
+        #[command(subcommand)]
+        command: cmd::sync::SyncCommand,
+    },
 }
 
 #[tokio::main]
@@ -116,6 +121,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::ShadowTest => cmd::shadow_test::run(),
         Command::Normalize => cmd::normalize::run(),
         Command::Test => cmd::test::run(),
+        Command::Sync { command } => cmd::sync::run(command),
     }
 }
 
@@ -161,6 +167,7 @@ mod tests {
             "shadow-test",
             "normalize",
             "test",
+            "sync",
         ];
         for cmd in &expected_commands {
             assert!(
@@ -168,7 +175,7 @@ mod tests {
                 "help output missing subcommand: {cmd}"
             );
         }
-        assert_eq!(expected_commands.len(), 26);
+        assert_eq!(expected_commands.len(), 27);
     }
 
     #[test]
@@ -346,6 +353,30 @@ mod tests {
     async fn test_dispatch_git_hooks() {
         let result = dispatch(Command::GitHooks { command: None }).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sync_subcommand_requires_subcommand() {
+        let result = Cli::try_parse_from(["codeflow", "sync"]);
+        assert!(result.is_err(), "sync without subcommand should fail");
+    }
+
+    #[test]
+    fn test_sync_daemon_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "daemon"]);
+        assert!(result.is_ok(), "should parse sync daemon");
+    }
+
+    #[test]
+    fn test_sync_daemon_with_interval_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "daemon", "--interval", "60"]);
+        assert!(result.is_ok(), "should parse sync daemon --interval 60");
+    }
+
+    #[test]
+    fn test_sync_status_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "status"]);
+        assert!(result.is_ok(), "should parse sync status");
     }
 
     #[test]

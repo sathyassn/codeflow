@@ -286,6 +286,63 @@ pub enum SettingsError {
     Config(#[from] ConfigError),
 }
 
+/// Sync daemon errors.
+#[derive(Debug, Error)]
+pub enum SyncError {
+    #[error("io error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("loro error: {0}")]
+    LoroError(#[from] loro::LoroError),
+
+    #[error("git error: {0}")]
+    GitError(#[from] git2::Error),
+
+    #[error("pid lock failed: {}", .0.display())]
+    PidLockFailed(std::path::PathBuf),
+
+    #[error("network partition: peer {peer}, retries exhausted ({retries})")]
+    NetworkPartition {
+        peer: crate::coordination::PeerId,
+        retries: u32,
+    },
+
+    #[error("connection error: {0}")]
+    ConnectionError(String),
+
+    #[error("schema error: {0}")]
+    SchemaError(String),
+
+    #[error("loro encode error: {0}")]
+    LoroEncodeError(#[from] loro::LoroEncodeError),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+impl SyncError {
+    /// Returns `true` if this error is retryable (connection/timeout).
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::ConnectionError(_)
+                | Self::GitError(_)
+                | Self::IoError(_)
+                | Self::NetworkPartition { .. }
+        )
+    }
+
+    /// Returns `true` if this error is a schema/logic error (not retryable).
+    #[must_use]
+    pub fn is_schema_error(&self) -> bool {
+        matches!(
+            self,
+            Self::SchemaError(_) | Self::LoroError(_) | Self::LoroEncodeError(_)
+        )
+    }
+}
+
 /// CRDT coordination errors.
 #[derive(Debug, Error)]
 pub enum CoordinationError {
@@ -859,5 +916,50 @@ mod tests {
     fn test_coordination_error_container_not_found() {
         let err = CoordinationError::ContainerNotFound("claims".into());
         assert_eq!(err.to_string(), "container not found: claims");
+    }
+
+    // -- SyncError --
+
+    #[test]
+    fn test_sync_error_pid_lock_failed() {
+        let err = SyncError::PidLockFailed(std::path::PathBuf::from("/tmp/daemon.pid"));
+        assert_eq!(err.to_string(), "pid lock failed: /tmp/daemon.pid");
+    }
+
+    #[test]
+    fn test_sync_error_network_partition() {
+        let err = SyncError::NetworkPartition {
+            peer: crate::coordination::PeerId::new("alice-laptop"),
+            retries: 5,
+        };
+        assert_eq!(
+            err.to_string(),
+            "network partition: peer alice-laptop, retries exhausted (5)"
+        );
+    }
+
+    #[test]
+    fn test_sync_error_connection_error() {
+        let err = SyncError::ConnectionError("timeout after 30s".into());
+        assert_eq!(err.to_string(), "connection error: timeout after 30s");
+    }
+
+    #[test]
+    fn test_sync_error_schema_error() {
+        let err = SyncError::SchemaError("incompatible version".into());
+        assert_eq!(err.to_string(), "schema error: incompatible version");
+    }
+
+    #[test]
+    fn test_sync_error_is_retryable() {
+        assert!(SyncError::ConnectionError("x".into()).is_retryable());
+        assert!(!SyncError::SchemaError("x".into()).is_retryable());
+        assert!(!SyncError::PidLockFailed(std::path::PathBuf::from("x")).is_retryable());
+    }
+
+    #[test]
+    fn test_sync_error_is_schema_error() {
+        assert!(SyncError::SchemaError("x".into()).is_schema_error());
+        assert!(!SyncError::ConnectionError("x".into()).is_schema_error());
     }
 }

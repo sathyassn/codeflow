@@ -75,7 +75,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-003 | Replace state.json with state.loro using Loro Map CRDT | complete | L | critical | A: Loro CRDT Foundation |
 | INF-TSK-023-004 | Wire claims into PreToolUse hooks | complete | L | critical | A: Loro CRDT Foundation |
 | INF-TSK-023-005 | Fencing token validation via Loro Map | complete | M | high | A: Loro CRDT Foundation |
-| INF-TSK-023-006 | Implement sync daemon logic (codeflow sync daemon) | todo | L | high | A: Loro CRDT Foundation |
+| INF-TSK-023-006 | Implement sync daemon logic (codeflow sync daemon) | complete | L | high | A: Loro CRDT Foundation |
 | INF-TSK-023-007 | Clean up unused state.loro artifact | todo | S | normal | A: Loro CRDT Foundation |
 | INF-TSK-023-008 | Add SetupDetached method to worktree manager | todo | M | critical | B: Worktree + Singleton |
 | INF-TSK-023-009 | Integrate worktree creation into SessionStart hook | todo | L | critical | B: Worktree + Singleton |
