@@ -23,6 +23,8 @@ use crate::types::BranchName;
 pub use cleanup::CleanupOpts;
 pub use registry::{WorktreeEntry, WorktreeRegistry};
 
+// WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
+
 /// Default base directory for worktrees (relative to project root).
 const DEFAULT_BASE_DIR: &str = ".git-worktrees";
 
@@ -187,6 +189,29 @@ impl WorktreeManager {
         setup::create_worktree(self, name, branch)
     }
 
+    /// Create a new worktree on a detached HEAD (no branch).
+    ///
+    /// Used at SessionStart when the feature branch is not yet known.
+    /// The branch is set later at PF3-CLASSIFY via `git checkout -b`.
+    ///
+    /// This operation:
+    /// 1. Validates the worktree name.
+    /// 2. Creates a git worktree on detached HEAD via `git2`.
+    /// 3. Copies `.gitignore` from the main repo.
+    /// 4. Symlinks shared state directories from main `.state/`.
+    /// 5. Creates per-worktree local directories.
+    /// 6. Registers the worktree in the YAML registry with an empty branch.
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidName` if the name is empty or contains path separators.
+    /// - `AlreadyExists` if the worktree directory already exists.
+    /// - `Git` for git2 operation failures.
+    /// - `Io` for filesystem errors.
+    pub fn setup_detached(&self, name: &str) -> Result<WorktreeEntry, WorktreeError> {
+        setup::create_detached_worktree(self, name)
+    }
+
     /// Remove a worktree and deregister it.
     ///
     /// # Errors
@@ -243,6 +268,116 @@ impl WorktreeManager {
     /// Check if the `PathFlow` guard is active.
     pub(crate) fn is_pathflow_active(&self) -> bool {
         self.pathflow_guard.as_ref().is_some_and(|guard| guard())
+    }
+}
+
+/// RAII handle for a worktree that ensures cleanup on scope exit.
+///
+/// When dropped, the handle removes the worktree directory and deregisters
+/// it from the YAML registry. This is the safety net for cleanup — the
+/// happy-path cleanup is performed by the SessionEnd hook (task 014).
+///
+/// Drop failures are logged to stderr (Drop cannot return errors or panic).
+pub struct WorktreeHandle {
+    /// Worktree name (used for git worktree removal).
+    name: String,
+    /// Absolute path to the worktree directory.
+    path: PathBuf,
+    /// Path to the YAML registry file.
+    registry_path: PathBuf,
+    /// Path to the project root (for git operations).
+    project_dir: PathBuf,
+    /// Whether cleanup should be skipped (set when ownership is transferred).
+    defused: bool,
+}
+
+impl WorktreeHandle {
+    /// Create a new handle from a worktree entry and manager.
+    #[must_use]
+    pub fn new(entry: &WorktreeEntry, mgr: &WorktreeManager) -> Self {
+        Self {
+            name: entry.name.clone(),
+            path: PathBuf::from(&entry.path),
+            registry_path: mgr.registry_path().to_path_buf(),
+            project_dir: mgr.project_dir().to_path_buf(),
+            defused: false,
+        }
+    }
+
+    /// Return the worktree name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Return the worktree path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Defuse the handle so Drop does NOT perform cleanup.
+    ///
+    /// Call this when the worktree ownership is transferred to another
+    /// cleanup mechanism (e.g., the SessionEnd hook for happy-path cleanup).
+    pub fn defuse(&mut self) {
+        self.defused = true;
+    }
+
+    /// Return whether this handle has been defused.
+    #[must_use]
+    pub fn is_defused(&self) -> bool {
+        self.defused
+    }
+}
+
+impl Drop for WorktreeHandle {
+    fn drop(&mut self) {
+        if self.defused {
+            return;
+        }
+
+        // Attempt to remove the worktree via git2.
+        if let Ok(repo) = git2::Repository::open(&self.project_dir) {
+            if let Ok(wt) = repo.find_worktree(&self.name) {
+                let _ = wt.prune(Some(
+                    git2::WorktreePruneOptions::new()
+                        .valid(true)
+                        .working_tree(true),
+                ));
+            }
+        }
+
+        // Remove the directory if it still exists.
+        if self.path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.path) {
+                eprintln!(
+                    "WorktreeHandle: failed to remove worktree directory {}: {e}",
+                    self.path.display()
+                );
+            }
+        }
+
+        // Deregister from the YAML registry.
+        let path_str = self.path.to_string_lossy();
+        if let Err(e) = registry::deregister_worktree(&self.registry_path, &path_str) {
+            eprintln!(
+                "WorktreeHandle: failed to deregister worktree {}: {e}",
+                self.name
+            );
+        }
+    }
+}
+
+impl std::fmt::Debug for WorktreeHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorktreeHandle")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("registry_path", &self.registry_path)
+            .field("project_dir", &self.project_dir)
+            .field("defused", &self.defused)
+            .finish()
     }
 }
 
@@ -348,6 +483,7 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Stale);
     }
@@ -363,6 +499,7 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Orphaned);
     }
@@ -379,6 +516,7 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Active);
     }
@@ -415,5 +553,240 @@ mod tests {
         assert_eq!(ts.len(), 20, "should be 20 chars: {ts}");
         assert_eq!(&ts[4..5], "-", "should have dash at pos 4: {ts}");
         assert_eq!(&ts[10..11], "T", "should have T at pos 10: {ts}");
+    }
+
+    // ---------------------------------------------------------------
+    // setup_detached tests (via WorktreeManager)
+    // ---------------------------------------------------------------
+
+    /// Helper: initialize a git repo with an initial commit for tests.
+    fn init_test_repo(dir: &std::path::Path) -> git2::Repository {
+        let repo = git2::Repository::init(dir).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        {
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    #[test]
+    fn test_setup_detached_creates_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+
+        let mgr = WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+
+        let entry = mgr.setup_detached("ses-test").unwrap();
+
+        assert_eq!(entry.name, "ses-test");
+        assert_eq!(entry.branch, "", "branch should be empty for detached");
+        assert_eq!(entry.status, "active");
+        assert!(entry.session_id.is_none());
+
+        // Verify directory exists with .git file (valid worktree).
+        let wt_dir = mgr.base_dir().join("ses-test");
+        assert!(wt_dir.exists());
+        assert!(wt_dir.join(".git").exists());
+    }
+
+    #[test]
+    fn test_setup_detached_uses_git_worktrees_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+
+        let mgr = WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+
+        let entry = mgr.setup_detached("base-test").unwrap();
+
+        assert!(
+            entry.path.contains(".git-worktrees"),
+            "path should use .git-worktrees/ base: {}",
+            entry.path
+        );
+        assert_eq!(
+            mgr.base_dir(),
+            dir.path().join(".git-worktrees"),
+            "base_dir should be .git-worktrees/"
+        );
+    }
+
+    #[test]
+    fn test_setup_detached_invalid_name_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+        let mgr = WorktreeManager::new(dir.path());
+
+        let result = mgr.setup_detached("");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), WorktreeError::InvalidName(_)));
+    }
+
+    #[test]
+    fn test_setup_detached_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+        let mgr = WorktreeManager::new(dir.path());
+
+        // Pre-create the directory.
+        std::fs::create_dir_all(mgr.base_dir().join("dup-wt")).unwrap();
+
+        let result = mgr.setup_detached("dup-wt");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            WorktreeError::AlreadyExists(_)
+        ));
+    }
+
+    // ---------------------------------------------------------------
+    // WorktreeHandle tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_worktree_handle_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "handle-test".to_string(),
+            path: "/tmp/handle-test".to_string(),
+            branch: String::new(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        };
+
+        let handle = WorktreeHandle::new(&entry, &mgr);
+        assert_eq!(handle.name(), "handle-test");
+        assert_eq!(handle.path(), std::path::Path::new("/tmp/handle-test"));
+        assert!(!handle.is_defused());
+    }
+
+    #[test]
+    fn test_worktree_handle_defuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "defuse-test".to_string(),
+            path: "/tmp/defuse-test".to_string(),
+            branch: String::new(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        };
+
+        let mut handle = WorktreeHandle::new(&entry, &mgr);
+        assert!(!handle.is_defused());
+        handle.defuse();
+        assert!(handle.is_defused());
+    }
+
+    #[test]
+    fn test_worktree_handle_debug() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "debug-test".to_string(),
+            path: "/tmp/debug-test".to_string(),
+            branch: String::new(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        };
+
+        let handle = WorktreeHandle::new(&entry, &mgr);
+        let debug = format!("{handle:?}");
+        assert!(debug.contains("WorktreeHandle"));
+        assert!(debug.contains("debug-test"));
+        assert!(debug.contains("defused: false"));
+    }
+
+    #[test]
+    fn test_worktree_handle_drop_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+
+        let mgr = WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+
+        // Create a real detached worktree.
+        let entry = mgr.setup_detached("drop-test").unwrap();
+        let wt_path = PathBuf::from(&entry.path);
+        assert!(wt_path.exists(), "worktree should exist before drop");
+
+        // Create handle and drop it.
+        {
+            let _handle = WorktreeHandle::new(&entry, &mgr);
+            // Handle drops here.
+        }
+
+        // Verify cleanup happened.
+        assert!(
+            !wt_path.exists(),
+            "worktree dir should be removed after drop"
+        );
+
+        // Verify registry was updated.
+        let entries = mgr.list(Some("removed")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "drop-test");
+    }
+
+    #[test]
+    fn test_worktree_handle_defused_does_not_clean_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_test_repo(dir.path());
+
+        let mgr = WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+
+        let entry = mgr.setup_detached("defused-drop").unwrap();
+        let wt_path = PathBuf::from(&entry.path);
+
+        // Create handle, defuse it, then drop.
+        {
+            let mut handle = WorktreeHandle::new(&entry, &mgr);
+            handle.defuse();
+            // Handle drops here but should NOT clean up.
+        }
+
+        // Verify worktree still exists (defused = no cleanup).
+        assert!(
+            wt_path.exists(),
+            "worktree should still exist after defused drop"
+        );
+
+        // Verify registry still shows active.
+        let entries = mgr.list(Some("active")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "defused-drop");
+    }
+
+    #[test]
+    fn test_worktree_handle_drop_on_nonexistent() {
+        // Handle for an already-removed worktree should not panic on drop.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "ghost-wt".to_string(),
+            path: dir
+                .path()
+                .join("nonexistent-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: String::new(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        };
+
+        // This should not panic.
+        {
+            let _handle = WorktreeHandle::new(&entry, &mgr);
+        }
     }
 }

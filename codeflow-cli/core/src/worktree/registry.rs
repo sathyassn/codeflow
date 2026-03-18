@@ -19,11 +19,15 @@ pub struct WorktreeEntry {
     /// Absolute filesystem path to the worktree directory.
     pub path: String,
     /// Git branch name associated with this worktree.
+    /// Empty string for detached worktrees (branch set later at PF3).
     pub branch: String,
     /// ISO 8601 timestamp of when the worktree was created.
     pub created_at: String,
     /// Current status: "active" or "removed".
     pub status: String,
+    /// Session ID that owns this worktree (set by SessionStart integration, task 009).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Registry metadata.
@@ -185,6 +189,7 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         });
 
         write_registry(&path, &reg).unwrap();
@@ -208,6 +213,7 @@ mod tests {
             branch: "feat/new".to_string(),
             created_at: "2026-03-07T11:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
 
         register_worktree(&path, entry).unwrap();
@@ -229,6 +235,7 @@ mod tests {
             branch: "feat/one".to_string(),
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         let entry2 = WorktreeEntry {
             name: "wt-2".to_string(),
@@ -236,6 +243,7 @@ mod tests {
             branch: "feat/two".to_string(),
             created_at: "2026-03-07T11:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
 
         register_worktree(&path, entry1).unwrap();
@@ -258,6 +266,7 @@ mod tests {
             branch: "feat/remove".to_string(),
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -278,6 +287,7 @@ mod tests {
             branch: "feat/exists".to_string(),
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -333,9 +343,65 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(entry, parsed);
+    }
+
+    #[test]
+    fn test_worktree_entry_backward_compat_no_session_id() {
+        // YAML files created before session_id was added should still parse.
+        let yaml = r#"
+name: old-wt
+path: /tmp/old-wt
+branch: feat/old
+created_at: "2026-03-07T10:30:00Z"
+status: active
+"#;
+        let parsed: WorktreeEntry = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.name, "old-wt");
+        assert!(
+            parsed.session_id.is_none(),
+            "session_id should default to None"
+        );
+    }
+
+    #[test]
+    fn test_worktree_entry_session_id_present() {
+        let entry = WorktreeEntry {
+            name: "sid-wt".to_string(),
+            path: "/tmp/sid-wt".to_string(),
+            branch: String::new(),
+            created_at: "2026-03-07T10:30:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-abc123".to_string()),
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(
+            yaml.contains("session_id"),
+            "session_id should be serialized when Some"
+        );
+
+        let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.session_id, Some("ses-abc123".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_entry_session_id_none_not_serialized() {
+        let entry = WorktreeEntry {
+            name: "nosid-wt".to_string(),
+            path: "/tmp/nosid-wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:30:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(
+            !yaml.contains("session_id"),
+            "session_id: None should be skipped in serialization"
+        );
     }
 }

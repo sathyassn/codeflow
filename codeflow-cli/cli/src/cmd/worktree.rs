@@ -67,6 +67,7 @@ mod tests {
             branch: "feat/test".to_string(),
             created_at: "2025-01-01T00:00:00Z".to_string(),
             status: "removed".to_string(),
+            session_id: None,
         };
 
         let state = mgr.detect_state(&entry);
@@ -85,6 +86,7 @@ mod tests {
             branch: "feat/something".to_string(),
             created_at: "2025-01-01T00:00:00Z".to_string(),
             status: "active".to_string(),
+            session_id: None,
         };
 
         let dir = tempfile::tempdir().unwrap();
