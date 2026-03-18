@@ -22,7 +22,9 @@ use crate::types::SessionId;
 
 pub use active_task::{ActiveTask, clear_active_task, get_active_task, set_active_task};
 pub use builder::SessionBuilder;
-pub use env::{EnvFile, read_env_file, remove_env_file, write_env_file};
+pub use env::{
+    EnvFile, read_env_file, remove_env_file, write_env_file, write_env_file_with_worktree,
+};
 
 /// Generate a new session ID using ULID format: `ses-{26-char-lowercase-ULID}`.
 ///

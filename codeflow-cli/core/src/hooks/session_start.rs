@@ -15,6 +15,7 @@ use crate::ledger::{Event, LedgerWriter};
 use crate::pathflow;
 use crate::session;
 use crate::types::SessionId;
+use crate::worktree::{WorktreeHandle, WorktreeManager, WorktreePaths};
 
 // ---------------------------------------------------------------------------
 // Session lock
@@ -182,23 +183,63 @@ impl SessionStartInit {
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
 
+        // --- Section 2b: Worktree creation (source-gated) ---
+        // On startup: create a detached worktree for session isolation.
+        // On compact/resume/clear: recover existing worktree path from env file.
+        // WorktreeHandle provides RAII cleanup on panic; defuse() at end of run().
+        let (worktree_paths, mut worktree_handle) = if source == "startup" {
+            match self.create_session_worktree(project_dir, session_id.as_str(), &mut result) {
+                Ok((paths, handle)) => (Some(paths), Some(handle)),
+                Err(e) => {
+                    result
+                        .warnings
+                        .push(format!("worktree creation failed: {e}"));
+                    (None, None)
+                }
+            }
+        } else {
+            // Compact/resume/clear: recover worktree path from main project env file.
+            let recovered = self.recover_worktree_path(&runtime_dir, &mut result);
+            (recovered, None)
+        };
+
+        // Export CODEFLOW_WORKTREE_PATH if we have a worktree.
+        if let Some(ref wp) = worktree_paths {
+            let wt_path_str = wp.root().to_string_lossy().to_string();
+            result
+                .env_vars
+                .insert("CODEFLOW_WORKTREE_PATH".into(), wt_path_str);
+        }
+
         // Release session lock -- env file written, teammates can now detect this session.
         drop(lock_file);
 
         // --- Section 3: Directory creation ---
-        self.create_directories(project_dir, session_id.as_str());
+        // When a worktree is available, create directories inside the worktree.
+        // Otherwise, fall back to the main project directory.
+        if let Some(ref wp) = worktree_paths {
+            self.create_directories_in_worktree(wp, session_id.as_str());
+        } else {
+            self.create_directories(project_dir, session_id.as_str());
+        }
 
         // --- Section 4+5: Sweep all stale sessions (replaces detect_stale_sessions + sweep_orphan_sentinels) ---
+        // Stale sweep always operates on main project dir (shared state).
         if source == "startup" || source == "unknown" {
             self.sweep_all_stale_sessions(project_dir, session_id.as_str());
         }
 
         // --- Section 6: Active task context expiry ---
+        // Active task cleanup operates on main project dir.
         self.cleanup_active_task(project_dir);
 
         // --- Section 7: PathFlow flag creation ---
+        // When a worktree is available, PathFlow flag goes in the worktree.
+        let flag_base = worktree_paths
+            .as_ref()
+            .map_or_else(|| project_dir.to_path_buf(), |wp| wp.root().to_path_buf());
         let is_resume = self.create_pathflow_flag(
-            project_dir,
+            &flag_base,
             session_id.as_str(),
             source,
             result.is_teammate,
@@ -207,7 +248,8 @@ impl SessionStartInit {
         result.is_resume = is_resume;
 
         // --- Section 7c: Checkpoint pre-initialization ---
-        self.init_checkpoint(project_dir, session_id.as_str(), &mut result);
+        // Checkpoint goes in the same base as pathflow flag.
+        self.init_checkpoint(&flag_base, session_id.as_str(), &mut result);
 
         // --- Section 8: Session metadata ---
         // Eliminated: session-meta.json is superseded by pathflow-session-status.json
@@ -219,8 +261,30 @@ impl SessionStartInit {
         // --- Section 10: Project temp directory ---
         self.create_project_temp_dir(project_dir, &mut result);
 
+        // Write env file inside worktree with CODEFLOW_WORKTREE_PATH.
+        if let Some(ref wp) = worktree_paths {
+            let wt_runtime = wp.runtime_dir();
+            let wt_path_str = wp.root().to_string_lossy().to_string();
+            if let Err(e) = session::write_env_file_with_worktree(
+                &wt_runtime,
+                &session_id,
+                &project_name,
+                Some(&wt_path_str),
+            ) {
+                result
+                    .warnings
+                    .push(format!("worktree env file write error: {e}"));
+            }
+        }
+
         // Write env JSON to stdout
         write_env_json(writer, &result.env_vars)?;
+
+        // Defuse the worktree handle -- ownership transfers to SessionEnd hook.
+        // If we panic before this point, Drop fires and cleans up the worktree.
+        if let Some(ref mut handle) = worktree_handle {
+            handle.defuse();
+        }
 
         Ok(result)
     }
@@ -743,6 +807,113 @@ impl SessionStartInit {
             .join(&project_name)
             .join("managed");
         let _ = fs::create_dir_all(&tmp_dir);
+    }
+
+    /// Create a detached worktree for the current session.
+    ///
+    /// Called during `source=startup` after session ID generation.
+    /// Creates the worktree, sets session_id on the registry entry, and
+    /// writes `CODEFLOW_WORKTREE_PATH` to the main project env file.
+    fn create_session_worktree(
+        &self,
+        project_dir: &Path,
+        session_id: &str,
+        result: &mut InitResult,
+    ) -> Result<(WorktreePaths, WorktreeHandle), HookError> {
+        let wt_name = format!("worktree-{session_id}");
+        let mgr = WorktreeManager::new(project_dir);
+
+        // Create the detached worktree.
+        // NOTE: This happens inside the session lock scope (lock_file still held),
+        // so concurrent session creation is serialized.
+        let entry = mgr.setup_detached(&wt_name)?;
+
+        // Create RAII handle for cleanup on panic.
+        let handle = WorktreeHandle::new(&entry, &mgr);
+
+        let wt_path = PathBuf::from(&entry.path);
+        let paths = WorktreePaths::new(&wt_path);
+
+        // Update the registry entry with session_id.
+        // NOTE: registry write is not locked; parallel sessions may race.
+        // See file_lock.rs and task 018 (parallel coordination adds locking).
+        if let Ok(mut reg) = crate::worktree::read_registry(mgr.registry_path()) {
+            for e in &mut reg.worktrees {
+                if e.name == wt_name {
+                    e.session_id = Some(session_id.to_string());
+                }
+            }
+            let _ = crate::worktree::write_registry(mgr.registry_path(), &reg);
+        }
+
+        // Write CODEFLOW_WORKTREE_PATH to the MAIN project env file
+        // so compact/resume can recover it.
+        let main_runtime = project_dir.join(".state").join("runtime");
+        let project_name = project_dir
+            .file_name()
+            .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+        let wt_path_str = wt_path.to_string_lossy().to_string();
+        let sid = SessionId::new_unchecked(session_id);
+        if let Err(e) = session::write_env_file_with_worktree(
+            &main_runtime,
+            &sid,
+            &project_name,
+            Some(&wt_path_str),
+        ) {
+            result
+                .warnings
+                .push(format!("main env file update error: {e}"));
+        }
+
+        result.messages.push(format!(
+            "WORKTREE: Created {} at {}",
+            wt_name,
+            wt_path.display()
+        ));
+
+        Ok((paths, handle))
+    }
+
+    /// Recover the worktree path from the main project's env file.
+    ///
+    /// Called during `source=compact/resume/clear` to find the existing worktree.
+    fn recover_worktree_path(
+        &self,
+        runtime_dir: &Path,
+        result: &mut InitResult,
+    ) -> Option<WorktreePaths> {
+        let env_data = match session::read_env_file(runtime_dir) {
+            Ok(Some(env)) => env,
+            _ => return None,
+        };
+
+        let wt_path_str = env_data.worktree_path?;
+        let wt_path = PathBuf::from(&wt_path_str);
+
+        if !wt_path.exists() {
+            result.warnings.push(format!(
+                "worktree path from env file does not exist: {wt_path_str}"
+            ));
+            return None;
+        }
+
+        result
+            .messages
+            .push(format!("WORKTREE: Recovered existing at {wt_path_str}"));
+
+        Some(WorktreePaths::new(wt_path))
+    }
+
+    /// Create required session directories inside the worktree.
+    fn create_directories_in_worktree(&self, wp: &WorktreePaths, session_id: &str) {
+        let dirs = [
+            wp.runtime_dir(),
+            wp.session_dir(session_id).join("pathflow"),
+            wp.sentinel_dir(session_id),
+        ];
+        for dir in &dirs {
+            let _ = fs::create_dir_all(dir);
+        }
     }
 }
 
@@ -2933,6 +3104,278 @@ mod tests {
         assert_eq!(
             data["status"], "created",
             "non-teammate startup should reset to 'created'"
+        );
+    }
+
+    // --- Worktree integration tests ---
+
+    /// Helper: initialize a git repo with an initial commit (required for worktree creation).
+    fn init_git_repo(dir: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(dir).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        {
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    #[test]
+    fn test_startup_creates_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        let sid = result.session_id.as_str();
+
+        // Verify CODEFLOW_WORKTREE_PATH is in env_vars.
+        assert!(
+            result.env_vars.contains_key("CODEFLOW_WORKTREE_PATH"),
+            "CODEFLOW_WORKTREE_PATH should be set on startup"
+        );
+        let wt_path = &result.env_vars["CODEFLOW_WORKTREE_PATH"];
+        assert!(
+            wt_path.contains(".git-worktrees"),
+            "worktree path should be under .git-worktrees: {wt_path}"
+        );
+        assert!(
+            wt_path.contains(sid),
+            "worktree path should contain session ID: {wt_path}"
+        );
+
+        // Verify the worktree directory exists.
+        assert!(
+            PathBuf::from(wt_path).exists(),
+            "worktree directory should exist: {wt_path}"
+        );
+
+        // Verify the worktree has a .git file (valid git worktree).
+        assert!(
+            PathBuf::from(wt_path).join(".git").exists(),
+            "worktree should have .git file"
+        );
+    }
+
+    #[test]
+    fn test_compact_reuses_existing_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        // First run: startup creates worktree.
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+        let sid = result.session_id.clone();
+        let wt_path = result.env_vars["CODEFLOW_WORKTREE_PATH"].clone();
+
+        // Simulate compact: env file already has CODEFLOW_WORKTREE_PATH from startup.
+        // The startup run already wrote it to main env file.
+        let input2 = make_input("compact", dir.path().to_str().unwrap());
+        let mut buf2 = Vec::new();
+        let result2 = init.run(&input2, dir.path(), &mut buf2).unwrap();
+
+        assert_eq!(result2.session_id, sid);
+        assert_eq!(
+            result2
+                .env_vars
+                .get("CODEFLOW_WORKTREE_PATH")
+                .map(|s| s.as_str()),
+            Some(wt_path.as_str()),
+            "compact should reuse the same worktree path"
+        );
+    }
+
+    #[test]
+    fn test_resume_reuses_existing_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        // Startup: create worktree.
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+        let sid = result.session_id.clone();
+        let wt_path = result.env_vars["CODEFLOW_WORKTREE_PATH"].clone();
+
+        // Resume: should recover the worktree path.
+        let input2 = make_input("resume", dir.path().to_str().unwrap());
+        let mut buf2 = Vec::new();
+        let result2 = init.run(&input2, dir.path(), &mut buf2).unwrap();
+
+        assert_eq!(result2.session_id, sid);
+        assert_eq!(
+            result2
+                .env_vars
+                .get("CODEFLOW_WORKTREE_PATH")
+                .map(|s| s.as_str()),
+            Some(wt_path.as_str()),
+            "resume should reuse the same worktree path"
+        );
+    }
+
+    #[test]
+    fn test_startup_worktree_handle_defused() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        // The worktree should still exist after run() completes (handle was defused).
+        let wt_path = &result.env_vars["CODEFLOW_WORKTREE_PATH"];
+        assert!(
+            PathBuf::from(wt_path).exists(),
+            "worktree should persist after defused handle drop"
+        );
+    }
+
+    #[test]
+    fn test_startup_env_file_in_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        let wt_path = PathBuf::from(&result.env_vars["CODEFLOW_WORKTREE_PATH"]);
+        let wt_env_file = wt_path
+            .join(".state")
+            .join("runtime")
+            .join("codeflow-env.sh");
+        assert!(
+            wt_env_file.exists(),
+            "codeflow-env.sh should be written in worktree: {}",
+            wt_env_file.display()
+        );
+
+        // Read and verify the worktree env file content.
+        let content = fs::read_to_string(&wt_env_file).unwrap();
+        assert!(content.contains("CODEFLOW_SESSION_ID"));
+        assert!(content.contains("CODEFLOW_WORKTREE_PATH"));
+    }
+
+    #[test]
+    fn test_startup_pathflow_flag_in_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        let wt_path = PathBuf::from(&result.env_vars["CODEFLOW_WORKTREE_PATH"]);
+        let sid = result.session_id.as_str();
+
+        // PathFlow flag should be in the worktree.
+        let flag_path = wt_path
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pathflow-session-status.json");
+        assert!(
+            flag_path.exists(),
+            "pathflow-session-status.json should be in worktree: {}",
+            flag_path.display()
+        );
+    }
+
+    #[test]
+    fn test_startup_worktree_session_id_in_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        let sid = result.session_id.as_str();
+
+        // Read the worktree registry and verify session_id is set.
+        let reg_path = dir.path().join(".state").join("worktrees.yaml");
+        let reg = crate::worktree::read_registry(&reg_path).unwrap();
+        let wt_name = format!("worktree-{sid}");
+        let entry = reg.worktrees.iter().find(|e| e.name == wt_name);
+        assert!(entry.is_some(), "registry should contain worktree entry");
+        assert_eq!(
+            entry.unwrap().session_id.as_deref(),
+            Some(sid),
+            "registry entry should have session_id set"
+        );
+    }
+
+    #[test]
+    fn test_startup_worktree_env_json_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _repo = init_git_repo(dir.path());
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let _result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Verify JSON output includes CODEFLOW_WORKTREE_PATH.
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("CODEFLOW_WORKTREE_PATH"),
+            "env JSON output should contain CODEFLOW_WORKTREE_PATH"
+        );
+    }
+
+    #[test]
+    fn test_startup_without_git_repo_degrades_gracefully() {
+        // When there's no git repo, worktree creation fails gracefully
+        // and session proceeds without a worktree.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // No git init -- setup_detached will fail.
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Should still succeed, just without worktree.
+        assert!(result.session_id.as_str().starts_with("ses-"));
+        assert!(
+            !result.env_vars.contains_key("CODEFLOW_WORKTREE_PATH"),
+            "no worktree should mean no CODEFLOW_WORKTREE_PATH"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("worktree creation failed")),
+            "should have warning about worktree creation failure"
         );
     }
 }

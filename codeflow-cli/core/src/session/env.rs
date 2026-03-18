@@ -26,6 +26,10 @@ pub struct EnvFile {
     pub session_id: SessionId,
     /// The project root exported as `CF_PROJECT_ROOT`.
     pub project_root: String,
+    /// Optional worktree path exported as `CODEFLOW_WORKTREE_PATH`.
+    /// Present when the session uses a worktree for isolation.
+    /// Backward compatible: `None` when parsed from older env files.
+    pub worktree_path: Option<String>,
 }
 
 /// Read and parse a `codeflow-env.sh` file from the given directory.
@@ -56,16 +60,39 @@ pub fn write_env_file(
     session_id: &SessionId,
     project_root: &str,
 ) -> Result<PathBuf, SessionError> {
+    write_env_file_with_worktree(state_dir, session_id, project_root, None)
+}
+
+/// Write a `codeflow-env.sh` file with an optional worktree path.
+///
+/// When `worktree_path` is `Some`, adds `CODEFLOW_WORKTREE_PATH` to the env file.
+/// This is used during worktree-enabled sessions so that compact/resume can
+/// recover the worktree location.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on write or rename failure.
+pub fn write_env_file_with_worktree(
+    state_dir: &Path,
+    session_id: &SessionId,
+    project_root: &str,
+    worktree_path: Option<&str>,
+) -> Result<PathBuf, SessionError> {
     fs::create_dir_all(state_dir)?;
 
     let target = state_dir.join(ENV_FILENAME);
     let tmp_path = state_dir.join(format!(".{ENV_FILENAME}.tmp"));
 
-    let content = format!(
+    let mut content = format!(
         "export CODEFLOW_SESSION_ID='{}'\nexport CF_PROJECT_ROOT='{}'\n",
         session_id.as_str(),
         project_root
     );
+
+    if let Some(wt_path) = worktree_path {
+        use std::fmt::Write as _;
+        let _ = writeln!(content, "export CODEFLOW_WORKTREE_PATH='{wt_path}'");
+    }
 
     {
         let mut file = fs::File::create(&tmp_path)?;
@@ -98,6 +125,7 @@ pub fn remove_env_file(state_dir: &Path) -> Result<(), SessionError> {
 fn parse_env_content(content: &str) -> Result<EnvFile, SessionError> {
     let mut session_id = None;
     let mut project_root = None;
+    let mut worktree_path = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -105,6 +133,8 @@ fn parse_env_content(content: &str) -> Result<EnvFile, SessionError> {
             session_id = Some(value.to_string());
         } else if let Some(value) = extract_export_value(line, "CF_PROJECT_ROOT") {
             project_root = Some(value.to_string());
+        } else if let Some(value) = extract_export_value(line, "CODEFLOW_WORKTREE_PATH") {
+            worktree_path = Some(value.to_string());
         }
     }
 
@@ -122,6 +152,7 @@ fn parse_env_content(content: &str) -> Result<EnvFile, SessionError> {
     Ok(EnvFile {
         session_id: sid,
         project_root: root,
+        worktree_path,
     })
 }
 
@@ -256,5 +287,92 @@ mod tests {
 
         let env = read_env_file(dir.path()).unwrap().unwrap();
         assert_eq!(env.session_id, sid2);
+    }
+
+    // --- CODEFLOW_WORKTREE_PATH tests ---
+
+    #[test]
+    fn test_write_and_read_env_file_with_worktree_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7wt123abc456def78901");
+
+        write_env_file_with_worktree(
+            dir.path(),
+            &sid,
+            "codeflow",
+            Some("/project/.git-worktrees/worktree-ses-abc"),
+        )
+        .unwrap();
+
+        let env = read_env_file(dir.path()).unwrap().unwrap();
+        assert_eq!(env.session_id, sid);
+        assert_eq!(env.project_root, "codeflow");
+        assert_eq!(
+            env.worktree_path.as_deref(),
+            Some("/project/.git-worktrees/worktree-ses-abc")
+        );
+    }
+
+    #[test]
+    fn test_read_env_file_backward_compat_no_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7backcompat123456789");
+
+        // Write WITHOUT worktree path (old format).
+        write_env_file(dir.path(), &sid, "codeflow").unwrap();
+
+        let env = read_env_file(dir.path()).unwrap().unwrap();
+        assert_eq!(env.session_id, sid);
+        assert!(
+            env.worktree_path.is_none(),
+            "missing CODEFLOW_WORKTREE_PATH should parse as None"
+        );
+    }
+
+    #[test]
+    fn test_write_env_file_with_worktree_path_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7format123456789abc");
+
+        write_env_file_with_worktree(
+            dir.path(),
+            &sid,
+            "codeflow",
+            Some("/project/.git-worktrees/wt-test"),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(ENV_FILENAME)).unwrap();
+        assert!(content.contains("export CODEFLOW_SESSION_ID='ses-01jq7format123456789abc'"));
+        assert!(content.contains("export CF_PROJECT_ROOT='codeflow'"));
+        assert!(
+            content.contains("export CODEFLOW_WORKTREE_PATH='/project/.git-worktrees/wt-test'")
+        );
+        assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_write_env_file_with_worktree_none_omits_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7nonewt1234567890abc");
+
+        write_env_file_with_worktree(dir.path(), &sid, "codeflow", None).unwrap();
+
+        let content = fs::read_to_string(dir.path().join(ENV_FILENAME)).unwrap();
+        assert!(!content.contains("CODEFLOW_WORKTREE_PATH"));
+    }
+
+    #[test]
+    fn test_parse_env_content_with_worktree_path() {
+        let content = "export CODEFLOW_SESSION_ID='ses-abc123'\n\
+                        export CF_PROJECT_ROOT='myproj'\n\
+                        export CODEFLOW_WORKTREE_PATH='/project/.git-worktrees/wt-1'\n";
+        let env = parse_env_content(content).unwrap();
+        assert_eq!(env.session_id.as_str(), "ses-abc123");
+        assert_eq!(env.project_root, "myproj");
+        assert_eq!(
+            env.worktree_path.as_deref(),
+            Some("/project/.git-worktrees/wt-1")
+        );
     }
 }

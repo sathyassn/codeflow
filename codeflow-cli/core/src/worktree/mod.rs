@@ -12,6 +12,7 @@
 //! - Registry: YAML-based tracking file at `.state/worktrees.yaml`.
 
 mod cleanup;
+mod paths;
 mod registry;
 mod setup;
 
@@ -21,7 +22,10 @@ use crate::error::WorktreeError;
 use crate::types::BranchName;
 
 pub use cleanup::CleanupOpts;
-pub use registry::{WorktreeEntry, WorktreeRegistry};
+pub use paths::WorktreePaths;
+pub use registry::{WorktreeEntry, WorktreeRegistry, read_registry, write_registry};
+
+// WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
 
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
 

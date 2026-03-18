@@ -79,6 +79,12 @@ pub enum HookError {
     Serialization(#[from] serde_json::Error),
 }
 
+impl From<WorktreeError> for HookError {
+    fn from(err: WorktreeError) -> Self {
+        Self::Config(format!("worktree error: {err}"))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SessionError {
     #[error("no active session")]
@@ -704,6 +710,32 @@ mod tests {
     fn test_worktree_error_invalid_name() {
         let err = WorktreeError::InvalidName("bad/name!".into());
         assert_eq!(err.to_string(), "invalid worktree name: bad/name!");
+    }
+
+    // -- HookError from WorktreeError --
+
+    #[test]
+    fn test_hook_error_from_worktree_error() {
+        let wt_err = WorktreeError::InvalidName("bad-name".into());
+        let hook_err: HookError = wt_err.into();
+        assert!(matches!(hook_err, HookError::Config(_)));
+        let msg = hook_err.to_string();
+        assert!(
+            msg.contains("worktree error"),
+            "should wrap with 'worktree error': {msg}"
+        );
+        assert!(
+            msg.contains("bad-name"),
+            "should preserve inner message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_hook_error_from_worktree_already_exists() {
+        let wt_err = WorktreeError::AlreadyExists("dup-wt".into());
+        let hook_err: HookError = wt_err.into();
+        let msg = hook_err.to_string();
+        assert!(msg.contains("worktree already exists"));
     }
 
     // -- DoctorError --
