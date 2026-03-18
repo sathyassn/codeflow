@@ -46,9 +46,9 @@ pub struct CleanupResult {
 
 /// Session-end cleanup handler with injectable dependencies.
 ///
-/// Performs the 13-section cleanup flow: `PathFlow` guard, PF7 validation,
-/// sentinel cleanup, active task handling, team backstop, runtime cleanup,
-/// and ledger event writing.
+/// Performs the cleanup flow: `PathFlow` guard, PF7 validation,
+/// sentinel cleanup, active task handling, worktree cleanup, team backstop,
+/// runtime cleanup, and ledger event writing.
 pub struct SessionEndCleanup {
     pub home_dir: PathBuf,
     /// Claude Code process PID of this agent (via `parent_id()` in hook).
@@ -124,6 +124,9 @@ impl SessionEndCleanup {
 
         // --- Section 6: Active task preservation ---
         self.handle_active_task(project_dir, &mut result);
+
+        // --- Section 7: Worktree cleanup ---
+        self.clean_worktree(project_dir, &mut result);
 
         // --- Section 8: Read team info ---
         let team_name = self.read_team_name(&session_state_dir);
@@ -359,6 +362,71 @@ impl SessionEndCleanup {
                 let project_runtime = project_dir.join(".state").join("runtime");
                 let _ = session::clear_active_task(&project_runtime);
             }
+        }
+    }
+
+    /// Remove the session's worktree (if present).
+    ///
+    /// Reads `CODEFLOW_WORKTREE_PATH` from env. If set, extracts the
+    /// worktree name from the path basename and calls
+    /// `WorktreeManager::cleanup(name, force=true)`. Also prunes stale
+    /// git worktree references afterward.
+    ///
+    /// Errors are non-fatal: logged as warnings, never abort cleanup.
+    fn clean_worktree(&self, project_dir: &Path, result: &mut CleanupResult) {
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        self.clean_worktree_inner(project_dir, worktree_path.as_deref(), result);
+    }
+
+    /// Inner implementation with explicit worktree path for testability.
+    fn clean_worktree_inner(
+        &self,
+        project_dir: &Path,
+        worktree_path: Option<&str>,
+        result: &mut CleanupResult,
+    ) {
+        let Some(wt_path) = worktree_path else {
+            return; // Non-worktree session — nothing to clean.
+        };
+
+        let wt_name = Path::new(wt_path)
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().to_string());
+        if wt_name.is_empty() {
+            result
+                .warnings
+                .push("SessionEnd: worktree path has no basename, skipping cleanup".into());
+            return;
+        }
+
+        let mgr = crate::worktree::WorktreeManager::new(project_dir);
+        let opts = crate::worktree::CleanupOpts {
+            force: true,
+            ..Default::default()
+        };
+
+        match mgr.cleanup(&wt_name, &opts) {
+            Ok(()) => {
+                result
+                    .messages
+                    .push(format!("SessionEnd: Cleaned worktree '{wt_name}'"));
+            }
+            Err(e) => {
+                result.warnings.push(format!(
+                    "SessionEnd: worktree cleanup failed for '{wt_name}': {e}"
+                ));
+            }
+        }
+
+        // Prune stale git worktree references (idempotent).
+        let prune_opts = crate::worktree::CleanupOpts {
+            prune: true,
+            ..Default::default()
+        };
+        if let Err(e) = mgr.cleanup("", &prune_opts) {
+            result
+                .warnings
+                .push(format!("SessionEnd: worktree prune failed: {e}"));
         }
     }
 
@@ -1463,5 +1531,209 @@ mod tests {
 
         // Cleanup.
         let _ = fs::remove_dir_all(PathBuf::from("/tmp/claude").join(&project_name));
+    }
+
+    // --- Worktree cleanup (Section 7) tests ---
+
+    #[test]
+    fn test_clean_worktree_inner_no_worktree_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: "ses-test".into(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // No worktree path -- should return early with no messages.
+        cleaner.clean_worktree_inner(dir.path(), None, &mut result);
+
+        assert!(
+            result.messages.is_empty(),
+            "no messages when no worktree path"
+        );
+        assert!(
+            result.warnings.is_empty(),
+            "no warnings when no worktree path"
+        );
+    }
+
+    #[test]
+    fn test_clean_worktree_inner_empty_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: "ses-test".into(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // Path with no valid basename (trailing slash edge case handled by Path).
+        cleaner.clean_worktree_inner(dir.path(), Some("/"), &mut result);
+
+        assert!(
+            result.warnings.iter().any(|w| w.contains("no basename")),
+            "should warn about empty basename: {:?}",
+            result.warnings,
+        );
+    }
+
+    #[test]
+    fn test_clean_worktree_inner_nonexistent_worktree() {
+        // WorktreeManager.cleanup with force=true on a nonexistent worktree
+        // should succeed (idempotent) — not an error.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: "ses-test".into(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        cleaner.clean_worktree_inner(
+            dir.path(),
+            Some("/proj/.git-worktrees/nonexistent-wt"),
+            &mut result,
+        );
+
+        // Should produce a success message (cleanup of nonexistent is OK with force).
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Cleaned worktree"))
+                || result.warnings.iter().any(|w| w.contains("cleanup failed")),
+            "should produce a message or warning: messages={:?}, warnings={:?}",
+            result.messages,
+            result.warnings,
+        );
+    }
+
+    #[test]
+    fn test_clean_worktree_inner_with_git_repo_and_worktree() {
+        // Full lifecycle: create a real git worktree, then clean it up.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        // Initialize a git repo with one commit (required for worktree creation).
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // Create worktree via the manager.
+        let mgr = crate::worktree::WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+        let branch = crate::types::BranchName::new_unchecked("feat/test-cleanup");
+        mgr.setup("test-wt", &branch).unwrap();
+
+        let wt_path = mgr.base_dir().join("test-wt");
+        assert!(wt_path.exists(), "worktree should exist before cleanup");
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: "ses-test".into(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // Clean the worktree.
+        cleaner.clean_worktree_inner(dir.path(), Some(wt_path.to_str().unwrap()), &mut result);
+
+        // Worktree directory should be removed.
+        assert!(
+            !wt_path.exists(),
+            "worktree directory should be removed after cleanup"
+        );
+
+        // Success message should be present.
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Cleaned worktree 'test-wt'")),
+            "should have success message: {:?}",
+            result.messages,
+        );
+
+        // Registry should show the worktree as removed.
+        let entries = mgr.list(Some("removed")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "test-wt");
+    }
+
+    #[test]
+    fn test_clean_worktree_inner_abnormal_termination() {
+        // Simulate abnormal termination: worktree exists but no PF7.
+        // cleanup(force=true) should still remove it.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        let mgr = crate::worktree::WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+        let branch = crate::types::BranchName::new_unchecked("feat/crash-test");
+        mgr.setup("crash-wt", &branch).unwrap();
+
+        let wt_path = mgr.base_dir().join("crash-wt");
+        assert!(wt_path.exists());
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+
+        let mut result = CleanupResult {
+            session_id: "ses-crash".into(),
+            pf7_valid: false, // Abnormal — no PF7.
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        cleaner.clean_worktree_inner(dir.path(), Some(wt_path.to_str().unwrap()), &mut result);
+
+        assert!(
+            !wt_path.exists(),
+            "worktree should be removed even without PF7 (abnormal termination)"
+        );
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Cleaned worktree")),
+            "should report cleanup success: {:?}",
+            result.messages,
+        );
     }
 }

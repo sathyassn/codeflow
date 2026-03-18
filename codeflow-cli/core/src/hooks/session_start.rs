@@ -161,6 +161,11 @@ impl SessionStartInit {
             }
         }
 
+        // --- Section 1b: Stale worktree cleanup (startup only) ---
+        if source == "startup" {
+            self.clean_stale_worktrees(project_dir, &mut result);
+        }
+
         // --- Section 2: Session ID generation (source-gated) ---
         let session_id = self.resolve_or_generate_session_id(
             project_dir,
@@ -406,6 +411,94 @@ impl SessionStartInit {
             "TEAMMATE MODE: Detected via status + config + lead_pid {lead_pid} alive (team: {team_name})"
         ));
         (Some(existing_sid), true)
+    }
+
+    /// Clean stale worktrees from dead sessions.
+    ///
+    /// Reads the worktrees.yaml registry and checks each active worktree's
+    /// owning session. If the session is dead (lead_pid not alive), the
+    /// worktree is force-cleaned.
+    ///
+    /// Called at startup (source=startup) only, after stale session cleanup.
+    fn clean_stale_worktrees(&self, project_dir: &Path, result: &mut InitResult) {
+        let registry_path = project_dir.join(".state").join("worktrees.yaml");
+        if !registry_path.exists() {
+            return;
+        }
+
+        let registry = match crate::worktree::read_registry(&registry_path) {
+            Ok(reg) => reg,
+            Err(e) => {
+                result
+                    .warnings
+                    .push(format!("stale worktree cleanup: registry read error: {e}"));
+                return;
+            }
+        };
+
+        let mgr = crate::worktree::WorktreeManager::new(project_dir);
+        let opts = crate::worktree::CleanupOpts {
+            force: true,
+            ..Default::default()
+        };
+
+        for entry in &registry.worktrees {
+            if entry.status != "active" {
+                continue;
+            }
+
+            // Check if the owning session is still alive via its status file.
+            let Some(ref sid) = entry.session_id else {
+                // No session_id recorded — cannot verify liveness, skip.
+                continue;
+            };
+
+            let status_path = project_dir
+                .join(".state")
+                .join("session")
+                .join(sid)
+                .join("pathflow")
+                .join("pathflow-session-status.json");
+
+            let session_alive =
+                if let Ok(status) = crate::pathflow::file_lock::locked_read(&status_path) {
+                    let lead_pid = status
+                        .get("lead_pid")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .unwrap_or(0);
+                    lead_pid > 0 && is_process_alive(lead_pid)
+                } else {
+                    false // No status file — session is dead.
+                };
+
+            if session_alive {
+                continue;
+            }
+
+            // Session is dead — clean up this worktree.
+            result.messages.push(format!(
+                "STALE WORKTREE: cleaning '{}' from dead session {sid}",
+                entry.name,
+            ));
+            if let Err(e) = mgr.cleanup(&entry.name, &opts) {
+                result.warnings.push(format!(
+                    "stale worktree cleanup failed for '{}': {e}",
+                    entry.name,
+                ));
+            }
+        }
+
+        // Prune stale git worktree references.
+        let prune_opts = crate::worktree::CleanupOpts {
+            prune: true,
+            ..Default::default()
+        };
+        if let Err(e) = mgr.cleanup("", &prune_opts) {
+            result
+                .warnings
+                .push(format!("stale worktree prune failed: {e}"));
+        }
     }
 
     /// Resolve or generate a session ID based on source type.
@@ -3501,6 +3594,283 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("worktree creation failed")),
             "should have warning about worktree creation failure"
+        );
+    }
+
+    // --- Stale worktree cleanup tests ---
+
+    #[test]
+    fn test_clean_stale_worktrees_no_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // No worktrees.yaml — should return early without errors.
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        assert!(result.warnings.is_empty(), "no warnings expected");
+        assert!(result.messages.is_empty(), "no messages expected");
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_empty_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Initialize a git repo (required for the prune call at the end).
+        let _repo = git2::Repository::init(dir.path()).unwrap();
+
+        // Create an empty registry.
+        let reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        assert!(result.warnings.is_empty(), "no warnings expected");
+        assert!(result.messages.is_empty(), "no messages expected");
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_dead_session_triggers_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Create a registry with an active worktree owned by a dead session.
+        let dead_sid = "ses-01jq7deadbeef000000000ab";
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "stale-wt".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees")
+                .join("stale-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: "feat/stale".to_string(),
+            created_at: "2026-03-18T00:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some(dead_sid.to_string()),
+        });
+        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Create session status file with a dead PID (PID 1 is init, use a very
+        // large PID that certainly doesn't exist).
+        let status_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(dead_sid)
+            .join("pathflow");
+        fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
+            "session_id": dead_sid,
+            "status": "pf-in-progress",
+            "lead_pid": 999999999_u64,
+            "team_name": "dead-team",
+        });
+        fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        // Should detect and report the stale worktree.
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("STALE WORKTREE") && m.contains("stale-wt")),
+            "should report stale worktree cleanup: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_skips_active_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Use current process PID so is_process_alive returns true.
+        let live_pid = std::process::id();
+        let live_sid = "ses-01jq7livesess000000000ab";
+
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "active-wt".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees")
+                .join("active-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: "feat/active".to_string(),
+            created_at: "2026-03-18T00:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some(live_sid.to_string()),
+        });
+        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Create session status with a LIVE PID.
+        let status_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(live_sid)
+            .join("pathflow");
+        fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
+            "session_id": live_sid,
+            "status": "pf-in-progress",
+            "lead_pid": live_pid,
+            "team_name": "live-team",
+        });
+        fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        // Active session — should NOT be cleaned.
+        assert!(
+            !result.messages.iter().any(|m| m.contains("STALE WORKTREE")),
+            "should not report stale worktree for active session: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_skips_no_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Registry entry with no session_id (legacy or manually created).
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "legacy-wt".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees")
+                .join("legacy-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: "feat/legacy".to_string(),
+            created_at: "2026-03-18T00:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+        });
+        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        // No session_id — should be skipped (cannot determine liveness).
+        assert!(
+            !result.messages.iter().any(|m| m.contains("STALE WORKTREE")),
+            "should skip worktree without session_id: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_skips_removed_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Registry entry with status "removed" — already cleaned up.
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "old-wt".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees")
+                .join("old-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: "feat/old".to_string(),
+            created_at: "2026-03-18T00:00:00Z".to_string(),
+            status: "removed".to_string(),
+            session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
+        });
+        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        // Already removed — should be skipped.
+        assert!(
+            !result.messages.iter().any(|m| m.contains("STALE WORKTREE")),
+            "should skip already-removed worktree: {:?}",
+            result.messages,
         );
     }
 }
