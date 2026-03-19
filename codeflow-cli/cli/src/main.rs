@@ -58,7 +58,10 @@ enum Command {
     /// Sentinel management
     Sentinel,
     /// Coordination operations
-    Coordination,
+    Coordination {
+        #[command(subcommand)]
+        command: Option<cmd::coordination::CoordinationCommand>,
+    },
     /// Settings management
     Settings,
     /// Git worktree management
@@ -117,7 +120,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Validate { command } => cmd::validate::run(command),
         Command::Hooks { command } => cmd::hooks::run(command),
         Command::Sentinel => cmd::sentinel::run(),
-        Command::Coordination => cmd::coordination::run(),
+        Command::Coordination { command } => cmd::coordination::run(command),
         Command::Settings => cmd::settings::run(),
         Command::Worktree => cmd::worktree::run(),
         Command::Report => cmd::report::run(),
@@ -329,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_coordination() {
-        let result = dispatch(Command::Coordination).await;
+        let result = dispatch(Command::Coordination { command: None }).await;
         assert!(result.is_ok());
     }
 

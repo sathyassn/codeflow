@@ -112,6 +112,7 @@ pub(crate) fn create_worktree(
         created_at: super::now_rfc3339(),
         status: "active".to_string(),
         session_id: None,
+        task_id: None,
     };
 
     registry::register_worktree(mgr.registry_path(), entry.clone())?;
@@ -178,6 +179,7 @@ pub(crate) fn create_detached_worktree(
         created_at: super::now_rfc3339(),
         status: "active".to_string(),
         session_id: None,
+        task_id: None,
     };
 
     registry::register_worktree(mgr.registry_path(), entry.clone())?;

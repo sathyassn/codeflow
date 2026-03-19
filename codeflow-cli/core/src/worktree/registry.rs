@@ -10,6 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::WorktreeError;
+use crate::file_lock;
 
 /// A single worktree entry in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +29,9 @@ pub struct WorktreeEntry {
     /// Session ID that owns this worktree (set by SessionStart integration, task 009).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Task ID being worked on in this worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }
 
 /// Registry metadata.
@@ -149,6 +153,160 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
     Ok(())
 }
 
+/// Count the number of active worktrees in the registry.
+#[must_use]
+pub fn count_active(registry: &WorktreeRegistry) -> usize {
+    registry
+        .worktrees
+        .iter()
+        .filter(|e| e.status == "active")
+        .count()
+}
+
+/// List all active worktree entries in the registry.
+#[must_use]
+pub fn list_active(registry: &WorktreeRegistry) -> Vec<&WorktreeEntry> {
+    registry
+        .worktrees
+        .iter()
+        .filter(|e| e.status == "active")
+        .collect()
+}
+
+/// Perform a locked read of the registry file.
+///
+/// Uses a sidecar `.lock` file for shared access. Returns the parsed registry
+/// or a default empty registry if the file does not exist.
+///
+/// # Errors
+///
+/// - `WorktreeError::Yaml` if YAML parsing fails.
+/// - `WorktreeError::Io` on filesystem errors.
+pub fn locked_read_registry(path: &Path) -> Result<WorktreeRegistry, WorktreeError> {
+    if !path.exists() {
+        return Ok(WorktreeRegistry::new(""));
+    }
+    // Use locked_binary_rmw in read-only mode (no modifications).
+    let mut result_registry = None;
+    file_lock::locked_binary_rmw(
+        path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            serde_yaml::to_string(reg)
+                .map(String::into_bytes)
+                .map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            result_registry = Some(reg.clone());
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked read: {e}")))?;
+    Ok(result_registry.unwrap_or_else(|| WorktreeRegistry::new("")))
+}
+
+/// Register a new worktree with an atomic count-check + register under a single lock.
+///
+/// Prevents TOCTOU races where two sessions both see count < max and both register.
+///
+/// # Errors
+///
+/// - `WorktreeError::Creation` if the number of active worktrees is already at the limit.
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn locked_register_with_limit(
+    registry_path: &Path,
+    entry: &WorktreeEntry,
+    max_concurrent: usize,
+) -> Result<(), WorktreeError> {
+    let entry_owned = entry.clone();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            let active = count_active(reg);
+            if active >= max_concurrent {
+                return Err(format!(
+                    "max concurrent worktrees reached: {active}/{max_concurrent}"
+                ));
+            }
+            reg.worktrees.push(entry_owned.clone());
+            reg.metadata.last_updated = super::now_rfc3339();
+            Ok(())
+        },
+    )
+    .map_err(|e| {
+        if e.contains("max concurrent worktrees reached") {
+            WorktreeError::Creation(e)
+        } else {
+            WorktreeError::Yaml(format!("locked register: {e}"))
+        }
+    })
+}
+
+/// Deregister a worktree under an exclusive lock.
+///
+/// # Errors
+///
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn locked_deregister_worktree(
+    registry_path: &Path,
+    worktree_path: &str,
+) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let wt_path = worktree_path.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            let mut found = false;
+            for entry in &mut reg.worktrees {
+                if entry.path == wt_path {
+                    entry.status = "removed".to_string();
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked deregister: {e}")))
+}
+
 /// Convert days since Unix epoch to (year, month, day).
 pub(crate) fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant's civil_from_days.
@@ -190,6 +348,7 @@ mod tests {
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         });
 
         write_registry(&path, &reg).unwrap();
@@ -214,6 +373,7 @@ mod tests {
             created_at: "2026-03-07T11:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         register_worktree(&path, entry).unwrap();
@@ -236,6 +396,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         let entry2 = WorktreeEntry {
             name: "wt-2".to_string(),
@@ -244,6 +405,7 @@ mod tests {
             created_at: "2026-03-07T11:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         register_worktree(&path, entry1).unwrap();
@@ -267,6 +429,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -288,6 +451,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -344,6 +508,7 @@ mod tests {
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
@@ -377,6 +542,7 @@ status: active
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: Some("ses-abc123".to_string()),
+            task_id: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -397,11 +563,240 @@ status: active
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
             !yaml.contains("session_id"),
             "session_id: None should be skipped in serialization"
         );
+    }
+
+    // -- task_id field tests --
+
+    #[test]
+    fn test_worktree_entry_task_id_serde_roundtrip() {
+        let entry = WorktreeEntry {
+            name: "tid-wt".to_string(),
+            path: "/tmp/tid-wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:30:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-abc".to_string()),
+            task_id: Some("INF-TSK-023-018".to_string()),
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(
+            yaml.contains("task_id"),
+            "task_id should be serialized when Some"
+        );
+        let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.task_id, Some("INF-TSK-023-018".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_entry_backward_compat_no_task_id() {
+        // YAML files created before task_id was added should still parse.
+        let yaml = r#"
+name: old-wt
+path: /tmp/old-wt
+branch: feat/old
+created_at: "2026-03-07T10:30:00Z"
+status: active
+session_id: ses-123
+"#;
+        let parsed: WorktreeEntry = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.name, "old-wt");
+        assert!(parsed.task_id.is_none(), "task_id should default to None");
+        assert_eq!(parsed.session_id, Some("ses-123".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_entry_task_id_none_not_serialized() {
+        let entry = WorktreeEntry {
+            name: "notid-wt".to_string(),
+            path: "/tmp/notid-wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:30:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(
+            !yaml.contains("task_id"),
+            "task_id: None should be skipped in serialization"
+        );
+    }
+
+    // -- count_active / list_active tests --
+
+    #[test]
+    fn test_count_active_mixed_statuses() {
+        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "active-1".to_string(),
+            path: "/tmp/a1".to_string(),
+            branch: "feat/a1".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "removed-1".to_string(),
+            path: "/tmp/r1".to_string(),
+            branch: "feat/r1".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "removed".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "active-2".to_string(),
+            path: "/tmp/a2".to_string(),
+            branch: "feat/a2".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+
+        assert_eq!(count_active(&reg), 2);
+    }
+
+    #[test]
+    fn test_count_active_empty_registry() {
+        let reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
+        assert_eq!(count_active(&reg), 0);
+    }
+
+    #[test]
+    fn test_list_active_filters_removed() {
+        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "active-1".to_string(),
+            path: "/tmp/a1".to_string(),
+            branch: "feat/a1".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "removed-1".to_string(),
+            path: "/tmp/r1".to_string(),
+            branch: "feat/r1".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "removed".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+
+        let active = list_active(&reg);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].name, "active-1");
+    }
+
+    // -- locked_register_with_limit tests --
+
+    #[test]
+    fn test_locked_register_with_limit_under_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "wt-1".to_string(),
+            path: "/tmp/wt/1".to_string(),
+            branch: "feat/one".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: Some("TSK-001".to_string()),
+        };
+
+        locked_register_with_limit(&path, &entry, 3).unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees.len(), 1);
+        assert_eq!(reg.worktrees[0].task_id, Some("TSK-001".to_string()));
+    }
+
+    #[test]
+    fn test_locked_register_with_limit_at_limit_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        // Register 3 active worktrees (the limit).
+        for i in 0..3 {
+            let entry = WorktreeEntry {
+                name: format!("wt-{i}"),
+                path: format!("/tmp/wt/{i}"),
+                branch: format!("feat/{i}"),
+                created_at: "2026-03-07T10:00:00Z".to_string(),
+                status: "active".to_string(),
+                session_id: None,
+                task_id: None,
+            };
+            locked_register_with_limit(&path, &entry, 3).unwrap();
+        }
+
+        // 4th should be rejected.
+        let entry = WorktreeEntry {
+            name: "wt-3".to_string(),
+            path: "/tmp/wt/3".to_string(),
+            branch: "feat/3".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+
+        let result = locked_register_with_limit(&path, &entry, 3);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, WorktreeError::Creation(_)),
+            "expected Creation error, got: {err}"
+        );
+        assert!(err.to_string().contains("max concurrent"));
+    }
+
+    #[test]
+    fn test_locked_register_with_limit_removed_not_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        // Register 3, then remove 1 — should allow a new one.
+        for i in 0..3 {
+            let entry = WorktreeEntry {
+                name: format!("wt-{i}"),
+                path: format!("/tmp/wt/{i}"),
+                branch: format!("feat/{i}"),
+                created_at: "2026-03-07T10:00:00Z".to_string(),
+                status: "active".to_string(),
+                session_id: None,
+                task_id: None,
+            };
+            locked_register_with_limit(&path, &entry, 3).unwrap();
+        }
+
+        // Deregister one.
+        locked_deregister_worktree(&path, "/tmp/wt/1").unwrap();
+
+        // Should now succeed (2 active, limit 3).
+        let entry = WorktreeEntry {
+            name: "wt-new".to_string(),
+            path: "/tmp/wt/new".to_string(),
+            branch: "feat/new".to_string(),
+            created_at: "2026-03-07T11:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry, 3).unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(count_active(&reg), 3);
     }
 }

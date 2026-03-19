@@ -23,9 +23,10 @@ use crate::types::BranchName;
 
 pub use cleanup::CleanupOpts;
 pub use paths::WorktreePaths;
-pub use registry::{WorktreeEntry, WorktreeRegistry, read_registry, write_registry};
-
-// WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
+pub use registry::{
+    WorktreeEntry, WorktreeRegistry, count_active, list_active, locked_deregister_worktree,
+    locked_read_registry, locked_register_with_limit, read_registry, write_registry,
+};
 
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
 
@@ -488,6 +489,7 @@ mod tests {
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Stale);
     }
@@ -504,6 +506,7 @@ mod tests {
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Orphaned);
     }
@@ -521,6 +524,7 @@ mod tests {
             created_at: "2026-03-07T10:30:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Active);
     }
@@ -662,6 +666,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -681,6 +686,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         let mut handle = WorktreeHandle::new(&entry, &mgr);
@@ -700,6 +706,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -786,6 +793,7 @@ mod tests {
             created_at: "2026-03-07T10:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         // This should not panic.

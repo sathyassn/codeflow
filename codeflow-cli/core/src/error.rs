@@ -364,6 +364,9 @@ pub enum CoordinationError {
     #[error("container not found: {0}")]
     ContainerNotFound(String),
 
+    #[error("merge queue error: {0}")]
+    MergeQueue(String),
+
     #[error("loro error: {0}")]
     Loro(#[from] loro::LoroError),
 

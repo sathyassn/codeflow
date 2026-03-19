@@ -1,6 +1,7 @@
 {
   "version": "1.0.0",
   "orchestration_note": "Tasks assigned to 'team-lead' are orchestration actions (team formation, routing decisions, verification checkpoints). They do NOT violate the delegation-only principle. Implementation work (code, docs, tests, commits) is ALWAYS delegated to teammates.",
+  "phase_registration_enforcement": "STRICT SEQUENTIAL RULE: You MUST complete ALL tasks within the current phase AND wait for the phase sentinel (pf-N) to be auto-created by the checkpoint system BEFORE creating TaskCreate entries for the next phase. The checkpoint hook WILL block cross-phase registration — attempting to register PF{N+1} tasks before PF{N}'s sentinel exists wastes effort and produces blocking errors. Internalize this rhythm: register phase tasks → execute them → mark completed → sentinel auto-created → THEN move to next phase. This is not a restriction — it is how your reasoning naturally flows: finish one step completely before starting the next.",
   "phases": {
     "PF1-INIT": {
       "name": "Session Start",

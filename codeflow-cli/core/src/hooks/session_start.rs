@@ -3775,6 +3775,7 @@ mod tests {
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: Some(dead_sid.to_string()),
+            task_id: None,
         });
         let registry_path = dir.path().join(".state").join("worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -3846,6 +3847,7 @@ mod tests {
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: Some(live_sid.to_string()),
+            task_id: None,
         });
         let registry_path = dir.path().join(".state").join("worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -3910,6 +3912,7 @@ mod tests {
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         });
         let registry_path = dir.path().join(".state").join("worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -3954,6 +3957,7 @@ mod tests {
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: "removed".to_string(),
             session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
+            task_id: None,
         });
         let registry_path = dir.path().join(".state").join("worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -3999,6 +4003,7 @@ mod tests {
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: Some("ses-orchestrator00000000000".to_string()),
+            task_id: None,
         });
 
         let registry_path = project_dir.join(".state").join("worktrees.yaml");

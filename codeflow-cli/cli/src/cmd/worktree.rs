@@ -68,6 +68,7 @@ mod tests {
             created_at: "2025-01-01T00:00:00Z".to_string(),
             status: "removed".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         let state = mgr.detect_state(&entry);
@@ -87,6 +88,7 @@ mod tests {
             created_at: "2025-01-01T00:00:00Z".to_string(),
             status: "active".to_string(),
             session_id: None,
+            task_id: None,
         };
 
         let dir = tempfile::tempdir().unwrap();
