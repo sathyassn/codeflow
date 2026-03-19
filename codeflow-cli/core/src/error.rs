@@ -404,6 +404,9 @@ pub enum AutorunError {
     #[error("yaml parse error: {0}")]
     Yaml(String),
 
+    #[error("worktree error: {0}")]
+    Worktree(#[from] WorktreeError),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -915,6 +918,22 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "yaml parse error: unexpected key at line 5"
+        );
+    }
+
+    #[test]
+    fn test_autorun_error_worktree() {
+        let wt_err = WorktreeError::Creation("git worktree add failed".into());
+        let err: AutorunError = wt_err.into();
+        assert!(
+            err.to_string().contains("worktree error"),
+            "should wrap with 'worktree error': {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("git worktree add failed"),
+            "should preserve inner message: {}",
+            err
         );
     }
 

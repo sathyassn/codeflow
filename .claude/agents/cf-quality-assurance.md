@@ -107,7 +107,7 @@ This is the unified CLI entry point. It routes to all test suites (shell/Python,
 | Suite | Bridge Script | Coverage | Config |
 |-------|--------------|----------|--------|
 | Shell/Python | `bash .codeflow/testing/run-all-tests.sh --mode full` | Structural coverage via `test-coverage.sh` | `.codeflow/testing/test-config.json` |
-| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via cargo-llvm-cov on business packages | `codeflow-cli/config/testing/test-config.json` |
+| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via `cargo llvm-cov` on business packages | `codeflow-cli/config/testing/test-config.json` |
 
 Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in the Rust test-config.json.
 

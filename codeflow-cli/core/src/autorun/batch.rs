@@ -39,6 +39,10 @@ pub struct TaskSpec {
 
     #[serde(default)]
     pub depends_on: Vec<String>,
+
+    /// File patterns this task claims for exclusive access.
+    #[serde(default)]
+    pub file_scope: Vec<String>,
 }
 
 /// Validated and resolved batch specification.
@@ -141,6 +145,14 @@ fn validate_batch(bf: &BatchFile) -> Result<(), AutorunError> {
                 )));
             }
         }
+    }
+
+    // Validate max_workers does not exceed system limit.
+    if bf.max_workers > DEFAULT_MAX_WORKERS {
+        return Err(AutorunError::InvalidBatch(format!(
+            "max_workers {} exceeds limit {}",
+            bf.max_workers, DEFAULT_MAX_WORKERS,
+        )));
     }
 
     // Validate auto_merge + protected branch constraint.
@@ -344,14 +356,17 @@ tasks:
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec!["b".into()],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
+                file_scope: vec![],
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -364,14 +379,17 @@ tasks:
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec![],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec![],
+                file_scope: vec![],
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -385,18 +403,22 @@ tasks:
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec!["a".into()],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "d".into(),
                 depends_on: vec!["b".into(), "c".into()],
+                file_scope: vec![],
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -413,10 +435,12 @@ tasks:
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec!["b".into()],
+                file_scope: vec![],
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
+                file_scope: vec![],
             },
         ];
         let result = topological_sort(&tasks);
@@ -451,5 +475,70 @@ tasks:
         let result = parse_batch_data("{{invalid yaml", "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("yaml"));
+    }
+
+    #[test]
+    fn test_validate_max_workers_exceeded() {
+        let yaml = "max_workers: 5\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("max_workers 5 exceeds limit 3"),
+            "expected max_workers error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_max_workers_at_limit() {
+        let yaml = "max_workers: 3\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 3);
+    }
+
+    #[test]
+    fn test_validate_max_workers_zero_defaults() {
+        let yaml = "max_workers: 0\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().max_workers,
+            DEFAULT_MAX_WORKERS,
+            "max_workers=0 should default to DEFAULT_MAX_WORKERS"
+        );
+    }
+
+    #[test]
+    fn test_task_spec_file_scope_default() {
+        let yaml = "tasks:\n  - id: task-a\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert!(
+            batch.tasks[0].file_scope.is_empty(),
+            "file_scope should default to empty"
+        );
+    }
+
+    #[test]
+    fn test_task_spec_file_scope_parsed() {
+        let yaml = "tasks:\n  - id: task-a\n    file_scope:\n      - \"src/**/*.rs\"\n      - \"tests/\"\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert_eq!(batch.tasks[0].file_scope, vec!["src/**/*.rs", "tests/"]);
+    }
+
+    #[test]
+    fn test_validate_max_workers_one_below_limit() {
+        let yaml = "max_workers: 2\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 2);
+    }
+
+    #[test]
+    fn test_validate_max_workers_one_above_limit() {
+        let yaml = "max_workers: 4\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds limit"));
     }
 }

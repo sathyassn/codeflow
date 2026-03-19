@@ -24,6 +24,8 @@ pub struct WorkerConfig {
     pub auto_merge: bool,
     pub target: String,
     pub tmux_prefix: String,
+    /// File patterns this worker claims for exclusive access via Loro.
+    pub file_scope: Vec<String>,
 }
 
 /// Result of a worker execution.
@@ -186,6 +188,12 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
 
             launched_any = true;
             state.running.lock().await.insert(task_id.clone());
+            let file_scope = batch
+                .tasks
+                .iter()
+                .find(|t| t.id == *task_id)
+                .map(|t| t.file_scope.clone())
+                .unwrap_or_default();
             Self::spawn_worker(
                 self.runner.clone(),
                 WorkerConfig {
@@ -197,6 +205,7 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
                     auto_merge: batch.auto_merge,
                     target: batch.target.clone(),
                     tmux_prefix: "codeflow-worker".into(),
+                    file_scope,
                 },
                 state.completed.clone(),
                 state.failed.clone(),
@@ -421,9 +430,11 @@ mod tests {
             auto_merge: false,
             target: "main".into(),
             tmux_prefix: "worker".into(),
+            file_scope: vec!["src/**/*.rs".into()],
         };
         assert_eq!(cfg.task_id, "task-a");
         assert_eq!(cfg.worker_num, 1);
+        assert_eq!(cfg.file_scope, vec!["src/**/*.rs"]);
     }
 
     #[test]

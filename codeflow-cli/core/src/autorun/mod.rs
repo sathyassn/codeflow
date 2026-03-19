@@ -11,4 +11,7 @@ pub mod worker;
 
 pub use batch::{BatchFile, ParsedBatch, TaskSpec};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
-pub use worker::{ClaudeInvoker, InvokeConfig, InvokeResult, TmuxRunner, WorkerRunner};
+pub use worker::{
+    ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TmuxRunner, TmuxWorker,
+    WorkerRunner, WorktreeInfo, WorktreeProvider,
+};
