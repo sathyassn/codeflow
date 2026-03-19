@@ -147,14 +147,6 @@ fn validate_batch(bf: &BatchFile) -> Result<(), AutorunError> {
         }
     }
 
-    // Validate max_workers does not exceed system limit.
-    if bf.max_workers > DEFAULT_MAX_WORKERS {
-        return Err(AutorunError::InvalidBatch(format!(
-            "max_workers {} exceeds limit {}",
-            bf.max_workers, DEFAULT_MAX_WORKERS,
-        )));
-    }
-
     // Validate auto_merge + protected branch constraint.
     if bf.auto_merge {
         let target = if bf.target.is_empty() {
@@ -478,19 +470,15 @@ tasks:
     }
 
     #[test]
-    fn test_validate_max_workers_exceeded() {
+    fn test_validate_max_workers_accepted() {
         let yaml = "max_workers: 5\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("max_workers 5 exceeds limit 3"),
-            "expected max_workers error, got: {err}"
-        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 5);
     }
 
     #[test]
-    fn test_validate_max_workers_at_limit() {
+    fn test_validate_max_workers_at_default() {
         let yaml = "max_workers: 3\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_ok());
@@ -535,10 +523,26 @@ tasks:
     }
 
     #[test]
-    fn test_validate_max_workers_one_above_limit() {
+    fn test_validate_max_workers_above_default() {
         let yaml = "max_workers: 4\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds limit"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 4);
+    }
+
+    #[test]
+    fn test_validate_max_workers_large_value() {
+        let yaml = "max_workers: 10\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 10);
+    }
+
+    #[test]
+    fn test_validate_max_workers_very_large_value() {
+        let yaml = "max_workers: 20\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().max_workers, 20);
     }
 }

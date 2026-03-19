@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use surrealdb::Surreal;
 
@@ -16,6 +17,110 @@ use crate::types::FormatId;
 
 const NS: &str = "codeflow";
 const DB: &str = "main";
+
+/// Default query timeout duration.
+///
+/// Callers of `with_timeout` should use this constant to apply
+/// the standard 5-second timeout to database operations.
+pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------
+// Retry configuration for contention handling
+// ---------------------------------------------------------------------------
+
+/// Configuration for async retry with exponential backoff.
+///
+/// Used to handle transient contention and connection errors when
+/// multiple processes access the same `surrealkv://` database.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of attempts (including the initial attempt).
+    pub max_attempts: u32,
+    /// Initial backoff duration before the first retry.
+    pub initial_backoff: Duration,
+    /// Maximum backoff duration (cap).
+    pub max_backoff: Duration,
+    /// Backoff multiplier applied after each retry.
+    pub multiplier: u32,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(1),
+            multiplier: 2,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Calculate backoff duration for a given attempt (0-based).
+    #[must_use]
+    pub fn backoff_for(&self, attempt: u32) -> Duration {
+        let millis = u64::try_from(self.initial_backoff.as_millis()).unwrap_or(u64::MAX);
+        let factor = u64::from(self.multiplier).saturating_pow(attempt);
+        let delay = Duration::from_millis(millis.saturating_mul(factor));
+        if delay > self.max_backoff {
+            self.max_backoff
+        } else {
+            delay
+        }
+    }
+}
+
+/// Execute an async operation with retry and exponential backoff.
+///
+/// Retries on retryable errors (contention, connection, transaction).
+/// Fails immediately on schema/logic errors (migration, integrity, not-found).
+///
+/// # Errors
+///
+/// Returns the last error if all retries are exhausted, or immediately
+/// on non-retryable errors.
+pub async fn with_retry_async<F, Fut, T>(
+    config: &RetryConfig,
+    mut operation: F,
+) -> Result<T, DbError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, DbError>>,
+{
+    let mut last_err = None;
+    for attempt in 0..config.max_attempts {
+        match operation().await {
+            Ok(val) => return Ok(val),
+            Err(e) if e.is_schema_error() => return Err(e),
+            Err(e) => {
+                if attempt + 1 < config.max_attempts {
+                    tokio::time::sleep(config.backoff_for(attempt)).await;
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| DbError::Contention("retries exhausted".into())))
+}
+
+/// Execute a query with a timeout.
+///
+/// # Errors
+///
+/// Returns `DbError::Contention` if the operation exceeds the timeout.
+pub async fn with_timeout<F, Fut, T>(timeout: Duration, operation: F) -> Result<T, DbError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T, DbError>>,
+{
+    match tokio::time::timeout(timeout, operation()).await {
+        Ok(result) => result,
+        Err(_) => Err(DbError::Contention(format!(
+            "query timed out after {}ms",
+            timeout.as_millis()
+        ))),
+    }
+}
 
 /// Embedded `SurrealDB` store.
 ///
@@ -745,6 +850,8 @@ mod tests {
         ActiveWorkStatus, AreaType, AutorunSessionStatus, EpicStatus, FormatId, SessionStatus,
         TaskStatus, WorkStage, WorkType,
     };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// Helper: create an in-memory store with schema applied.
     async fn test_store() -> SurrealStore {
@@ -1856,6 +1963,348 @@ mod tests {
             .unwrap();
         assert_eq!(result.events_processed, 1);
         assert_eq!(result.epics_upserted, 1);
+    }
+
+    // -- Concurrent access tests --
+
+    #[tokio::test]
+    async fn test_concurrent_read_write() {
+        let store = Arc::new(test_store().await);
+
+        // Spawn N concurrent tasks doing CRUD on the same shared store.
+        let n = 5;
+        let mut handles = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let store = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                let id = format!("conc-ses-{i}");
+                let session = Session {
+                    id: id.clone(),
+                    project_id: None,
+                    user_id: format!("user-{i}"),
+                    user_host: "localhost".into(),
+                    machine_fingerprint: None,
+                    started_at: "2026-03-08T00:00:00Z".into(),
+                    ended_at: None,
+                    duration_seconds: None,
+                    status: SessionStatus::Active,
+                    work_ids: vec![],
+                    previous_session_id: None,
+                    context_summary: None,
+                    tool_stats: serde_json::Value::Null,
+                    metadata: serde_json::Value::Null,
+                };
+
+                // Create
+                store.create_session(&session).await.unwrap();
+
+                // Read back
+                let fetched = store.get_session(&id).await.unwrap();
+                assert!(fetched.is_some());
+                assert_eq!(fetched.unwrap().user_id, format!("user-{i}"));
+
+                // Update
+                store
+                    .update_session(
+                        &id,
+                        SessionUpdate {
+                            status: Some(SessionStatus::Ended),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+
+                // Verify update
+                let updated = store.get_session(&id).await.unwrap().unwrap();
+                assert_eq!(updated.status, SessionStatus::Ended);
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify all sessions exist
+        let all = store.list_sessions(SessionFilter::default()).await.unwrap();
+        assert_eq!(all.len(), n);
+    }
+
+    // -- Retry tests --
+
+    #[tokio::test]
+    async fn test_retry_on_contention() {
+        let attempt = AtomicU32::new(0);
+        let config = RetryConfig::default();
+
+        let result = with_retry_async(&config, || {
+            let a = attempt.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                if a == 1 {
+                    Err(DbError::Contention("lock held".into()))
+                } else {
+                    Ok(42)
+                }
+            }
+        })
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempt.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhaustion() {
+        let attempt = AtomicU32::new(0);
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(10),
+            multiplier: 2,
+        };
+
+        let result: Result<(), DbError> = with_retry_async(&config, || {
+            let a = attempt.fetch_add(1, Ordering::SeqCst) + 1;
+            async move { Err(DbError::Connection(format!("fail-{a}"))) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempt.load(Ordering::SeqCst), 3);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("connection failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_skips_schema_errors() {
+        let attempt = AtomicU32::new(0);
+        let config = RetryConfig::default();
+
+        let result: Result<(), DbError> = with_retry_async(&config, || {
+            attempt.fetch_add(1, Ordering::SeqCst);
+            async { Err(DbError::Migration("bad schema".into())) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        // Schema errors should NOT retry -- only 1 attempt.
+        assert_eq!(attempt.load(Ordering::SeqCst), 1);
+        assert!(result.unwrap_err().to_string().contains("bad schema"));
+    }
+
+    #[tokio::test]
+    async fn test_backoff_timing_async() {
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(50),
+            max_backoff: Duration::from_secs(1),
+            multiplier: 2,
+        };
+
+        let start = tokio::time::Instant::now();
+        let attempt = AtomicU32::new(0);
+
+        let _: Result<(), DbError> = with_retry_async(&config, || {
+            attempt.fetch_add(1, Ordering::SeqCst);
+            async { Err(DbError::Contention("busy".into())) }
+        })
+        .await;
+
+        let elapsed = start.elapsed();
+        // 3 attempts: backoff after attempt 1 (50ms) + backoff after attempt 2 (100ms) = ~150ms
+        // Allow some tolerance.
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "expected at least 100ms of backoff, got {elapsed:?}"
+        );
+        assert_eq!(attempt.load(Ordering::SeqCst), 3);
+    }
+
+    // -- RetryConfig tests --
+
+    #[test]
+    fn test_retry_config_default() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.initial_backoff, Duration::from_millis(100));
+        assert_eq!(config.max_backoff, Duration::from_secs(1));
+        assert_eq!(config.multiplier, 2);
+    }
+
+    #[test]
+    fn test_retry_config_backoff_sequence() {
+        let config = RetryConfig::default();
+        assert_eq!(config.backoff_for(0), Duration::from_millis(100));
+        assert_eq!(config.backoff_for(1), Duration::from_millis(200));
+        assert_eq!(config.backoff_for(2), Duration::from_millis(400));
+        assert_eq!(config.backoff_for(3), Duration::from_millis(800));
+    }
+
+    #[test]
+    fn test_retry_config_backoff_capped() {
+        let config = RetryConfig::default();
+        // High attempt should cap at max_backoff.
+        assert_eq!(config.backoff_for(20), Duration::from_secs(1));
+    }
+
+    // -- Query timeout tests --
+
+    #[tokio::test]
+    async fn test_query_timeout() {
+        let result: Result<(), DbError> = with_timeout(Duration::from_millis(10), || async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(())
+        })
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+        // Timeout errors should be retryable (contention variant).
+        assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn test_query_timeout_success() {
+        let result: Result<i32, DbError> =
+            with_timeout(Duration::from_secs(5), || async { Ok(42) }).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    // -- Error classification tests --
+
+    #[test]
+    fn test_error_classification() {
+        // Retryable errors
+        assert!(DbError::Contention("x".into()).is_retryable());
+        assert!(DbError::Connection("x".into()).is_retryable());
+        assert!(DbError::Transaction("x".into()).is_retryable());
+
+        // Non-retryable errors
+        assert!(!DbError::Query("x".into()).is_retryable());
+        assert!(!DbError::Migration("x".into()).is_retryable());
+
+        // Schema errors
+        assert!(DbError::Migration("x".into()).is_schema_error());
+        assert!(DbError::IntegrityCheck("x".into()).is_schema_error());
+
+        // Non-schema errors
+        assert!(!DbError::Contention("x".into()).is_schema_error());
+        assert!(!DbError::Connection("x".into()).is_schema_error());
+    }
+
+    // -- Graceful degradation test --
+
+    #[tokio::test]
+    async fn test_graceful_degradation() {
+        // Verify that retry with connection errors eventually returns the last error.
+        let config = RetryConfig {
+            max_attempts: 2,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(10),
+            multiplier: 2,
+        };
+
+        let result: Result<(), DbError> = with_retry_async(&config, || async {
+            Err(DbError::Connection("db unavailable".into()))
+        })
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("db unavailable"));
+        assert!(err.is_retryable());
+    }
+
+    // -- Benchmark: concurrent sessions --
+
+    #[tokio::test]
+    async fn test_benchmark_concurrent_sessions() {
+        let store = Arc::new(test_store().await);
+        let concurrency = 5; // Parameterized, not hardcoded to 3.
+        let ops_per_task = 20;
+
+        let start = tokio::time::Instant::now();
+        let mut handles = Vec::with_capacity(concurrency);
+
+        for worker in 0..concurrency {
+            let store = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                let mut latencies = Vec::with_capacity(ops_per_task);
+
+                for op in 0..ops_per_task {
+                    let op_start = tokio::time::Instant::now();
+                    let id = format!("bench-{worker}-{op}");
+                    let session = Session {
+                        id: id.clone(),
+                        project_id: None,
+                        user_id: format!("bench-user-{worker}"),
+                        user_host: "localhost".into(),
+                        machine_fingerprint: None,
+                        started_at: "2026-03-08T00:00:00Z".into(),
+                        ended_at: None,
+                        duration_seconds: None,
+                        status: SessionStatus::Active,
+                        work_ids: vec![],
+                        previous_session_id: None,
+                        context_summary: None,
+                        tool_stats: serde_json::Value::Null,
+                        metadata: serde_json::Value::Null,
+                    };
+
+                    // Create
+                    store.create_session(&session).await.unwrap();
+
+                    // Read
+                    let _ = store.get_session(&id).await.unwrap();
+
+                    // Update
+                    store
+                        .update_session(
+                            &id,
+                            SessionUpdate {
+                                status: Some(SessionStatus::Ended),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap();
+
+                    latencies.push(op_start.elapsed());
+                }
+
+                latencies
+            }));
+        }
+
+        let mut all_latencies = Vec::new();
+        for handle in handles {
+            let latencies = handle.await.unwrap();
+            all_latencies.extend(latencies);
+        }
+
+        let total_elapsed = start.elapsed();
+
+        // Sort for percentile calculation.
+        all_latencies.sort();
+        let total_ops = all_latencies.len();
+        let p50 = all_latencies[total_ops / 2];
+        let p95 = all_latencies[(total_ops as f64 * 0.95) as usize];
+        let p99 = all_latencies[(total_ops as f64 * 0.99) as usize];
+
+        // Assert p99 under 100ms for in-memory operations.
+        assert!(
+            p99 < Duration::from_millis(100),
+            "p99 latency {p99:?} exceeds 100ms threshold (p50={p50:?}, p95={p95:?}, total={total_elapsed:?})"
+        );
     }
 
     // -- Sync helper error paths --

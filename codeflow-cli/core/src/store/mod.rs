@@ -1,7 +1,7 @@
 pub mod schema;
 pub mod surreal;
 
-pub use surreal::SurrealStore;
+pub use surreal::{QUERY_TIMEOUT, RetryConfig, SurrealStore, with_retry_async, with_timeout};
 
 use crate::error::DbError;
 use crate::models::{

@@ -23,8 +23,31 @@ pub enum DbError {
     #[error("integrity check failed: {0}")]
     IntegrityCheck(String),
 
+    #[error("contention: {0}")]
+    Contention(String),
+
     #[error("surrealdb error: {0}")]
     Surreal(#[from] surrealdb::Error),
+}
+
+impl DbError {
+    /// Returns `true` if this error is retryable (contention, connection, transaction).
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Contention(_) | Self::Connection(_) | Self::Transaction(_)
+        )
+    }
+
+    /// Returns `true` if this error is a schema/logic error (not retryable).
+    #[must_use]
+    pub fn is_schema_error(&self) -> bool {
+        matches!(
+            self,
+            Self::Migration(_) | Self::IntegrityCheck(_) | Self::NotFound { .. }
+        )
+    }
 }
 
 #[derive(Debug, Error)]
@@ -491,6 +514,64 @@ mod tests {
             err.to_string(),
             "integrity check failed: foreign key violation"
         );
+    }
+
+    #[test]
+    fn test_db_error_contention() {
+        let err = DbError::Contention("lock held by another process".into());
+        assert_eq!(err.to_string(), "contention: lock held by another process");
+    }
+
+    #[test]
+    fn test_db_error_is_retryable() {
+        assert!(DbError::Contention("x".into()).is_retryable());
+        assert!(DbError::Connection("x".into()).is_retryable());
+        assert!(DbError::Transaction("x".into()).is_retryable());
+        assert!(!DbError::Query("x".into()).is_retryable());
+        assert!(!DbError::Migration("x".into()).is_retryable());
+        assert!(
+            !DbError::NotFound {
+                table: "t".into(),
+                id: "i".into()
+            }
+            .is_retryable()
+        );
+        assert!(!DbError::IntegrityCheck("x".into()).is_retryable());
+        assert!(
+            !DbError::Duplicate {
+                table: "t".into(),
+                id: "i".into()
+            }
+            .is_retryable()
+        );
+        let surreal_err = surrealdb::Error::Db(surrealdb::error::Db::Thrown("test error".into()));
+        assert!(!DbError::Surreal(surreal_err).is_retryable());
+    }
+
+    #[test]
+    fn test_db_error_is_schema_error() {
+        assert!(DbError::Migration("x".into()).is_schema_error());
+        assert!(DbError::IntegrityCheck("x".into()).is_schema_error());
+        assert!(
+            DbError::NotFound {
+                table: "t".into(),
+                id: "i".into()
+            }
+            .is_schema_error()
+        );
+        assert!(!DbError::Contention("x".into()).is_schema_error());
+        assert!(!DbError::Connection("x".into()).is_schema_error());
+        assert!(!DbError::Query("x".into()).is_schema_error());
+        assert!(!DbError::Transaction("x".into()).is_schema_error());
+        assert!(
+            !DbError::Duplicate {
+                table: "t".into(),
+                id: "i".into()
+            }
+            .is_schema_error()
+        );
+        let surreal_err = surrealdb::Error::Db(surrealdb::error::Db::Thrown("test error".into()));
+        assert!(!DbError::Surreal(surreal_err).is_schema_error());
     }
 
     // -- LedgerError --
