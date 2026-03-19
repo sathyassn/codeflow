@@ -460,11 +460,11 @@
           "blocked_by": [
             "PF6-TSK-08"
           ],
-          "description": "Sync local repository via cf-git-operations (sync-local). Interactive+merged: git pull origin main. Autorun+auto_merge: git pull origin {target_branch}. Autorun+no_merge: no pull needed.",
+          "description": "Sync local repository via cf-git-operations (sync-local). ⛔ MUST wait for PF6-TSK-08 (record-pr-outcome) to COMPLETE before executing — do NOT dispatch sync-local in parallel with record-pr-outcome. Sync-local pulls main which triggers branch protection hooks that block all writes, preventing pr_outcome from being recorded. Interactive+merged: git pull origin main. Autorun+auto_merge: git pull origin {target_branch}. Autorun+no_merge: no pull needed.",
           "assigned_to": "cf-git-operations",
           "operation": "sync-local",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF6-TSK-08] when creating this task in the tracker.",
-          "enforcement_note": "You MUST execute this task's operation. Mark completed ONLY after the operation succeeds. Do NOT skip this task — skipping is a PROTOCOL VIOLATION."
+          "enforcement_note": "⛔ STRICTLY SEQUENTIAL: The team lead MUST verify that PF6-TSK-08 (record-pr-outcome) has status=completed BEFORE dispatching sync-local to cf-git-operations. Do NOT send the sync-local message to cf-git-operations until cf-knowledge-layer confirms record-pr-outcome is done. Sending both in parallel causes sync-local to pull main first, which activates branch protection hooks that block record-pr-outcome writes. This ordering violation is the root cause of missing pr_outcome JSONL entries."
         }
       ],
       "required_tasks": [

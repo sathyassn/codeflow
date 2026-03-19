@@ -377,6 +377,25 @@ pub enum CoordinationError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Git operation errors (merge conflict detection, branch analysis).
+#[derive(Debug, Error)]
+pub enum GitError {
+    #[error("failed to open repository: {0}")]
+    RepoOpen(String),
+
+    #[error("ref not found: {0}")]
+    RefNotFound(String),
+
+    #[error("no common ancestor between HEAD and {0}")]
+    NoCommonAncestor(String),
+
+    #[error("merge analysis failed: {0}")]
+    MergeFailed(String),
+
+    #[error("git2 error: {0}")]
+    Git2(#[from] git2::Error),
+}
+
 /// Autorun batch parsing and orchestration errors.
 #[derive(Debug, Error)]
 pub enum AutorunError {
@@ -860,6 +879,43 @@ mod tests {
             err.to_string(),
             "template discovery failed: glob pattern failed"
         );
+    }
+
+    // -- GitError --
+
+    #[test]
+    fn test_git_error_repo_open() {
+        let err = GitError::RepoOpen("not a git repository".into());
+        assert_eq!(
+            err.to_string(),
+            "failed to open repository: not a git repository"
+        );
+    }
+
+    #[test]
+    fn test_git_error_ref_not_found() {
+        let err = GitError::RefNotFound("refs/remotes/origin/main".into());
+        assert_eq!(err.to_string(), "ref not found: refs/remotes/origin/main");
+    }
+
+    #[test]
+    fn test_git_error_no_common_ancestor() {
+        let err = GitError::NoCommonAncestor("main".into());
+        assert_eq!(err.to_string(), "no common ancestor between HEAD and main");
+    }
+
+    #[test]
+    fn test_git_error_merge_failed() {
+        let err = GitError::MergeFailed("index conflict".into());
+        assert_eq!(err.to_string(), "merge analysis failed: index conflict");
+    }
+
+    #[test]
+    fn test_git_error_from_git2() {
+        let git2_err = git2::Error::from_str("test git2 error");
+        let err: GitError = git2_err.into();
+        assert!(matches!(err, GitError::Git2(_)));
+        assert!(err.to_string().contains("test git2 error"));
     }
 
     // -- AutorunError --

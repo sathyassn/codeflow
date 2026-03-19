@@ -67,6 +67,11 @@ enum Command {
     Report,
     /// `WorkGraph` operations
     Workgraph,
+    /// Git operations (conflict detection, branch analysis)
+    Git {
+        #[command(subcommand)]
+        command: Option<cmd::git::GitCommand>,
+    },
     /// Git hooks management
     #[command(name = "git-hooks")]
     GitHooks {
@@ -117,6 +122,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Worktree => cmd::worktree::run(),
         Command::Report => cmd::report::run(),
         Command::Workgraph => cmd::workgraph::run().await,
+        Command::Git { command } => cmd::git::run(command),
         Command::GitHooks { command } => cmd::git_hooks::run(command),
         Command::ShadowTest => cmd::shadow_test::run(),
         Command::Normalize => cmd::normalize::run(),
@@ -163,6 +169,7 @@ mod tests {
             "worktree",
             "report",
             "workgraph",
+            "git",
             "git-hooks",
             "shadow-test",
             "normalize",
@@ -175,7 +182,7 @@ mod tests {
                 "help output missing subcommand: {cmd}"
             );
         }
-        assert_eq!(expected_commands.len(), 27);
+        assert_eq!(expected_commands.len(), 28);
     }
 
     #[test]
@@ -202,6 +209,7 @@ mod tests {
             "worktree",
             "report",
             "workgraph",
+            "git",
             "git-hooks",
             "shadow-test",
             "normalize",
@@ -346,6 +354,12 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_pathflow() {
         let result = dispatch(Command::Pathflow).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_git() {
+        let result = dispatch(Command::Git { command: None }).await;
         assert!(result.is_ok());
     }
 

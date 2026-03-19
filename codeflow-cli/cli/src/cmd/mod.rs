@@ -3,6 +3,7 @@ pub mod config;
 pub mod coordination;
 pub mod db;
 pub mod doctor;
+pub mod git;
 pub mod git_hooks;
 pub mod hooks;
 pub mod init;
