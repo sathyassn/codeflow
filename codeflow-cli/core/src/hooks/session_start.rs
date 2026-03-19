@@ -189,17 +189,28 @@ impl SessionStartInit {
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
 
         // --- Section 2b: Worktree creation (source-gated) ---
-        // On startup: create a detached worktree for session isolation.
+        // On startup: check for pre-created worktree (autorun orchestrator), then
+        // create a detached worktree for session isolation if none found.
         // On compact/resume/clear: recover existing worktree path from env file.
         // WorktreeHandle provides RAII cleanup on panic; defuse() at end of run().
         let (worktree_paths, mut worktree_handle) = if source == "startup" {
-            match self.create_session_worktree(project_dir, session_id.as_str(), &mut result) {
-                Ok((paths, handle)) => (Some(paths), Some(handle)),
-                Err(e) => {
-                    result
-                        .warnings
-                        .push(format!("worktree creation failed: {e}"));
-                    (None, None)
+            // Check for pre-created worktree (autorun orchestrator).
+            if let Some(paths) = self.detect_precreated_worktree(
+                project_dir,
+                &runtime_dir,
+                session_id.as_str(),
+                &mut result,
+            ) {
+                (Some(paths), None) // No handle — orchestrator manages lifecycle
+            } else {
+                match self.create_session_worktree(project_dir, session_id.as_str(), &mut result) {
+                    Ok((paths, handle)) => (Some(paths), Some(handle)),
+                    Err(e) => {
+                        result
+                            .warnings
+                            .push(format!("worktree creation failed: {e}"));
+                        (None, None)
+                    }
                 }
             }
         } else {
@@ -1022,6 +1033,99 @@ impl SessionStartInit {
             .push(format!("WORKTREE: Recovered existing at {wt_path_str}"));
 
         Some(WorktreePaths::new(wt_path))
+    }
+
+    /// Detect a pre-created worktree from the autorun orchestrator.
+    ///
+    /// Checks process environment for `CODEFLOW_WORKTREE_PATH` (primary signal),
+    /// then falls back to the env file. Delegates to `_inner` for testability.
+    fn detect_precreated_worktree(
+        &self,
+        project_dir: &Path,
+        runtime_dir: &Path,
+        session_id: &str,
+        result: &mut InitResult,
+    ) -> Option<WorktreePaths> {
+        let env_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        self.detect_precreated_worktree_inner(
+            project_dir,
+            runtime_dir,
+            session_id,
+            env_path.as_deref(),
+            result,
+        )
+    }
+
+    /// Inner implementation of pre-created worktree detection.
+    ///
+    /// Takes the env var value as an explicit parameter so tests can call this
+    /// directly without modifying process environment.
+    fn detect_precreated_worktree_inner(
+        &self,
+        project_dir: &Path,
+        runtime_dir: &Path,
+        session_id: &str,
+        env_worktree_path: Option<&str>,
+        result: &mut InitResult,
+    ) -> Option<WorktreePaths> {
+        // 1. Resolve worktree path from env var (primary) or env file (fallback).
+        let wt_path_str = if let Some(p) = env_worktree_path {
+            p.to_string()
+        } else {
+            // Fallback: read from env file (orchestrator may have written it).
+            let env_data = match session::read_env_file(runtime_dir) {
+                Ok(Some(env)) => env,
+                _ => return None,
+            };
+            env_data.worktree_path?
+        };
+
+        // 2. Dual-condition validation: directory exists AND .state/runtime/ present.
+        let wt_path = Path::new(&wt_path_str);
+        if !wt_path.exists() {
+            return None;
+        }
+        if !wt_path.join(".state").join("runtime").exists() {
+            result.warnings.push(format!(
+                "pre-created worktree path exists but .state/runtime/ missing: {wt_path_str}"
+            ));
+            return None;
+        }
+
+        // 3. Update registry session_id (mirrors create_session_worktree lines 960-967).
+        if let Some(wt_name) = wt_path.file_name().map(|n| n.to_string_lossy().to_string()) {
+            let mgr = WorktreeManager::new(project_dir);
+            if let Ok(mut reg) = crate::worktree::read_registry(mgr.registry_path()) {
+                for e in &mut reg.worktrees {
+                    if e.name == wt_name {
+                        e.session_id = Some(session_id.to_string());
+                    }
+                }
+                let _ = crate::worktree::write_registry(mgr.registry_path(), &reg);
+            }
+        }
+
+        // 4. Update main env file with worker's session ID (mirrors lines 971-986).
+        let project_name = project_dir
+            .file_name()
+            .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+        let sid = SessionId::new_unchecked(session_id);
+        if let Err(e) = session::write_env_file_with_worktree(
+            runtime_dir,
+            &sid,
+            &project_name,
+            Some(&wt_path_str),
+        ) {
+            result
+                .warnings
+                .push(format!("main env file update error: {e}"));
+        }
+
+        result
+            .messages
+            .push(format!("WORKTREE: Pre-created detected at {wt_path_str}"));
+
+        Some(WorktreePaths::new(wt_path.to_path_buf()))
     }
 
     /// Create required session directories inside the worktree.
@@ -3871,6 +3975,328 @@ mod tests {
             !result.messages.iter().any(|m| m.contains("STALE WORKTREE")),
             "should skip already-removed worktree: {:?}",
             result.messages,
+        );
+    }
+
+    // --- Pre-created worktree detection tests ---
+
+    /// Helper: create a minimal pre-created worktree directory structure.
+    /// Simulates what the autorun orchestrator would create.
+    fn setup_precreated_worktree(
+        project_dir: &Path,
+        wt_name: &str,
+    ) -> (PathBuf, crate::worktree::WorktreeRegistry) {
+        let wt_dir = project_dir.join(".git-worktrees").join(wt_name);
+        let state_runtime = wt_dir.join(".state").join("runtime");
+        fs::create_dir_all(&state_runtime).unwrap();
+
+        // Create a registry with the worktree entry.
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: wt_name.to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: String::new(),
+            created_at: "2026-03-18T00:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-orchestrator00000000000".to_string()),
+        });
+
+        let registry_path = project_dir.join(".state").join("worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        (wt_dir, reg)
+    }
+
+    #[test]
+    fn test_detect_precreated_from_env_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (wt_dir, _reg) = setup_precreated_worktree(dir.path(), "worktree-pre1");
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-worker00000000000000001"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-worker00000000000000001",
+            Some(wt_dir.to_str().unwrap()),
+            &mut result,
+        );
+
+        assert!(
+            detected.is_some(),
+            "should detect pre-created worktree from env var"
+        );
+        assert_eq!(
+            detected.unwrap().root(),
+            wt_dir,
+            "detected path should match"
+        );
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Pre-created detected")),
+            "should log detection: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_detect_precreated_from_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (wt_dir, _reg) = setup_precreated_worktree(dir.path(), "worktree-pre2");
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        // Write env file WITH worktree path (simulates orchestrator writing it).
+        let sid = SessionId::new_unchecked("ses-orchestrator00000000000");
+        session::write_env_file_with_worktree(
+            &runtime_dir,
+            &sid,
+            "codeflow",
+            Some(wt_dir.to_str().unwrap()),
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-worker00000000000000002"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // No env var (None) — should fall back to env file.
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-worker00000000000000002",
+            None,
+            &mut result,
+        );
+
+        assert!(
+            detected.is_some(),
+            "should detect pre-created worktree from env file"
+        );
+        assert_eq!(detected.unwrap().root(), wt_dir);
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Pre-created detected")),
+            "should log detection: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_detect_precreated_no_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-worker00000000000000003"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // No env var, no env file — should return None.
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-worker00000000000000003",
+            None,
+            &mut result,
+        );
+
+        assert!(detected.is_none(), "no signal should return None");
+        assert!(result.messages.is_empty(), "no messages expected");
+        assert!(result.warnings.is_empty(), "no warnings expected");
+    }
+
+    #[test]
+    fn test_detect_precreated_dir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-worker00000000000000004"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        // Env var points to nonexistent directory.
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-worker00000000000000004",
+            Some("/nonexistent/worktree/path"),
+            &mut result,
+        );
+
+        assert!(detected.is_none(), "nonexistent dir should return None");
+    }
+
+    #[test]
+    fn test_detect_precreated_state_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        // Create worktree directory but WITHOUT .state/runtime/.
+        let wt_dir = dir
+            .path()
+            .join(".git-worktrees")
+            .join("worktree-incomplete");
+        fs::create_dir_all(&wt_dir).unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-worker00000000000000005"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-worker00000000000000005",
+            Some(wt_dir.to_str().unwrap()),
+            &mut result,
+        );
+
+        assert!(
+            detected.is_none(),
+            "missing .state/runtime should return None"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains(".state/runtime/ missing")),
+            "should warn about missing .state/runtime: {:?}",
+            result.warnings,
+        );
+    }
+
+    #[test]
+    fn test_detect_precreated_updates_registry_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let wt_name = "worktree-pre-reg";
+        let (wt_dir, _reg) = setup_precreated_worktree(dir.path(), wt_name);
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let worker_sid = "ses-worker00000000000000006";
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(worker_sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            worker_sid,
+            Some(wt_dir.to_str().unwrap()),
+            &mut result,
+        );
+        assert!(detected.is_some());
+
+        // Verify registry was updated with worker's session_id.
+        let mgr = WorktreeManager::new(dir.path());
+        let reg = crate::worktree::read_registry(mgr.registry_path()).unwrap();
+        let entry = reg.worktrees.iter().find(|e| e.name == wt_name).unwrap();
+        assert_eq!(
+            entry.session_id.as_deref(),
+            Some(worker_sid),
+            "registry entry should have worker's session_id, not orchestrator's"
+        );
+    }
+
+    #[test]
+    fn test_detect_precreated_updates_main_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (wt_dir, _reg) = setup_precreated_worktree(dir.path(), "worktree-pre-env");
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let worker_sid = "ses-worker00000000000000007";
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(worker_sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let detected = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            worker_sid,
+            Some(wt_dir.to_str().unwrap()),
+            &mut result,
+        );
+        assert!(detected.is_some());
+
+        // Verify main env file was rewritten with worker's session_id.
+        let env = session::read_env_file(&runtime_dir).unwrap().unwrap();
+        assert_eq!(
+            env.session_id.as_str(),
+            worker_sid,
+            "env file should have worker's session_id"
+        );
+        assert_eq!(
+            env.worktree_path.as_deref(),
+            Some(wt_dir.to_str().unwrap()),
+            "env file should have worktree path"
         );
     }
 }
