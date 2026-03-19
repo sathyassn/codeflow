@@ -36,6 +36,11 @@ pub struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 
+    /// Worktree path that produced this event (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub worktree: Option<String>,
+
     /// Event-specific key-value pairs, flattened into the top-level object.
     #[serde(flatten)]
     pub data: HashMap<String, serde_json::Value>,
@@ -84,6 +89,7 @@ mod tests {
             event_type: event_type.to_string(),
             timestamp: "2026-03-07T12:00:00Z".to_string(),
             session_id: session_id.map(String::from),
+            worktree: None,
             data,
         }
     }
@@ -134,6 +140,7 @@ mod tests {
             event_type: "task_created".to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: None,
+            worktree: None,
             data,
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -172,6 +179,48 @@ mod tests {
         insta::assert_json_snapshot!(event);
     }
 
+    #[test]
+    fn test_event_serialization_with_worktree() {
+        let mut data = HashMap::new();
+        data.insert("key".to_string(), serde_json::json!("value"));
+        let event = Event {
+            event_type: "phase_transition".to_string(),
+            timestamp: "2026-03-07T12:00:00Z".to_string(),
+            session_id: Some("ses-123".to_string()),
+            worktree: Some("/tmp/worktree/abc".to_string()),
+            data,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["worktree"], "/tmp/worktree/abc");
+        assert_eq!(parsed["session_id"], "ses-123");
+    }
+
+    #[test]
+    fn test_event_deserialization_without_worktree() {
+        // Old events without a worktree field should deserialize with worktree = None
+        let line = r#"{"event":"phase_transition","timestamp":"2026-03-07T00:00:00Z","session_id":"ses-old","phase":"PF1-INIT"}"#;
+        let event: Event = serde_json::from_str(line).unwrap();
+        assert!(event.worktree.is_none());
+        assert_eq!(event.event_type, "phase_transition");
+        assert_eq!(event.session_id.as_deref(), Some("ses-old"));
+    }
+
+    #[test]
+    fn test_event_worktree_skip_serializing_none() {
+        let event = make_event("session_start", Some("ses-1"));
+        // worktree is None in make_event
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // skip_serializing_if = Option::is_none means worktree is absent
+        assert!(
+            parsed.get("worktree").is_none(),
+            "worktree should be absent when None, but got: {json}",
+        );
+    }
+
     mod proptests {
         use proptest::prelude::*;
 
@@ -204,6 +253,7 @@ mod tests {
                     event_type: event_type.clone(),
                     timestamp: "2026-03-07T00:00:00Z".to_string(),
                     session_id,
+                    worktree: None,
                     data,
                 };
                 let json = serde_json::to_string(&event).unwrap();

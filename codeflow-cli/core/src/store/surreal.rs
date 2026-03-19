@@ -1647,6 +1647,7 @@ mod tests {
             event_type: "session_start".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: Some("sync-ses".into()),
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-ses")),
                 ("user_id".into(), serde_json::json!("user-sync")),
@@ -1679,6 +1680,7 @@ mod tests {
             event_type: "epic_created".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-epic")),
                 ("format_id".into(), serde_json::json!("INF-EPC-SYNC")),
@@ -1719,6 +1721,7 @@ mod tests {
             event_type: "task_created".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-task")),
                 ("format_id".into(), serde_json::json!("INF-TSK-SYNC")),
@@ -1783,6 +1786,7 @@ mod tests {
             event_type: "memory_event".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data,
         };
 
@@ -1811,6 +1815,7 @@ mod tests {
             event_type: "unknown_type".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(),
         };
 
@@ -1832,6 +1837,7 @@ mod tests {
             event_type: "session_start".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: Some("mix-ses".into()),
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("mix-ses")),
                 ("user_id".into(), serde_json::json!("user-mix")),
@@ -1849,6 +1855,7 @@ mod tests {
             event_type: "custom_event".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(),
         };
 
@@ -1857,6 +1864,7 @@ mod tests {
             event_type: "epic_created".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(), // Missing "id" field
         };
 
@@ -1877,6 +1885,7 @@ mod tests {
             event_type: "session_start".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: Some("sync-upd".into()),
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-upd")),
                 ("user_id".into(), serde_json::json!("user-1")),
@@ -1894,6 +1903,7 @@ mod tests {
             event_type: "session_update".into(),
             timestamp: "2026-03-08T01:00:00Z".into(),
             session_id: Some("sync-upd".into()),
+            worktree: None,
             data: HashMap::from([
                 ("session_id".into(), serde_json::json!("sync-upd")),
                 ("status".into(), serde_json::json!("ended")),
@@ -1904,6 +1914,7 @@ mod tests {
             event_type: "session_end".into(),
             timestamp: "2026-03-08T02:00:00Z".into(),
             session_id: Some("sync-upd".into()),
+            worktree: None,
             data: HashMap::from([
                 ("session_id".into(), serde_json::json!("sync-upd")),
                 ("ended_at".into(), serde_json::json!("2026-03-08T02:00:00Z")),
@@ -1926,6 +1937,7 @@ mod tests {
             event_type: "task_status_changed".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-tsc")),
                 ("status".into(), serde_json::json!("IN_PROGRESS")),
@@ -1950,6 +1962,7 @@ mod tests {
             event_type: "epic_updated".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::from([
                 ("id".into(), serde_json::json!("sync-eu")),
                 ("status".into(), serde_json::json!("IN_PROGRESS")),
@@ -2318,6 +2331,7 @@ mod tests {
             event_type: "session_start".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(), // No "id" or "session_id"
         };
 
@@ -2337,6 +2351,7 @@ mod tests {
             event_type: "task_created".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(),
         };
 
@@ -2356,6 +2371,7 @@ mod tests {
             event_type: "memory_event".into(),
             timestamp: "2026-03-08T00:00:00Z".into(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(),
         };
 

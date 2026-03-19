@@ -89,7 +89,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-017 | Merge conflict detection before PR creation | complete | M | normal | C: Autorun + Coordination |
 | INF-TSK-023-018 | Parallel session coordination (worktree registry, FIFO merge queue) | complete | L | high | C: Autorun + Coordination |
 | INF-TSK-023-019 | SurrealDB parallel access tuning | complete | S | normal | C: Autorun + Coordination |
-| INF-TSK-023-020 | Add worktree field to pathflow-events.jsonl events | todo | S | normal | B: Worktree + Singleton |
+| INF-TSK-023-020 | Add worktree field to pathflow-events.jsonl events | complete | S | normal | B: Worktree + Singleton |
 | INF-TSK-023-021 | Cross-Epic Review Handoff: Complete Fix List | complete | M | normal | Cross-Epic |
 
 ### Dependency DAG

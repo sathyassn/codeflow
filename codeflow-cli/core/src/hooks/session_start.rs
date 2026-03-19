@@ -1498,6 +1498,7 @@ impl<L: LedgerWriter> SessionStartLogging<L> {
             event_type: "session_start".into(),
             timestamp: (self.now)(),
             session_id: Some(session_id.to_string()),
+            worktree: None,
             data,
         };
 

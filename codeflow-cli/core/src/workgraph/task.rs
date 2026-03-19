@@ -150,6 +150,7 @@ pub async fn create_task(
         event_type: "task_created".to_string(),
         timestamp: now,
         session_id: None,
+        worktree: None,
         data,
     };
     ledger.append_event(event)?;
@@ -212,6 +213,7 @@ pub async fn update_task(
             event_type: "task_status_changed".to_string(),
             timestamp: super::now_rfc3339(),
             session_id: None,
+            worktree: None,
             data,
         };
         ledger.append_event(event)?;

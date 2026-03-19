@@ -125,6 +125,7 @@ pub async fn create_epic(
         event_type: "epic_created".to_string(),
         timestamp: now,
         session_id: None,
+        worktree: None,
         data,
     };
     ledger.append_event(event)?;
@@ -187,6 +188,7 @@ pub async fn update_epic(
             event_type: "epic_status_changed".to_string(),
             timestamp: now_rfc3339(),
             session_id: None,
+            worktree: None,
             data,
         };
         ledger.append_event(event)?;

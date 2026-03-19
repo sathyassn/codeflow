@@ -177,6 +177,7 @@ mod tests {
             event_type: "session_start".to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: Some("ses-001".to_string()),
+            worktree: None,
             data: std::collections::HashMap::new(),
         };
         let json = serde_json::to_string(&event).expect("serialize");

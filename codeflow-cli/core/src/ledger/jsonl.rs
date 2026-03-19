@@ -113,6 +113,7 @@ mod tests {
             event_type: event_type.to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: Some("ses-test-001".to_string()),
+            worktree: None,
             data: HashMap::new(),
         }
     }
@@ -123,6 +124,7 @@ mod tests {
             event_type: event_type.to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: Some("ses-test-002".to_string()),
+            worktree: None,
             data,
         }
     }
@@ -279,6 +281,7 @@ mod tests {
                         event_type: "task_created".to_string(),
                         timestamp: format!("2026-03-07T00:00:{i:02}Z"),
                         session_id: None,
+                        worktree: None,
                         data,
                     };
                     writer.append_event(event).unwrap();
@@ -377,6 +380,7 @@ mod tests {
             event_type: "config_set".to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: None,
+            worktree: None,
             data: HashMap::new(),
         };
         writer.append_event(event).unwrap();
@@ -407,6 +411,7 @@ mod tests {
             event_type: "task_status_changed".to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: None,
+            worktree: None,
             data,
         };
         writer.append_event(event).unwrap();

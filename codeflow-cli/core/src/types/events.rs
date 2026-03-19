@@ -178,6 +178,9 @@ pub enum LedgerEvent {
         session_id: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
         #[serde(flatten)]
         data: serde_json::Value,
     },
@@ -186,6 +189,9 @@ pub enum LedgerEvent {
         session_id: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
         #[serde(flatten)]
         data: serde_json::Value,
     },
@@ -194,6 +200,9 @@ pub enum LedgerEvent {
         session_id: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
         #[serde(flatten)]
         data: serde_json::Value,
     },
@@ -202,6 +211,9 @@ pub enum LedgerEvent {
         session_id: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
         #[serde(flatten)]
         data: serde_json::Value,
     },
@@ -210,6 +222,9 @@ pub enum LedgerEvent {
         session_id: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
         #[serde(flatten)]
         data: serde_json::Value,
     },
@@ -582,6 +597,94 @@ mod tests {
         insta::assert_json_snapshot!(event);
     }
 
+    #[test]
+    fn test_ledger_event_phase_transition_with_worktree() {
+        let json = r#"{"event":"phase_transition","session_id":"ses-1","timestamp":"2026-03-07T00:00:00Z","worktree":"/tmp/wt/abc","phase":"PF1-INIT","status":"entered"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_type(), "phase_transition");
+        if let LedgerEvent::PhaseTransition {
+            session_id,
+            worktree,
+            ..
+        } = &event
+        {
+            assert_eq!(session_id.as_deref(), Some("ses-1"));
+            assert_eq!(worktree.as_deref(), Some("/tmp/wt/abc"));
+        } else {
+            panic!("wrong variant");
+        }
+
+        // Roundtrip preserves worktree
+        let serialized = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed["worktree"], "/tmp/wt/abc");
+    }
+
+    #[test]
+    fn test_ledger_event_backward_compat_no_worktree() {
+        // Old events without worktree field should deserialize with worktree = None
+        let json = r#"{"event":"phase_transition","session_id":"ses-old","timestamp":"2026-03-07T00:00:00Z","phase":"PF2-CONTEXT"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_type(), "phase_transition");
+        if let LedgerEvent::PhaseTransition { worktree, .. } = &event {
+            assert!(worktree.is_none());
+        } else {
+            panic!("wrong variant");
+        }
+
+        // worktree should be omitted when None (skip_serializing_if)
+        let serialized = serde_json::to_string(&event).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        assert!(
+            parsed.get("worktree").is_none(),
+            "worktree should be absent when None, but got: {serialized}",
+        );
+    }
+
+    #[test]
+    fn test_ledger_event_stage_transition_with_worktree() {
+        let json = r#"{"event":"stage_transition","session_id":"ses-1","timestamp":"2026-03-07T00:00:00Z","worktree":"/tmp/wt/xyz","stage":"WS-DEV"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        if let LedgerEvent::StageTransition { worktree, .. } = &event {
+            assert_eq!(worktree.as_deref(), Some("/tmp/wt/xyz"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_ledger_event_session_register_with_worktree() {
+        let json = r#"{"event":"session_register","session_id":"ses-1","timestamp":"2026-03-07T00:00:00Z","worktree":"/tmp/wt/reg"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        if let LedgerEvent::SessionRegister { worktree, .. } = &event {
+            assert_eq!(worktree.as_deref(), Some("/tmp/wt/reg"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_ledger_event_pathflow_task_update_with_worktree() {
+        let json = r#"{"event":"pathflow_task_update","session_id":"ses-1","timestamp":"2026-03-07T00:00:00Z","worktree":"/tmp/wt/task"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        if let LedgerEvent::PathflowTaskUpdate { worktree, .. } = &event {
+            assert_eq!(worktree.as_deref(), Some("/tmp/wt/task"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_ledger_event_session_metadata_with_worktree() {
+        let json = r#"{"event":"session_metadata","session_id":"ses-1","timestamp":"2026-03-07T00:00:00Z","worktree":"/tmp/wt/meta"}"#;
+        let event: LedgerEvent = serde_json::from_str(json).unwrap();
+        if let LedgerEvent::SessionMetadata { worktree, .. } = &event {
+            assert_eq!(worktree.as_deref(), Some("/tmp/wt/meta"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
     mod proptests {
         use proptest::prelude::*;
 
@@ -616,6 +719,7 @@ mod tests {
                     LedgerEvent::PhaseTransition {
                         session_id: sid,
                         timestamp: ts,
+                        worktree: None,
                         data: serde_json::json!({"from": "PF1-INIT", "to": "PF2-CONTEXT"}),
                     }
                 }),
