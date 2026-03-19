@@ -85,7 +85,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-013 | Scope team config by session | complete | S | normal | B: Worktree + Singleton |
 | INF-TSK-023-014 | Add worktree cleanup to SessionEnd hook | complete | M | high | B: Worktree + Singleton |
 | INF-TSK-023-015 | Pre-created worktree detection in SessionStart | complete | S | normal | B: Worktree + Singleton |
-| INF-TSK-023-016 | Autorun worker worktree integration | todo | L | high | C: Autorun + Coordination |
+| INF-TSK-023-016 | Autorun worker worktree integration | complete | L | high | C: Autorun + Coordination |
 | INF-TSK-023-017 | Merge conflict detection before PR creation | todo | M | normal | C: Autorun + Coordination |
 | INF-TSK-023-018 | Parallel session coordination (worktree registry, FIFO merge queue) | todo | L | high | C: Autorun + Coordination |
 | INF-TSK-023-019 | SurrealDB parallel access tuning | todo | S | normal | C: Autorun + Coordination |
