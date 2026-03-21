@@ -6,10 +6,12 @@
 //! - Orchestrator for dependency-aware concurrent execution ([`orchestrator`])
 
 pub mod batch;
+pub mod config;
 pub mod orchestrator;
 pub mod worker;
 
 pub use batch::{BatchFile, ParsedBatch, TaskSpec};
+pub use config::{ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
 pub use worker::{
     ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TmuxRunner, TmuxWorker,

@@ -188,28 +188,61 @@ impl SessionStartInit {
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
 
-        // --- Section 2b: Worktree creation (source-gated) ---
-        // On startup: check for pre-created worktree (autorun orchestrator), then
-        // create a detached worktree for session isolation if none found.
+        // --- Section 2b: Worktree creation (source-gated + mode-gated) ---
+        // On startup: check worktree.mode from parallel-work config, then:
+        //   mode=disabled: skip worktree creation entirely
+        //   mode=autorun: only use pre-created worktree (orchestrator created it)
+        //   mode=always: create worktree for every session
         // On compact/resume/clear: recover existing worktree path from env file.
         // WorktreeHandle provides RAII cleanup on panic; defuse() at end of run().
         let (worktree_paths, mut worktree_handle) = if source == "startup" {
-            // Check for pre-created worktree (autorun orchestrator).
-            if let Some(paths) = self.detect_precreated_worktree(
-                project_dir,
-                &runtime_dir,
-                session_id.as_str(),
-                &mut result,
-            ) {
-                (Some(paths), None) // No handle — orchestrator manages lifecycle
-            } else {
-                match self.create_session_worktree(project_dir, session_id.as_str(), &mut result) {
-                    Ok((paths, handle)) => (Some(paths), Some(handle)),
-                    Err(e) => {
-                        result
-                            .warnings
-                            .push(format!("worktree creation failed: {e}"));
+            // Load worktree mode from parallel-work config.
+            let wt_mode = crate::autorun::config::load_config(project_dir)
+                .map(|c| c.worktree.mode)
+                .unwrap_or(crate::autorun::config::WorktreeMode::Autorun);
+
+            match wt_mode {
+                crate::autorun::config::WorktreeMode::Disabled => {
+                    // Worktrees disabled — skip creation entirely.
+                    (None, None)
+                }
+                crate::autorun::config::WorktreeMode::Autorun => {
+                    // Autorun mode: only use pre-created worktree from orchestrator.
+                    if let Some(paths) = self.detect_precreated_worktree(
+                        project_dir,
+                        &runtime_dir,
+                        session_id.as_str(),
+                        &mut result,
+                    ) {
+                        (Some(paths), None) // No handle — orchestrator manages lifecycle
+                    } else {
+                        // No pre-created worktree and mode=autorun — skip for interactive.
                         (None, None)
+                    }
+                }
+                crate::autorun::config::WorktreeMode::Always => {
+                    // Always mode: check for pre-created, otherwise create new.
+                    if let Some(paths) = self.detect_precreated_worktree(
+                        project_dir,
+                        &runtime_dir,
+                        session_id.as_str(),
+                        &mut result,
+                    ) {
+                        (Some(paths), None)
+                    } else {
+                        match self.create_session_worktree(
+                            project_dir,
+                            session_id.as_str(),
+                            &mut result,
+                        ) {
+                            Ok((paths, handle)) => (Some(paths), Some(handle)),
+                            Err(e) => {
+                                result
+                                    .warnings
+                                    .push(format!("worktree creation failed: {e}"));
+                                (None, None)
+                            }
+                        }
                     }
                 }
             }
@@ -951,8 +984,31 @@ impl SessionStartInit {
         session_id: &str,
         result: &mut InitResult,
     ) -> Result<(WorktreePaths, WorktreeHandle), HookError> {
+        // Read max_concurrent from parallel-work config.
+        let max_concurrent = crate::autorun::config::load_config(project_dir)
+            .map(|c| c.worktree.max_concurrent)
+            .unwrap_or(3);
+
         let wt_name = format!("worktree-{session_id}");
         let mgr = WorktreeManager::new(project_dir);
+
+        // Check worktree limit before creation using locked_register_with_limit.
+        // This atomically checks count + registers under a single file lock.
+        let now_ts = (self.now)();
+        let reg_entry = crate::worktree::WorktreeEntry {
+            name: wt_name.clone(),
+            path: String::new(), // placeholder — updated after setup_detached
+            branch: String::new(),
+            created_at: now_ts,
+            status: "active".to_string(),
+            session_id: Some(session_id.to_string()),
+            task_id: None,
+        };
+        crate::worktree::locked_register_with_limit(
+            mgr.registry_path(),
+            &reg_entry,
+            max_concurrent,
+        )?;
 
         // Create the detached worktree.
         // NOTE: This happens inside the session lock scope (lock_file still held),
@@ -3445,11 +3501,27 @@ mod tests {
         repo
     }
 
+    /// Write a parallel-work config with `worktree.mode=always` into the tempdir.
+    /// Required for tests that expect worktree creation on startup.
+    fn write_worktree_always_config(dir: &Path) {
+        let config_dir = dir
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "mode": "always" } }"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_startup_creates_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3492,6 +3564,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         // First run: startup creates worktree.
         let init = make_init(home.path().to_path_buf());
@@ -3523,6 +3596,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         // Startup: create worktree.
         let init = make_init(home.path().to_path_buf());
@@ -3553,6 +3627,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3573,6 +3648,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3602,6 +3678,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3631,6 +3708,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3658,6 +3736,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _repo = init_git_repo(dir.path());
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
@@ -3680,6 +3759,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         // No git init -- setup_detached will fail.
+        write_worktree_always_config(dir.path());
 
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());

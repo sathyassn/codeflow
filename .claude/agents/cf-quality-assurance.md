@@ -111,6 +111,8 @@ This is the unified CLI entry point. It routes to all test suites (shell/Python,
 
 Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in the Rust test-config.json.
 
+🔒 **MANDATORY Rust per-file coverage (BLOCKING GATE):** Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --lib` and include a per-file coverage table in the QA Report for ALL modified/created Rust files. Any file below 85% line coverage is an AUTOMATIC QA FAIL — you MUST set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Do NOT skip coverage, defer to CI, or claim macOS SIP blocks it — `cargo llvm-cov` works on the development machine. If `cargo llvm-cov` is not installed, install it with `cargo install cargo-llvm-cov`. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
+
 #### Step 3: Run Targeted Tests
 
 If changes are scoped to specific components, run those tests directly:
@@ -198,6 +200,14 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 | {suite name} | {n} | {n} | {n} | {time} |
 
 **Coverage:** {n}% (threshold: {n}%)
+
+#### Per-File Coverage
+
+| File | Lines | Line Cov% | Branches | Branch Cov% | Threshold | Status |
+|------|-------|-----------|----------|-------------|-----------|--------|
+| {path} | {n}/{total} | {pct}% | {n}/{total} | {pct}% | 85% | PASS/FAIL |
+
+> Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --lib` to generate. Include ALL modified/created Rust files. QA verdict CANNOT be PASS if any row shows FAIL.
 
 #### Acceptance Verification
 

@@ -27,8 +27,12 @@ fn extract_string(voc: &ValueOrContainer) -> Option<&str> {
     }
 }
 
-/// Default claim TTL: 5 minutes.
-const DEFAULT_TTL_SECS: u64 = 300;
+/// Default claim TTL: 70 minutes (4200s).
+///
+/// Must exceed the worker timeout (default 3600s / 60 min) to prevent
+/// "locked out of own file" scenarios. The sync daemon's PID liveness
+/// detection is the primary crash cleanup mechanism; TTL is the fallback.
+const DEFAULT_TTL_SECS: u64 = 4200;
 
 /// Environment variable to override the claim TTL.
 const TTL_ENV_VAR: &str = "CODEFLOW_CLAIM_TTL_SECS";
@@ -45,12 +49,27 @@ const KG_RELATIONSHIPS_CONTAINER: &str = "kg_relationships";
 const KG_METADATA_CONTAINER: &str = "kg_metadata";
 const EXTRACTION_QUEUE_CONTAINER: &str = "extraction_queue";
 
-/// Read the configured claim TTL from the environment, falling back to default.
+/// Read the configured claim TTL.
+///
+/// Priority: env var > parallel-work-config.json > hardcoded default (4200s).
 fn configured_ttl_secs() -> u64 {
-    std::env::var(TTL_ENV_VAR)
+    // 1. Environment variable override (highest priority).
+    if let Some(val) = std::env::var(TTL_ENV_VAR)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_TTL_SECS)
+    {
+        return val;
+    }
+
+    // 2. Read from parallel-work-config.json if available.
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(config) = crate::autorun::config::load_config(&cwd) {
+            return config.claims.ttl_secs;
+        }
+    }
+
+    // 3. Hardcoded default.
+    DEFAULT_TTL_SECS
 }
 
 /// Return the current Unix timestamp in seconds.

@@ -43,6 +43,11 @@ pub struct TaskSpec {
     /// File patterns this task claims for exclusive access.
     #[serde(default)]
     pub file_scope: Vec<String>,
+
+    /// Scope policy override for this task. Defaults to config's
+    /// `default_scope_policy` (typically "soft") when not specified.
+    #[serde(default)]
+    pub scope_policy: Option<String>,
 }
 
 /// Validated and resolved batch specification.
@@ -349,16 +354,19 @@ tasks:
                 id: "c".into(),
                 depends_on: vec!["b".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -372,16 +380,19 @@ tasks:
                 id: "b".into(),
                 depends_on: vec![],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec![],
                 file_scope: vec![],
+                scope_policy: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -396,21 +407,25 @@ tasks:
                 id: "a".into(),
                 depends_on: vec![],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "d".into(),
                 depends_on: vec!["b".into(), "c".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -428,11 +443,13 @@ tasks:
                 id: "a".into(),
                 depends_on: vec!["b".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
+                scope_policy: None,
             },
         ];
         let result = topological_sort(&tasks);
@@ -544,5 +561,22 @@ tasks:
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_ok());
         assert_eq!(result.unwrap().max_workers, 20);
+    }
+
+    #[test]
+    fn test_task_spec_scope_policy_default() {
+        let yaml = "tasks:\n  - id: task-a\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert!(
+            batch.tasks[0].scope_policy.is_none(),
+            "scope_policy should default to None"
+        );
+    }
+
+    #[test]
+    fn test_task_spec_scope_policy_parsed() {
+        let yaml = "tasks:\n  - id: task-a\n    scope_policy: hard\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert_eq!(batch.tasks[0].scope_policy.as_deref(), Some("hard"));
     }
 }

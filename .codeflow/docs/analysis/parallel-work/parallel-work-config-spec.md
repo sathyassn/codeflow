@@ -12,7 +12,7 @@ parent: "parallel-work/README.md"
 
 [← Back to Overview](README.md)
 
-> **Status:** Design specification. The config file `.codeflow/config/parallel-work/parallel-work-config.json` does not yet exist — it is to be created by INF-TSK-023-024. Source files do not yet read this config (target: `session_start.rs`, `registry.rs`, `sync.rs`, `loro.rs`, `worker.rs`). All defaults and field descriptions reflect the target design.
+> **Status:** Implemented by INF-TSK-023-024. The config file `.codeflow/config/parallel-work/parallel-work-config.json` exists. The `autorun/config.rs` module loads and validates it. `loro.rs` reads `claims.ttl_secs` from config (default 4200). Coordination events route to `coordination-events.jsonl`. Remaining wiring: `session_start.rs` worktree.mode, `registry.rs` max_concurrent from config, `sync.rs` interval_secs from config — these are in scope for INF-TSK-023-025/026/027.
 
 ## Table of Contents
 
@@ -62,7 +62,7 @@ Controls the CRDT sync daemon that propagates state between worktrees (same-mach
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `interval_secs` | integer | `5` (target; current code default: 30s `DEFAULT_SYNC_INTERVAL_SECS`, to be changed by INF-TSK-023-026) | Sync daemon cycle interval in seconds. At each interval, the daemon exports new Loro deltas, pushes to its per-peer git ref, and imports all peer refs. Balances responsiveness (faster = sooner conflict detection) vs I/O overhead (slower = fewer filesystem operations). |
+| `interval_secs` | integer | `30` (current code default: `DEFAULT_SYNC_INTERVAL_SECS` in `sync.rs`; target: 5s, to be changed by INF-TSK-023-026) | Sync daemon cycle interval in seconds. At each interval, the daemon exports new Loro deltas, pushes to its per-peer git ref, and imports all peer refs. Balances responsiveness (faster = sooner conflict detection) vs I/O overhead (slower = fewer filesystem operations). |
 | `auto_start` | boolean | `true` | Auto-start the sync daemon when `count_active() > 1` (more than one worktree active). Set `false` for debugging or when running the daemon manually. |
 
 ### 3.3 merge
@@ -82,7 +82,7 @@ Controls the Loro CRDT claim system for parallel file access coordination.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `default_scope_policy` | string | `"soft"` | Default `scope_policy` for tasks that do not specify one explicitly. One of `"soft"`, `"hard"`, `"permissive"`. Note: `"permissive"` as a default is valid only if all tasks are interactive; autorun tasks always require a non-permissive policy. |
-| `ttl_secs` | integer | `4200` (target; current code default: 300s in `loro.rs:31`, to be changed by INF-TSK-023-024) | Safety-net claim TTL in seconds. Claims expire after this duration regardless of session state. Must exceed the worker timeout (default 3600s) to prevent "locked out of own file" scenarios. The sync daemon's PID liveness detection is the primary crash cleanup mechanism (5–10s); TTL is the nuclear fallback. |
+| `ttl_secs` | integer | `4200` (implemented: `loro.rs` reads from config, default 4200) | Safety-net claim TTL in seconds. Claims expire after this duration regardless of session state. Must exceed the worker timeout (default 3600s) to prevent "locked out of own file" scenarios. The sync daemon's PID liveness detection is the primary crash cleanup mechanism (5–10s); TTL is the nuclear fallback. |
 | `capture_events` | boolean | `true` | Persist all coordination events (`ClaimAcquired`, `ClaimConflict`, `ClaimReleased`, `ScopeExpansion`, `MergeConflictDetected`, `MergeRebaseAttempted`) to `coordination-events.jsonl` and the `coordination_event` SurrealDB table. Set `false` to disable event capture in performance-sensitive environments. |
 
 ---

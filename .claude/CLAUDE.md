@@ -416,6 +416,8 @@ In autorun mode (no human present), phase transitions happen automatically:
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
 - **Parallel workers:** Each autorun worker runs in its own worktree via `WorktreeProvider` trait. Workers pre-claim file_scope entries at startup via acquire_batch(). Claims are enforced via scope_policy (soft by default for autorun). Merge conflicts are detected via `check_merge_conflicts()` before PR creation. The merge queue (`coordination/merge_queue.rs`) serializes PR merges across concurrent workers.
+- **Configuration:** All parallel execution settings are in `.codeflow/config/parallel-work/parallel-work-config.json` (4 sections: worktree, sync, merge, claims). Config is optional — defaults apply when absent. See `autorun/config.rs` for loading and validation.
+- **Coordination events:** Claim lifecycle events (acquired, conflict, released, scope expansion) are emitted to `coordination-events.jsonl` via `ledger/routing.rs`. Event types are defined in `coordination/types/events.rs`.
 
 ### 4.5 Scenario Navigator
 
@@ -1370,12 +1372,13 @@ codeflow-cli/                         # Rust CLI workspace
 │   ├── src/worktree/                 #   Worktree isolation (mod, paths, registry, setup, cleanup)
 │   ├── src/coordination/            #   CRDT coordination (mod, loro, claims, sync, merge_queue)
 │   ├── src/transport/               #   Git ref transport (gitref)
-│   ├── src/autorun/                 #   Autorun workers (worker — WorktreeProvider trait)
+│   ├── src/autorun/                 #   Autorun workers (worker, orchestrator, config, batch)
 │   └── src/git/conflict.rs          #   Merge conflict detection (ConflictResult, check_merge_conflicts)
 
 .codeflow/                            # CodeFlow infrastructure
 ├── config/
 │   ├── enforcement/                  # enforcement-policy.json
+│   ├── parallel-work/                # parallel-work-config.json (worktree, sync, merge, claims)
 │   └── pathflow/                     # pathflow-config.json (phases, stages, pipelines, rework limits)
 ├── scripts/
 │   └── security/                     # Protection scripts (cf-protect-resources.sh, cf-promote-protection.sh, cf-reload-protection.sh + lib/)

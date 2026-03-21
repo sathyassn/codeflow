@@ -51,6 +51,11 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         | "session_metadata"
         | "pathflow_task_update" => Ok(files::PATHFLOW_EVENTS),
 
+        // coordination-events.jsonl
+        "claim_acquired" | "claim_conflict" | "coord_claim_released" | "scope_expansion" => {
+            Ok(files::COORDINATION_EVENTS)
+        }
+
         _ => Err(LedgerError::UnknownEventType(event_type.to_string())),
     }
 }
@@ -158,6 +163,22 @@ mod tests {
     }
 
     #[test]
+    fn test_coordination_events_route_to_coordination() {
+        for event_type in &[
+            "claim_acquired",
+            "claim_conflict",
+            "coord_claim_released",
+            "scope_expansion",
+        ] {
+            assert_eq!(
+                route_event_type(event_type).unwrap(),
+                files::COORDINATION_EVENTS,
+                "{event_type} should route to coordination-events.jsonl"
+            );
+        }
+    }
+
+    #[test]
     fn test_unknown_event_type_returns_error() {
         let result = route_event_type("totally_unknown");
         assert!(result.is_err());
@@ -210,6 +231,10 @@ mod tests {
             "pathflow_task_update",
             "config_set",
             "config_updated",
+            "claim_acquired",
+            "claim_conflict",
+            "coord_claim_released",
+            "scope_expansion",
         ];
         for event_type in &all_variants {
             assert!(

@@ -145,9 +145,9 @@ Key fields used by the autorun system:
 |-------|-------------------|---------|
 | `max_concurrent` | `worktree.max_concurrent` | Maximum parallel workers (default: 3) |
 | `default_scope_policy` | `claims.default_scope_policy` | Scope policy when task doesn't specify one (default: "soft") |
-| `ttl_secs` | `claims.ttl_secs` | Claim TTL safety net (default: 4200s (target; current: 300s)) |
+| `ttl_secs` | `claims.ttl_secs` | Claim TTL safety net (default: 4200s) |
 | `capture_events` | `claims.capture_events` | Whether to persist coordination events (default: true) |
-| `interval_secs` | `sync.interval_secs` | Sync daemon interval (default: 5s (target; current: 30s)) |
+| `interval_secs` | `sync.interval_secs` | Sync daemon interval (default: 30s) |
 
 See [parallel-work-config-spec.md](parallel-work-config-spec.md) for the full schema.
 

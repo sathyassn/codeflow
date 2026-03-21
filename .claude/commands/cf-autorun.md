@@ -472,21 +472,30 @@ main
 
 ### Configuration
 
-```yaml
-# .codeflow/config/autorun.yaml
-execution:
-  max_session_workers: 3
-  order: dependency
-timeouts:
-  per_task: 1h
-  per_session: 8h
-pr:
-  create: true
-  auto_merge: false             # Default: human review required
-worktree:
-  cleanup_on_merged: true
-  preserve_on_failure: true
+**Parallel work config** (`.codeflow/config/parallel-work/parallel-work-config.json`):
+
+```json
+{
+  "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees" },
+  "sync": { "interval_secs": 30, "auto_start": true },
+  "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
+  "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true }
+}
 ```
+
+This config is optional (defaults apply when absent). See [parallel-work-config-spec.md](../../.codeflow/docs/analysis/parallel-work/parallel-work-config-spec.md) for field descriptions.
+
+**Worker spawning procedure:**
+
+1. `codeflow autorun` parses the batch YAML file
+2. Config is loaded from `parallel-work-config.json` (defaults if absent)
+3. Workers are spawned into separate worktrees (one per task, max `max_concurrent`)
+4. Each worker pre-acquires claims for its `file_scope` via `acquire_batch()`
+5. Workers write `scope_policy` and `file_scope` to `active-task.json`
+6. Workers use `WorktreePaths` for all `.state/` access
+7. On completion: claims released via `release_all()`, worktree cleaned up
+8. PR merge goes through merge queue (`enqueue` before, `dequeue` after)
+9. Merge conflict detection runs via `check_merge_conflicts()` before PR creation
 
 ---
 
@@ -654,3 +663,5 @@ Validation passed. Ready to start.
 - [cf-develop command](./cf-develop.md) -- Single-task implementation (worker equivalent)
 - [cf-doctor command](./cf-doctor.md) -- Infrastructure diagnostics and repair
 - [cf-cleanup command](./cf-cleanup.md) -- Session cleanup
+- [Parallel work config spec](../../.codeflow/docs/analysis/parallel-work/parallel-work-config-spec.md) -- Config field descriptions
+- [Parallel work config](../../.codeflow/config/parallel-work/parallel-work-config.json) -- Runtime config file

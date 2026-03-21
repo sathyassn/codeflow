@@ -193,6 +193,45 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
             Some(&wt_info.path.to_string_lossy()),
         );
 
+        // Pre-acquire claims for file_scope at startup via acquire_batch().
+        let state_path = self.project_dir.join(".state/coordination/state.loro");
+        if !cfg.file_scope.is_empty() {
+            let scope_refs: Vec<&str> = cfg.file_scope.iter().map(String::as_str).collect();
+            match crate::file_lock::locked_binary_rmw(
+                &state_path,
+                crate::coordination::loro::LoroCoordinator::in_memory,
+                |bytes| {
+                    crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &state_path)
+                        .map_err(|e| format!("load coordinator: {e}"))
+                },
+                |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+                |coord| {
+                    let _ =
+                        crate::coordination::claims::acquire_batch(coord, &scope_refs, &worker_sid);
+                    Ok(())
+                },
+            ) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("warning: claim acquisition failed: {e}");
+                }
+            }
+        }
+
+        // Write scope_policy and file_scope to active-task.json via WorktreePaths.
+        let active_task_path = wt_paths.active_task();
+        if let Some(parent) = active_task_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let active_task = serde_json::json!({
+            "task_id": cfg.task_id,
+            "session_id": cfg.session_id,
+            "scope_policy": cfg.scope_policy,
+            "file_scope": cfg.file_scope,
+            "worktree_path": wt_info.path.to_string_lossy(),
+        });
+        let _ = std::fs::write(&active_task_path, active_task.to_string());
+
         // Create the tmux session.
         self.tmux.create_session(&tmux_name).await?;
 
@@ -212,7 +251,67 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
         })
         .await;
 
-        // Always cleanup: kill tmux session first, then remove worktree.
+        // Check for merge conflicts before PR creation.
+        if let Ok(Ok(ref invoke_result)) = result {
+            if invoke_result.exit_code == 0 && !cfg.target.is_empty() {
+                match crate::git::conflict::check_merge_conflicts(&wt_info.path, &cfg.target) {
+                    Ok(conflict_result) if conflict_result.has_conflicts => {
+                        eprintln!(
+                            "warning: merge conflicts detected with {}: {:?}",
+                            cfg.target, conflict_result.conflicting_files
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("warning: merge conflict check failed: {e}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Enqueue in merge queue before PR merge.
+        if let Ok(Ok(ref invoke_result)) = result {
+            if invoke_result.exit_code == 0 {
+                let entry = crate::coordination::merge_queue::MergeQueueEntry {
+                    session_id: worker_sid.clone(),
+                    task_id: cfg.task_id.clone(),
+                    branch: invoke_result.branch_name.clone(),
+                    pr_ready_at: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(e) =
+                    crate::coordination::merge_queue::locked_enqueue(&state_path, &entry)
+                {
+                    eprintln!("warning: merge queue enqueue failed: {e}");
+                }
+            }
+        }
+
+        // Always cleanup: release claims, kill tmux, remove worktree.
+        // Release claims via release_all().
+        match crate::file_lock::locked_binary_rmw(
+            &state_path,
+            crate::coordination::loro::LoroCoordinator::in_memory,
+            |bytes| {
+                crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &state_path)
+                    .map_err(|e| format!("load coordinator: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+            |coord| {
+                let _ = crate::coordination::claims::release_all(coord, &worker_sid);
+                Ok(())
+            },
+        ) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("warning: claim release failed: {e}");
+            }
+        }
+
+        // Dequeue from merge queue after completion.
+        if let Err(e) = crate::coordination::merge_queue::locked_dequeue(&state_path) {
+            eprintln!("warning: merge queue dequeue failed: {e}");
+        }
+
         let _ = self.tmux.kill_session(&tmux_name).await;
         if let Err(e) = self.worktree.cleanup(&wt_name) {
             eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
@@ -501,6 +600,7 @@ mod tests {
             target: "main".into(),
             tmux_prefix: "codeflow-worker".into(),
             file_scope: Vec::new(),
+            scope_policy: "soft".into(),
         }
     }
 

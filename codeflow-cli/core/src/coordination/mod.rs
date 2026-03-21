@@ -8,6 +8,7 @@ pub mod claims;
 pub mod loro;
 pub mod merge_queue;
 pub mod sync;
+pub mod types;
 
 use std::fmt;
 

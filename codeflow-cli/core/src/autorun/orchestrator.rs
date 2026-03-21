@@ -26,6 +26,9 @@ pub struct WorkerConfig {
     pub tmux_prefix: String,
     /// File patterns this worker claims for exclusive access via Loro.
     pub file_scope: Vec<String>,
+    /// Scope policy for this worker: "soft", "hard", or "permissive".
+    /// Defaults to "soft" when not specified in the task definition.
+    pub scope_policy: String,
 }
 
 /// Result of a worker execution.
@@ -188,12 +191,11 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
 
             launched_any = true;
             state.running.lock().await.insert(task_id.clone());
-            let file_scope = batch
-                .tasks
-                .iter()
-                .find(|t| t.id == *task_id)
-                .map(|t| t.file_scope.clone())
-                .unwrap_or_default();
+            let task_spec = batch.tasks.iter().find(|t| t.id == *task_id);
+            let file_scope = task_spec.map(|t| t.file_scope.clone()).unwrap_or_default();
+            let scope_policy = task_spec
+                .and_then(|t| t.scope_policy.clone())
+                .unwrap_or_else(|| "soft".to_string());
             Self::spawn_worker(
                 self.runner.clone(),
                 WorkerConfig {
@@ -206,6 +208,7 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
                     target: batch.target.clone(),
                     tmux_prefix: "codeflow-worker".into(),
                     file_scope,
+                    scope_policy,
                 },
                 state.completed.clone(),
                 state.failed.clone(),
@@ -431,10 +434,12 @@ mod tests {
             target: "main".into(),
             tmux_prefix: "worker".into(),
             file_scope: vec!["src/**/*.rs".into()],
+            scope_policy: "hard".into(),
         };
         assert_eq!(cfg.task_id, "task-a");
         assert_eq!(cfg.worker_num, 1);
         assert_eq!(cfg.file_scope, vec!["src/**/*.rs"]);
+        assert_eq!(cfg.scope_policy, "hard");
     }
 
     #[test]

@@ -1,0 +1,21 @@
+{
+  "worktree": {
+    "mode": "autorun",
+    "max_concurrent": 3,
+    "base_dir": ".git-worktrees"
+  },
+  "sync": {
+    "interval_secs": 30,
+    "auto_start": true
+  },
+  "merge": {
+    "auto_rebase": true,
+    "queue_enabled": true,
+    "max_rebase_attempts": 3
+  },
+  "claims": {
+    "default_scope_policy": "soft",
+    "ttl_secs": 4200,
+    "capture_events": true
+  }
+}

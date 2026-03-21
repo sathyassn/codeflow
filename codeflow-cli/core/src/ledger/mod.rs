@@ -17,8 +17,9 @@ pub mod files {
     pub const SESSIONS: &str = "sessions.jsonl";
     pub const CONFIG: &str = "config.jsonl";
     pub const PATHFLOW_EVENTS: &str = "pathflow-events.jsonl";
+    pub const COORDINATION_EVENTS: &str = "coordination-events.jsonl";
 
-    /// Files synced to the database (excludes pathflow-events).
+    /// Files synced to the database (excludes pathflow-events and coordination-events).
     pub const CANONICAL: &[&str] = &[WORK_GRAPH, MEMORY_EVENTS, SESSIONS, CONFIG];
 }
 
@@ -169,8 +170,10 @@ mod tests {
         assert_eq!(files::SESSIONS, "sessions.jsonl");
         assert_eq!(files::CONFIG, "config.jsonl");
         assert_eq!(files::PATHFLOW_EVENTS, "pathflow-events.jsonl");
+        assert_eq!(files::COORDINATION_EVENTS, "coordination-events.jsonl");
         assert_eq!(files::CANONICAL.len(), 4);
         assert!(!files::CANONICAL.contains(&files::PATHFLOW_EVENTS));
+        assert!(!files::CANONICAL.contains(&files::COORDINATION_EVENTS));
     }
 
     #[test]
