@@ -63,7 +63,7 @@ async fn run_with_dir(project_dir: &Path) -> Result<()> {
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker);
 
     let results = orchestrator
-        .execute(session_id.as_str(), &parsed)
+        .execute(session_id.as_str(), &parsed, project_dir)
         .await
         .context("executing autorun batch")?;
 
@@ -293,18 +293,26 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
 
         // Send the Claude command. Uses regular '...' quoting (not $'...') so
         // that backslash sequences like \n in the prompt are preserved literally.
+        // Quote work_dir with POSIX single-quote escaping to handle paths with spaces.
+        let escaped_work_dir = work_dir.replace('\'', "'\\''");
         let exit_code_path = format!("{work_dir}/.state/runtime/worker-exit-code");
         let output_path = format!("{work_dir}/.state/runtime/worker-output.json");
+        let escaped_exit_code_path = exit_code_path.replace('\'', "'\\''");
+        let escaped_output_path = output_path.replace('\'', "'\\''");
         let claude_cmd = format!(
-            "cd {work_dir} && claude -p '{escaped_prompt}' \
+            "cd '{escaped_work_dir}' && claude -p '{escaped_prompt}' \
              --dangerously-skip-permissions \
              --output-format json \
-             > {output_path} 2>&1; \
-             echo $? > {exit_code_path}"
+             > '{escaped_output_path}' 2>&1; \
+             echo $? > '{escaped_exit_code_path}'"
         );
         self.tmux.send_command(session, &claude_cmd).await?;
 
-        // Poll for the exit-code marker file.
+        // INNER TIMEOUT: Polls for Claude's exit-code marker file and handles
+        // graceful shutdown (SIGTERM → grace period → SIGKILL). This complements
+        // the OUTER timeout in worker.rs which bounds the entire worker lifecycle.
+        // The inner timeout provides Claude-specific shutdown sequencing, while
+        // the outer timeout catches hangs in non-Claude phases (worktree setup, etc.).
         let exit_code_file = PathBuf::from(&exit_code_path);
         let timeout = self.worker_timeout;
         let poll_start = std::time::Instant::now();

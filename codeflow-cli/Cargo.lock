@@ -825,6 +825,7 @@ name = "codeflow-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "codeflow-core",
  "git2",
@@ -841,6 +842,7 @@ dependencies = [
 name = "codeflow-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dirs",
  "fs2",

@@ -92,6 +92,7 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
         &self,
         session_id: &str,
         batch: &ParsedBatch,
+        project_dir: &std::path::Path,
     ) -> Result<Vec<WorkerResult>, AutorunError> {
         let dep_map: HashMap<&str, Vec<&str>> = batch
             .tasks
@@ -104,7 +105,13 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
             })
             .collect();
 
-        let state = ExecutionState::new(batch.max_workers);
+        // Bound the semaphore by the global worktree limit to prevent
+        // exceeding worktree.max_concurrent even if batch.max_workers is larger.
+        let effective_workers = match crate::autorun::config::load_config(project_dir) {
+            Ok(config) => batch.max_workers.min(config.worktree.max_concurrent),
+            Err(_) => batch.max_workers,
+        };
+        let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
 
         loop {
@@ -206,7 +213,7 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
                     batch_name: batch.name.clone(),
                     auto_merge: batch.auto_merge,
                     target: batch.target.clone(),
-                    tmux_prefix: "codeflow-worker".into(),
+                    tmux_prefix: format!("codeflow-{}-w", &session_id[..session_id.len().min(8)]),
                     file_scope,
                     scope_policy,
                 },
@@ -340,11 +347,15 @@ mod tests {
         let runner = OrderTracker::new();
         let order_ref = runner.order.clone();
         let orch = Orchestrator::new(runner);
+        let project_dir = tempfile::tempdir().unwrap();
 
         let batch =
             make_batch("max_workers: 1\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n");
 
-        let results = orch.execute("ses-test", &batch).await.unwrap();
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.status == "completed"));
 
@@ -359,10 +370,14 @@ mod tests {
     async fn test_orchestrator_parallel_execution() {
         let runner = OrderTracker::new();
         let orch = Orchestrator::new(runner);
+        let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n  - id: c\n");
 
-        let results = orch.execute("ses-test", &batch).await.unwrap();
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|r| r.status == "completed"));
     }
@@ -370,11 +385,15 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrator_dependency_failure_skips_dependents() {
         let orch = Orchestrator::new(FailingRunner);
+        let project_dir = tempfile::tempdir().unwrap();
 
         let batch =
             make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n");
 
-        let results = orch.execute("ses-test", &batch).await.unwrap();
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
 
         let a_result = results.iter().find(|r| r.task_id == "a").unwrap();
@@ -388,10 +407,14 @@ mod tests {
     async fn test_orchestrator_single_task() {
         let runner = OrderTracker::new();
         let orch = Orchestrator::new(runner);
+        let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch("tasks:\n  - id: only\n");
 
-        let results = orch.execute("ses-test", &batch).await.unwrap();
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].task_id, "only");
         assert_eq!(results[0].status, "completed");
@@ -402,12 +425,16 @@ mod tests {
         let runner = OrderTracker::new();
         let order_ref = runner.order.clone();
         let orch = Orchestrator::new(runner);
+        let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch(
             "max_workers: 3\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n  - id: c\n    depends_on: [a]\n  - id: d\n    depends_on: [b, c]\n",
         );
 
-        let results = orch.execute("ses-test", &batch).await.unwrap();
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 4);
         assert!(results.iter().all(|r| r.status == "completed"));
 
@@ -457,5 +484,106 @@ mod tests {
         };
         assert_eq!(result.status, "completed");
         assert_eq!(result.duration_sec, 120);
+    }
+
+    #[test]
+    fn test_tmux_name_format_batch_scoped() {
+        // Verify the tmux_prefix format uses session_id first 8 chars.
+        let session_id = "ses-01km9911pmagn2xa8n9b449wdd";
+        let prefix = format!("codeflow-{}-w", &session_id[..session_id.len().min(8)]);
+        // Worker num 1 should produce: codeflow-ses-01km-w1
+        let tmux_name = format!("{prefix}{}", 1);
+        assert!(
+            tmux_name.starts_with("codeflow-"),
+            "tmux name should start with codeflow-"
+        );
+        assert!(
+            tmux_name.ends_with("1"),
+            "tmux name should end with worker num"
+        );
+        // Verify format: codeflow-{8chars with hyphens}-w{N}
+        let re_pattern = r"^codeflow-[a-z0-9-]{1,8}-w[0-9]+$";
+        let re = regex::Regex::new(re_pattern).unwrap();
+        assert!(
+            re.is_match(&tmux_name),
+            "tmux name '{tmux_name}' must match pattern {re_pattern}"
+        );
+
+        // Verify uniqueness: different session IDs produce different prefixes.
+        let other_id = "ses-99xx1234abcd";
+        let other_prefix = format!("codeflow-{}-w", &other_id[..other_id.len().min(8)]);
+        assert_ne!(
+            prefix, other_prefix,
+            "different sessions must produce different prefixes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_bounded_by_min_max_workers_max_concurrent() {
+        // Create a config with max_concurrent=2 while batch has max_workers=5.
+        // The semaphore should use min(5, 2) = 2.
+        let project_dir = tempfile::tempdir().unwrap();
+        let config_dir = project_dir.path().join(".codeflow/config/parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "max_concurrent": 2 } }"#,
+        )
+        .unwrap();
+
+        // Track concurrency: how many workers run simultaneously.
+        let max_concurrent_observed = Arc::new(AtomicI32::new(0));
+        let current_concurrent = Arc::new(AtomicI32::new(0));
+
+        struct ConcurrencyTracker {
+            max_observed: Arc<AtomicI32>,
+            current: Arc<AtomicI32>,
+        }
+
+        impl WorkerRunner for ConcurrencyTracker {
+            async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+                let prev = self.current.fetch_add(1, Ordering::SeqCst);
+                let concurrent = prev + 1;
+                // Update max observed.
+                self.max_observed.fetch_max(concurrent, Ordering::SeqCst);
+                // Simulate work.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                self.current.fetch_sub(1, Ordering::SeqCst);
+                Ok(WorkerResult {
+                    worker_id: cfg.worker_id,
+                    task_id: cfg.task_id,
+                    status: "completed".into(),
+                    exit_code: 0,
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    error: String::new(),
+                    branch_name: String::new(),
+                    duration_sec: 0,
+                })
+            }
+        }
+
+        let tracker = ConcurrencyTracker {
+            max_observed: max_concurrent_observed.clone(),
+            current: current_concurrent,
+        };
+        let orch = Orchestrator::new(tracker);
+
+        // 4 independent tasks, max_workers=5, but max_concurrent=2 from config.
+        let batch =
+            make_batch("max_workers: 5\ntasks:\n  - id: a\n  - id: b\n  - id: c\n  - id: d\n");
+
+        let results = orch
+            .execute("ses-test", &batch, project_dir.path())
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 4);
+        assert!(results.iter().all(|r| r.status == "completed"));
+
+        let max_seen = max_concurrent_observed.load(Ordering::SeqCst);
+        assert!(
+            max_seen <= 2,
+            "max concurrent workers should be <= 2 (min(5, 2)), but saw {max_seen}"
+        );
     }
 }

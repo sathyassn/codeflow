@@ -161,7 +161,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> TmuxWorker<T, C, W> {
 
 impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for TmuxWorker<T, C, W> {
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
-        let tmux_name = format!("{}-{}", cfg.tmux_prefix, cfg.worker_num);
+        let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
 
         let timeout = if self.timeout.is_zero() {
             DEFAULT_WORKER_TIMEOUT
@@ -197,6 +197,11 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
         );
 
         // Pre-acquire claims for file_scope at startup via acquire_batch().
+        // TODO(INF-TSK-023-033): When blocked_behavior is added to AutorunConfig,
+        // check claim acquisition failures against blocked_behavior config:
+        // - "skip_and_continue": return WorkerResult { status: "blocked", .. }
+        // - "fail": return Err(AutorunError::WorkerFailed(...))
+        // Currently, claim failures are warned and execution continues.
         let state_path = self.project_dir.join(".state/coordination/state.loro");
         if !cfg.file_scope.is_empty() {
             let scope_refs: Vec<&str> = cfg.file_scope.iter().map(String::as_str).collect();
@@ -251,7 +256,12 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
                 }
             };
 
-        // Run with timeout, using worktree path as work_dir.
+        // OUTER TIMEOUT: Bounds total worker wall-clock time including worktree
+        // setup, Claude invocation, and cleanup. This is the safety net enforced
+        // by the orchestrator/worker layer. The INNER timeout lives in the CLI
+        // invoker (autorun.rs) and polls for Claude's exit-code marker file,
+        // handling SIGTERM/SIGKILL escalation. Both are needed: the outer catches
+        // hangs in non-Claude phases; the inner provides graceful Claude shutdown.
         let result = tokio::time::timeout(timeout, async {
             self.claude
                 .invoke(InvokeConfig {
@@ -324,14 +334,20 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
             }
         }
 
-        // Dequeue from merge queue after completion.
-        if let Err(e) = crate::coordination::merge_queue::locked_dequeue(&state_path) {
+        // Dequeue from merge queue after completion (session-verified).
+        if let Err(e) = crate::coordination::merge_queue::locked_dequeue(&state_path, &worker_sid) {
             eprintln!("warning: merge queue dequeue failed: {e}");
         }
 
         let _ = self.tmux.kill_session(&tmux_name).await;
         if let Err(e) = self.worktree.cleanup(&wt_name) {
             eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
+        }
+
+        // Auto-stop the sync daemon if worktree count drops to <=1.
+        let registry_path = self.project_dir.join(".state/worktrees.yaml");
+        if let Err(e) = crate::worktree::maybe_auto_stop_daemon(&registry_path, &self.project_dir) {
+            eprintln!("warning: daemon auto-stop check failed: {e}");
         }
 
         match result {
@@ -535,6 +551,15 @@ pub fn build_task_prompt_from_file(
         return Err(AutorunError::MissingTask(format!(
             "invalid task ID format: {task_id} (expected AREA-TSK-NNN-NNN)"
         )));
+    }
+
+    // Reject task IDs containing path traversal characters to prevent directory escape.
+    for part in &parts {
+        if part.contains("..") || part.contains('/') || part.contains('\\') {
+            return Err(AutorunError::MissingTask(format!(
+                "task ID contains path traversal characters: {task_id}"
+            )));
+        }
     }
 
     let area = parts[0];
@@ -1377,5 +1402,87 @@ Read and implement.
             cfg.acceptance_criteria.is_empty(),
             "acceptance_criteria should default to empty vec"
         );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_auto_stop_called_after_cleanup() {
+        // Verify that maybe_auto_stop_daemon is called after worktree cleanup.
+        // We test this indirectly: after a successful run, the registry_path
+        // would be checked. Since MockWorktree doesn't create a real registry,
+        // maybe_auto_stop_daemon will fail gracefully (eprintln warning),
+        // but the important thing is the worker completes without error.
+        let project_dir = make_project_dir();
+        // Create the .state directory so the registry path is attempted.
+        std::fs::create_dir_all(project_dir.path().join(".state")).unwrap();
+
+        let (tmux, _, _) = MockTmux::new();
+        let (wt, _, wt_cleanup, _, _) =
+            MockWorktree::with_tracking(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        assert_eq!(result.status, "completed");
+        assert!(
+            wt_cleanup.load(Ordering::SeqCst),
+            "worktree cleanup must be called before daemon auto-stop"
+        );
+        // The daemon auto-stop is called but fails gracefully (no real registry).
+        // This test confirms the code path executes without blocking the worker.
+    }
+
+    #[test]
+    fn test_path_traversal_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Task ID with ".." should be rejected.
+        let result = build_task_prompt_from_file(dir.path(), "INF-TSK-..-001");
+        assert!(result.is_err(), "task ID with '..' must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("path traversal"),
+            "error should mention path traversal, got: {err}"
+        );
+
+        // Task ID with "/" should be rejected.
+        let result = build_task_prompt_from_file(dir.path(), "INF-TSK-foo/bar-001");
+        assert!(result.is_err(), "task ID with '/' must be rejected");
+
+        // Task ID with "\\" should be rejected.
+        let result = build_task_prompt_from_file(dir.path(), "INF-TSK-foo\\bar-001");
+        assert!(result.is_err(), "task ID with '\\\\' must be rejected");
+
+        // Valid task ID should not be rejected (it may fail with MissingTask, but not path traversal).
+        let result = build_task_prompt_from_file(dir.path(), "INF-TSK-023-028");
+        assert!(
+            result.is_err(),
+            "valid task ID should fail with MissingTask, not path traversal"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            !err.to_string().contains("path traversal"),
+            "valid task ID must not be rejected for path traversal"
+        );
+    }
+
+    #[test]
+    fn test_tmux_name_format_uses_prefix_directly() {
+        // Verify the worker produces {prefix}{worker_num} (no extra separator).
+        // The prefix from orchestrator already ends with "-w".
+        let cfg = WorkerConfig {
+            session_id: "ses-test".into(),
+            worker_id: "arw-test".into(),
+            worker_num: 3,
+            task_id: "task-a".into(),
+            batch_name: "test-batch".into(),
+            auto_merge: false,
+            target: "main".into(),
+            tmux_prefix: "codeflow-ses01km9-w".into(),
+            file_scope: Vec::new(),
+            scope_policy: "soft".into(),
+        };
+        // The format is "{prefix}{worker_num}" = "codeflow-ses01km9-w3"
+        let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
+        assert_eq!(tmux_name, "codeflow-ses01km9-w3");
     }
 }

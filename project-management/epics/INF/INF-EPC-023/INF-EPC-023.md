@@ -97,7 +97,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-026 | Implement sync daemon lifecycle management | complete | M | normal | E: Integration |
 | INF-TSK-023-027 | Implement scope policy enforcement + validation | complete | L | normal | E: Integration |
 | INF-TSK-023-028 | Implement Claude invoker (hybrid tmux + file-marker) | complete | L | high | F: Autorun Readiness |
-| INF-TSK-023-029 | Fix worker coordination bugs | todo | L | high | F: Autorun Readiness |
+| INF-TSK-023-029 | Fix worker coordination bugs | complete | L | high | F: Autorun Readiness |
 | INF-TSK-023-030 | Wire merge conflict remediation | todo | M | normal | F: Autorun Readiness |
 | INF-TSK-023-031 | Comprehensive batch validation | todo | L | high | F: Autorun Readiness |
 | INF-TSK-023-032 | Wire autorun DB + event recording | todo | L | high | F: Autorun Readiness |

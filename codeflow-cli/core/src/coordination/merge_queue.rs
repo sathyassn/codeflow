@@ -53,10 +53,12 @@ pub fn enqueue(
     Ok(())
 }
 
-/// Dequeue the front entry (first-completed-first-merged).
+/// Dequeue the front entry if it belongs to the requesting session.
 ///
-/// Reads and removes the entry at index 0 of the `merge_queue` `LoroList`.
-/// Returns `None` if the queue is empty.
+/// Peeks at index 0 of the `merge_queue` `LoroList` and only removes it
+/// if the entry's `session_id` matches the provided `session_id`. Returns
+/// `None` if the queue is empty or the front entry belongs to a different
+/// session (preventing cross-session dequeue in concurrent batches).
 ///
 /// # Errors
 ///
@@ -64,6 +66,7 @@ pub fn enqueue(
 /// Returns `CoordinationError::Loro` if the LoroList operation fails.
 pub fn dequeue(
     coordinator: &LoroCoordinator,
+    session_id: &SessionId,
 ) -> Result<Option<MergeQueueEntry>, CoordinationError> {
     let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
     let len = queue.len();
@@ -72,9 +75,14 @@ pub fn dequeue(
     }
 
     let entry = read_entry_at(&queue, 0)?;
-    queue.delete(0, 1)?;
-    coordinator.doc().commit();
-    Ok(entry)
+    match &entry {
+        Some(e) if e.session_id == *session_id => {
+            queue.delete(0, 1)?;
+            coordinator.doc().commit();
+            Ok(entry)
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Peek at the front entry without removing it.
@@ -164,11 +172,17 @@ pub fn locked_enqueue(state_path: &Path, entry: &MergeQueueEntry) -> Result<(), 
 
 /// Dequeue under a file lock (for disk-backed state).
 ///
+/// Only dequeues the front entry if it belongs to the given `session_id`.
+///
 /// # Errors
 ///
 /// Returns `CoordinationError::MergeQueue` on lock or operation failure.
-pub fn locked_dequeue(state_path: &Path) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+pub fn locked_dequeue(
+    state_path: &Path,
+    session_id: &SessionId,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
     let mut result = None;
+    let sid = session_id.clone();
     locked_binary_rmw(
         state_path,
         LoroCoordinator::in_memory,
@@ -178,7 +192,7 @@ pub fn locked_dequeue(state_path: &Path) -> Result<Option<MergeQueueEntry>, Coor
         },
         |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
         |coord| {
-            result = dequeue(coord).map_err(|e| format!("dequeue: {e}"))?;
+            result = dequeue(coord, &sid).map_err(|e| format!("dequeue: {e}"))?;
             Ok(())
         },
     )
@@ -245,12 +259,12 @@ mod tests {
 
         assert_eq!(queue_len(&coord), 3);
 
-        // Dequeue in FIFO order.
-        let d1 = dequeue(&coord).unwrap().unwrap();
+        // Dequeue in FIFO order (each session dequeues its own entry).
+        let d1 = dequeue(&coord, &session("ses-001")).unwrap().unwrap();
         assert_eq!(d1.session_id.as_str(), "ses-001");
-        let d2 = dequeue(&coord).unwrap().unwrap();
+        let d2 = dequeue(&coord, &session("ses-002")).unwrap().unwrap();
         assert_eq!(d2.session_id.as_str(), "ses-002");
-        let d3 = dequeue(&coord).unwrap().unwrap();
+        let d3 = dequeue(&coord, &session("ses-003")).unwrap().unwrap();
         assert_eq!(d3.session_id.as_str(), "ses-003");
 
         assert_eq!(queue_len(&coord), 0);
@@ -295,7 +309,7 @@ mod tests {
     #[test]
     fn test_dequeue_empty_queue() {
         let coord = LoroCoordinator::in_memory();
-        let result = dequeue(&coord).unwrap();
+        let result = dequeue(&coord, &session("ses-any")).unwrap();
         assert!(result.is_none());
     }
 
@@ -325,7 +339,7 @@ mod tests {
         enqueue(&coord, &make_entry("ses-002", "T2", "b2", "ts2")).unwrap();
         assert_eq!(queue_len(&coord), 2);
 
-        dequeue(&coord).unwrap();
+        dequeue(&coord, &session("ses-001")).unwrap();
         assert_eq!(queue_len(&coord), 1);
     }
 
@@ -371,10 +385,10 @@ mod tests {
         // All 3 entries should be present after merge.
         assert_eq!(queue_len(&merged), 3);
 
-        // Verify all sessions are in the queue.
+        // Verify all sessions are in the queue using peek+position.
         let mut found_sessions = Vec::new();
-        for _ in 0..3 {
-            let entry = dequeue(&merged).unwrap().unwrap();
+        for i in 0..3 {
+            let entry = peek_at(&merged, i).unwrap().unwrap();
             found_sessions.push(entry.session_id.as_str().to_string());
         }
         found_sessions.sort();
@@ -392,13 +406,17 @@ mod tests {
         locked_enqueue(&state_path, &e1).unwrap();
         locked_enqueue(&state_path, &e2).unwrap();
 
-        let d1 = locked_dequeue(&state_path).unwrap().unwrap();
+        let d1 = locked_dequeue(&state_path, &session("ses-001"))
+            .unwrap()
+            .unwrap();
         assert_eq!(d1.session_id.as_str(), "ses-001");
 
-        let d2 = locked_dequeue(&state_path).unwrap().unwrap();
+        let d2 = locked_dequeue(&state_path, &session("ses-002"))
+            .unwrap()
+            .unwrap();
         assert_eq!(d2.session_id.as_str(), "ses-002");
 
-        let d3 = locked_dequeue(&state_path).unwrap();
+        let d3 = locked_dequeue(&state_path, &session("ses-any")).unwrap();
         assert!(d3.is_none());
     }
 
@@ -406,8 +424,68 @@ mod tests {
     fn test_locked_dequeue_empty_state() {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("state.loro");
-        let result = locked_dequeue(&state_path).unwrap();
+        let result = locked_dequeue(&state_path, &session("ses-any")).unwrap();
         assert!(result.is_none());
+    }
+
+    // -- Session-verified dequeue tests --
+
+    #[test]
+    fn test_dequeue_mismatch_returns_none_without_removing() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry("ses-owner", "TSK-001", "feat/a", "2026-03-19T10:00:00Z");
+        enqueue(&coord, &e1).unwrap();
+
+        // A different session tries to dequeue -- should get None.
+        let result = dequeue(&coord, &session("ses-other")).unwrap();
+        assert!(result.is_none(), "mismatched session_id should return None");
+
+        // Entry should still be in the queue.
+        assert_eq!(
+            queue_len(&coord),
+            1,
+            "entry must not be removed on mismatch"
+        );
+        let peeked = peek(&coord).unwrap().unwrap();
+        assert_eq!(peeked.session_id.as_str(), "ses-owner");
+    }
+
+    #[test]
+    fn test_dequeue_match_returns_and_removes() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry("ses-owner", "TSK-001", "feat/a", "2026-03-19T10:00:00Z");
+        enqueue(&coord, &e1).unwrap();
+
+        // The owning session dequeues -- should succeed.
+        let result = dequeue(&coord, &session("ses-owner")).unwrap().unwrap();
+        assert_eq!(result.session_id.as_str(), "ses-owner");
+        assert_eq!(
+            queue_len(&coord),
+            0,
+            "entry must be removed after matching dequeue"
+        );
+    }
+
+    #[test]
+    fn test_concurrent_dequeue_different_sessions_non_owner_gets_none() {
+        let coord = LoroCoordinator::in_memory();
+        enqueue(&coord, &make_entry("ses-A", "TSK-A", "feat/a", "ts1")).unwrap();
+        enqueue(&coord, &make_entry("ses-B", "TSK-B", "feat/b", "ts2")).unwrap();
+
+        // ses-B tries to dequeue first -- front is ses-A, so mismatch.
+        let result_b = dequeue(&coord, &session("ses-B")).unwrap();
+        assert!(result_b.is_none(), "ses-B should not dequeue ses-A's entry");
+        assert_eq!(queue_len(&coord), 2, "no entries removed");
+
+        // ses-A dequeues successfully.
+        let result_a = dequeue(&coord, &session("ses-A")).unwrap().unwrap();
+        assert_eq!(result_a.session_id.as_str(), "ses-A");
+        assert_eq!(queue_len(&coord), 1);
+
+        // Now ses-B is at the front and can dequeue.
+        let result_b2 = dequeue(&coord, &session("ses-B")).unwrap().unwrap();
+        assert_eq!(result_b2.session_id.as_str(), "ses-B");
+        assert_eq!(queue_len(&coord), 0);
     }
 
     // -- Integration test scenarios --
@@ -465,11 +543,11 @@ mod tests {
         .unwrap();
 
         // Merge order should be: worker-2, worker-0, worker-1.
-        let d1 = dequeue(&coord).unwrap().unwrap();
+        let d1 = dequeue(&coord, &session("ses-worker-2")).unwrap().unwrap();
         assert_eq!(d1.session_id.as_str(), "ses-worker-2");
-        let d2 = dequeue(&coord).unwrap().unwrap();
+        let d2 = dequeue(&coord, &session("ses-worker-0")).unwrap().unwrap();
         assert_eq!(d2.session_id.as_str(), "ses-worker-0");
-        let d3 = dequeue(&coord).unwrap().unwrap();
+        let d3 = dequeue(&coord, &session("ses-worker-1")).unwrap().unwrap();
         assert_eq!(d3.session_id.as_str(), "ses-worker-1");
     }
 
@@ -544,17 +622,12 @@ mod tests {
         // Both entries should be in the queue.
         assert_eq!(queue_len(&c1), 2);
 
-        // Dequeue both and verify deterministic ordering.
-        let d1 = dequeue(&c1).unwrap().unwrap();
-        let d2 = dequeue(&c1).unwrap().unwrap();
-
-        // After CRDT merge, both entries exist. The total ordering for
-        // tiebreaking uses pr_ready_at + ULID session_id monotonicity.
-        // We verify both are present (ordering depends on peer ID).
-        let mut sids = vec![
-            d1.session_id.as_str().to_string(),
-            d2.session_id.as_str().to_string(),
-        ];
+        // Verify both entries are present using peek_at (dequeue requires matching session_id).
+        let mut sids = Vec::new();
+        for i in 0..2 {
+            let entry = peek_at(&c1, i).unwrap().unwrap();
+            sids.push(entry.session_id.as_str().to_string());
+        }
         sids.sort();
         assert_eq!(
             sids,
