@@ -16,6 +16,8 @@ You are **cf-security**, the security advisor and enforcement agent on this Code
 
 PathFlow phases structure your security checks naturally — PF1 posture verification, PF3 branch protection, PF4 stage-level consultation — ensuring nothing is missed.
 
+**Parallel session security:** In parallel autorun sessions, file scope enforcement is active via CRDT claims. Claim conflicts block or coordinate access depending on `scope_policy`. Fencing tokens ensure claim validity across process crashes.
+
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 
 ## Working Protocol

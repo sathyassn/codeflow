@@ -4,7 +4,7 @@ type: analysis
 status: active
 author: cf-planning
 created_at: "2026-03-04"
-updated_at: "2026-03-05"
+updated_at: "2026-03-21"
 parent: "parallel-work/README.md"
 ---
 
@@ -21,6 +21,7 @@ parent: "parallel-work/README.md"
 - [5. SurrealDB Evaluation](#5-surrealdb-evaluation)
 - [6. Pure Rust CLI Architecture](#6-pure-rust-cli-architecture)
 - [7. Global Database Architecture](#7-global-database-architecture)
+- [8. Coordination Events Ledger](#8-coordination-events-ledger)
 
 ---
 
@@ -66,21 +67,22 @@ parent: "parallel-work/README.md"
 
 ## 3. Claims System (Coordination Layer)
 
-**State file:** `.state/coordination/state.json` (path from `claim.go:85-87`)
+**State file:** `.state/coordination/state.loro` (Loro CRDT document, managed by `LoroCoordinator` in the Rust CLI)
 
-**Read-modify-write cycle** (from `claim.go:89-133`):
-1. `loadDoc()` reads entire `state.json` (lines 89-108)
-2. In-memory mutation (e.g., add claim to `doc.Claims` map, increment `TokenCounter`)
-3. `saveDoc()` marshals and writes atomically via tmp+rename (lines 110-133)
+**Status: RESOLVED by Loro CRDT (INF-EPC-023 Phase A).**
 
-**Parallel safety assessment:**
-- **UNSAFE.** No locking between `loadDoc()` and `saveDoc()`. Two sessions calling `Acquire()` concurrently can both read the same state, both add their claim, and one write overwrites the other -- losing a claim. This is a classic TOCTOU race.
-- The existing `state.loro` file at `.state/coordination/state.loro` is an unused artifact (483 bytes, never read or written by Go code).
-- `patternsConflict()` checks are correct for single-process use but meaningless under TOCTOU race conditions.
+The previous Go implementation used `state.json` with a TOCTOU race: two sessions calling `Acquire()` concurrently could both read the same state, both add their claim, and one write would overwrite the other. This is eliminated by the Rust CLI's `LoroCoordinator`.
 
-**Risk:** HIGH. Claims are the mechanism for preventing file conflicts between parallel sessions. If claims themselves are racy, the entire conflict detection system is unreliable.
+**Current implementation:**
+- `LoroCoordinator` implements the `Coordinator` trait from Epic 0
+- `Coordinator::acquire(path, session_id)` — atomic claim via Loro Map CRDT, no TOCTOU race
+- `claims::acquire_batch(coordinator, paths, session_id)` — pre-claim all `file_scope` entries at startup
+- `claims::release_all(session_id)` — release on session end (also triggered by SessionEnd hook)
+- Fencing tokens are monotonically increasing `u64` values stored in the Loro Map
+- Same-machine parallel sessions share `state.loro` via symlink — immediate conflict detection
+- Multi-machine sessions sync via per-peer git refs (5s default interval)
 
-**Resolution:** Migrate `state.json` to `state.loro` using Loro Map CRDT (Epic A Phase A). After Epic 0 (Rust CLI redesign), Loro is a direct crate dependency -- `use loro::LoroDoc;`. `LoroCoordinator` implements Epic 0's `Coordinator` trait. Loro handles concurrency natively for both same-machine and multi-machine parallel sessions. Loro Map operations are atomic at the CRDT level, eliminating the TOCTOU race entirely. Delta sync via per-peer git refs enables cross-machine merge (see [CRDT Coordination](crdt-coordination.md)).
+**Coordination events** are now recorded in `coordination-events.jsonl` and the `coordination_event` SurrealDB table. See [Section 8: Coordination Events Ledger](#8-coordination-events-ledger) for the schema.
 
 ---
 
@@ -153,6 +155,8 @@ SurrealDB is a multi-model database offering document, graph, vector (HNSW), ful
 | Concurrency | Multi-writer, lockless reads | Single writer via WAL | SurrealDB better for parallel writes |
 
 ### 5.3 Unified Query Advantage for Agentic Use Cases
+
+> **Note:** SurrealDB embedded replaces SQLite entirely in the Rust CLI (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). References to SQLite `busy_timeout` and WAL mode in this document reflect the legacy/transitional Go implementation. The Rust CLI uses SurrealDB's `RetryConfig` with exponential backoff for parallel access, not SQLite busy_timeout.
 
 SurrealDB's key advantage is combining multiple query types in a single statement:
 
@@ -356,6 +360,61 @@ Cross-project semantic search requires vector embeddings. These are generated lo
 | 2 (Markdown) | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes | No |
 
 JSONL (Tier 0) remains the rebuild authority — unchanged. If the SurrealDB embedded store is lost or corrupted, it is rebuilt from JSONL. The rebuild path (`codeflow db rebuild`) uses the same event-sourcing logic as the current SQLite rebuild path.
+
+---
+
+## 8. Coordination Events Ledger
+
+All coordination events are written to two destinations:
+
+1. **`coordination-events.jsonl`** — append-only ledger at `.state/ledger/coordination-events.jsonl`. Written by `LoroCoordinator` on every claim operation. Protected by `flock` for I/O append safety.
+2. **`coordination_event` SurrealDB table** — queryable view for operational analysis, reporting, and debugging.
+
+### 8.1 SurrealDB Schema
+
+```surql
+DEFINE TABLE coordination_event SCHEMAFULL;
+
+DEFINE FIELD event_type    ON coordination_event TYPE string;
+DEFINE FIELD session_id    ON coordination_event TYPE string;
+DEFINE FIELD task_id       ON coordination_event TYPE option<string>;
+DEFINE FIELD worktree_id   ON coordination_event TYPE option<string>;
+DEFINE FIELD file_path     ON coordination_event TYPE option<string>;
+DEFINE FIELD token         ON coordination_event TYPE option<int>;
+DEFINE FIELD scope_policy  ON coordination_event TYPE option<string>;
+DEFINE FIELD was_expansion ON coordination_event TYPE option<bool>;
+DEFINE FIELD holding_session ON coordination_event TYPE option<string>;
+DEFINE FIELD holding_task  ON coordination_event TYPE option<string>;
+DEFINE FIELD file_count    ON coordination_event TYPE option<int>;
+DEFINE FIELD release_type  ON coordination_event TYPE option<string>;
+DEFINE FIELD original_scope ON coordination_event TYPE option<array>;
+DEFINE FIELD attempt_number ON coordination_event TYPE option<int>;
+DEFINE FIELD max_attempts  ON coordination_event TYPE option<int>;
+DEFINE FIELD occurred_at   ON coordination_event TYPE datetime;
+```
+
+### 8.2 Event Types
+
+| Event | Written When | Key Fields |
+|-------|-------------|------------|
+| `ClaimAcquired` | Successful claim acquisition | file_path, token, was_expansion |
+| `ClaimConflict` | Blocked by another holder | file_path, holding_session, holding_task, scope_policy |
+| `ClaimReleased` | Claims released on session end | file_count, release_type (normal/crash/timeout) |
+| `ScopeExpansion` | Soft mode allowed out-of-scope claim | file_path, original_scope, token |
+| `MergeConflictDetected` | Git merge conflict detected pre-PR | file_path |
+| `MergeRebaseAttempted` | Rebase retry initiated | attempt_number, max_attempts |
+
+### 8.3 Example Query
+
+Find all claim conflicts for a specific session:
+
+```surql
+SELECT file_path, holding_session, holding_task, occurred_at
+FROM coordination_event
+WHERE event_type = 'ClaimConflict'
+  AND session_id = 'ses-01kjxabc123'
+ORDER BY occurred_at DESC;
+```
 
 ---
 

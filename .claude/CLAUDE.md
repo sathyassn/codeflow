@@ -35,6 +35,7 @@ PathFlow phases are not external constraints — they are your thinking process 
 | Memory-first | Context persists across sessions via three-tier data model |
 | Team-based | Specialized teammates handle specialized work; lead orchestrates |
 | Enforcement-backed | Hooks enforce workflow compliance at tool-call level |
+| Worktree-isolated | Each tracked session runs in its own git worktree for parallel safety |
 
 **Key Distinction:**
 
@@ -136,6 +137,8 @@ SESSION START
     v
 SessionStart hook fires (auto)                         [auto]
 Loads cf-working-protocol
+Creates worktree via WorktreeManager (if enabled)       [auto]
+WorktreeRegistry enforces max 3 concurrent
     |
     v
 PF1-INIT                                               [team-lead]
@@ -220,7 +223,9 @@ Mark task complete
 PF7-END                                                 [team-lead]
 Shutdown all teammates
 TeamDelete
-SessionEnd hook cleans up
+SessionEnd hook cleans up                               [auto]
+Worktree destroyed via cleanup_worktree()               [auto]
+Claims released via claims::release_all()
     |
     v
 SESSION END
@@ -235,6 +240,7 @@ SESSION END
 - Session status file  (`pathflow-session-status.json`) auto-created by SessionStart hook at `.state/session/{SID}/pathflow/pathflow-session-status.json` with `status:"created"`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
+- Worktree: SessionStart creates a detached worktree via `WorktreeManager::setup_detached()` if worktree mode is enabled. `WorktreeRegistry` enforces max 3 concurrent worktrees (`locked_register_with_limit`). `codeflow-env.sh` exports `CODEFLOW_WORKTREE_PATH` pointing to the worktree root.
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF1-TSK-02 blocked by PF1-TSK-01); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
@@ -276,6 +282,7 @@ SESSION END
 
 - Branch prefix from work type: FEAT→feat/, FIX→fix/, RFCT→refactor/, CICD→cicd/, DOCS→docs/, TEST→test/, CHOR→chore/, PLAN→plan/, HTFX→hotfix/, SPKE→spike/
 - → See Section 6 for work type classification details
+- Worktree note: In worktree mode, the feature branch is created within the worktree (switching from detached HEAD to the feature branch).
 - Note: Task registration (ensure-work-registered) and begin-work were moved from PF3 to PF4-EXECUTE (PF4-TSK-01/02) to avoid circular dependency with the pf-3 sentinel. These operations require Write access (for markdown files and active-task.json), which is gated on the pf-3 sentinel. Keeping them in PF3 created a deadlock: they couldn't complete without the sentinel, but the sentinel required all PF3 tasks to complete.
 
 4. **Task Tracker (MANDATORY):** TaskCreate for PF3-CLASSIFY phase entry (addBlockedBy PF2); TaskCreate for PF3-TSK-01 through PF3-TSK-03; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF3-TSK-01 blocked by PF2-TSK-04, PF3-TSK-02 blocked by PF3-TSK-01, PF3-TSK-03 blocked by PF3-TSK-02); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
@@ -340,7 +347,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 2. Update project memory (PF6-TSK-02, cf-knowledge-layer — `record-session-summary`)
 3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown)
 4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
-5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event)
+5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event). In parallel sessions, merge conflict detection via `check_merge_conflicts()` runs before PR creation. PRs are serialized through the merge queue (`coordination/merge_queue.rs`).
 6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)
 7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
    - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
@@ -356,7 +363,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - Shutdown all teammates (on-demand first, then persistent)
 - Mark all PF7 task tracker entries completed (PF7-TSK-01, PF7-TSK-02, PF7-TSK-03) — this triggers the TaskCompleted hook which creates the pathflow-pf-7 sentinel
 - TeamDelete (ONLY after all PF7 tasks are marked completed and pf-7 sentinel exists)
-- SessionEnd hook handles cleanup
+- SessionEnd hook handles cleanup: destroys worktree via `cleanup_worktree()`, releases all claims via `claims::release_all()`
 - One PR per tracked session. New work = new session.
 - Note: The pathflow-active flag is removed automatically by the PostToolUse hook after TeamDelete. The lead's only cleanup actions are: shutdown teammates → mark PF7 tasks completed → TeamDelete.
 
@@ -392,6 +399,7 @@ Each task in `pathflow-config.json` has an `assigned_to` field (which teammate o
 |----------|--------|---------|
 | Mode | Tracked / Untracked | Is work registered in WorkGraph? |
 | Interaction | Interactive / Autorun | Is a human present? |
+| Isolation | Worktree / Main | Is the session running in an isolated git worktree? |
 
 ### Session Boundary
 
@@ -407,6 +415,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 - WS-REV uses cf-review teammate (same pipeline as interactive mode)
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
+- **Parallel workers:** Each autorun worker runs in its own worktree via `WorktreeProvider` trait. Workers pre-claim file_scope entries at startup via acquire_batch(). Claims are enforced via scope_policy (soft by default for autorun). Merge conflicts are detected via `check_merge_conflicts()` before PR creation. The merge queue (`coordination/merge_queue.rs`) serializes PR merges across concurrent workers.
 
 ### 4.5 Scenario Navigator
 
@@ -490,6 +499,46 @@ Task(
   prompt="You are {teammate-name}. Read your agent definition at .claude/agents/cf-{role}.md and follow all instructions there. Then: {detailed task with scope, acceptance criteria, and context}"
 )
 ```
+
+### Teammate Permissions
+
+🔒 **Teammates inherit the lead's permission mode.** There is no per-teammate `mode` parameter at spawn time. If the lead runs with `--dangerously-skip-permissions` (bypassPermissions), all teammates automatically get bypassPermissions. If the lead runs in `default` mode, all teammates run in `default` mode.
+
+**bypassPermissions protected paths:** Even in bypassPermissions mode, writes to `.claude/` still prompt for confirmation EXCEPT for these exempt subdirectories:
+
+| Path | Behavior | Action |
+|------|----------|--------|
+| `.claude/agents/*.md` | **EXEMPT** — no prompt | Edit directly |
+| `.claude/commands/*.md` | **EXEMPT** — no prompt | Edit directly |
+| `.claude/skills/**` | **EXEMPT** — no prompt | Edit directly |
+| `.claude/CLAUDE.md` | **PROMPTS** — not exempt | Use staged edits |
+| `.claude/settings.json` | **PROMPTS** — not exempt | Use staged edits |
+| `.claude/settings.local.json` | **PROMPTS** — not exempt | Use staged edits |
+| `.claude/hooks/**` | **PROMPTS** — not exempt | Use staged edits |
+| `.claude/memory/**` | **PROMPTS** — not exempt | Use staged edits |
+
+### Protected Resource Staged Edits
+
+When a file requires staging (see table above), teammates use this procedure:
+
+1. **STAGE** — Copy original to staging area using **flat filename** (no directory mirroring):
+   ```bash
+   cp {original-path} /tmp/claude/{project}/managed/protected-edits/{basename}
+   ```
+   Example: `cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md`
+
+2. **EDIT** — Edit the staged copy using Edit/Write tools (staging area is always writable)
+
+3. **PROVIDE** — Output the reverse cp command:
+   ```bash
+   cp /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md .claude/CLAUDE.md
+   ```
+
+4. **VERIFY** — Read the original file to confirm changes applied
+
+5. **CLEANUP** — Remove the staged file
+
+⛔ **Do NOT mirror the `.claude/` directory structure in staging.** Paths containing `.claude/` as a directory component trigger bypassPermissions prompts even in `/tmp/`. Use flat basenames only.
 
 **Spawn examples by phase (persistent teammates):**
 
@@ -729,6 +778,41 @@ Source: `pathflow-config.json` stage definitions.
 - If any instance fails, the lead resolves before proceeding
 
 **Applies to:** Any on-demand teammate during PF4-EXECUTE — cf-development, cf-documentation, cf-planning, cf-quality-assurance (for WS-TEST).
+
+### Cross-Session Parallelism
+
+Parallel Batch Execution (above) covers intra-session parallelism — multiple teammates within ONE session. Cross-session parallelism enables multiple independent sessions running concurrently, each in its own git worktree.
+
+| Concept | Purpose |
+|---------|---------|
+| Worktree isolation | Each session gets its own working copy via `git worktree add` (max 3 concurrent, enforced by `WorktreeRegistry`) |
+| Claims | CRDT-based file claims prevent concurrent edits to the same file (enforced via scope_policy — soft/hard/permissive — using `Coordinator::acquire`) |
+| Fencing tokens | Monotonic `FencingToken` values ensure claim validity across crashes |
+| Merge queue | FIFO queue serializes PR merges to prevent conflicts (`merge_queue::enqueue/dequeue`) |
+| Sync daemon | Propagates CRDT state between worktrees via git ref transport (5s default interval (target; current: 30s), `sync::run_sync_cycle`) |
+
+**Worktree layout (shared vs local state):**
+
+```text
+.git-worktrees/worktree-{SID}/
+├── .state/
+│   ├── db/ → ../../.state/db/                (symlink — shared)
+│   ├── ledger/ → ../../.state/ledger/         (symlink — shared)
+│   ├── coordination/ → ../../.state/coordination/ (symlink — shared)
+│   ├── logs/ → ../../.state/logs/             (symlink — shared)
+│   ├── registry/ → ../../.state/registry/     (symlink — shared)
+│   ├── backups/ → ../../.state/backups/       (symlink — shared)
+│   ├── runtime/                               (LOCAL per-worktree)
+│   ├── session/                               (LOCAL per-worktree)
+│   └── sentinels/                             (LOCAL per-worktree)
+└── (full working copy)
+```
+
+**Key APIs** (`codeflow-cli/core/src/coordination/`):
+- `Coordinator::acquire(path, session_id)` / `release(path, session_id)` — claim lifecycle
+- `claims::acquire_batch(coordinator, paths, session_id)` — batch claim acquisition
+- `merge_queue::enqueue(coordinator, entry)` / `dequeue(coordinator)` — PR merge ordering
+- `sync::run_sync_cycle(config, peer_id)` — CRDT state propagation between worktrees
 
 ### Teammate Name Preservation
 
@@ -973,6 +1057,7 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `codeflow hooks pre-tool-use gate-check` |
 | Stage ordering within PF4 | Primary stage sentinel (`ws-dev`/`ws-docs`/`ws-plan`/`ws-test`) must exist before WS-REV can complete and `ws-rev` before WS-QA can ship | `Bash(git push)`, `Bash(gh pr)` (via dual gate requiring `pf-5` + `ws-rev`) | `codeflow hooks pre-tool-use gate-check` |
 | TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `codeflow hooks pre-tool-use team-guard` |
+| Claim enforcement (scope_policy) | File claims via CRDT | Edit/Write (scope_policy=soft: claim-coordinated, scope_policy=hard: scope-restricted, scope_policy=permissive: unrestricted) | `codeflow hooks pre-tool-use gate-check` |
 
 **Instruction-enforced gates (not currently hook-enforced):**
 
@@ -1014,6 +1099,8 @@ The checkpoint file (`.state/session/{SID}/pathflow/pathflow-phase-tasks.json`) 
 
 Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
+**Worktree note:** In worktree mode, sentinels are stored at `{worktree}/.state/sentinels/` (local, not symlinked). Each worktree has its own sentinel namespace.
+
 → See Section 4 (Phase Reference) for sentinel-to-phase mapping
 
 ### Task Tracker Mirroring
@@ -1038,6 +1125,7 @@ Agents must NOT create sentinels manually -- if a sentinel appears missing, inve
 - Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
 - JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
 - The task tracker step is embedded as a mandatory sub-step within each Section 4.2 phase step.
+- 🔒 **Phase ordering constraint:** Task registration for phase N MUST wait until ALL tasks in phase N-1 are completed and the `pf-{N-1}` sentinel exists. The `checkpoint-register` PostToolUse hook blocks cross-phase registration (exit 2) if the prior phase sentinel is missing. Do NOT call `TaskCreate` for `PF{N}-TSK-{NN}` entries until the previous phase is fully complete. Create all tasks for ONE phase, complete them, then move to the next phase.
 
 **Reference:** `pathflow-config.json` -- template properties (subject, description, activeForm) are inline in the `phases` and `stages` sections.
 
@@ -1068,6 +1156,7 @@ Three complementary mechanisms provide defense-in-depth:
 - Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `cicd/*`, `spike/*`, `hotfix/*`
 - Commit messages follow conventional format (enforced by cf-git-operations)
 - All changes through PRs to main
+- Merge conflict detection: Before PR creation (PF6-TSK-05), `check_merge_conflicts()` from `git/conflict.rs` verifies the branch can merge cleanly. In parallel sessions, the merge queue (`coordination/merge_queue.rs`) serializes PR merges.
 
 ### Sandbox Bypass
 
@@ -1235,6 +1324,9 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 codeflow test                          # Run test suite (default: essential mode)
 codeflow test --mode full --coverage   # Run all suites with coverage enforcement
 codeflow doctor                        # Diagnose infrastructure
+codeflow worktree list                 # List active worktrees
+codeflow worktree cleanup              # Clean up stale worktrees
+codeflow worktree prune                # Remove orphaned worktree entries
 ```
 
 The unified `codeflow test` command routes to all test suites (shell/Python, Go, Rust). Use `--mode full --coverage` for WS-QA and pre-commit verification. Coverage enforces 85% per-file threshold on business packages across Go and Rust suites.
@@ -1271,9 +1363,15 @@ The unified `codeflow test` command routes to all test suites (shell/Python, Go,
 
 codeflow-cli/                         # Rust CLI workspace
 ├── Cargo.toml                        #   Workspace root (members: core, cli)
-├── core/                             #   Library crate (codeflow-core): hooks, models, pathflow, session
+├── core/                             #   Library crate (codeflow-core): hooks, models, pathflow, session, worktree, coordination, transport, autorun, git
 ├── cli/                              #   Binary crate (codeflow-cli, bin: codeflow)
-└── config/testing/test-config.json   #   Rust test configuration (coverage, business packages)
+├── config/testing/test-config.json   #   Rust test configuration (coverage, business packages)
+│   (core/src/ notable modules:)
+│   ├── src/worktree/                 #   Worktree isolation (mod, paths, registry, setup, cleanup)
+│   ├── src/coordination/            #   CRDT coordination (mod, loro, claims, sync, merge_queue)
+│   ├── src/transport/               #   Git ref transport (gitref)
+│   ├── src/autorun/                 #   Autorun workers (worker — WorktreeProvider trait)
+│   └── src/git/conflict.rs          #   Merge conflict detection (ConflictResult, check_merge_conflicts)
 
 .codeflow/                            # CodeFlow infrastructure
 ├── config/
@@ -1290,9 +1388,22 @@ codeflow-cli/                         # Rust CLI workspace
 ├── logs/
 │   └── pathflow-events.jsonl         # Phase/stage transitions
 ├── runtime/                          # Active task, current session ID
+│   └── peer-id                       # Unique peer identifier for CRDT sync
 ├── sentinels/                        # PathFlow sentinels (auto-created by hooks)
 │   └── pathflow/{session-id}/        # Session-scoped sentinel files
-└── session/                          # Session state (pathflow-active flags)
+├── session/                          # Session state (pathflow-active flags)
+├── coordination/                     # CRDT coordination state
+│   ├── state.loro                    #   Loro CRDT document (binary)
+│   ├── sync-state.json               #   Sync daemon state
+│   └── sync-daemon.pid               #   Sync daemon PID file
+├── worktrees.yaml                    # Worktree registry (active worktrees)
+├── backups/                          # State backups
+└── registry/                         # Component registry
+
+.git-worktrees/                       # Git worktrees (gitignored)
+└── worktree-{SID}/                   # Per-session worktree
+    ├── .state/                       #   Mixed symlink + local (see Section 5)
+    └── (full working copy)           #   Independent checkout
 
 project/                              # PROJECT.md, mission, tech-stack
 project-management/                   # Tier 2: Human-readable work tracking
@@ -1314,6 +1425,10 @@ project-management/                   # Tier 2: Human-readable work tracking
 
 **Key principle:** If Tier 1 (database) is lost, rebuild from Tier 0 (JSONL). Tier 2 (markdown) is always derived from Tier 1. JSONL is the ultimate source of truth.
 
+**CRDT coordination state** (`.state/coordination/state.loro`) is shared across worktrees (symlinked). SurrealDB uses `RetryConfig` with exponential backoff for parallel access from multiple worktrees.
+
+**WorktreePaths resolution:** When running in a worktree, state file paths resolve via `WorktreePaths` (`codeflow-cli/core/src/worktree/paths.rs`). Shared state (db, ledger, coordination, logs, registry, backups) is symlinked to the main repo. Local state (runtime, session, sentinels) is per-worktree.
+
 ### Memory Operations
 
 All memory operations are routed through the **cf-knowledge-layer** teammate. The lead does not interact with the database or JSONL directly.
@@ -1331,11 +1446,16 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 
 | File | Purpose |
 |------|---------|
-| `.state/runtime/active-task.json` | Bridge file: current task for hook context |
-| `.state/runtime/codeflow-env.sh` | Single source of truth for current session ID (`CODEFLOW_SESSION_ID`, `CF_PROJECT_ROOT`) |
+| `.state/runtime/active-task.json` | Bridge file: current task for hook context (includes `worktree_path` field when in a worktree) |
+| `.state/runtime/codeflow-env.sh` | Single source of truth for current session ID (`CODEFLOW_SESSION_ID`, `CF_PROJECT_ROOT`, `CODEFLOW_WORKTREE_PATH`) |
 | `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/pathflow/pathflow-session-status.json` | Session lifecycle state (see below) |
 | `.state/session/{SID}/pathflow/pathflow-team.json` | Team composition and process tracking (see below) |
+| `.state/coordination/state.loro` | Loro CRDT document for claims, fencing tokens, merge queue (shared across worktrees) |
+| `.state/coordination/sync-state.json` | Sync daemon state (last sync time, peer list) |
+| `.state/coordination/sync-daemon.pid` | Sync daemon PID file |
+| `.state/worktrees.yaml` | Worktree registry — `WorktreeEntry` records (session_id, path, branch, status) |
+| `.state/runtime/peer-id` | Unique peer identifier for CRDT sync |
 
 **`pathflow-session-status.json` fields:**
 
@@ -1383,6 +1503,10 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-session-status.json stale |  Check status field; if stuck, manually remove `.state/session/{SID}/pathflow/` directory via PF7 flow |
 | Session record missing | Check `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and query DB via cf-knowledge-layer |
+| Stale worktree | Check `.state/worktrees.yaml` for entries with status != active. Run `codeflow worktree cleanup` to remove stale entries and directories. |
+| Orphaned worktree | If `.git-worktrees/worktree-{SID}/` exists but no registry entry, run `codeflow worktree prune` to reconcile. |
+| Max worktrees reached | `WorktreeRegistry` enforces max 3 concurrent. Clean up completed sessions' worktrees first, then retry. |
+| Claims stuck after crash | Claims have TTL. Run `claims::release_all()` for the crashed session's worktree_id, or wait for TTL expiry. |
 
 ### Teammate Recovery
 
@@ -1402,6 +1526,8 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Hook blocking unexpectedly | Read hook message, address the condition it reports |
 | Team accidentally dissolved | Unrecoverable -- session must end, work restarted from scratch |
 | Enforcement degraded | Log degradation, continue with instructions + task graph (advisory mode). → See Section 7 (Graceful Degradation) |
+| Merge queue deadlock | Check `merge_queue::queue_len()`. If entries exist for completed/crashed sessions, dequeue stale entries. |
+| Claim conflict blocking | scope_policy=soft: out-of-scope edits attempt CRDT claim — blocked if another worker holds the file. scope_policy=hard: out-of-scope edits blocked immediately. Release conflicting claims or coordinate file scope between workers. |
 
 ### Context Overflow Recovery
 
@@ -1416,6 +1542,8 @@ Context overflow means the lead lost its conversation history -- NOT that teamma
 - **Dead** -- only if the session was also forcefully terminated (a separate event from compaction)
 
 Do NOT assume teammates are dead after context overflow. Verify before respawning.
+
+**Worktree context:** When recovering in a worktree, verify the worktree path from `.state/runtime/codeflow-env.sh` (`CODEFLOW_WORKTREE_PATH`). Check worktree health: `git worktree list` should show the worktree. If missing, check the registry and re-create if needed.
 
 **Detection signals:**
 

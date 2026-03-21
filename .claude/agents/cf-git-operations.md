@@ -247,6 +247,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
    gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base main
    ```
 
+5b. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
 6. Capture PR URL and number from output
 7. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
 8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update `tasks.pr_number` in SQLite
@@ -464,4 +465,5 @@ Before marking any operation complete, verify:
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Branch protection rules |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
+| Parallel Work Config | `.codeflow/config/parallel-work/parallel-work-config.json` | Worktree, claims, TTL, sync settings |
 | Worktree CLI | `codeflow worktree setup/status/list/cleanup` | Worktree management via CLI |

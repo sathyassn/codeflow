@@ -134,6 +134,7 @@ Execute the checklist for the assigned review mode.
 **CODE_REVIEW** (WS-DEV output: FEAT, FIX, RFCT, CICD, HTFX, CHOR):
 
 - [ ] **Acceptance criteria** -- PASS/FAIL per criterion from task spec
+- [ ] **Scope policy** -- Task has `scope_policy` and `file_scope` set; `scope_policy` matches work type (soft for standard autorun, hard for schema/security, permissive for interactive only)
 - [ ] **Correctness** -- Logic paths produce expected results
 - [ ] **Style** -- ShellCheck for `.sh` ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md)), ruff/flake8 for `.py` ([cf-python-standards](../skills/cf-python-standards/SKILL.md)), cargo clippy + cargo fmt for `.rs`
 - [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)

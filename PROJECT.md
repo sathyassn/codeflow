@@ -19,7 +19,7 @@ This provides universal project context for all AI models.
 - Lost context between conversations
 - No enforcement of git discipline
 - Ad-hoc memory management
-- No coordination for parallel work
+- No coordination for parallel work -- SOLVED by INF-EPC-023 (parallel execution)
 
 **Solution:** CodeFlow provides:
 
@@ -28,6 +28,7 @@ This provides universal project context for all AI models.
 - Persistent memory via three-tier data model (JSONL + SQLite + Markdown)
 - Hook-enforced PR-only development (19 hooks across 6 lifecycle events)
 - Work type pipelines with independent review and quality gates
+- Parallel execution via git worktree isolation, CRDT-based coordination, file-level claims, and serialized merge queue
 
 ## 3. Core Concepts
 
@@ -95,6 +96,12 @@ This provides universal project context for all AI models.
 │   │   WorkGraph   │  │    Git       │  │      Memory          │       │
 │   │ JSONL+SQLite  │  │  PR-only    │  │  3-tier persistent   │       │
 │   └──────────────┘  └──────────────┘  └──────────────────────┘       │
+│                                                                       │
+│   ┌───────────────────────────────────────────────────────────┐       │
+│   │               PARALLEL EXECUTION LAYER                    │       │
+│   │  Worktree isolation, CRDT coordination (Loro),            │       │
+│   │  file-level claims, fencing tokens, merge queue           │       │
+│   └───────────────────────────────────────────────────────────┘       │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -226,11 +233,14 @@ codeflow/
 │   ├── testing/                      # Test suite (1,555+ tests)
 │   ├── docs/archived/skills/         # 9 archived skills (reference only)
 │   └── VERSION                       # CodeFlow version
+├── .git-worktrees/                   # Git worktrees for parallel sessions
 ├── .state/                           # Runtime state (partially gitignored)
 │   ├── db/codeflow.db                # Tier 1: SQLite (query interface)
+│   ├── coordination/                 # CRDT state (state.loro) for claims + merge queue
 │   ├── ledger/                       # Tier 0: JSONL event logs (rebuild authority)
 │   ├── runtime/                      # Active task, session ID
-│   └── sentinels/                    # PathFlow sentinels
+│   ├── sentinels/                    # PathFlow sentinels
+│   └── worktrees.yaml                # Worktree registry (active/removed entries)
 ├── project/                          # Project knowledge base
 ├── project-management/               # Tier 2: Human-readable work tracking
 │   ├── epics/                        # Epic markdown files
@@ -270,6 +280,17 @@ codeflow/
 | **0 (JSONL)** | `.state/ledger/*.jsonl` | Rebuild authority -- immutable, append-only | Yes |
 | **1 (SQLite)** | `.state/db/codeflow.db` | Query interface -- fast indexed lookups | No |
 | **2 (Markdown)** | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes |
+
+### Parallel Execution
+
+| Component | Module | Purpose |
+|-----------|--------|---------|
+| WorktreeManager | `codeflow-cli/core/src/worktree/mod.rs` | Creates/cleans isolated git worktrees per session |
+| WorktreePaths | `codeflow-cli/core/src/worktree/paths.rs` | Canonical path resolver for worktree-scoped state |
+| WorktreeRegistry | `codeflow-cli/core/src/worktree/registry.rs` | YAML-based tracking with locked concurrency control (max 3) |
+| Coordinator (CRDT) | `codeflow-cli/core/src/coordination/mod.rs` | Loro CRDT-based file-level claims with fencing tokens |
+| MergeQueue | `codeflow-cli/core/src/coordination/merge_queue.rs` | FIFO queue for serialized PR merges across sessions |
+| ConflictDetection | `codeflow-cli/core/src/git/conflict.rs` | In-memory merge conflict check before PR creation |
 
 ### Commands (14)
 

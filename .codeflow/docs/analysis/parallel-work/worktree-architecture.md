@@ -1,10 +1,10 @@
 ---
 title: "Worktree Architecture"
 type: analysis
-status: draft
+status: active
 author: cf-planning
 created_at: "2026-03-04"
-updated_at: "2026-03-05"
+updated_at: "2026-03-21"
 parent: "parallel-work/README.md"
 ---
 
@@ -23,7 +23,8 @@ parent: "parallel-work/README.md"
 - [7. Detached HEAD Worktree Pattern](#7-detached-head-worktree-pattern)
 - [8. Worktree Cleanup at SessionEnd](#8-worktree-cleanup-at-sessionend)
 - [9. Edge Cases](#9-edge-cases)
-- [Appendix: Temp Path Convention](#appendix-temp-path-convention)
+- [Appendix A: Parallel Work Configuration](#appendix-a-parallel-work-configuration)
+- [Appendix B: Temp Path Convention](#appendix-b-temp-path-convention)
 
 ---
 
@@ -103,7 +104,7 @@ The shared/local split at `worktree.go:153-167` is well-designed for parallel wo
 |--------------------|-----------|----------------|
 | `db/` | Single SQLite database | WAL mode + busy_timeout handle concurrent access |
 | `ledger/` | Append-only JSONL files | flock for file I/O append safety (not coordination) |
-| `coordination/` | Claims state | Loro Map CRDT (sole coordination mechanism, native crate dependency in Rust CLI). Replaces state.json (see [Data Layer Protection](data-layer-protection.md) and [CRDT Coordination](crdt-coordination.md)). |
+| `coordination/` | Claims state | Loro Map CRDT (sole coordination mechanism, native crate dependency in Rust CLI). `state.loro` replaces `state.json`. TTL default 4200s; sync daemon handles fast crash cleanup (5–10s). See [Data Layer Protection](data-layer-protection.md) and [CRDT Coordination](crdt-coordination.md). |
 | `logs/` | Event logs | Append-only, flock for file I/O append safety (not coordination) |
 | `registry/` | Worktree tracking | Single writer expected |
 | `backups/` | DB backups | Timestamped filenames prevent collision |
@@ -358,7 +359,21 @@ With the pure Rust CLI (Epic 0), Loro is a compiled-in crate dependency -- there
 
 ---
 
-## Appendix: Temp Path Convention
+## Appendix A: Parallel Work Configuration
+
+Worktree behavior is driven by `.codeflow/config/parallel-work/parallel-work-config.json`. Key fields:
+
+| Config Field | Purpose | Default |
+|-------------|---------|---------|
+| `worktree.mode` | When to create worktrees: "autorun", "always", "disabled" | `"autorun"` |
+| `worktree.max_concurrent` | Maximum parallel worktrees enforced by `locked_register_with_limit()` | `3` |
+| `worktree.base_dir` | Directory for worktree creation, relative to project root | `".git-worktrees"` |
+
+See [parallel-work-config-spec.md](parallel-work-config-spec.md) for the full schema.
+
+---
+
+## Appendix B: Temp Path Convention
 
 Parallel sessions use session-scoped temp directories:
 

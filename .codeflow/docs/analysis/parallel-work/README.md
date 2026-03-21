@@ -23,10 +23,12 @@ This analysis package examines what is required to enable true parallel PathFlow
 | [Data Layer Protection](data-layer-protection.md) | JSONL append safety, claims TOCTOU race and Loro resolution, CLI-only enforcement, SurrealDB evaluation (decided: SurrealDB-only), pure Rust CLI architecture, global DB architecture summary |
 | [CRDT Coordination](crdt-coordination.md) | Loro CRDT integration plan, claims migration to Loro Map, sync daemon subcommand design, multi-machine delta sync via git ref, coordination examples |
 | [Schema Standardization](schema-standardization.md) | Ledger and log audit, per-file target schemas, field name standardization, retention policies, cleanup CLI |
-| [Autorun Integration](autorun-integration.md) | Worktree-integrated autorun workers, pre-created worktree detection, worker lifecycle |
+| [Autorun Integration](autorun-integration.md) | Worktree-integrated autorun workers, pre-created worktree detection, worker lifecycle, scope policy in workers |
+| [Scope Policy Design](scope-policy-design.md) | file_scope + scope_policy modes (soft/hard/permissive), determination criteria, file scope best practices, Loro CRDT integration flow |
+| [Parallel Work Config Spec](parallel-work-config-spec.md) | Full schema for `.codeflow/config/parallel-work/parallel-work-config.json` — worktree, sync, merge, claims sections |
 | [Global Intelligence Layer](global-intelligence.md) | Global daemon architecture, project registration, cross-project visibility, local ONNX embeddings, SurrealDB graph queries |
 | [Product Strategy](product-strategy.md) | Pricing model, open-core analysis, competitive positioning, go-to-market approach |
-| [Decisions](decisions.md) | All 24 analyzed recommendations with options, trade-offs, and justified decisions |
+| [Decisions](decisions.md) | All 31 analyzed recommendations with options, trade-offs, and justified decisions |
 
 ## Key Findings
 
@@ -237,7 +239,7 @@ Everything behind this interface is fair game for redesign.
 | 2 | Replace state.json with state.loro | Migrate claims from JSON to Loro Map CRDT. Direct `loro` crate API -- no FFI. Loro handles concurrency natively for both same-machine and multi-machine. | L |
 | 3 | Wire claims into PreToolUse hooks | Acquire exclusive claim before Edit/Write. Release on stage completion. | L |
 | 4 | Fencing token validation via Loro | Store and validate fencing tokens in Loro Map. | M |
-| 5 | Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Configurable 10-30s interval. Retry with backoff on network partition. | L |
+| 5 | Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. 5s default interval, configurable via `sync.interval_secs` in `parallel-work-config.json`. Retry with backoff on network partition. | L |
 | 6 | Clean up unused state.loro artifact | Remove unused 483-byte file. Replace with real Loro-managed state. | S |
 
 #### Phase B: Worktree Integration + Singleton Scoping
@@ -417,9 +419,9 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
 
 **Without claims:** Both sessions succeed independently. When Session B creates its PR after Session A's PR is merged, git reports merge conflicts.
 
-**With claims (advisory mode, initial rollout):** Session A acquires an exclusive claim via Loro Map. Session B's attempt returns `ErrConflict` (`claim.go:172-174`). Advisory mode: Session B logs a warning and proceeds. The PR merge conflict is detected at PF6.
+**With claims (soft scope policy):** Session A pre-claims the file at startup. Session B's attempt returns `ErrConflict` from `LoroCoordinator::acquire()`. Session B is blocked (exit 2) and a `ClaimConflict` event is recorded. The orchestrator queues the task for after Session A completes, or suggests an alternative task with no file overlap.
 
-**With claims (enforcing mode, later):** Session B is blocked and the orchestrator either queues the task for after Session A completes, or suggests an alternative task with no file overlap.
+**With claims (hard scope policy):** Session B is blocked immediately at the scope boundary — no claim attempt is made. The task is queued for later.
 
 ## Risk Assessment
 

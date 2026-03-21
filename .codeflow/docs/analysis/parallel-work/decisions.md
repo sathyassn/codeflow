@@ -38,6 +38,13 @@ parent: "parallel-work/README.md"
 - [22. Revised Epic Structure](#22-revised-epic-structure)
 - [23. Knowledge Graph Synchronization](#23-knowledge-graph-synchronization)
 - [24. Combined Epic D+E: CodeFlow App Vision](#24-combined-epic-de-codeflow-app-vision)
+- [25. Claims Enforcement is Mandatory](#25-claims-enforcement-is-mandatory)
+- [26. Sync Interval Default](#26-sync-interval-default)
+- [27. Coordination Intelligence](#27-coordination-intelligence)
+- [28. Claim TTL Default](#28-claim-ttl-default)
+- [29. No max_expansion_files Limit](#29-no-max_expansion_files-limit)
+- [30. Validation in Code, Not Config](#30-validation-in-code-not-config)
+- [31. File Scope and Scope Policy Determination](#31-file-scope-and-scope-policy-determination)
 
 ---
 
@@ -104,7 +111,9 @@ parent: "parallel-work/README.md"
 | B. Advisory (log + warn) | Non-disruptive. Session continues. | May produce PR merge conflicts. |
 | C. Two-phase: Advisory then Enforcing | Gradual rollout. Learn from data. | Two phases to manage. |
 
-**Recommendation: Option C (Two-phase).** Start advisory. In autorun, queue conflicted task. In interactive, show notification. After data collection, switch to enforcing.
+**Original recommendation: Option C (Two-phase).** Start advisory. In autorun, queue conflicted task. In interactive, show notification. After data collection, switch to enforcing.
+
+> **Superseded by [Decision #25](#25-claims-enforcement-is-mandatory).** Advisory mode provides zero protection during parallel execution. Claims enforcement is now mandatory from day one. The scope_policy field (`soft`/`hard`/`permissive`) determines enforcement behavior, not a separate advisory toggle.
 
 ---
 
@@ -470,6 +479,126 @@ Extend the existing Loro infrastructure (already designed in Decision #8 for coo
 - **Subscription leverage pitch:** Existing model subscriptions used more effectively through routing, not new API costs.
 
 - **Updated dependency ordering:** `Epic 0 -> {A, B, C parallel} -> D (needs 0+C) -> E (needs 0+C+D)`. Epic E phases E1, E3, E4 can start when Epic C Phase C1-C2 is stable. Phase E2 requires Epic D Phase D1-D2. Phase E5 requires Epic C Phase C3-C4.
+
+---
+
+## 25. Claims Enforcement is Mandatory
+
+**Question:** Should claims be advisory (log-only) or enforcing (block conflicting edits)?
+
+**Decision: Claims enforcement is mandatory. scope_policy IS enforcement. There is no separate advisory toggle.**
+
+Advisory mode provides zero protection during parallel execution. The entire point of claims is to prevent concurrent edits to the same file. A mode that logs conflicts but allows them anyway creates the illusion of coordination while providing none.
+
+- `soft` scope policy: enforces claims on in-scope files (pre-claimed), attempts claims on out-of-scope files (blocks if held, expands if unclaimed)
+- `hard` scope policy: enforces strict scope boundary, blocks all out-of-scope edits immediately
+- `permissive` scope policy: no enforcement — for interactive sessions only, FORBIDDEN for autorun
+
+The earlier "Phase 1 (advisory) / Phase 2 (enforcing)" framing is removed. All scope policies enforce from day one. The distinction between them is HOW they enforce, not WHETHER they enforce.
+
+---
+
+## 26. Sync Interval Default
+
+**Question:** What should the default sync interval be for the CRDT sync daemon?
+
+**Decision: 5 seconds.**
+
+5 seconds balances two competing concerns:
+
+- **Responsiveness:** Faster intervals detect conflicts sooner. A 5s interval means a worker learns of a competing claim within 5–10 seconds (one to two sync cycles), which is fast enough to prevent extended work on conflicted files.
+- **Overhead:** Each sync cycle reads `state.loro`, computes a delta, and writes back. At 5s intervals on typical hardware, this overhead is negligible (<1ms per cycle).
+
+The interval is configurable via `parallel-work-config.json` (`sync.interval_secs`). Teams with very high worktree counts or constrained I/O may increase this value. Teams requiring sub-second conflict detection should consider reducing it, understanding the I/O trade-off.
+
+---
+
+## 27. Coordination Intelligence
+
+**Question:** What should the CRDT coordination system capture beyond blocking edits?
+
+**Decision: CRDT coordination serves five purposes: prevent conflicts, detect conflicts, report conflicts (with full context), record conflicts (coordination-events.jsonl + SurrealDB), and enable safe expansion (soft mode).**
+
+Claims are not just a mutex. The coordination system captures operational intelligence about parallel work patterns:
+
+- Who is working on what (session, task, worktree)
+- What files are being claimed and when
+- Where conflicts occur (and between which sessions)
+- How scope expansion unfolds over time
+
+This data enables future optimizations: smarter task decomposition, better file scope recommendations, conflict hotspot analysis, and team analytics. Recording coordination events costs negligible I/O but creates significant long-term value.
+
+Event types: `ClaimAcquired`, `ClaimConflict`, `ClaimReleased`, `ScopeExpansion`, `MergeConflictDetected`, `MergeRebaseAttempted`.
+
+---
+
+## 28. Claim TTL Default
+
+**Question:** What should the default claim TTL be?
+
+**Decision: 4200 seconds (70 minutes).**
+
+> **Note:** Current code (`loro.rs:31`) has `DEFAULT_TTL_SECS = 300` (5 minutes). This decision prescribes changing it to 4200s, implemented by INF-TSK-023-024.
+
+The TTL must exceed the worker timeout (3600 seconds) to prevent "locked out of own file" scenarios where a worker's claims expire before it finishes. 4200s = 3600s (worker timeout) + 600s (10-minute buffer).
+
+The TTL is a nuclear fallback. The sync daemon's PID liveness check is the primary crash recovery mechanism — it detects dead workers within 5–10 seconds and releases their claims. TTL handles cases where the daemon itself has failed or lost connectivity.
+
+TTL is configurable via `parallel-work-config.json` (`claims.ttl_secs`) once INF-TSK-023-024 is implemented. Environments with longer-running workers should increase TTL proportionally.
+
+---
+
+## 29. No max_expansion_files Limit
+
+**Question:** Should there be a numeric limit on how many files a worker can expand into beyond its declared scope?
+
+**Decision: No numeric limit. Loro CRDT provides natural limits via other workers' claims.**
+
+Artificial numeric limits (e.g., `max_expansion_files: 10`) constrain the soft policy mechanism without adding safety. The constraint that matters is whether the file is already claimed by another worker — and that is enforced atomically by the Loro Map CRDT.
+
+If a file is unclaimed, expansion is safe regardless of how many files have already been expanded. If a file is claimed, expansion is blocked regardless of whether this would be the first or hundredth expansion. The number of expansions is irrelevant to safety; the claim state is what matters.
+
+---
+
+## 30. Validation in Code, Not Config
+
+**Question:** Should autorun invariants (require file_scope, reject permissive) be configurable?
+
+**Decision: Autorun invariants are correctness constraints enforced in code, not configurable preferences.**
+
+An autorun task without `file_scope` cannot be safely parallelized — the system cannot know what files to pre-claim, making conflict detection impossible. This is not a preference; it is a correctness requirement.
+
+Similarly, `permissive` scope_policy in autorun provides zero protection and is fundamentally incompatible with parallel execution. Allowing it via config would create a footgun with no legitimate use case.
+
+These constraints are enforced in `validate/mod.rs` at batch parse time (implemented by INF-TSK-023-027). They produce clear validation errors before any worker spawns.
+
+---
+
+## 31. File Scope and Scope Policy Determination
+
+**Question:** When and how should file_scope and scope_policy be determined for tasks?
+
+**Decision: File scope and scope_policy are set at task creation time.**
+
+- **Planned tasks:** cf-planning sets `file_scope` and `scope_policy` during task decomposition (WS-PLAN stage). The decomposition prompt explicitly includes scope determination as a required output.
+- **Adhoc tasks:** cf-knowledge-layer sets `file_scope` and `scope_policy` when registering the task (PF4-TSK-01). The registration operation requires these fields for autorun-eligible tasks.
+
+**Default:** `scope_policy = "soft"` when not specified.
+
+**Scope policy selection criteria:**
+
+| Condition | Recommended scope_policy | Rationale |
+|-----------|-------------------------|-----------|
+| Standard feature/fix work | `soft` | Safe expansion with CRDT coordination |
+| Database schema changes | `hard` | Strict isolation prevents concurrent schema modifications |
+| Security-sensitive files | `hard` | No expansion into security-critical paths |
+| Configuration changes | `soft` | Usually isolated but may need related files |
+| Documentation | `soft` | Minimal conflict risk, expansion useful |
+| Test implementation | `soft` | Tests may need fixtures in other directories |
+| Single-file hotfix | `hard` | Tight scope, no expansion needed |
+| Interactive session | `permissive` | Human-directed; no parallel coordination needed |
+
+See [scope-policy-design.md](scope-policy-design.md) for the full policy specification and file scope best practices.
 
 ---
 

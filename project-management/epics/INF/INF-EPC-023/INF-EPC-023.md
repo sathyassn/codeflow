@@ -3,7 +3,7 @@ id: "epic-01kk0s6b6k9qmhkq79hpz22rka"
 format_id: "INF-EPC-023"
 title: "Parallel Execution Core (Epic A)"
 summary: "Implement parallel PathFlow sessions: Loro CRDT coordination, git worktree isolation, singleton scoping, autorun integration, and sync daemon"
-status: planning
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -91,6 +91,11 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-019 | SurrealDB parallel access tuning | complete | S | normal | C: Autorun + Coordination |
 | INF-TSK-023-020 | Add worktree field to pathflow-events.jsonl events | complete | S | normal | B: Worktree + Singleton |
 | INF-TSK-023-021 | Cross-Epic Review Handoff: Complete Fix List | complete | M | normal | Cross-Epic |
+| INF-TSK-023-023 | Document parallel execution capabilities | complete | L | normal | D: Documentation |
+| INF-TSK-023-024 | Wire autorun parallel worker orchestration | todo | L | high | E: Integration |
+| INF-TSK-023-025 | Implement worktree CLI subcommands (cleanup/prune) | todo | M | normal | E: Integration |
+| INF-TSK-023-026 | Implement sync daemon lifecycle management | todo | M | normal | E: Integration |
+| INF-TSK-023-027 | Implement claims activation configuration | todo | M | normal | E: Integration |
 
 ### Dependency DAG
 

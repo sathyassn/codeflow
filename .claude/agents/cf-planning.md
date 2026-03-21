@@ -158,7 +158,20 @@ Apply the appropriate design operation based on the deliverable type:
 3. Define epic scope -- summary, in-scope/out-of-scope, acceptance criteria, prerequisites.
 4. Break into tasks -- each independently implementable, right-sized (XS-XL), with file paths, approach, and verification steps.
 5. Map dependencies -- identify blocked-by/blocks relationships, minimize sequential dependencies.
-6. Set task metadata -- `origin: planned`, `scope_policy: hard`, `estimate: XS/S/M/L/XL`, `autorun_eligible: true/false`, `acceptance: [testable criteria]`.
+6. Set task metadata -- `origin: planned`, `estimate: XS/S/M/L/XL`, `autorun_eligible: true/false`, `acceptance: [testable criteria]`, `file_scope: [list of file patterns]`, and `scope_policy` (required — see criteria table below):
+
+   **`scope_policy` determination (MUST set explicitly on every task):**
+
+   | Work type | `scope_policy` | Rationale |
+   |-----------|---------------|-----------|
+   | Standard autorun implementation | `soft` | Claim-coordinated; blocks on conflict |
+   | Schema, security, or shared config changes | `hard` | Scope-restricted; out-of-scope edits blocked immediately |
+   | Interactive sessions (human present) | `permissive` | Unrestricted; no claim enforcement |
+
+   - Default for autorun: `soft`. Default for interactive: `permissive`.
+   - Set `hard` explicitly for critical paths where concurrent file access must be prevented.
+   - `file_scope` patterns must be specific, not catch-all. Example: `["codeflow-cli/core/src/session/**", "codeflow-cli/core/src/hooks/session_start.rs"]` not `["codeflow-cli/**"]`.
+   - For autorun batches: ensure sibling tasks have non-overlapping `file_scope` to prevent claim conflicts.
 7. Send to cf-knowledge-layer for work item creation.
 
 ### Step 5: Document Plan

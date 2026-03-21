@@ -1,10 +1,10 @@
 ---
 title: "CRDT Coordination"
 type: analysis
-status: draft
+status: active
 author: cf-planning
 created_at: "2026-03-04"
-updated_at: "2026-03-05"
+updated_at: "2026-03-21"
 parent: "parallel-work/README.md"
 ---
 
@@ -19,9 +19,11 @@ parent: "parallel-work/README.md"
 - [3. Loro CRDT Capabilities](#3-loro-crdt-capabilities)
 - [4. Integration Path: Pure Rust CLI](#4-integration-path-pure-rust-cli)
 - [5. Integration Plan (Phase A)](#5-integration-plan-phase-a)
-- [6. How Loro CRDT Coordination Works](#6-how-loro-crdt-coordination-works)
-- [7. Multi-Machine Sync Mechanism](#7-multi-machine-sync-mechanism)
-- [8. Multi-Machine Merge Flow](#8-multi-machine-merge-flow)
+- [6. Coordination Intelligence](#6-coordination-intelligence)
+- [7. File Scope and Loro CRDT Coordination Flow](#7-file-scope-and-loro-crdt-coordination-flow)
+- [8. How Loro CRDT Coordination Works](#8-how-loro-crdt-coordination-works)
+- [9. Multi-Machine Sync Mechanism](#9-multi-machine-sync-mechanism)
+- [10. Multi-Machine Merge Flow](#10-multi-machine-merge-flow)
 
 ---
 
@@ -175,7 +177,7 @@ Phase A uses Loro CRDT as a direct crate dependency in the pure Rust CLI (from E
 | Replace state.json with state.loro | Migrate claims system from JSON read-modify-write to Loro Map CRDT. Direct `loro` crate API -- no FFI. Loro handles all coordination natively. | L |
 | Wire claims into PreToolUse hooks | Add claim acquisition to gate-check hook. Before Edit/Write, acquire exclusive claim on target file pattern via Loro Map. Release on stage completion. | L |
 | Fencing token validation via Loro | Fencing tokens stored in Loro Map. PreToolUse validates token matches latest for claimed resource. | M |
-| Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Uses native Loro API directly (same binary). Started by SessionStart hook, stops when no active sessions. Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Configurable sync interval (10-30s). Retry with backoff on network partition. Peer ID stored at `.state/runtime/peer-id`. | L |
+| Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Uses native Loro API directly (same binary). Started by SessionStart hook, stops when no active sessions. Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Sync interval: 5s default (target; current code default: 30s), configurable via `parallel-work-config.json`. Retry with backoff on network partition. Peer ID stored at `.state/runtime/peer-id`. | L |
 | Clean up unused state.loro artifact | Remove current unused 483-byte `state.loro` file. Replace with real Loro-managed state. | S |
 
 ### Extended Scope: Knowledge Graph Sync
@@ -184,7 +186,112 @@ Per [Decision #23](decisions.md#23-knowledge-graph-synchronization), Loro's scop
 
 ---
 
-## 6. How Loro CRDT Coordination Works
+## 6. Coordination Intelligence
+
+Loro CRDT serves five distinct purposes in CodeFlow's parallel execution system. Claims are not just a blocking mechanism — they are the foundation for full operational intelligence.
+
+### 6.1 Five Purposes
+
+| Purpose | Description |
+|---------|-------------|
+| **Prevent conflicts** | Pre-claim all `file_scope` entries at startup via `acquire_batch()`. In-scope edits proceed immediately without coordination overhead. |
+| **Detect conflicts** | Out-of-scope edits attempt a Loro claim. If another worker holds the claim, the conflict is detected atomically. |
+| **Report conflicts** | Conflict details are captured with full context: requesting session, task, worktree, file, fencing token, and the holding session/task. |
+| **Record conflicts** | All coordination events are persisted to `coordination-events.jsonl` and the `coordination_event` SurrealDB table for operational audit and analysis. |
+| **Enable safe expansion** | In `soft` scope policy mode, unclaimed out-of-scope files are claimed and the expansion is logged as a `ScopeExpansion` event. Natural limits are provided by other workers' claims — no artificial numeric cap. |
+
+### 6.2 Claim Struct
+
+The Loro Map value for each claim includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `owner_session` | string | Session ID holding the claim |
+| `owner_task` | string | Task ID for context |
+| `owner_worktree` | string | Worktree path for context |
+| `token` | u64 | Monotonically increasing fencing token |
+| `ttl_expires_at` | u64 | Unix timestamp for TTL expiry (4200s default) |
+| `acquired_at` | u64 | Unix timestamp of acquisition |
+| `was_expansion` | bool | True if this claim was acquired outside declared file_scope |
+
+### 6.3 Coordination Event Types
+
+All coordination events are written to `coordination-events.jsonl` (append-only) and the `coordination_event` SurrealDB table.
+
+| Event | When | Key Fields |
+|-------|------|------------|
+| `ClaimAcquired` | Successful claim | file, session, task, worktree, token, was_expansion |
+| `ClaimConflict` | Blocked by another holder | file, requesting session/task, holding session/task, token, scope_policy |
+| `ClaimReleased` | Claims released | session, task, file_count, release_type (normal/crash/timeout) |
+| `ScopeExpansion` | Soft mode allowed out-of-scope claim | session, task, original_scope, expanded_file, token |
+| `MergeConflictDetected` | Git merge conflict found pre-PR | session, task, conflicting_files |
+| `MergeRebaseAttempted` | Rebase retry initiated | session, task, attempt_number, max_attempts |
+
+### 6.4 TTL Design
+
+The default TTL is **4200 seconds** (70 minutes). This exceeds the worker timeout (3600 seconds) by a safe buffer to prevent "locked out of own file" scenarios.
+
+| Mechanism | Role | Latency |
+|-----------|------|---------|
+| Sync daemon (PID liveness check) | Fast path for crash cleanup — detects dead workers and releases claims | 5–10 seconds |
+| TTL expiry | Nuclear fallback — claims self-expire if sync daemon misses a crash | 4200 seconds |
+
+The sync daemon is the primary crash recovery mechanism. TTL is the safety net, not the primary cleanup path.
+
+---
+
+## 7. File Scope and Loro CRDT Coordination Flow
+
+`file_scope` defines a worker's declared territory. At startup, the worker pre-claims all entries in `file_scope` via `acquire_batch()`. The coordination flow during execution depends on whether a requested edit falls within or outside that scope.
+
+```text
+file_scope defines worker's DECLARED territory
+    |
+    v
+At startup: worker pre-claims ALL file_scope entries via acquire_batch()
+    |
+    v
+During execution:
+    |
+    +-- Edit within file_scope?
+    |       -> Already claimed at startup -> proceed immediately
+    |
+    +-- Edit outside file_scope?
+            |
+            v
+            Attempt Loro claim for target file
+                |
+                +-- No conflict (file unclaimed)?
+                |       -> Claim acquired
+                |       -> Edit allowed
+                |       -> ScopeExpansion event logged
+                |       -> (soft mode only; hard mode blocks immediately)
+                |
+                +-- Conflict (file held by another worker)?
+                        -> BLOCKED (exit 2)
+                        -> ClaimConflict event recorded
+                        -> Conflict details reported to worker
+    |
+    v
+On completion: release_all() releases all held claims
+    |
+    v
+ClaimReleased event logged
+```
+
+### 7.1 scope_policy Modes
+
+| Policy | Behavior | Use Case |
+|--------|----------|----------|
+| `soft` (default) | Allow out-of-scope claim if file is unclaimed. Log expansion. | Most parallel work — safe with coordinated flexibility. |
+| `hard` | Block out-of-scope edits immediately (exit 2, no claim attempt). | Strict isolation for critical paths (schema migrations, security-sensitive files). |
+| `permissive` | No scope checking, no claim acquisition. | Interactive sessions only. FORBIDDEN for autorun tasks. |
+
+See [scope-policy-design.md](scope-policy-design.md) for the full policy specification.
+
+---
+
+## 8. How Loro CRDT Coordination Works
 
 This section demonstrates Loro CRDT coordination through concrete examples. Every example uses the same mechanism -- Loro operations on a shared `state.loro` document. The only difference between same-machine and multi-machine scenarios is the transport layer (shared file vs git delta sync).
 
@@ -392,7 +499,9 @@ LoroTree.move(                          (no move)
             │ Latency:      │    │   loro/*        │
             │ Immediate     │    │                 │
             │ (shared fs)   │    │ Latency:        │
-            │               │    │ 10-30s interval │
+            │               │    │ 5s default      │
+            │               │    │ (target; cur:   │
+            │               │    │  30s)           │
             └───────────────┘    └─────────────────┘
 
 One CRDT engine. Two transports. Zero coordination logic differences.
@@ -403,7 +512,7 @@ Sync daemon subcommand manages both: compaction for local, per-peer delta sync f
 
 ---
 
-## 7. Multi-Machine Sync Mechanism
+## 9. Multi-Machine Sync Mechanism
 
 This section addresses how Loro delta sync works across machines. A background sync daemon is essential for multi-machine coordination -- this is the industry standard pattern used by all production CRDT systems (Figma, Automerge, Riak). Loro is explicitly transport-agnostic: it provides `export()` and `import()` APIs and leaves the sync transport to the application layer.
 
@@ -412,7 +521,7 @@ This section addresses how Loro delta sync works across machines. A background s
 | Transport | Scope | Mechanism | Latency |
 |-----------|-------|-----------|---------|
 | Same-machine | Parallel sessions on one machine | Shared `state.loro` file (symlinked into each worktree) | Immediate (filesystem) |
-| Multi-machine | Sessions across machines | `codeflow sync daemon` (Rust CLI subcommand) exports Loro deltas to per-peer git ref (`refs/coordination/loro/{peer-id}`), fetches all peer refs | 10-30 seconds (configurable) |
+| Multi-machine | Sessions across machines | `codeflow sync daemon` (Rust CLI subcommand) exports Loro deltas to per-peer git ref (`refs/coordination/loro/{peer-id}`), fetches all peer refs | 5 seconds default (target; current code default: 30s), configurable via `parallel-work-config.json` |
 
 Both transports use the same Loro CRDT engine. The `codeflow sync daemon` subcommand manages the multi-machine transport and also handles compaction and health monitoring for same-machine shared state.
 
@@ -431,7 +540,7 @@ Is daemon already running? (PID file at .state/coordination/sync-daemon.pid)
     +--- YES --> Register session with daemon (increment ref count)
     |
     +--- NO ---> Start daemon:
-                   codeflow sync daemon --interval 10s
+                   codeflow sync daemon --interval 5s
                  Daemon reads peer ID from .state/runtime/peer-id
                    (format: {username}-{hostname}, created on first run)
                  Register session (ref count = 1)
@@ -455,7 +564,7 @@ Ref count == 0?
 **Daemon sync loop (multi-machine):**
 
 ```text
-Every sync interval (10-30s, configurable):
+Every sync interval (5s default (target; current code default: 30s), configurable via parallel-work-config.json):
     |
     v
 1. Export new deltas since last sync:
@@ -543,10 +652,10 @@ For same-machine parallel sessions (shared `state.loro` via symlink), the daemon
 |----------|-----------|-----------------|-----------------|
 | Same machine, parallel sessions | Shared file (symlink) | Immediate (filesystem) | Microseconds |
 | Same machine, separate worktrees | Shared file (symlink) | Immediate (filesystem) | Microseconds |
-| Multi-machine, daemon sync | Git ref push/fetch (periodic) | 10-30 seconds (configurable) | Sync interval |
+| Multi-machine, daemon sync | Git ref push/fetch (periodic) | 5 seconds default (target; current code default: 30s) (configurable via parallel-work-config.json) | Sync interval |
 | Multi-machine, daemon (network partition) | Local accumulation, sync on reconnect | Minutes to hours (partition duration) | Partition duration (TTL mitigates) |
 
-**Critical observation:** Same-machine parallel sessions (the primary use case) have effectively zero sync latency because all worktrees share the same `state.loro` file via symlink. The daemon's multi-machine sync adds 10-30 seconds of latency, which is acceptable for claim coordination where TTLs are measured in minutes.
+**Critical observation:** Same-machine parallel sessions (the primary use case) have effectively zero sync latency because all worktrees share the same `state.loro` file via symlink. The daemon's multi-machine sync adds 5 seconds of latency by default, which is acceptable for claim coordination where TTLs are measured in minutes.
 
 ### Conflict-Free Guarantee
 
@@ -590,7 +699,7 @@ These questions require implementation-phase decisions (Phase A tasks):
 
 ---
 
-## 8. Multi-Machine Merge Flow
+## 10. Multi-Machine Merge Flow
 
 With Loro integration and the sync daemon, multi-machine coordination works automatically:
 
@@ -602,7 +711,7 @@ Edit file foo.go                     Edit file bar.go
 Acquire claim (Loro Map)             Acquire claim (Loro Map)
     |                                     |
     v                                     v
-codeflow sync daemon (10-30s):        codeflow sync daemon (10-30s):
+codeflow sync daemon (5s default (target; current code default: 30s)):    codeflow sync daemon (5s default (target; current code default: 30s)):
   delta = doc.export(                  delta = doc.export(
     updates(&last_sync_vv))              updates(&last_sync_vv))
   push refs/coord/loro/dev-1         push refs/coord/loro/ci-1

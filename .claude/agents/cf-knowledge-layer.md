@@ -107,6 +107,7 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 | `config.jsonl` | `LEDGER_CONFIG` | Configuration changes | `config_change` |
 | `pathflow-events.jsonl` | *(in `.state/logs/`)* | Phase/stage transitions, PathFlow events | `phase_transition`, `stage_transition`, `begin_work`, `complete_work`, `task_updated` |
 | `pr-events-{YYYY-MM-DD}.jsonl` | *(in `.state/logs/git/`)* | PR lifecycle events (daily rotation) | `pr_created`, `pr_outcome` |
+| `coordination-events.jsonl` | *(in `.state/ledger/`)* | Parallel session coordination events | `ClaimAcquired`, `ClaimReleased`, `ClaimConflict`, `MergeConflictDetected`, `MergeRebaseAttempted` |
 
 **NEVER write an event to a file that doesn't list that event type. memory_events go to memory-events.jsonl, NOT work-graph.jsonl.**
 

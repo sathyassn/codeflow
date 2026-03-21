@@ -339,7 +339,7 @@ pathflow-gate: pathflow:pf-3 sentinel exists?
                                     +--> NO --> Apply scope_policy
                                                 +--> hard: BLOCK
                                                 +--> soft: WARN + expand
-                                                +--> permissive: ALLOW (advisory)
+                                                +--> permissive: ALLOW (interactive only)
 ```
 
 ---

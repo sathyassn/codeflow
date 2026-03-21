@@ -122,6 +122,12 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
+**Parallel execution and file claims:** In parallel autorun sessions, file claims are enforced via `scope_policy`. If a CLAIM CONFLICT occurs:
+- `scope_policy=soft`: out-of-scope edits attempt CRDT claim — blocked if another worker holds the file. Wait for release or coordinate scope.
+- `scope_policy=hard`: out-of-scope edits blocked immediately. Stay within declared `file_scope`.
+- `scope_policy=permissive`: unrestricted access (interactive mode only).
+Claim conflicts are logged to `.state/ledger/coordination-events.jsonl`.
+
 **Modularization check:** If scripts exceed thresholds (lines > 200, functions > 10, nesting > 4 levels), extract to shared libraries. Document intentional exceptions.
 
 ### Step 4: Write Tests
