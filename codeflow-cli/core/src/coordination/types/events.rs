@@ -56,6 +56,29 @@ pub enum CoordinationEvent {
         task_id: Option<String>,
         timestamp: String,
     },
+
+    /// A merge conflict was detected before PR creation.
+    #[serde(rename = "merge_conflict_detected")]
+    MergeConflictDetected {
+        session_id: SessionId,
+        branch: String,
+        target_branch: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        timestamp: String,
+    },
+
+    /// A merge rebase was attempted to resolve conflicts.
+    #[serde(rename = "merge_rebase_attempted")]
+    MergeRebaseAttempted {
+        session_id: SessionId,
+        branch: String,
+        target_branch: String,
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        timestamp: String,
+    },
 }
 
 impl CoordinationEvent {
@@ -67,6 +90,8 @@ impl CoordinationEvent {
             Self::ClaimConflict { .. } => "claim_conflict",
             Self::ClaimReleased { .. } => "coord_claim_released",
             Self::ScopeExpansion { .. } => "scope_expansion",
+            Self::MergeConflictDetected { .. } => "merge_conflict_detected",
+            Self::MergeRebaseAttempted { .. } => "merge_rebase_attempted",
         }
     }
 }
@@ -175,6 +200,25 @@ mod tests {
             timestamp: "ts".to_string(),
         };
         assert_eq!(expansion.event_type(), "scope_expansion");
+
+        let merge_conflict = CoordinationEvent::MergeConflictDetected {
+            session_id: session("ses-001"),
+            branch: "feat/test".to_string(),
+            target_branch: "main".to_string(),
+            task_id: None,
+            timestamp: "ts".to_string(),
+        };
+        assert_eq!(merge_conflict.event_type(), "merge_conflict_detected");
+
+        let rebase = CoordinationEvent::MergeRebaseAttempted {
+            session_id: session("ses-001"),
+            branch: "feat/test".to_string(),
+            target_branch: "main".to_string(),
+            success: true,
+            task_id: None,
+            timestamp: "ts".to_string(),
+        };
+        assert_eq!(rebase.event_type(), "merge_rebase_attempted");
     }
 
     #[test]
@@ -190,5 +234,38 @@ mod tests {
             !json.contains("task_id"),
             "task_id should be omitted when None"
         );
+    }
+
+    #[test]
+    fn merge_conflict_detected_serde_roundtrip() {
+        let event = CoordinationEvent::MergeConflictDetected {
+            session_id: session("ses-001"),
+            branch: "feat/my-feature".to_string(),
+            target_branch: "main".to_string(),
+            task_id: Some("TSK-001".to_string()),
+            timestamp: "2026-03-21T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("merge_conflict_detected"));
+        assert!(json.contains("feat/my-feature"));
+        let parsed: CoordinationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn merge_rebase_attempted_serde_roundtrip() {
+        let event = CoordinationEvent::MergeRebaseAttempted {
+            session_id: session("ses-001"),
+            branch: "feat/my-feature".to_string(),
+            target_branch: "main".to_string(),
+            success: false,
+            task_id: None,
+            timestamp: "2026-03-21T12:01:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("merge_rebase_attempted"));
+        assert!(json.contains("\"success\":false"));
+        let parsed: CoordinationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
     }
 }

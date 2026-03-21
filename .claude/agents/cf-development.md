@@ -122,11 +122,15 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
-**Parallel execution and file claims:** In parallel autorun sessions, file claims are enforced via `scope_policy`. If a CLAIM CONFLICT occurs:
-- `scope_policy=soft`: out-of-scope edits attempt CRDT claim — blocked if another worker holds the file. Wait for release or coordinate scope.
-- `scope_policy=hard`: out-of-scope edits blocked immediately. Stay within declared `file_scope`.
-- `scope_policy=permissive`: unrestricted access (interactive mode only).
-Claim conflicts are logged to `.state/ledger/coordination-events.jsonl`.
+**Parallel execution and file claims:** In parallel autorun sessions, file claims are enforced via `scope_policy`. The task's `file_scope` list defines the declared territory; all declared files are pre-claimed at startup via `acquire_batch()`.
+
+| Mode | In-scope edit | Out-of-scope edit |
+|------|--------------|-------------------|
+| `scope_policy=soft` (default) | Claim already held — proceed immediately | Attempt CRDT claim: if unclaimed, claim acquired and edit allowed (ScopeExpansion logged); if held by another worker, BLOCKED (exit 2) + ClaimConflict logged |
+| `scope_policy=hard` | Claim already held — proceed immediately | BLOCKED immediately (exit 2, no claim attempt) |
+| `scope_policy=permissive` | No claim enforcement — proceed | No claim enforcement — proceed (interactive mode only; forbidden for autorun tasks) |
+
+Claim conflict details (holding session, task, file, fencing token) are logged to `.state/ledger/coordination-events.jsonl` and the `coordination_event` SurrealDB table. When you encounter a claim conflict, coordinate scope changes with the holding worker or wait for release.
 
 **Modularization check:** If scripts exceed thresholds (lines > 200, functions > 10, nesting > 4 levels), extract to shared libraries. Document intentional exceptions.
 

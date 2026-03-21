@@ -62,6 +62,14 @@ pub struct ActiveTask {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team_name: Option<String>,
+
+    /// Scope enforcement policy: "soft", "hard", or "permissive".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_policy: Option<String>,
+
+    /// List of file paths this task is allowed to edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_scope: Option<Vec<String>>,
 }
 
 /// Read the active task from `runtime_dir/active-task.json`.
@@ -260,6 +268,8 @@ mod tests {
             updated_at: Some("2026-03-09T00:00:00Z".into()),
             current_stage: Some("WS-DEV".into()),
             team_name: Some("codeflow-team".into()),
+            scope_policy: None,
+            file_scope: None,
         }
     }
 
@@ -317,6 +327,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
 
         set_active_task(&nested, &task).unwrap();
@@ -375,6 +387,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
 
         let json = serde_json::to_string(&task).unwrap();

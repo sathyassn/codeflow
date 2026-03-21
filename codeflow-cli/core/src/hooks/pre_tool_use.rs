@@ -402,46 +402,108 @@ fn classify_task_gate(tool_input: &serde_json::Value) -> GateType {
 /// git push/PR before pf-5 AND ws-rev (dual gate),
 /// role teammate spawn before pf-3.
 ///
-/// For Edit/Write tools, also acquires a Loro CRDT claim on the target
-/// file path. In advisory mode (Phase 1), conflicts produce a warning
-/// but do not block the operation.
+/// For Edit/Write tools, enforces `scope_policy` from `active-task.json`:
+/// - `permissive`: no scope checking, no claim acquisition
+/// - `hard`: blocks edits to files NOT in `file_scope` (exit 2, no claim)
+/// - `soft` (default): in-scope files auto-claimed; out-of-scope attempts
+///   CRDT claim — blocked on conflict, allowed with ScopeExpansion if unclaimed
 pub struct GateCheck {
     sentinel_dir: PathBuf,
     /// Path to the Loro coordination state file (e.g., `.state/coordination/state.loro`).
     state_path: PathBuf,
     /// Session ID of the current session, used as claim owner.
     session_id: SessionId,
+    /// Project root directory for reading active-task.json.
+    project_dir: PathBuf,
 }
 
 impl GateCheck {
     #[must_use]
-    pub fn new(sentinel_dir: PathBuf, state_path: PathBuf, session_id: SessionId) -> Self {
+    pub fn new(
+        sentinel_dir: PathBuf,
+        state_path: PathBuf,
+        session_id: SessionId,
+        project_dir: PathBuf,
+    ) -> Self {
         Self {
             sentinel_dir,
             state_path,
             session_id,
+            project_dir,
         }
     }
 
-    /// Attempt to acquire a Loro CRDT claim on the given file path.
+    /// Read scope_policy and file_scope from active-task.json.
+    /// Returns (scope_policy, file_scope) with defaults: ("soft", empty vec).
+    fn read_scope_context(&self) -> (String, Vec<String>) {
+        use crate::session::active_task::get_active_task_worktree_aware;
+
+        match get_active_task_worktree_aware(&self.project_dir) {
+            Ok(Some(task)) => {
+                let policy = task.scope_policy.unwrap_or_else(|| "soft".to_string());
+                let scope = task.file_scope.unwrap_or_default();
+                (policy, scope)
+            }
+            _ => ("soft".to_string(), Vec::new()),
+        }
+    }
+
+    /// Check if a file path is within the declared file_scope.
+    fn is_in_scope(file_path: &str, file_scope: &[String]) -> bool {
+        if file_scope.is_empty() {
+            return true; // No scope declared = everything in scope.
+        }
+        file_scope.iter().any(|scope_entry| {
+            file_path == scope_entry
+                || file_path.starts_with(&format!("{scope_entry}/"))
+                || scope_entry.ends_with('/') && file_path.starts_with(scope_entry.as_str())
+        })
+    }
+
+    /// Enforce scope_policy for an Edit/Write operation on a file path.
     ///
-    /// The entire load-check-acquire-persist cycle is wrapped in a sidecar file
-    /// lock (`state.loro.lock`) to prevent concurrent hook invocations from
-    /// racing.
-    ///
-    /// **Fencing token validation (Phase 1 — advisory):** Before acquiring,
-    /// checks if the path already has an active claim by a *different* session.
-    /// If so, this session's prior claim was superseded (stale token). In
-    /// advisory mode this produces `HookOutput::Warn`; in enforcing mode
-    /// (Phase 2, future) it would produce `HookOutput::Block`.
-    ///
-    /// Returns `HookOutput::Allow` on success, `HookOutput::Warn` on conflict
-    /// or stale token (advisory mode per Decision #5).
+    /// Dispatches based on scope_policy from active-task.json:
+    /// - `permissive`: allow unconditionally, no claim acquisition
+    /// - `hard`: block if file is NOT in file_scope (exit 2)
+    /// - `soft` (default): in-scope → auto-acquire claim; out-of-scope →
+    ///   attempt claim via Coordinator::acquire; block on conflict
     fn try_acquire_claim(&self, file_path: &str) -> HookOutput {
+        let (scope_policy, file_scope) = self.read_scope_context();
+
+        match scope_policy.as_str() {
+            "permissive" => HookOutput::Allow,
+            "hard" => {
+                if Self::is_in_scope(file_path, &file_scope) {
+                    self.acquire_claim(file_path)
+                } else {
+                    HookOutput::Block {
+                        reason: format!(
+                            "BLOCKED: scope_policy=hard — file '{file_path}' is NOT in file_scope.\n\
+                             Declared scope: {file_scope:?}\n\
+                             Hard mode does not attempt claim acquisition for out-of-scope files.\n",
+                        ),
+                        category: Some(BlockCategory::Gate),
+                    }
+                }
+            }
+            _ => {
+                // "soft" (default)
+                if Self::is_in_scope(file_path, &file_scope) {
+                    self.acquire_claim(file_path)
+                } else {
+                    // Out-of-scope: attempt claim, block on conflict.
+                    self.acquire_claim_or_block(file_path, &file_scope)
+                }
+            }
+        }
+    }
+
+    /// Acquire a claim on a file path (in-scope, auto-acquire).
+    /// On conflict, warns but allows (graceful degradation for in-scope files).
+    fn acquire_claim(&self, file_path: &str) -> HookOutput {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
 
-        // Capture warning info across the locked_binary_rmw boundary.
         let mut conflict_warning: Option<String> = None;
         let fp = file_path.to_string();
         let sid = self.session_id.clone();
@@ -455,33 +517,22 @@ impl GateCheck {
             },
             |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
             |coord| {
-                // -- Fencing token validation --
-                // Before acquiring, check if another session already holds a
-                // non-expired claim on this path. If so, our session's prior
-                // claim was superseded — warn (advisory) or block (enforcing).
                 if let Some(existing) = coord.check(&fp) {
                     if existing.owner != sid {
-                        // Stale token: another session superseded our claim.
-                        // Phase 1 (advisory): HookOutput::Warn (EXIT_ADVISORY).
-                        // Phase 2 (enforcing, future): switch to HookOutput::Block (EXIT_BLOCKING).
+                        let owner = &existing.owner;
+                        let token = existing.token;
                         conflict_warning = Some(format!(
-                            "STALE CLAIM (advisory): file '{}' was claimed by session {} \
-                             with token {}. Your session's claim has been superseded. \
-                             Proceeding anyway (advisory mode).",
-                            fp, existing.owner, existing.token,
+                            "CLAIM CONFLICT (in-scope): file '{fp}' is claimed by session {owner} \
+                             with token {token}. Proceeding (in-scope auto-acquire).",
                         ));
                         return Ok(());
                     }
                 }
-
                 match coord.acquire(&fp, &sid) {
                     Ok(_token) => Ok(()),
                     Err(crate::error::CoordinationError::ClaimConflict { path, owner }) => {
-                        // Capture conflict for advisory warning; still allow the RMW
-                        // to complete (no state change needed since acquire failed).
                         conflict_warning = Some(format!(
-                            "CLAIM CONFLICT (advisory): file '{path}' is claimed by session {owner}. \
-                             Proceeding anyway (advisory mode)."
+                            "CLAIM CONFLICT (in-scope): file '{path}' is claimed by session {owner}."
                         ));
                         Ok(())
                     }
@@ -494,16 +545,97 @@ impl GateCheck {
         );
 
         if let Err(e) = result {
-            // Graceful degradation: lock/load/save failure → warn and allow.
+            eprintln!("gate-check: claim coordinator unavailable: {e}");
+            return HookOutput::Allow;
+        }
+        if let Some(message) = conflict_warning {
+            return HookOutput::Warn { message };
+        }
+        HookOutput::Allow
+    }
+
+    /// Attempt to acquire a claim on an out-of-scope file (soft mode).
+    /// If claim succeeds → allow + emit ScopeExpansion.
+    /// If conflict → BLOCK (exit 2) + emit ClaimConflict.
+    fn acquire_claim_or_block(&self, file_path: &str, file_scope: &[String]) -> HookOutput {
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+
+        #[derive(Debug)]
+        enum ClaimResult {
+            Acquired,
+            Conflict { owner: String },
+        }
+
+        let mut claim_result: Option<ClaimResult> = None;
+        let fp = file_path.to_string();
+        let sid = self.session_id.clone();
+
+        let result = crate::file_lock::locked_binary_rmw(
+            &self.state_path,
+            LoroCoordinator::in_memory,
+            |bytes| {
+                LoroCoordinator::from_bytes(bytes, &self.state_path)
+                    .map_err(|e| format!("loro load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
+            |coord| {
+                // Check if another session already holds a claim.
+                if let Some(existing) = coord.check(&fp) {
+                    if existing.owner != sid {
+                        claim_result = Some(ClaimResult::Conflict {
+                            owner: existing.owner.as_str().to_string(),
+                        });
+                        return Ok(());
+                    }
+                }
+                match coord.acquire(&fp, &sid) {
+                    Ok(_token) => {
+                        claim_result = Some(ClaimResult::Acquired);
+                        Ok(())
+                    }
+                    Err(crate::error::CoordinationError::ClaimConflict { owner, .. }) => {
+                        claim_result = Some(ClaimResult::Conflict {
+                            owner: owner.as_str().to_string(),
+                        });
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("gate-check: claim acquisition error: {e}");
+                        Ok(())
+                    }
+                }
+            },
+        );
+
+        if let Err(e) = result {
             eprintln!("gate-check: claim coordinator unavailable: {e}");
             return HookOutput::Allow;
         }
 
-        if let Some(message) = conflict_warning {
-            return HookOutput::Warn { message };
+        match claim_result {
+            Some(ClaimResult::Acquired) => {
+                eprintln!(
+                    "SCOPE EXPANSION: file '{file_path}' is outside file_scope {file_scope:?} but claim acquired. \
+                     Edit allowed.",
+                );
+                HookOutput::Allow
+            }
+            Some(ClaimResult::Conflict { owner }) => HookOutput::Block {
+                reason: format!(
+                    "BLOCKED: scope_policy=soft — CLAIM CONFLICT on out-of-scope file.\n\
+                     File: {file_path}\n\
+                     Held by session: {owner}\n\
+                     Your file_scope: {file_scope:?}\n\
+                     The file is outside your declared scope AND held by another session.\n",
+                ),
+                category: Some(BlockCategory::Gate),
+            },
+            None => {
+                // No result = coordinator issue, graceful degradation.
+                HookOutput::Allow
+            }
         }
-
-        HookOutput::Allow
     }
 
     /// Cumulative push/PR gate: verify ALL pf-1..pf-5 + ALL pipeline stage sentinels.
@@ -1592,9 +1724,10 @@ mod tests {
         // since /dev/null is empty. For tests that need real claim state, construct
         // GateCheck directly with a proper state_path.
         GateCheck::new(
-            sentinel_dir,
+            sentinel_dir.clone(),
             PathBuf::from("/dev/null"),
             SessionId::new_unchecked("ses-gate-test"),
+            sentinel_dir,
         )
     }
 
@@ -1837,6 +1970,7 @@ mod tests {
             dir.path().to_path_buf(),
             state_path.clone(),
             SessionId::new_unchecked("ses-claim-test-001"),
+            dir.path().to_path_buf(),
         );
         let input = HookInput {
             tool_name: Some("Edit".into()),
@@ -1884,6 +2018,7 @@ mod tests {
             dir.path().to_path_buf(),
             state_path,
             SessionId::new_unchecked("ses-session-b"),
+            dir.path().to_path_buf(),
         );
         let input = HookInput {
             tool_name: Some("Edit".into()),
@@ -1897,13 +2032,13 @@ mod tests {
         assert_eq!(
             result.exit_code(),
             EXIT_ADVISORY,
-            "conflict should warn, not block (advisory mode)"
+            "conflict should warn, not block (in-scope auto-acquire)"
         );
         match &result {
             HookOutput::Warn { message } => {
                 assert!(
-                    message.contains("STALE CLAIM"),
-                    "warning should mention STALE CLAIM (fencing token validation), got: {message}"
+                    message.contains("CLAIM CONFLICT"),
+                    "warning should mention CLAIM CONFLICT, got: {message}"
                 );
                 assert!(
                     message.contains("ses-session-a"),
@@ -1947,6 +2082,7 @@ mod tests {
             dir.path().to_path_buf(),
             state_path,
             SessionId::new_unchecked("ses-session-b"),
+            dir.path().to_path_buf(),
         );
         let input = HookInput {
             tool_name: Some("Edit".into()),
@@ -2009,6 +2145,7 @@ mod tests {
             dir.path().to_path_buf(),
             state_path.clone(),
             SessionId::new_unchecked("ses-reacquire"),
+            dir.path().to_path_buf(),
         );
 
         // First acquire.
@@ -2087,6 +2224,7 @@ mod tests {
             dir.path().to_path_buf(),
             state_path,
             SessionId::new_unchecked("ses-stale-a"),
+            dir.path().to_path_buf(),
         );
         let input = HookInput {
             tool_name: Some("Edit".into()),
@@ -2099,13 +2237,13 @@ mod tests {
         assert_eq!(
             result.exit_code(),
             EXIT_ADVISORY,
-            "stale claim should warn (advisory), not block"
+            "stale claim should warn (in-scope), not block"
         );
         match &result {
             HookOutput::Warn { message } => {
                 assert!(
-                    message.contains("STALE CLAIM"),
-                    "warning should mention STALE CLAIM, got: {message}"
+                    message.contains("CLAIM CONFLICT"),
+                    "warning should mention CLAIM CONFLICT, got: {message}"
                 );
                 assert!(
                     message.contains("ses-stale-b"),
@@ -3378,5 +3516,371 @@ mod tests {
         assert!(match_blocked_dir("path/to/.git/hooks", ".git"));
         assert!(match_blocked_dir("path/to/node_modules", "node_modules"));
         assert!(!match_blocked_dir("gitconfig", ".git"));
+    }
+
+    // -- scope_policy tests (AC #1-5, #17) --
+
+    #[test]
+    fn test_is_in_scope_exact_match() {
+        let scope = vec!["src/main.rs".to_string()];
+        assert!(GateCheck::is_in_scope("src/main.rs", &scope));
+        assert!(!GateCheck::is_in_scope("src/lib.rs", &scope));
+    }
+
+    #[test]
+    fn test_is_in_scope_directory_prefix() {
+        let scope = vec!["codeflow-cli/core/src".to_string()];
+        assert!(GateCheck::is_in_scope(
+            "codeflow-cli/core/src/hooks/pre_tool_use.rs",
+            &scope
+        ));
+        assert!(!GateCheck::is_in_scope("codeflow-cli/cli/src/main.rs", &scope));
+    }
+
+    #[test]
+    fn test_is_in_scope_empty_scope_allows_all() {
+        assert!(GateCheck::is_in_scope("anything.rs", &[]));
+    }
+
+    #[test]
+    fn test_scope_policy_permissive_allows_all() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-perm"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("permissive".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-perm-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "out/of/scope.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-perm-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "permissive should allow out-of-scope edits"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_hard_blocks_out_of_scope() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-hard"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("hard".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-hard-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "out/of/scope.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-hard-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "hard mode should block out-of-scope edits"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_hard_allows_in_scope() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-hard-in"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("hard".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-hard-in-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-hard-in-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "hard mode should allow in-scope edits"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_soft_allows_in_scope() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-soft-in"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("soft".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-soft-in-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-soft-in-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "soft mode should allow in-scope edits"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_soft_out_of_scope_unclaimed_allows() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-soft-expand"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("soft".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-soft-expand"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "out/of/scope.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-soft-expand".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "soft mode should allow out-of-scope edits when unclaimed (scope expansion)"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_soft_out_of_scope_conflict_blocks() {
+        use crate::coordination::Coordinator;
+        use crate::coordination::loro::LoroCoordinator;
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-soft-conflict"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: Some("soft".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        // Pre-claim the file by another session.
+        let state_path = dir.path().join("state.loro");
+        {
+            let mut coord = LoroCoordinator::in_memory();
+            let other = SessionId::new_unchecked("ses-other-holder");
+            coord.acquire("out/of/scope.rs", &other).unwrap();
+            let bytes = coord.export_bytes().unwrap();
+            std::fs::write(&state_path, bytes).unwrap();
+        }
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            state_path,
+            SessionId::new_unchecked("ses-soft-conflict"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "out/of/scope.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-soft-conflict".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "soft mode should block out-of-scope edits when claimed by another session"
+        );
+    }
+
+    #[test]
+    fn test_scope_policy_default_is_soft() {
+        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-default"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            scope_policy: None, // No policy specified = default to soft.
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-default"),
+            dir.path().to_path_buf(),
+        );
+        // Edit in-scope file: should allow (soft default behavior).
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-default".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "default scope_policy (soft) should allow in-scope edits"
+        );
     }
 }

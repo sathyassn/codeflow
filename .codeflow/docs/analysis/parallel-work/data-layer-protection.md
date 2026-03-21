@@ -22,6 +22,7 @@ parent: "parallel-work/README.md"
 - [6. Pure Rust CLI Architecture](#6-pure-rust-cli-architecture)
 - [7. Global Database Architecture](#7-global-database-architecture)
 - [8. Coordination Events Ledger](#8-coordination-events-ledger)
+- [9. Scope Policy as Data Protection](#9-scope-policy-as-data-protection)
 
 ---
 
@@ -415,6 +416,76 @@ WHERE event_type = 'ClaimConflict'
   AND session_id = 'ses-01kjxabc123'
 ORDER BY occurred_at DESC;
 ```
+
+---
+
+## 9. Scope Policy as Data Protection
+
+`scope_policy` enforces file-level access control in parallel worker scenarios. Where Sections 1-4 address protection of the data layer (SQLite, JSONL, CRDT state) from agent misuse, `scope_policy` protects source files and project artifacts from concurrent write conflicts between parallel workers.
+
+### 9.1 The Concurrent Edit Problem
+
+In parallel autorun mode, multiple workers execute independently in separate git worktrees. Without coordination, two workers can both attempt to modify the same file:
+
+```text
+Worker A (task: add caching)          Worker B (task: fix latency)
+    |                                     |
+    v                                     v
+Edit: coordination/claims.rs         Edit: coordination/claims.rs
+    |                                     |
+    v                                     v
+Both edits succeed locally.
+    |
+    v
+PR A merged first.
+PR B's edit is based on stale version — overwrites or conflicts.
+```
+
+This is a data integrity problem: the merged state may not represent either worker's intended change, or one worker's changes may be silently lost.
+
+### 9.2 How scope_policy Prevents This
+
+`scope_policy` drives CRDT claim enforcement in the PreToolUse hook (`pre_tool_use.rs`). Claims are stored in the Loro CRDT (`state.loro`) and shared across all workers in the same repository. Before a worker can edit a file, the claim system checks whether another worker already holds a claim on it.
+
+**Claim enforcement modes:**
+
+| Policy | Mechanism | Data Protection Guarantee |
+|--------|-----------|--------------------------|
+| `soft` (default) | `Coordinator::acquire()` for out-of-scope files; pre-claim for in-scope via `acquire_batch()` | Concurrent edits to the same file are blocked with conflict details. Scope expansion to unclaimed files is logged for audit. |
+| `hard` | Out-of-scope edits blocked without claim attempt | Strict territory enforcement — no worker can access files outside its declared scope. Prevents unintended cross-cutting changes. |
+| `permissive` | No enforcement | Unrestricted. Only valid for interactive sessions where a human is present to resolve conflicts manually. Forbidden for autorun. |
+
+### 9.3 Protection Layers for Source Files
+
+| Layer | What It Protects | Mechanism |
+|-------|-----------------|-----------|
+| CRDT claims (`scope_policy`) | Source files and project artifacts from concurrent edits | PreToolUse hook blocks conflicting edits; Loro CRDT detects conflicts atomically |
+| edit-write-guard hook | Protected directories (`.state/ledger/`, `.state/db/`) | Blocks Edit/Write tool calls to protected paths |
+| protection-guard hook | CRITICAL/HIGH/MODERATE tier files (CLAUDE.md, settings.json, hooks) | Enforces staged-edit workflow for critical resources |
+| Worktree isolation | File system-level separation | Each worker operates in its own git worktree; no shared working directory |
+
+`scope_policy` is the first layer — it prevents conflicts before they occur by ensuring only one worker can claim a file at a time. The other layers protect infrastructure files from agent misuse regardless of parallelism.
+
+### 9.4 Claim Struct Extension (INF-TSK-023-027)
+
+The `Claim` struct in `codeflow-cli/core/src/coordination/mod.rs` was extended with `task_id: String` and `worktree_id: Option<WorktreeId>` fields. These fields serve two data protection purposes:
+
+1. **Auditability:** `task_id` links every claim to the work item that holds it. When a conflict occurs, the error message includes which task holds the file, enabling the blocked worker to coordinate scope changes.
+2. **Crash recovery:** `worktree_id` enables the sync daemon to identify which worktree holds a claim during dead worker detection. If the worktree's process is no longer alive, the claim can be force-released, preventing permanent lockout.
+
+### 9.5 Coordination Events as Audit Log
+
+All claim operations are recorded in `coordination-events.jsonl` at `.state/ledger/coordination-events.jsonl`. This file is git-tracked, providing an immutable audit log of all file access coordination events:
+
+| Event | Data Protection Value |
+|-------|----------------------|
+| `ClaimAcquired` | Records which session claimed which file, when, and whether it was an in-scope or expansion claim |
+| `ClaimConflict` | Records every blocked access attempt — enables post-incident analysis of coordination failures |
+| `ScopeExpansion` | Records every out-of-scope access that succeeded — visible deviations from declared task scope |
+| `ClaimReleased` | Records scope release at session end — confirms no claims are held beyond their intended lifetime |
+| `MergeConflictDetected` | Records when a git merge conflict is found pre-PR — provides traceability from git conflict to original claim coordination |
+
+The `coordination_event` SurrealDB table provides a queryable view of the same data for operational analysis (see [Section 8](#8-coordination-events-ledger) for schema).
 
 ---
 

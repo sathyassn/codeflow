@@ -169,9 +169,12 @@ Apply the appropriate design operation based on the deliverable type:
    | Interactive sessions (human present) | `permissive` | Unrestricted; no claim enforcement |
 
    - Default for autorun: `soft`. Default for interactive: `permissive`.
-   - Set `hard` explicitly for critical paths where concurrent file access must be prevented.
+   - Set `hard` explicitly for critical paths where concurrent file access must be prevented (schema migrations, shared config files, security-sensitive code).
+   - `scope_policy=permissive` is FORBIDDEN for `autorun_eligible=true` tasks. Validation in `validate/mod.rs` enforces this with an ERROR.
+   - `file_scope` MUST list ALL files the task will modify. Missing files will trigger claim enforcement as out-of-scope edits during execution.
    - `file_scope` patterns must be specific, not catch-all. Example: `["codeflow-cli/core/src/session/**", "codeflow-cli/core/src/hooks/session_start.rs"]` not `["codeflow-cli/**"]`.
    - For autorun batches: ensure sibling tasks have non-overlapping `file_scope` to prevent claim conflicts.
+   - If `autorun_eligible=true` and `file_scope` is empty: validation in `validate/mod.rs` will return ERROR.
 7. Send to cf-knowledge-layer for work item creation.
 
 ### Step 5: Document Plan

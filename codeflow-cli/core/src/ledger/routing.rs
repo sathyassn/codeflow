@@ -52,9 +52,12 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         | "pathflow_task_update" => Ok(files::PATHFLOW_EVENTS),
 
         // coordination-events.jsonl
-        "claim_acquired" | "claim_conflict" | "coord_claim_released" | "scope_expansion" => {
-            Ok(files::COORDINATION_EVENTS)
-        }
+        "claim_acquired"
+        | "claim_conflict"
+        | "coord_claim_released"
+        | "scope_expansion"
+        | "merge_conflict_detected"
+        | "merge_rebase_attempted" => Ok(files::COORDINATION_EVENTS),
 
         _ => Err(LedgerError::UnknownEventType(event_type.to_string())),
     }
@@ -169,6 +172,8 @@ mod tests {
             "claim_conflict",
             "coord_claim_released",
             "scope_expansion",
+            "merge_conflict_detected",
+            "merge_rebase_attempted",
         ] {
             assert_eq!(
                 route_event_type(event_type).unwrap(),
@@ -235,6 +240,8 @@ mod tests {
             "claim_conflict",
             "coord_claim_released",
             "scope_expansion",
+            "merge_conflict_detected",
+            "merge_rebase_attempted",
         ];
         for event_type in &all_variants {
             assert!(

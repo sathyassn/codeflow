@@ -95,7 +95,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-024 | Wire autorun parallel worker orchestration | complete | XL | high | E: Integration |
 | INF-TSK-023-025 | Implement worktree CLI subcommands (cleanup/prune) | complete | L | normal | E: Integration |
 | INF-TSK-023-026 | Implement sync daemon lifecycle management | complete | M | normal | E: Integration |
-| INF-TSK-023-027 | Implement claims activation configuration | todo | M | normal | E: Integration |
+| INF-TSK-023-027 | Implement scope policy enforcement + validation | complete | L | normal | E: Integration |
 
 ### Dependency DAG
 

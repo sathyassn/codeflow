@@ -24,6 +24,7 @@ parent: "parallel-work/README.md"
 - [8. How Loro CRDT Coordination Works](#8-how-loro-crdt-coordination-works)
 - [9. Multi-Machine Sync Mechanism](#9-multi-machine-sync-mechanism)
 - [10. Multi-Machine Merge Flow](#10-multi-machine-merge-flow)
+- [11. Scope Policy and CRDT Integration](#11-scope-policy-and-crdt-integration)
 
 ---
 
@@ -809,6 +810,129 @@ Both machines converge to            Both machines converge to
 ```
 
 The `codeflow sync daemon` subcommand handles all multi-machine coordination transparently. Sessions operate on local Loro state; the daemon syncs deltas in the background via per-peer git refs (`refs/coordination/loro/{peer-id}`). Each peer pushes only to its own ref -- no conflicts. Same-machine parallel sessions use the shared `state.loro` file directly (no daemon sync needed -- immediate via filesystem). One CRDT engine, one sync subcommand, one solution.
+
+---
+
+## 11. Scope Policy and CRDT Integration
+
+`scope_policy` is the enforcement mechanism that drives CRDT claim behavior in `pre_tool_use.rs`. It determines whether and how Loro claim operations are invoked for each file edit. This section describes the integration design implemented by INF-TSK-023-027.
+
+### 11.1 Integration Architecture
+
+The PreToolUse hook (`codeflow hooks pre-tool-use gate-check`) calls `try_acquire_claim()` in `codeflow-cli/core/src/hooks/pre_tool_use.rs`. This function reads `scope_policy` and `file_scope` from `active-task.json` at `.state/runtime/active-task.json` and dispatches to the appropriate enforcement path.
+
+```text
+PreToolUse fires (Edit/Write tool call)
+    |
+    v
+try_acquire_claim() reads active-task.json:
+  - scope_policy: "soft" | "hard" | "permissive"
+  - file_scope: ["path/a", "path/b", ...]
+    |
+    v
+file in file_scope?
+    |
+    +--- YES (in-scope):
+    |       Claim already acquired at startup via acquire_batch()
+    |       Edit proceeds immediately — no coordination overhead
+    |
+    +--- NO (out-of-scope):
+            |
+            v
+            scope_policy dispatch:
+                |
+                +-- "hard" --> BLOCK (exit 2, no claim attempt)
+                |                ClaimConflict event NOT emitted
+                |                Error message: "out-of-scope edit blocked by hard scope_policy"
+                |
+                +-- "soft" --> Coordinator::acquire(file_path, session_id)
+                |               via locked_binary_rmw() on state.loro
+                |               |
+                |               +--- Acquired (no conflict):
+                |               |       Edit allowed
+                |               |       ScopeExpansion event logged
+                |               |       (coordination-events.jsonl + coordination_event table)
+                |               |
+                |               +--- Conflict (another worker holds claim):
+                |                       BLOCK (exit 2)
+                |                       ClaimConflict event logged with:
+                |                         holding_session, holding_task,
+                |                         file_path, fencing token
+                |
+                +-- "permissive" --> No scope checking
+                                     No claim acquisition
+                                     Edit allowed
+```
+
+### 11.2 Coordinator::acquire and Loro Integration
+
+In soft mode, out-of-scope edits call `Coordinator::acquire(path, session_id)`. The `LoroCoordinator` implementation executes a `locked_binary_rmw()` (read-modify-write under flock) on `state.loro`:
+
+1. Read current `state.loro`
+2. Check if `path` key in the Loro Map is unclaimed (no entry) or expired (TTL elapsed)
+3. If unclaimed: insert new claim entry — `{owner_session, owner_task, owner_worktree, token, ttl_expires_at, acquired_at, was_expansion: true}`
+4. Write updated `state.loro` (atomic rename: temp file + rename)
+5. Return `Acquired` or `Conflict` result
+
+The fencing token is a monotonically increasing `u64` read from the Loro Map's metadata (global counter per document). Concurrent acquisition on the same machine resolves via last-writer-wins: both sessions may write to `state.loro`, but the flock serializes the reads, so only one acquisition succeeds.
+
+### 11.3 Pre-Claim at Startup
+
+Workers pre-claim all `file_scope` entries at startup via `claims::acquire_batch(coordinator, paths, session_id)` in `codeflow-cli/core/src/coordination/claims.rs`. This happens during the worker initialization phase, before any file edits begin.
+
+```text
+Worker startup:
+    |
+    v
+Read active-task.json: file_scope = ["path/a", "path/b", ...]
+    |
+    v
+acquire_batch(coordinator, file_scope, session_id)
+    |
+    v
+For each path in file_scope:
+    coordinator.acquire(path, session_id)
+    --> ClaimAcquired event logged (was_expansion: false)
+    |
+    v
+All in-scope files now claimed.
+In-scope edits during execution proceed immediately.
+```
+
+Pre-claiming prevents claim-check overhead on every in-scope edit and ensures the worker has territorial priority before other workers can observe the session.
+
+### 11.4 scope_policy Enforcement Summary
+
+| Policy | In-scope edit | Out-of-scope: unclaimed file | Out-of-scope: claimed file | Autorun eligible? |
+|--------|--------------|------------------------------|----------------------------|-------------------|
+| `soft` (default) | Pre-claimed at startup; proceed immediately | Coordinator::acquire; edit allowed + ScopeExpansion logged | BLOCKED (exit 2) + ClaimConflict logged | Yes |
+| `hard` | Pre-claimed at startup; proceed immediately | BLOCKED immediately (exit 2) | BLOCKED immediately (exit 2) | Yes |
+| `permissive` | No claims; proceed | No claims; proceed | No claims; proceed | No (validation ERROR) |
+
+### 11.5 Validation Rules
+
+Cross-field validation in `codeflow-cli/core/src/validate/mod.rs` enforces:
+
+- `autorun_eligible=true` + `file_scope` is empty → ERROR
+- `autorun_eligible=true` + `scope_policy=permissive` → ERROR
+
+These rules prevent autorun tasks from running without claim coordination, which would cause undetected concurrent file conflicts.
+
+### 11.6 Coordination Event Flow
+
+Every claim operation emits a coordination event routed to two destinations via `codeflow-cli/core/src/ledger/routing.rs`:
+
+1. **`coordination-events.jsonl`** at `.state/ledger/coordination-events.jsonl` — append-only, git-tracked
+2. **`coordination_event` SurrealDB table** — queryable view for analysis
+
+| Event | Emitted When | Key Fields |
+|-------|-------------|------------|
+| `ClaimAcquired` | Successful claim (in-scope pre-claim or soft-mode expansion) | file_path, session_id, task_id, worktree_id, token, was_expansion |
+| `ClaimConflict` | Blocked by another holder (soft or hard mode) | file_path, session_id, holding_session, holding_task, scope_policy |
+| `ScopeExpansion` | Soft mode allowed out-of-scope claim | file_path, session_id, task_id, original_scope |
+| `ClaimReleased` | Worker session ends; `claims::release_all(session_id)` called | session_id, file_count, release_type |
+
+See [data-layer-protection.md Section 8](data-layer-protection.md#8-coordination-events-ledger) for the full SurrealDB schema.
 
 ---
 

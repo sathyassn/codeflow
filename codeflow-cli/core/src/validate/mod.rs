@@ -515,6 +515,12 @@ pub fn validate_task(
     // Cross-field: autorun_eligible requires acceptance.
     errs.extend(validate_autorun_acceptance(&data));
 
+    // Cross-field: autorun_eligible requires non-empty file_scope.
+    errs.extend(validate_autorun_file_scope(&data));
+
+    // Cross-field: autorun_eligible + permissive scope_policy is invalid.
+    errs.extend(validate_autorun_scope_policy(&data));
+
     // Cross-field: code work type with .sh/.py in file_scope requires tests.
     errs.extend(validate_code_task_tests(&data));
 
@@ -582,6 +588,41 @@ fn validate_autorun_acceptance(data: &HashMap<String, serde_yaml::Value>) -> Vec
         return vec![ValidationError {
             field: "autorun_eligible".into(),
             message: "autorun_eligible is true but acceptance is empty".into(),
+        }];
+    }
+    Vec::new()
+}
+
+fn validate_autorun_file_scope(
+    data: &HashMap<String, serde_yaml::Value>,
+) -> Vec<ValidationError> {
+    let (autorun, set) = get_bool_field(data, "autorun_eligible");
+    if !set || !autorun {
+        return Vec::new();
+    }
+    if is_field_empty(data, "file_scope") {
+        return vec![ValidationError {
+            field: "autorun_eligible".into(),
+            message: "autorun_eligible is true but file_scope is empty".into(),
+        }];
+    }
+    Vec::new()
+}
+
+fn validate_autorun_scope_policy(
+    data: &HashMap<String, serde_yaml::Value>,
+) -> Vec<ValidationError> {
+    let (autorun, set) = get_bool_field(data, "autorun_eligible");
+    if !set || !autorun {
+        return Vec::new();
+    }
+    let scope_policy = get_string_field(data, "scope_policy");
+    if scope_policy == "permissive" {
+        return vec![ValidationError {
+            field: "scope_policy".into(),
+            message: "scope_policy is permissive but autorun_eligible is true — \
+                      autorun tasks require soft or hard scope_policy for claim enforcement"
+                .into(),
         }];
     }
     Vec::new()
@@ -1072,5 +1113,114 @@ Related
         let errs = validate_code_task_tests(&data);
         assert!(!errs.is_empty());
         assert!(errs[0].field == "tests");
+    }
+
+    // -- autorun_eligible + file_scope validation (AC #11) --
+
+    #[test]
+    fn test_autorun_file_scope_empty_is_error() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(true),
+        );
+        // file_scope empty.
+        let errs = validate_autorun_file_scope(&data);
+        assert!(!errs.is_empty());
+        assert!(errs[0].field == "autorun_eligible");
+        assert!(errs[0].message.contains("file_scope is empty"));
+    }
+
+    #[test]
+    fn test_autorun_file_scope_present_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(true),
+        );
+        data.insert(
+            "file_scope".into(),
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+                "src/main.rs".into(),
+            )]),
+        );
+        let errs = validate_autorun_file_scope(&data);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_autorun_file_scope_not_autorun_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(false),
+        );
+        // file_scope empty is fine if not autorun.
+        let errs = validate_autorun_file_scope(&data);
+        assert!(errs.is_empty());
+    }
+
+    // -- autorun_eligible + scope_policy validation (AC #12) --
+
+    #[test]
+    fn test_autorun_permissive_is_error() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(true),
+        );
+        data.insert(
+            "scope_policy".into(),
+            serde_yaml::Value::String("permissive".into()),
+        );
+        let errs = validate_autorun_scope_policy(&data);
+        assert!(!errs.is_empty());
+        assert!(errs[0].field == "scope_policy");
+        assert!(errs[0].message.contains("permissive"));
+    }
+
+    #[test]
+    fn test_autorun_soft_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(true),
+        );
+        data.insert(
+            "scope_policy".into(),
+            serde_yaml::Value::String("soft".into()),
+        );
+        let errs = validate_autorun_scope_policy(&data);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_autorun_hard_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(true),
+        );
+        data.insert(
+            "scope_policy".into(),
+            serde_yaml::Value::String("hard".into()),
+        );
+        let errs = validate_autorun_scope_policy(&data);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_not_autorun_permissive_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "autorun_eligible".into(),
+            serde_yaml::Value::Bool(false),
+        );
+        data.insert(
+            "scope_policy".into(),
+            serde_yaml::Value::String("permissive".into()),
+        );
+        let errs = validate_autorun_scope_policy(&data);
+        assert!(errs.is_empty());
     }
 }

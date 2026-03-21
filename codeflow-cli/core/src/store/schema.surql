@@ -201,6 +201,25 @@ DEFINE FIELD OVERWRITE verification_result ON TABLE autorun_task_run TYPE option
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_task_run TYPE string;
 
 -- =============================================================================
+-- COORDINATION TABLES
+-- =============================================================================
+
+DEFINE TABLE OVERWRITE coordination_event SCHEMAFULL;
+DEFINE FIELD OVERWRITE event_type   ON TABLE coordination_event TYPE string;
+DEFINE FIELD OVERWRITE session_id   ON TABLE coordination_event TYPE string;
+DEFINE FIELD OVERWRITE path         ON TABLE coordination_event TYPE option<string>;
+DEFINE FIELD OVERWRITE branch       ON TABLE coordination_event TYPE option<string>;
+DEFINE FIELD OVERWRITE target_branch ON TABLE coordination_event TYPE option<string>;
+DEFINE FIELD OVERWRITE held_by      ON TABLE coordination_event TYPE option<string>;
+DEFINE FIELD OVERWRITE task_id      ON TABLE coordination_event TYPE option<string>;
+DEFINE FIELD OVERWRITE success      ON TABLE coordination_event TYPE option<bool>;
+DEFINE FIELD OVERWRITE original_scope ON TABLE coordination_event TYPE option<array<string>>;
+DEFINE FIELD OVERWRITE timestamp    ON TABLE coordination_event TYPE string;
+
+DEFINE INDEX OVERWRITE idx_coordination_event_type       ON TABLE coordination_event FIELDS event_type;
+DEFINE INDEX OVERWRITE idx_coordination_event_session_id  ON TABLE coordination_event FIELDS session_id;
+
+-- =============================================================================
 -- GRAPH RELATION TABLES
 -- =============================================================================
 

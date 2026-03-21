@@ -597,7 +597,7 @@ pub mod mock {
             domain: "infrastructure".into(),
             origin: "adhoc".into(),
             file_scope: vec![],
-            scope_policy: "append".into(),
+            scope_policy: "soft".into(),
             scope_root: None,
             estimate: None,
             priority: "medium".into(),

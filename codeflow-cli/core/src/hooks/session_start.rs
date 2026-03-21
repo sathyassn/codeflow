@@ -1872,6 +1872,8 @@ mod tests {
             updated_at: None,
             current_stage: Some("WS-DEV".into()),
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -2060,6 +2062,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -2522,6 +2526,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -2553,6 +2559,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -2584,6 +2592,8 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            scope_policy: None,
+            file_scope: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 

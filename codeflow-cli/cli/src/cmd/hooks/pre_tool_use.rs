@@ -102,6 +102,7 @@ fn build_handler(
                 sentinel_dir,
                 state_path,
                 session_id,
+                project_dir.clone(),
             ))
         }
         PreToolUseHandler::TeamGuard => {

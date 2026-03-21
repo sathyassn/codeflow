@@ -1065,6 +1065,14 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `codeflow hooks pre-tool-use team-guard` |
 | Claim enforcement (scope_policy) | File claims via CRDT | Edit/Write (scope_policy=soft: claim-coordinated, scope_policy=hard: scope-restricted, scope_policy=permissive: unrestricted) | `codeflow hooks pre-tool-use gate-check` |
 
+**Scope policy enforcement modes** (enforced by `try_acquire_claim()` in `pre_tool_use.rs`):
+
+- `scope_policy=hard`: edits to files NOT in `file_scope` are BLOCKED immediately (exit 2, no claim attempt)
+- `scope_policy=soft` + file IN `file_scope`: claim auto-acquired at startup via `acquire_batch()`, edit allowed
+- `scope_policy=soft` + file NOT in `file_scope`: attempt claim via `Coordinator::acquire` — if acquired (unclaimed), allow edit + emit `ScopeExpansion` event; if conflict, BLOCK (exit 2) + emit `ClaimConflict` event
+- `scope_policy=permissive`: no scope checking, no claim acquisition, edit allowed (interactive sessions only; forbidden for `autorun_eligible=true` tasks)
+- Default is `soft` when not specified in the task definition
+
 **Instruction-enforced gates (not currently hook-enforced):**
 
 | Gate | Instruction | Why Not Hook-Enforced |

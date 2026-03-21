@@ -117,6 +117,12 @@ pub struct Claim {
     pub ttl_secs: u64,
     /// Unix timestamp (seconds) when the claim was acquired.
     pub acquired_at: u64,
+    /// Task ID that owns this claim (for audit trail).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub task_id: String,
+    /// Worktree holding this claim (for dead-worker detection).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<WorktreeId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +208,8 @@ mod tests {
             token: FencingToken::new(42),
             ttl_secs: 300,
             acquired_at: 1_700_000_000,
+            task_id: "INF-TSK-023-027".to_string(),
+            worktree_id: Some(WorktreeId::new("wt-session-1")),
         };
         let json = serde_json::to_string(&claim).unwrap();
         let parsed: Claim = serde_json::from_str(&json).unwrap();
@@ -209,6 +217,35 @@ mod tests {
         assert_eq!(parsed.token.value(), 42);
         assert_eq!(parsed.ttl_secs, 300);
         assert_eq!(parsed.acquired_at, 1_700_000_000);
+        assert_eq!(parsed.task_id, "INF-TSK-023-027");
+        assert_eq!(parsed.worktree_id.unwrap().as_str(), "wt-session-1");
+    }
+
+    #[test]
+    fn claim_serde_backward_compatible() {
+        // Claims without new fields should deserialize with defaults.
+        let json = r#"{"owner":"ses-123","token":42,"ttl_secs":300,"acquired_at":1700000000}"#;
+        let parsed: Claim = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.task_id, "");
+        assert!(parsed.worktree_id.is_none());
+    }
+
+    #[test]
+    fn claim_serde_empty_task_id_omitted() {
+        let claim = Claim {
+            owner: SessionId::new_unchecked("ses-123"),
+            token: FencingToken::new(1),
+            ttl_secs: 300,
+            acquired_at: 1_700_000_000,
+            task_id: String::new(),
+            worktree_id: None,
+        };
+        let json = serde_json::to_string(&claim).unwrap();
+        assert!(!json.contains("task_id"), "empty task_id should be omitted");
+        assert!(
+            !json.contains("worktree_id"),
+            "None worktree_id should be omitted"
+        );
     }
 
     #[test]

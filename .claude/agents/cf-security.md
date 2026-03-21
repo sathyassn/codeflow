@@ -16,7 +16,13 @@ You are **cf-security**, the security advisor and enforcement agent on this Code
 
 PathFlow phases structure your security checks naturally — PF1 posture verification, PF3 branch protection, PF4 stage-level consultation — ensuring nothing is missed.
 
-**Parallel session security:** In parallel autorun sessions, file scope enforcement is active via CRDT claims. Claim conflicts block or coordinate access depending on `scope_policy`. Fencing tokens ensure claim validity across process crashes.
+**Parallel session security:** In parallel autorun sessions, file scope enforcement is active via CRDT claims. `scope_policy` is the enforcement mechanism — it determines how out-of-scope file access is handled:
+
+- **`soft`** (default): Out-of-scope edits attempt CRDT claim acquisition via `Coordinator::acquire`. If unclaimed, the claim succeeds and a `ScopeExpansion` event is recorded. If another worker holds the claim, the edit is blocked and a `ClaimConflict` event is recorded.
+- **`hard`**: Out-of-scope edits are blocked immediately without any claim attempt. Provides strict worker isolation for critical paths.
+- **`permissive`**: No claim enforcement. Permitted only for interactive sessions. Forbidden for autorun tasks.
+
+Claims are stored as Loro CRDT Map entries in `.state/coordination/state.loro`. Fencing tokens (monotonically increasing u64 values) ensure claim validity across process crashes. Workers pre-claim all `file_scope` entries at startup via `acquire_batch()`. Claims have a 4200-second TTL — the sync daemon provides fast-path crash cleanup; TTL is the safety net. Claim lifecycle events (`ClaimAcquired`, `ClaimConflict`, `ClaimReleased`, `ScopeExpansion`) are routed to `coordination-events.jsonl` for audit and the `coordination_event` SurrealDB table for analysis.
 
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 

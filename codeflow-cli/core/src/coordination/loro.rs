@@ -304,6 +304,8 @@ impl Coordinator for LoroCoordinator {
             token,
             ttl_secs: self.ttl_secs,
             acquired_at: now,
+            task_id: String::new(),
+            worktree_id: None,
         };
         let json = serde_json::to_string(&claim)?;
         claims.insert(path, json)?;
