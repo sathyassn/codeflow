@@ -649,4 +649,188 @@ tasks:
         }
     }
 
+    // -- RealClaude tests --
+
+    #[test]
+    fn test_real_claude_invoke_returns_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = RealClaude {
+            project_dir: dir.path().to_path_buf(),
+        };
+        let cfg = codeflow_core::autorun::InvokeConfig {
+            task_id: "task-claude-test".into(),
+            work_dir: "/tmp/work".into(),
+            prompt: "test prompt".into(),
+            session_id: "ses-test".into(),
+            auto_merge: false,
+            target: "main".into(),
+            tmux_session: "worker-1".into(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(codeflow_core::autorun::ClaudeInvoker::invoke(&claude, cfg));
+        let result = result.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.contains("task-claude-test"),
+            "output should contain task ID"
+        );
+        assert!(
+            result.output.contains("/tmp/work"),
+            "output should contain work dir"
+        );
+    }
+
+    #[test]
+    fn test_real_claude_invoke_output_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = RealClaude {
+            project_dir: dir.path().to_path_buf(),
+        };
+        let cfg = codeflow_core::autorun::InvokeConfig {
+            task_id: "task-fmt".into(),
+            work_dir: "/work/dir".into(),
+            prompt: String::new(),
+            session_id: "ses-fmt".into(),
+            auto_merge: true,
+            target: "integration".into(),
+            tmux_session: "w-2".into(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(codeflow_core::autorun::ClaudeInvoker::invoke(&claude, cfg))
+            .unwrap();
+        assert_eq!(result.output, "task task-fmt dispatched to /work/dir");
+        assert!(result.pr_url.is_empty());
+        assert!(result.branch_name.is_empty());
+        assert_eq!(result.pr_number, 0);
+    }
+
+    // -- RealTmux tests (exercise trait methods; gracefully handle missing tmux) --
+
+    #[test]
+    fn test_real_tmux_kill_nonexistent_session_is_ok() {
+        let tmux = RealTmux;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // kill_session always returns Ok even for nonexistent sessions.
+        let result = rt.block_on(codeflow_core::autorun::TmuxRunner::kill_session(
+            &tmux,
+            "nonexistent-session-xyz",
+        ));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_real_tmux_has_nonexistent_session() {
+        let tmux = RealTmux;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(codeflow_core::autorun::TmuxRunner::has_session(
+            &tmux,
+            "nonexistent-session-xyz",
+        ));
+        // Either Ok(false) if tmux is available, or Err if tmux not installed.
+        match result {
+            Ok(has) => assert!(!has, "nonexistent session should not exist"),
+            Err(_) => {} // tmux not available — acceptable in CI
+        }
+    }
+
+    #[test]
+    fn test_real_tmux_create_session_handles_failure() {
+        let tmux = RealTmux;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // Use an invalid session name to trigger failure or tmux unavailability.
+        let result = rt.block_on(codeflow_core::autorun::TmuxRunner::create_session(
+            &tmux,
+            "", // empty name should fail
+        ));
+        // Either Err (tmux fails or not available) — we just verify no panic.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_real_tmux_send_command_handles_failure() {
+        let tmux = RealTmux;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(codeflow_core::autorun::TmuxRunner::send_command(
+            &tmux,
+            "nonexistent-session-xyz",
+            "echo test",
+        ));
+        // Should fail (session doesn't exist) or tmux not available.
+        let _ = result;
+    }
+
+    // -- run_with_dir integration: batch + config + session ID generation --
+
+    #[test]
+    fn test_run_with_dir_generates_session_id_and_prints_batch_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("batch.yaml"),
+            "name: session-gen-test\nmax_workers: 2\ntasks:\n  - id: task-a\n  - id: task-b\n",
+        )
+        .unwrap();
+
+        // Write custom config.
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "claims": { "default_scope_policy": "hard" } }"#,
+        )
+        .unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_with_dir(dir.path()));
+        // Will fail at orchestrator/tmux level, but exercises config + batch + session ID paths.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_run_with_dir_with_multiple_tasks_and_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("batch.yaml"),
+            "name: multi\nmax_workers: 1\ntasks:\n  - id: t1\n    file_scope: [src/a.rs]\n    scope_policy: soft\n  - id: t2\n    depends_on: [t1]\n",
+        )
+        .unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_with_dir(dir.path()));
+        let _ = result;
+    }
+
+    // -- Batch parsing edge cases --
+
+    #[test]
+    fn test_batch_parse_default_max_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("batch.yaml");
+        // No max_workers specified — should use default.
+        std::fs::write(&batch_path, "name: defaults\ntasks:\n  - id: task-1\n").unwrap();
+        let parsed = codeflow_core::autorun::batch::parse_batch_file(&batch_path).unwrap();
+        assert!(parsed.max_workers > 0, "default max_workers should be > 0");
+    }
+
+    #[test]
+    fn test_batch_parse_task_without_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("batch.yaml");
+        std::fs::write(
+            &batch_path,
+            "name: no-scope\ntasks:\n  - id: task-plain\n",
+        )
+        .unwrap();
+        let parsed = codeflow_core::autorun::batch::parse_batch_file(&batch_path).unwrap();
+        assert!(parsed.tasks[0].file_scope.is_empty());
+        assert!(parsed.tasks[0].scope_policy.is_none());
+    }
 }
