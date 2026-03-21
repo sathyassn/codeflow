@@ -96,6 +96,17 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-025 | Implement worktree CLI subcommands (cleanup/prune) | complete | L | normal | E: Integration |
 | INF-TSK-023-026 | Implement sync daemon lifecycle management | complete | M | normal | E: Integration |
 | INF-TSK-023-027 | Implement scope policy enforcement + validation | complete | L | normal | E: Integration |
+| INF-TSK-023-028 | Implement Claude invoker (hybrid tmux + file-marker) | todo | L | high | F: Autorun Readiness |
+| INF-TSK-023-029 | Fix worker coordination bugs | todo | L | high | F: Autorun Readiness |
+| INF-TSK-023-030 | Wire merge conflict remediation | todo | M | normal | F: Autorun Readiness |
+| INF-TSK-023-031 | Comprehensive batch validation | todo | L | high | F: Autorun Readiness |
+| INF-TSK-023-032 | Wire autorun DB + event recording | todo | L | high | F: Autorun Readiness |
+| INF-TSK-023-033 | Autorun config section | todo | S | normal | F: Autorun Readiness |
+| INF-TSK-023-034 | Pre-flight checks + CLI args | todo | M | normal | F: Autorun Readiness |
+| INF-TSK-023-035 | Orchestrator graceful shutdown | todo | M | normal | F: Autorun Readiness |
+| INF-TSK-023-036 | Agent autorun SOPs | todo | M | normal | F: Autorun Readiness |
+| INF-TSK-023-037 | Autorun session management commands | todo | L | normal | F: Autorun Readiness |
+| INF-TSK-023-038 | Batch report generation | todo | S | normal | F: Autorun Readiness |
 
 ### Dependency DAG
 
@@ -124,6 +135,20 @@ Phase C: Autorun + Coordination
   Epic 0 ── 017 (merge conflict detection)
   003 + 008 ── 018 (parallel coordination)
   Epic 0 ── 019 (SurrealDB tuning)
+
+Phase F: Autorun Readiness
+  033 (config section)
+    └── 029 (worker coord bugs, needs blocked_behavior)
+  028 (Claude invoker)
+  030 (merge conflict remediation)
+  031 (batch validation)
+  032 (DB + events)
+    ├── 037 (session mgmt cmds, needs DB)
+    └── 038 (batch reports, needs DB)
+  034 (pre-flight + CLI args)
+    └── 037 (session mgmt cmds, needs subcommand enum)
+  035 (graceful shutdown)
+  036 (agent SOPs, DOCS pipeline)
 ```
 
 ### Effort Summary
@@ -133,7 +158,10 @@ Phase C: Autorun + Coordination
 | A: Loro CRDT Foundation | 6 | 2S + 1M + 3L |
 | B: Worktree + Singleton | 9 | 4S + 4M + 1L |
 | C: Autorun + Coordination | 4 | 1S + 1M + 2L |
-| **Total** | **19** | **7S + 6M + 6L** |
+| D: Documentation | 1 | 1L |
+| E: Integration | 4 | 1M + 1L + 1XL + 1L |
+| F: Autorun Readiness | 11 | 2S + 3M + 5L + 1M(DOCS) |
+| **Total** | **35** | **9S + 10M + 11L + 1XL** |
 
 ## Dependencies
 
