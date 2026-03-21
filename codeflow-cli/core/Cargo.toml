@@ -23,6 +23,7 @@ url = "2"
 sha2 = "0.10"
 tokio = { workspace = true }
 loro = { workspace = true }
+base64 = { workspace = true }
 which = "7"
 signal-hook = "0.3"
 

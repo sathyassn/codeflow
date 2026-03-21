@@ -11,9 +11,10 @@ pub mod orchestrator;
 pub mod worker;
 
 pub use batch::{BatchFile, ParsedBatch, TaskSpec};
-pub use config::{ParallelWorkConfig, load_config};
+pub use config::{AutorunConfig, ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
 pub use worker::{
-    ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TmuxRunner, TmuxWorker,
-    WorkerRunner, WorktreeInfo, WorktreeProvider,
+    ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TaskMetadata, TmuxRunner,
+    TmuxWorker, WorkerRunner, WorktreeInfo, WorktreeProvider, build_task_prompt,
+    build_task_prompt_from_file, parse_task_markdown,
 };

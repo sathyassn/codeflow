@@ -13,7 +13,7 @@ use crate::error::AutorunError;
 /// Relative path to the config file from the project root.
 const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.json";
 
-/// Top-level parallel work configuration with 4 sections.
+/// Top-level parallel work configuration with 5 sections.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ParallelWorkConfig {
@@ -25,6 +25,24 @@ pub struct ParallelWorkConfig {
     pub merge: MergeConfig,
     /// Loro CRDT claim system settings.
     pub claims: ClaimsConfig,
+    /// Autorun worker settings.
+    pub autorun: AutorunConfig,
+}
+
+/// Autorun worker execution settings.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AutorunConfig {
+    /// Worker timeout in seconds (default: 3600 = 60 minutes).
+    pub worker_timeout_secs: u64,
+}
+
+impl Default for AutorunConfig {
+    fn default() -> Self {
+        Self {
+            worker_timeout_secs: 3600,
+        }
+    }
 }
 
 /// Worktree creation mode.
@@ -394,7 +412,8 @@ mod tests {
             "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees" },
             "sync": { "interval_secs": 30, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
-            "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true }
+            "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
+            "autorun": { "worker_timeout_secs": 3600 }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg, ParallelWorkConfig::default());
@@ -411,5 +430,38 @@ mod tests {
         assert_eq!(cfg.worktree.max_concurrent, 1);
         assert_eq!(cfg.claims.default_scope_policy, "hard");
         assert_eq!(cfg.claims.ttl_secs, 120);
+    }
+
+    // -- AutorunConfig tests --
+
+    #[test]
+    fn autorun_config_default() {
+        let cfg = AutorunConfig::default();
+        assert_eq!(cfg.worker_timeout_secs, 3600);
+    }
+
+    #[test]
+    fn autorun_config_custom() {
+        let json = r#"{ "autorun": { "worker_timeout_secs": 7200 } }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.worker_timeout_secs, 7200);
+    }
+
+    #[test]
+    fn autorun_config_absent_uses_default() {
+        let json = r#"{}"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
+    }
+
+    #[test]
+    fn full_config_with_autorun() {
+        let json = r#"{
+            "worktree": { "mode": "autorun", "max_concurrent": 3 },
+            "autorun": { "worker_timeout_secs": 1800 }
+        }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.worker_timeout_secs, 1800);
+        assert_eq!(cfg.worktree.max_concurrent, 3);
     }
 }

@@ -21,6 +21,7 @@ regex = "1"
 serde_yaml = "0.9"
 ulid = "1"
 tokio = { version = "1", features = ["full"] }
+base64 = "0.22"
 # Dev-only dependencies (3)
 proptest = "1"
 insta = { version = "1", features = ["json"] }

@@ -81,7 +81,7 @@ pub struct WorktreeInfo {
 }
 
 /// Configuration for a Claude Code invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InvokeConfig {
     pub work_dir: String,
     pub prompt: String,
@@ -90,6 +90,9 @@ pub struct InvokeConfig {
     pub auto_merge: bool,
     pub target: String,
     pub tmux_session: String,
+    /// Acceptance criteria extracted from task markdown for base64-encoded env var.
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
 }
 
 /// Result of a Claude Code invocation.
@@ -235,17 +238,31 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
         // Create the tmux session.
         self.tmux.create_session(&tmux_name).await?;
 
+        // Build task prompt from task markdown, falling back to generic prompt.
+        let (prompt, acceptance_criteria) =
+            match build_task_prompt_from_file(&self.project_dir, &cfg.task_id) {
+                Ok((p, a)) => (p, a),
+                Err(e) => {
+                    eprintln!(
+                        "warning: could not build task prompt for {}: {e}. Using generic prompt.",
+                        cfg.task_id
+                    );
+                    (format!("Execute autorun task {}", cfg.task_id), Vec::new())
+                }
+            };
+
         // Run with timeout, using worktree path as work_dir.
         let result = tokio::time::timeout(timeout, async {
             self.claude
                 .invoke(InvokeConfig {
                     work_dir: wt_info.path.to_string_lossy().into_owned(),
-                    prompt: format!("Execute autorun task {}", cfg.task_id),
+                    prompt,
                     session_id: cfg.session_id.clone(),
                     task_id: cfg.task_id.clone(),
                     auto_merge: cfg.auto_merge,
                     target: cfg.target.clone(),
                     tmux_session: tmux_name.clone(),
+                    acceptance_criteria,
                 })
                 .await
         })
@@ -353,6 +370,190 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
             }),
         }
     }
+}
+
+/// Parsed task metadata extracted from a task markdown file.
+#[derive(Debug, Clone, Default)]
+pub struct TaskMetadata {
+    /// Task description from the markdown body.
+    pub description: String,
+    /// Approach section from the markdown body.
+    pub approach: String,
+    /// Acceptance criteria from YAML frontmatter.
+    pub acceptance: Vec<String>,
+    /// File scope from YAML frontmatter.
+    pub file_scope: Vec<String>,
+    /// Task title from YAML frontmatter.
+    pub title: String,
+}
+
+/// Read a task markdown file and extract metadata for prompt construction.
+///
+/// Expects the file to have YAML frontmatter delimited by `---` lines,
+/// followed by markdown body sections.
+///
+/// # Errors
+///
+/// Returns `AutorunError::MissingTask` if the file does not exist or cannot be read.
+pub fn parse_task_markdown(content: &str) -> TaskMetadata {
+    let mut meta = TaskMetadata::default();
+
+    // Extract YAML frontmatter.
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() >= 3 {
+        let yaml_str = parts[1].trim();
+        if let Ok(yaml_val) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) {
+            if let Some(title) = yaml_val.get("title").and_then(serde_yaml::Value::as_str) {
+                meta.title = title.to_string();
+            }
+            if let Some(desc) = yaml_val
+                .get("description")
+                .and_then(serde_yaml::Value::as_str)
+            {
+                meta.description = desc.to_string();
+            }
+            if let Some(acc) = yaml_val
+                .get("acceptance")
+                .and_then(serde_yaml::Value::as_sequence)
+            {
+                meta.acceptance = acc
+                    .iter()
+                    .filter_map(serde_yaml::Value::as_str)
+                    .map(String::from)
+                    .collect();
+            }
+            if let Some(scope) = yaml_val
+                .get("file_scope")
+                .and_then(serde_yaml::Value::as_sequence)
+            {
+                meta.file_scope = scope
+                    .iter()
+                    .filter_map(serde_yaml::Value::as_str)
+                    .map(String::from)
+                    .collect();
+            }
+        }
+    }
+
+    // Extract approach section from markdown body.
+    let body = if parts.len() >= 3 { parts[2] } else { content };
+    if let Some(approach_start) = body.find("## Approach") {
+        let after_heading = &body[approach_start + "## Approach".len()..];
+        // Find the next ## heading to delimit the approach section.
+        let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
+        meta.approach = after_heading[..end].trim().to_string();
+    }
+
+    // If description is empty from frontmatter, try the Description section.
+    if meta.description.is_empty() {
+        if let Some(desc_start) = body.find("## Description") {
+            let after_heading = &body[desc_start + "## Description".len()..];
+            let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
+            meta.description = after_heading[..end].trim().to_string();
+        }
+    }
+
+    meta
+}
+
+/// Build a PathFlow-aware task prompt from task metadata.
+///
+/// Constructs a prompt suitable for autonomous Claude Code execution in
+/// an autorun worker context.
+#[must_use]
+pub fn build_task_prompt(meta: &TaskMetadata) -> String {
+    use std::fmt::Write;
+
+    let mut prompt = String::with_capacity(2048);
+
+    prompt.push_str("You are executing an autorun task autonomously. ");
+    prompt.push_str("Follow PathFlow PF1-PF7 without user interaction. ");
+    prompt.push_str("Document any Tier 3 decisions in the PR description.\n\n");
+
+    // Title.
+    if !meta.title.is_empty() {
+        let _ = write!(prompt, "# Task: {}\n\n", meta.title);
+    }
+
+    // Description.
+    if !meta.description.is_empty() {
+        let _ = write!(prompt, "## Description\n{}\n\n", meta.description);
+    }
+
+    // Approach.
+    if !meta.approach.is_empty() {
+        let _ = write!(prompt, "## Approach\n{}\n\n", meta.approach);
+    }
+
+    // Acceptance criteria.
+    if !meta.acceptance.is_empty() {
+        prompt.push_str("## Acceptance Criteria\n");
+        for (i, criterion) in meta.acceptance.iter().enumerate() {
+            let _ = writeln!(prompt, "{}. {criterion}", i + 1);
+        }
+        prompt.push('\n');
+    }
+
+    // File scope.
+    if !meta.file_scope.is_empty() {
+        prompt.push_str("## File Scope\n");
+        for path in &meta.file_scope {
+            let _ = writeln!(prompt, "- {path}");
+        }
+        prompt.push('\n');
+    }
+
+    // Autonomous operation instructions.
+    prompt.push_str("## Autonomous Operation\n");
+    prompt.push_str("- Do NOT prompt the user for input.\n");
+    prompt.push_str("- Make all decisions autonomously (Tier 1 and Tier 2).\n");
+    prompt.push_str(
+        "- Document Tier 3 decisions (architectural, breaking changes) in the PR description.\n",
+    );
+    prompt.push_str("- Create a PR targeting the configured branch on success.\n");
+    prompt.push_str("- Exit with code 0 on success, non-zero on failure.\n");
+
+    prompt
+}
+
+/// Read a task markdown file from disk and build a prompt from it.
+///
+/// Constructs the file path from the task ID format `{AREA}-TSK-{epic_NNN}-{seq_NNN}`.
+///
+/// # Errors
+///
+/// Returns `AutorunError::MissingTask` if the task file cannot be found or read.
+pub fn build_task_prompt_from_file(
+    project_dir: &std::path::Path,
+    task_id: &str,
+) -> Result<(String, Vec<String>), AutorunError> {
+    // Parse task_id format: AREA-TSK-EPC_NNN-SEQ_NNN
+    // Example: INF-TSK-023-028 -> area=INF, epic_num=023, task file = INF-TSK-023-028.md
+    // Epic dir: project-management/epics/INF/INF-EPC-023/tasks/INF-TSK-023-028.md
+    let parts: Vec<&str> = task_id.split('-').collect();
+    if parts.len() < 4 || parts[1] != "TSK" {
+        return Err(AutorunError::MissingTask(format!(
+            "invalid task ID format: {task_id} (expected AREA-TSK-NNN-NNN)"
+        )));
+    }
+
+    let area = parts[0];
+    let epic_num = parts[2];
+    let task_path = project_dir
+        .join("project-management")
+        .join("epics")
+        .join(area)
+        .join(format!("{area}-EPC-{epic_num}"))
+        .join("tasks")
+        .join(format!("{task_id}.md"));
+
+    let content = std::fs::read_to_string(&task_path)
+        .map_err(|e| AutorunError::MissingTask(format!("reading {}: {e}", task_path.display())))?;
+
+    let meta = parse_task_markdown(&content);
+    let acceptance = meta.acceptance.clone();
+    let prompt = build_task_prompt(&meta);
+    Ok((prompt, acceptance))
 }
 
 /// Real `WorktreeProvider` implementation backed by `WorktreeManager`.
@@ -685,9 +886,11 @@ mod tests {
             auto_merge: true,
             target: "develop".into(),
             tmux_session: "worker-1".into(),
+            acceptance_criteria: vec!["criterion 1".into()],
         };
         assert_eq!(cfg.task_id, "t-1");
         assert!(cfg.auto_merge);
+        assert_eq!(cfg.acceptance_criteria.len(), 1);
     }
 
     #[test]
@@ -938,5 +1141,241 @@ mod tests {
     fn test_real_worktree_provider_new() {
         let provider = RealWorktreeProvider::new(PathBuf::from("/tmp/project"));
         assert_eq!(provider.project_dir, PathBuf::from("/tmp/project"));
+    }
+
+    // -- parse_task_markdown tests --
+
+    #[test]
+    fn test_parse_task_markdown_full() {
+        let content = r#"---
+title: "Test task"
+description: "A test task description"
+acceptance:
+  - "criterion one"
+  - "criterion two"
+file_scope:
+  - "src/main.rs"
+  - "src/lib.rs"
+---
+
+# Test Task
+
+## Description
+
+This is the body description.
+
+## Approach
+
+1. Do step one
+2. Do step two
+
+## Files
+"#;
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.title, "Test task");
+        assert_eq!(meta.description, "A test task description");
+        assert_eq!(meta.acceptance.len(), 2);
+        assert_eq!(meta.acceptance[0], "criterion one");
+        assert_eq!(meta.acceptance[1], "criterion two");
+        assert_eq!(meta.file_scope, vec!["src/main.rs", "src/lib.rs"]);
+        assert!(
+            meta.approach.contains("Do step one"),
+            "approach should contain step 1, got: {}",
+            meta.approach
+        );
+    }
+
+    #[test]
+    fn test_parse_task_markdown_empty_acceptance() {
+        let content = r#"---
+title: "No criteria"
+acceptance: []
+---
+
+## Description
+
+Some description.
+"#;
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.title, "No criteria");
+        assert!(meta.acceptance.is_empty());
+    }
+
+    #[test]
+    fn test_parse_task_markdown_no_frontmatter() {
+        let content = "# Just a heading\n\nSome content.\n";
+        let meta = parse_task_markdown(content);
+        assert!(meta.title.is_empty());
+        assert!(meta.acceptance.is_empty());
+    }
+
+    #[test]
+    fn test_parse_task_markdown_description_from_body() {
+        let content = r#"---
+title: "Body desc test"
+---
+
+## Description
+
+Body description goes here.
+
+## Approach
+
+Do the thing.
+"#;
+        let meta = parse_task_markdown(content);
+        assert!(
+            meta.description.contains("Body description"),
+            "should extract description from body, got: {}",
+            meta.description
+        );
+        assert!(
+            meta.approach.contains("Do the thing"),
+            "should extract approach, got: {}",
+            meta.approach
+        );
+    }
+
+    // -- build_task_prompt tests --
+
+    #[test]
+    fn test_build_task_prompt_includes_all_sections() {
+        let meta = TaskMetadata {
+            title: "Implement feature X".into(),
+            description: "Add feature X to the system.".into(),
+            approach: "1. Read code\n2. Write code".into(),
+            acceptance: vec!["tests pass".into(), "no warnings".into()],
+            file_scope: vec!["src/main.rs".into()],
+        };
+        let prompt = build_task_prompt(&meta);
+
+        assert!(prompt.contains("# Task: Implement feature X"));
+        assert!(prompt.contains("Add feature X"));
+        assert!(prompt.contains("Read code"));
+        assert!(prompt.contains("1. tests pass"));
+        assert!(prompt.contains("2. no warnings"));
+        assert!(prompt.contains("- src/main.rs"));
+        assert!(prompt.contains("Autonomous Operation"));
+        assert!(prompt.contains("Do NOT prompt the user"));
+        assert!(prompt.contains("Tier 3 decisions"));
+    }
+
+    #[test]
+    fn test_build_task_prompt_empty_metadata() {
+        let meta = TaskMetadata::default();
+        let prompt = build_task_prompt(&meta);
+
+        // Should still include autonomous operation instructions.
+        assert!(prompt.contains("autorun task autonomously"));
+        assert!(prompt.contains("Autonomous Operation"));
+        // Should not include empty sections.
+        assert!(!prompt.contains("# Task:"));
+        assert!(!prompt.contains("## Description"));
+        assert!(!prompt.contains("## File Scope"));
+    }
+
+    #[test]
+    fn test_build_task_prompt_acceptance_numbering() {
+        let meta = TaskMetadata {
+            acceptance: vec!["A".into(), "B".into(), "C".into()],
+            ..TaskMetadata::default()
+        };
+        let prompt = build_task_prompt(&meta);
+        assert!(prompt.contains("1. A\n"));
+        assert!(prompt.contains("2. B\n"));
+        assert!(prompt.contains("3. C\n"));
+    }
+
+    // -- build_task_prompt_from_file tests --
+
+    #[test]
+    fn test_build_task_prompt_from_file_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-001/tasks");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        std::fs::write(
+            task_dir.join("INF-TSK-001-001.md"),
+            r#"---
+title: "Test file task"
+description: "File-based task"
+acceptance:
+  - "criterion from file"
+file_scope:
+  - "src/a.rs"
+---
+
+## Approach
+
+Read and implement.
+"#,
+        )
+        .unwrap();
+
+        let (prompt, acceptance) =
+            build_task_prompt_from_file(dir.path(), "INF-TSK-001-001").unwrap();
+        assert!(prompt.contains("Test file task"));
+        assert!(prompt.contains("criterion from file"));
+        assert_eq!(acceptance, vec!["criterion from file"]);
+    }
+
+    #[test]
+    fn test_build_task_prompt_from_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = build_task_prompt_from_file(dir.path(), "INF-TSK-999-001");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, AutorunError::MissingTask(_)),
+            "expected MissingTask error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_task_prompt_from_file_invalid_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = build_task_prompt_from_file(dir.path(), "invalid-id");
+        assert!(result.is_err());
+    }
+
+    // -- InvokeConfig serde round-trip --
+
+    #[test]
+    fn test_invoke_config_serde_round_trip() {
+        let cfg = InvokeConfig {
+            work_dir: "/tmp/test".into(),
+            prompt: "test prompt".into(),
+            session_id: "ses-1".into(),
+            task_id: "task-1".into(),
+            auto_merge: true,
+            target: "main".into(),
+            tmux_session: "w-1".into(),
+            acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: InvokeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.task_id, cfg.task_id);
+        assert_eq!(deserialized.work_dir, cfg.work_dir);
+        assert_eq!(deserialized.acceptance_criteria, cfg.acceptance_criteria);
+        assert_eq!(deserialized.auto_merge, cfg.auto_merge);
+    }
+
+    #[test]
+    fn test_invoke_config_deserialize_without_acceptance() {
+        let json = r#"{
+            "work_dir": "/tmp",
+            "prompt": "test",
+            "session_id": "ses",
+            "task_id": "t",
+            "auto_merge": false,
+            "target": "main",
+            "tmux_session": "w"
+        }"#;
+        let cfg: InvokeConfig = serde_json::from_str(json).unwrap();
+        assert!(
+            cfg.acceptance_criteria.is_empty(),
+            "acceptance_criteria should default to empty vec"
+        );
     }
 }
