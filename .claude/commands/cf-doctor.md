@@ -200,6 +200,13 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - Check for orphaned sentinels (from aborted sessions)
 - Verify sentinel progression is consistent (no `ws-rev-done` without `ws-dev-done`)
 
+**Check 6b: Worktree Health**
+
+- Run `codeflow worktree list` to show all worktrees and their state
+- Run `codeflow worktree prune --dry-run` to detect registry/filesystem inconsistencies
+- With `--repair`: run `codeflow worktree prune` to fix stale entries, `codeflow worktree cleanup` to remove stale worktrees
+- Check `codeflow parallel status` for active claims and merge queue state
+
 **Check 7: Teammate Responsiveness**
 
 - If a team is active, check team config for registered members

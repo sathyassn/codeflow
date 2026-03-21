@@ -274,6 +274,108 @@ impl WorktreeManager {
     pub(crate) fn is_pathflow_active(&self) -> bool {
         self.pathflow_guard.as_ref().is_some_and(|guard| guard())
     }
+
+    /// Remove all stale (and optionally orphaned) worktrees from the registry.
+    ///
+    /// Iterates over registry entries, detects their state, and removes those
+    /// matching the cleanup criteria. Active worktrees are never removed.
+    ///
+    /// Returns the names of worktrees that were removed (or would be removed
+    /// in dry-run mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns `WorktreeError::Io` or `WorktreeError::Yaml` on registry access failure.
+    pub fn cleanup_stale(
+        &self,
+        opts: &CleanupOpts,
+    ) -> Result<Vec<String>, WorktreeError> {
+        let reg = registry::locked_read_registry(&self.registry_path)?;
+        let mut removed = Vec::new();
+
+        for entry in &reg.worktrees {
+            if entry.status == "removed" {
+                continue;
+            }
+            let state = self.detect_state(entry);
+            let should_remove = matches!(
+                (opts.force, state),
+                (_, WorktreeState::Stale) | (true, WorktreeState::Orphaned)
+            );
+            if should_remove {
+                removed.push(entry.name.clone());
+                if !opts.dry_run {
+                    self.cleanup(&entry.name, opts)?;
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Reconcile the YAML registry against the filesystem.
+    ///
+    /// Detects two kinds of inconsistencies:
+    /// - **Stale entries**: in registry but directory missing on disk.
+    /// - **Orphaned directories**: on disk in `.git-worktrees/` but not in registry.
+    ///
+    /// Returns `(stale_entries, orphaned_dirs)` — names/paths of each category.
+    /// In non-dry-run mode, stale entries are deregistered from the registry.
+    /// Orphaned directories are reported but NOT auto-registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WorktreeError::Io` or `WorktreeError::Yaml` on registry/filesystem access failure.
+    pub fn reconcile_registry(
+        &self,
+        dry_run: bool,
+    ) -> Result<(Vec<String>, Vec<String>), WorktreeError> {
+        let reg = registry::locked_read_registry(&self.registry_path)?;
+
+        // Find stale entries: in registry (active) but directory missing.
+        let mut stale_entries = Vec::new();
+        for entry in &reg.worktrees {
+            if entry.status == "removed" {
+                continue;
+            }
+            let state = self.detect_state(entry);
+            if state == WorktreeState::Stale {
+                stale_entries.push(entry.name.clone());
+                if !dry_run {
+                    let wt_path_str = entry.path.clone();
+                    registry::locked_deregister_worktree(
+                        &self.registry_path,
+                        &wt_path_str,
+                    )?;
+                }
+            }
+        }
+
+        // Find orphaned directories: on disk but not in registry.
+        let mut orphaned_dirs = Vec::new();
+        if self.base_dir.exists() {
+            let registry_paths: std::collections::HashSet<String> = reg
+                .worktrees
+                .iter()
+                .filter(|e| e.status != "removed")
+                .map(|e| e.path.clone())
+                .collect();
+
+            if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
+                for dir_entry in entries.flatten() {
+                    let path = dir_entry.path();
+                    if path.is_dir() {
+                        let path_str = path.to_string_lossy().to_string();
+                        if !registry_paths.contains(&path_str) {
+                            orphaned_dirs.push(path_str);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((stale_entries, orphaned_dirs))
+    }
 }
 
 /// RAII handle for a worktree that ensures cleanup on scope exit.

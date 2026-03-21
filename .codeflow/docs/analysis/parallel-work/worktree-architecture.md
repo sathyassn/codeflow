@@ -23,6 +23,7 @@ parent: "parallel-work/README.md"
 - [7. Detached HEAD Worktree Pattern](#7-detached-head-worktree-pattern)
 - [8. Worktree Cleanup at SessionEnd](#8-worktree-cleanup-at-sessionend)
 - [9. Edge Cases](#9-edge-cases)
+- [10. CLI Operations](#10-cli-operations)
 - [Appendix A: Parallel Work Configuration](#appendix-a-parallel-work-configuration)
 - [Appendix B: Temp Path Convention](#appendix-b-temp-path-convention)
 
@@ -356,6 +357,43 @@ With the pure Rust CLI (Epic 0), Loro is a compiled-in crate dependency -- there
 - Block parallel session creation (claims require functional Loro state)
 
 **Implementation requirement:** Both "coordination healthy" and "coordination degraded" paths need integration tests.
+
+---
+
+## 10. CLI Operations
+
+The `codeflow` CLI provides three worktree management subcommands and a parallel execution status dashboard.
+
+### 10.1 Worktree Subcommands
+
+| Command | Purpose | Key Behavior |
+|---------|---------|-------------|
+| `codeflow worktree list` | List all worktrees and their state | Default when no subcommand given. Shows name, branch, and state (active/stale/orphaned). |
+| `codeflow worktree cleanup` | Remove stale worktrees | Removes worktrees with `WorktreeState::Stale` (directory missing). Add `--force` to also remove orphaned (dir exists but no `.git`). Add `--dry-run` to preview. |
+| `codeflow worktree prune` | Reconcile registry with filesystem | Detects stale entries (in registry, dir missing) and deregisters them. Reports orphaned directories (on disk, not in registry) without auto-registering. Add `--dry-run` to preview. |
+
+### 10.2 Parallel Status Dashboard
+
+`codeflow parallel status` aggregates data from multiple sources into a single view:
+
+| Section | Data Source | What It Shows |
+|---------|-----------|---------------|
+| Active Worktrees | `.state/worktrees.yaml` | Name, branch, session ID, task ID for each active worktree |
+| Active Claims | `.state/coordination/state.loro` | File paths and claim owners (non-expired claims only) |
+| Merge Queue | `.state/coordination/state.loro` | Queued sessions with position, task ID, and branch |
+| Recent Events | `.state/ledger/coordination-events.jsonl` | Last 10 coordination events (claim acquired/conflict/released/scope expansion) |
+
+### 10.3 Cleanup vs Prune Distinction
+
+- **Cleanup** operates on worktree state: it removes worktrees that are stale or orphaned. It uses `WorktreeManager::cleanup()` which interacts with git2 and the filesystem.
+- **Prune** operates on registry consistency: it reconciles the YAML registry against what is on disk. Stale entries are deregistered; orphaned directories are reported but not auto-registered.
+
+Both commands use locked registry access (`locked_read_registry`, `locked_deregister_worktree`) for concurrent safety.
+
+### 10.4 Integration with /cf-cleanup and /cf-doctor
+
+- `/cf-cleanup --worktrees` uses `codeflow worktree cleanup` and `codeflow worktree prune` for worktree maintenance.
+- `/cf-doctor` includes a worktree health check that runs `codeflow worktree prune --dry-run` and `codeflow parallel status` to detect issues.
 
 ---
 

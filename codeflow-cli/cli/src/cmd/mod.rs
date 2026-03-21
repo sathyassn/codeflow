@@ -10,6 +10,7 @@ pub mod init;
 pub mod internal;
 pub mod ledger;
 pub mod normalize;
+pub mod parallel;
 pub mod pathflow;
 pub mod report;
 pub mod sentinel;

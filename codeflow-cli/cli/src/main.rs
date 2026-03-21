@@ -65,7 +65,15 @@ enum Command {
     /// Settings management
     Settings,
     /// Git worktree management
-    Worktree,
+    Worktree {
+        #[command(subcommand)]
+        command: Option<cmd::worktree::WorktreeCommand>,
+    },
+    /// Parallel execution status
+    Parallel {
+        #[command(subcommand)]
+        command: Option<cmd::parallel::ParallelCommand>,
+    },
     /// Report generation
     Report,
     /// `WorkGraph` operations
@@ -122,7 +130,8 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Sentinel => cmd::sentinel::run(),
         Command::Coordination { command } => cmd::coordination::run(command),
         Command::Settings => cmd::settings::run(),
-        Command::Worktree => cmd::worktree::run(),
+        Command::Worktree { command } => cmd::worktree::run(command),
+        Command::Parallel { command } => cmd::parallel::run(command),
         Command::Report => cmd::report::run(),
         Command::Workgraph => cmd::workgraph::run().await,
         Command::Git { command } => cmd::git::run(command),
@@ -170,6 +179,7 @@ mod tests {
             "coordination",
             "settings",
             "worktree",
+            "parallel",
             "report",
             "workgraph",
             "git",
@@ -185,7 +195,7 @@ mod tests {
                 "help output missing subcommand: {cmd}"
             );
         }
-        assert_eq!(expected_commands.len(), 28);
+        assert_eq!(expected_commands.len(), 29);
     }
 
     #[test]
@@ -210,6 +220,7 @@ mod tests {
             "coordination",
             "settings",
             "worktree",
+            "parallel",
             "report",
             "workgraph",
             "git",
@@ -394,6 +405,61 @@ mod tests {
     fn test_sync_status_parses() {
         let result = Cli::try_parse_from(["codeflow", "sync", "status"]);
         assert!(result.is_ok(), "should parse sync status");
+    }
+
+    #[test]
+    fn test_worktree_list_parses() {
+        let result = Cli::try_parse_from(["codeflow", "worktree", "list"]);
+        assert!(result.is_ok(), "should parse worktree list");
+    }
+
+    #[test]
+    fn test_worktree_cleanup_parses() {
+        let result = Cli::try_parse_from(["codeflow", "worktree", "cleanup"]);
+        assert!(result.is_ok(), "should parse worktree cleanup");
+    }
+
+    #[test]
+    fn test_worktree_cleanup_with_flags_parses() {
+        let result = Cli::try_parse_from([
+            "codeflow", "worktree", "cleanup", "--force", "--dry-run",
+        ]);
+        assert!(
+            result.is_ok(),
+            "should parse worktree cleanup --force --dry-run"
+        );
+    }
+
+    #[test]
+    fn test_worktree_prune_parses() {
+        let result = Cli::try_parse_from(["codeflow", "worktree", "prune"]);
+        assert!(result.is_ok(), "should parse worktree prune");
+    }
+
+    #[test]
+    fn test_worktree_prune_dry_run_parses() {
+        let result =
+            Cli::try_parse_from(["codeflow", "worktree", "prune", "--dry-run"]);
+        assert!(result.is_ok(), "should parse worktree prune --dry-run");
+    }
+
+    #[test]
+    fn test_parallel_status_parses() {
+        let result = Cli::try_parse_from(["codeflow", "parallel", "status"]);
+        assert!(result.is_ok(), "should parse parallel status");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_worktree() {
+        let result = dispatch(Command::Worktree { command: None }).await;
+        // May fail if no project dir detected, which is fine.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_parallel() {
+        let result = dispatch(Command::Parallel { command: None }).await;
+        let _ = result;
     }
 
     #[test]

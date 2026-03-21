@@ -217,6 +217,8 @@ Next: Session ends. Start new session for new work.
   - Collect: session IDs, branches, ages
 
 - **Worktrees (if `--worktrees` or `--all`):**
+  - Use `codeflow worktree cleanup --dry-run` to preview stale worktrees
+  - Use `codeflow worktree prune --dry-run` to preview registry/filesystem inconsistencies
   - Send to cf-git-operations:
     - `"List all worktrees and identify which have merged branches"`
   - Identify: worktrees whose branches have been merged to main
@@ -251,7 +253,9 @@ Next: Session ends. Start new session for new work.
   - Archives session records, removes runtime state
 
 - **Worktrees:**
-  - Send to cf-git-operations:
+  - Run `codeflow worktree cleanup` to remove stale worktrees (or `--force` for orphaned too)
+  - Run `codeflow worktree prune` to reconcile registry with filesystem
+  - Send to cf-git-operations for branch-level cleanup:
     - `"Clean up worktrees: [{paths}]. Remove merged branches."`
   - cf-git-operations executes cleanup-worktrees SOP:
     - `git worktree remove {path}` for each clean worktree
