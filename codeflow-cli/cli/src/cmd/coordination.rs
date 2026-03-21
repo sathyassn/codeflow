@@ -147,4 +147,98 @@ mod tests {
         let result = run_status(dir.path());
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_coordination_status_with_malformed_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("worktrees.yaml"), "{{invalid yaml").unwrap();
+
+        // Should not error — prints error message but returns Ok.
+        let result = run_status(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_coordination_status_with_state_loro() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+
+        // Create a valid state.loro with empty merge queue.
+        let coord = codeflow_core::coordination::loro::LoroCoordinator::in_memory();
+        let bytes = coord.export_bytes().unwrap();
+        std::fs::write(coord_dir.join("state.loro"), bytes).unwrap();
+
+        let result = run_status(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_coordination_status_with_malformed_state_loro() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+        std::fs::write(coord_dir.join("state.loro"), b"not valid loro data").unwrap();
+
+        // Should not error — prints error message but returns Ok.
+        let result = run_status(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_coordination_status_with_merge_queue_entries() {
+        use codeflow_core::coordination::merge_queue;
+        use codeflow_core::coordination::Coordinator;
+
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+        let state_path = coord_dir.join("state.loro");
+
+        // Create coordinator and enqueue an entry.
+        let mut coord =
+            codeflow_core::coordination::loro::LoroCoordinator::new(&state_path).unwrap();
+        let sid = codeflow_core::types::SessionId::new_unchecked("ses-merge-test");
+        let entry = merge_queue::MergeQueueEntry {
+            session_id: sid,
+            task_id: "TSK-001".to_string(),
+            branch: "feat/test".to_string(),
+            pr_ready_at: "2026-03-21T12:00:00Z".to_string(),
+        };
+        merge_queue::enqueue(&mut coord, &entry).unwrap();
+        coord.persist().unwrap();
+
+        let result = run_status(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_coordination_status_with_detached_branch_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let registry_path = state_dir.join("worktrees.yaml");
+
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-19T10:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "ses-detached".to_string(),
+            path: "/tmp/wt/detached".to_string(),
+            branch: String::new(), // empty = detached HEAD
+            created_at: "2026-03-19T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let result = run_status(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_coordination_command_status_variant() {
+        let _cmd = CoordinationCommand::Status;
+    }
 }

@@ -62,7 +62,11 @@ async fn run_with_dir(project_dir: &Path) -> Result<()> {
         .await
         .context("executing autorun batch")?;
 
-    // Report results.
+    report_results(&results)
+}
+
+/// Report execution results and return error if any tasks failed or timed out.
+fn report_results(results: &[codeflow_core::autorun::WorkerResult]) -> Result<()> {
     let completed = results.iter().filter(|r| r.status == "completed").count();
     let failed = results.iter().filter(|r| r.status == "failed").count();
     let skipped = results.iter().filter(|r| r.status == "skipped").count();
@@ -72,18 +76,14 @@ async fn run_with_dir(project_dir: &Path) -> Result<()> {
         "autorun complete: {completed} completed, {failed} failed, {skipped} skipped, {timed_out} timed out"
     );
 
-    for result in &results {
+    for result in results {
         if result.status != "completed" {
             eprintln!(
                 "  task {}: {} (exit={}{})",
                 result.task_id,
                 result.status,
                 result.exit_code,
-                if result.error.is_empty() {
-                    String::new()
-                } else {
-                    format!(", error={}", result.error)
-                }
+                format_error(&result.error),
             );
         }
     }
@@ -93,6 +93,15 @@ async fn run_with_dir(project_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Format an error string for display in result output.
+fn format_error(error: &str) -> String {
+    if error.is_empty() {
+        String::new()
+    } else {
+        format!(", error={error}")
+    }
 }
 
 /// Real tmux runner that executes tmux commands via the system.
@@ -451,83 +460,91 @@ tasks:
         );
     }
 
-    // -- WorkerResult counting logic --
+    // -- report_results (extracted from run_with_dir) --
 
     #[test]
-    fn test_result_counting_all_completed() {
+    fn test_report_results_all_completed_returns_ok() {
         let results = vec![
             make_result("task-1", "completed", 0),
             make_result("task-2", "completed", 0),
             make_result("task-3", "completed", 0),
         ];
-        let (completed, failed, skipped, timed_out) = count_results(&results);
-        assert_eq!(completed, 3);
-        assert_eq!(failed, 0);
-        assert_eq!(skipped, 0);
-        assert_eq!(timed_out, 0);
+        assert!(report_results(&results).is_ok());
     }
 
     #[test]
-    fn test_result_counting_mixed() {
+    fn test_report_results_with_failure_returns_error() {
+        let results = vec![
+            make_result("task-1", "completed", 0),
+            make_result("task-2", "failed", 1),
+        ];
+        let err = report_results(&results).unwrap_err();
+        assert!(
+            err.to_string().contains("1 task(s) failed or timed out"),
+            "expected failure count in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_report_results_with_timeout_returns_error() {
+        let results = vec![make_result("task-1", "timeout", -1)];
+        let err = report_results(&results).unwrap_err();
+        assert!(err.to_string().contains("1 task(s) failed or timed out"));
+    }
+
+    #[test]
+    fn test_report_results_mixed_statuses() {
         let results = vec![
             make_result("task-1", "completed", 0),
             make_result("task-2", "failed", 1),
             make_result("task-3", "skipped", 0),
             make_result("task-4", "timeout", -1),
         ];
-        let (completed, failed, skipped, timed_out) = count_results(&results);
-        assert_eq!(completed, 1);
-        assert_eq!(failed, 1);
-        assert_eq!(skipped, 1);
-        assert_eq!(timed_out, 1);
+        let err = report_results(&results).unwrap_err();
+        assert!(
+            err.to_string().contains("2 task(s) failed or timed out"),
+            "expected 2 failures, got: {err}"
+        );
     }
 
     #[test]
-    fn test_result_counting_all_failed() {
+    fn test_report_results_skipped_only_returns_ok() {
         let results = vec![
-            make_result("task-1", "failed", 1),
-            make_result("task-2", "failed", 2),
+            make_result("task-1", "skipped", 0),
+            make_result("task-2", "skipped", 0),
         ];
-        let (completed, failed, skipped, timed_out) = count_results(&results);
-        assert_eq!(completed, 0);
-        assert_eq!(failed, 2);
-        assert_eq!(skipped, 0);
-        assert_eq!(timed_out, 0);
+        // Skipped tasks don't trigger failure.
+        assert!(report_results(&results).is_ok());
     }
 
     #[test]
-    fn test_result_counting_empty() {
+    fn test_report_results_empty_returns_ok() {
         let results: Vec<codeflow_core::autorun::WorkerResult> = vec![];
-        let (completed, failed, skipped, timed_out) = count_results(&results);
-        assert_eq!(completed, 0);
-        assert_eq!(failed, 0);
-        assert_eq!(skipped, 0);
-        assert_eq!(timed_out, 0);
+        assert!(report_results(&results).is_ok());
     }
 
     #[test]
-    fn test_result_error_display_with_error_message() {
-        let r = make_result_with_error("task-err", "failed", 1, "connection timeout");
-        assert_eq!(r.status, "failed");
-        assert_eq!(r.error, "connection timeout");
-        // Verify the error formatting matches run_with_dir output.
-        let display = if r.error.is_empty() {
-            String::new()
-        } else {
-            format!(", error={}", r.error)
-        };
-        assert_eq!(display, ", error=connection timeout");
+    fn test_report_results_with_error_message() {
+        let results = vec![make_result_with_error(
+            "task-err",
+            "failed",
+            1,
+            "connection timeout",
+        )];
+        let err = report_results(&results).unwrap_err();
+        assert!(err.to_string().contains("1 task(s) failed"));
+    }
+
+    // -- format_error --
+
+    #[test]
+    fn test_format_error_with_message() {
+        assert_eq!(format_error("connection timeout"), ", error=connection timeout");
     }
 
     #[test]
-    fn test_result_error_display_without_error_message() {
-        let r = make_result("task-ok", "completed", 0);
-        let display = if r.error.is_empty() {
-            String::new()
-        } else {
-            format!(", error={}", r.error)
-        };
-        assert!(display.is_empty());
+    fn test_format_error_empty() {
+        assert!(format_error("").is_empty());
     }
 
     // -- Worker/orchestrator construction --
@@ -632,13 +649,4 @@ tasks:
         }
     }
 
-    fn count_results(
-        results: &[codeflow_core::autorun::WorkerResult],
-    ) -> (usize, usize, usize, usize) {
-        let completed = results.iter().filter(|r| r.status == "completed").count();
-        let failed = results.iter().filter(|r| r.status == "failed").count();
-        let skipped = results.iter().filter(|r| r.status == "skipped").count();
-        let timed_out = results.iter().filter(|r| r.status == "timeout").count();
-        (completed, failed, skipped, timed_out)
-    }
 }
