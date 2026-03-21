@@ -207,6 +207,17 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - With `--repair`: run `codeflow worktree prune` to fix stale entries, `codeflow worktree cleanup` to remove stale worktrees
 - Check `codeflow parallel status` for active claims and merge queue state
 
+**Check 6c: Sync Daemon Health**
+
+- Check if the PID file exists at `.state/coordination/sync-daemon.pid`
+- If PID file exists: verify the daemon process is alive using `is_pid_alive(pid)` (equivalent to `/bin/kill -0 <pid>`)
+- Run `codeflow sync status` to get the full daemon status: running/stopped state, PID, peer ID, session count, and last sync completion flag
+- Check `.state/coordination/sync-state.json` for `last_sync_vv` — if `null`, the daemon has not completed a sync cycle yet
+- Check `.state/runtime/peer-id` exists — if missing, the daemon has not initialized yet
+- If active worktrees > 1 and daemon is stopped: report as WARNING (daemon should auto-start)
+- If active worktrees <= 1 and daemon is running: report as INFO (daemon may auto-stop on next worktree deregistration)
+- With `--repair`: if daemon should be running but is stopped, run `codeflow sync start`; if daemon should be stopped but is running (no active worktrees), run `codeflow sync stop`
+
 **Check 7: Teammate Responsiveness**
 
 - If a team is active, check team config for registered members

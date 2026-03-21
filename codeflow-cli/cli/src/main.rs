@@ -408,6 +408,24 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_start_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "start"]);
+        assert!(result.is_ok(), "should parse sync start");
+    }
+
+    #[test]
+    fn test_sync_start_with_interval_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "start", "--interval", "10"]);
+        assert!(result.is_ok(), "should parse sync start --interval 10");
+    }
+
+    #[test]
+    fn test_sync_stop_parses() {
+        let result = Cli::try_parse_from(["codeflow", "sync", "stop"]);
+        assert!(result.is_ok(), "should parse sync stop");
+    }
+
+    #[test]
     fn test_worktree_list_parses() {
         let result = Cli::try_parse_from(["codeflow", "worktree", "list"]);
         assert!(result.is_ok(), "should parse worktree list");
@@ -421,9 +439,8 @@ mod tests {
 
     #[test]
     fn test_worktree_cleanup_with_flags_parses() {
-        let result = Cli::try_parse_from([
-            "codeflow", "worktree", "cleanup", "--force", "--dry-run",
-        ]);
+        let result =
+            Cli::try_parse_from(["codeflow", "worktree", "cleanup", "--force", "--dry-run"]);
         assert!(
             result.is_ok(),
             "should parse worktree cleanup --force --dry-run"
@@ -438,8 +455,7 @@ mod tests {
 
     #[test]
     fn test_worktree_prune_dry_run_parses() {
-        let result =
-            Cli::try_parse_from(["codeflow", "worktree", "prune", "--dry-run"]);
+        let result = Cli::try_parse_from(["codeflow", "worktree", "prune", "--dry-run"]);
         assert!(result.is_ok(), "should parse worktree prune --dry-run");
     }
 

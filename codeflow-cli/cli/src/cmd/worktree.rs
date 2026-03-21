@@ -134,9 +134,7 @@ fn run_prune(project_dir: &Path, dry_run: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codeflow_core::worktree::{
-        WorktreeEntry, WorktreeRegistry, write_registry,
-    };
+    use codeflow_core::worktree::{WorktreeEntry, WorktreeRegistry, write_registry};
 
     #[test]
     fn test_worktree_command_exists() {
@@ -327,7 +325,10 @@ mod tests {
             prune: false,
         };
         let removed_no_force = mgr.cleanup_stale(&opts_no_force).unwrap();
-        assert!(removed_no_force.is_empty(), "orphaned not removed without force");
+        assert!(
+            removed_no_force.is_empty(),
+            "orphaned not removed without force"
+        );
 
         // With force, orphaned should be removed.
         let opts_force = CleanupOpts {
@@ -478,8 +479,7 @@ mod tests {
             .with_registry_path(dir.path().join(".state/worktrees.yaml"));
 
         // Create a worktree.
-        let branch =
-            codeflow_core::types::BranchName::new_unchecked("feat/prune-test");
+        let branch = codeflow_core::types::BranchName::new_unchecked("feat/prune-test");
         let entry = mgr.setup("prune-test", &branch).unwrap();
         assert_eq!(entry.status, "active");
 
@@ -493,7 +493,10 @@ mod tests {
         // Verify detect_state now returns Stale.
         let entries = mgr.list(None).unwrap();
         let our_entry = entries.iter().find(|e| e.name == "prune-test").unwrap();
-        assert_eq!(mgr.detect_state(our_entry), codeflow_core::worktree::WorktreeState::Stale);
+        assert_eq!(
+            mgr.detect_state(our_entry),
+            codeflow_core::worktree::WorktreeState::Stale
+        );
 
         // Run prune (reconcile).
         let (stale, _) = mgr.reconcile_registry(false).unwrap();
@@ -502,7 +505,11 @@ mod tests {
 
         // Verify registry was updated: entry is now "removed".
         let reg = codeflow_core::worktree::read_registry(mgr.registry_path()).unwrap();
-        let pruned = reg.worktrees.iter().find(|e| e.name == "prune-test").unwrap();
+        let pruned = reg
+            .worktrees
+            .iter()
+            .find(|e| e.name == "prune-test")
+            .unwrap();
         assert_eq!(pruned.status, "removed");
     }
 
@@ -550,7 +557,10 @@ mod tests {
         let cli = TestCli::try_parse_from(["test", "cleanup"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(WorktreeCommand::Cleanup { force: false, dry_run: false })
+            Some(WorktreeCommand::Cleanup {
+                force: false,
+                dry_run: false
+            })
         ));
     }
 
@@ -564,12 +574,13 @@ mod tests {
             command: Option<WorktreeCommand>,
         }
 
-        let cli =
-            TestCli::try_parse_from(["test", "cleanup", "--force", "--dry-run"])
-                .unwrap();
+        let cli = TestCli::try_parse_from(["test", "cleanup", "--force", "--dry-run"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(WorktreeCommand::Cleanup { force: true, dry_run: true })
+            Some(WorktreeCommand::Cleanup {
+                force: true,
+                dry_run: true
+            })
         ));
     }
 
@@ -600,8 +611,7 @@ mod tests {
             command: Option<WorktreeCommand>,
         }
 
-        let cli =
-            TestCli::try_parse_from(["test", "prune", "--dry-run"]).unwrap();
+        let cli = TestCli::try_parse_from(["test", "prune", "--dry-run"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(WorktreeCommand::Prune { dry_run: true })

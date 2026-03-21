@@ -4,6 +4,7 @@
 //! sync loop for same-machine compaction and multi-machine delta exchange.
 
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -15,12 +16,20 @@ use crate::helpers;
 /// Sync subcommands.
 #[derive(Debug, Subcommand)]
 pub enum SyncCommand {
-    /// Start the sync daemon (long-running process).
+    /// Start the sync daemon (long-running foreground process).
     Daemon {
-        /// Sync interval in seconds (default: 30).
+        /// Sync interval in seconds (default: 5).
         #[arg(long, default_value_t = DEFAULT_SYNC_INTERVAL_SECS)]
         interval: u64,
     },
+    /// Start the sync daemon as a background process.
+    Start {
+        /// Sync interval in seconds (default: 5).
+        #[arg(long, default_value_t = DEFAULT_SYNC_INTERVAL_SECS)]
+        interval: u64,
+    },
+    /// Stop the sync daemon gracefully.
+    Stop,
     /// Show sync daemon status.
     Status,
 }
@@ -39,6 +48,8 @@ pub fn run(command: SyncCommand) -> Result<()> {
 fn run_with_dir(project_dir: &Path, command: &SyncCommand) -> Result<()> {
     match command {
         SyncCommand::Daemon { interval } => run_daemon(project_dir, *interval),
+        SyncCommand::Start { interval } => run_start(project_dir, *interval),
+        SyncCommand::Stop => run_stop(project_dir),
         SyncCommand::Status => {
             run_status(project_dir);
             Ok(())
@@ -46,9 +57,12 @@ fn run_with_dir(project_dir: &Path, command: &SyncCommand) -> Result<()> {
     }
 }
 
-/// Run the sync daemon loop.
+/// Run the sync daemon loop (foreground).
 fn run_daemon(project_dir: &Path, interval_secs: u64) -> Result<()> {
     let config = SyncConfig::from_project_dir(project_dir, interval_secs);
+
+    // Register SIGTERM/SIGINT handler.
+    let term_flag = sync::register_signal_handler().context("registering signal handler")?;
 
     // Ensure peer ID exists.
     let peer_id = sync::ensure_peer_id(&config.runtime_dir).context("ensuring peer ID")?;
@@ -66,8 +80,19 @@ fn run_daemon(project_dir: &Path, interval_secs: u64) -> Result<()> {
 
     // Run sync loop until interrupted.
     loop {
+        // Check SIGTERM flag first.
+        if term_flag.load(Ordering::Relaxed) {
+            eprintln!("SIGTERM received, shutting down");
+            break;
+        }
+
         if let Err(e) = sync::run_sync_cycle(&config, &peer_id) {
             eprintln!("sync cycle error: {e}");
+        }
+
+        // Run crash cleanup: detect dead workers and release their claims.
+        if let Err(e) = sync::cleanup_dead_workers(&config) {
+            eprintln!("crash cleanup error: {e}");
         }
 
         // Check if ref count has reached 0 (graceful shutdown).
@@ -94,43 +119,59 @@ fn run_daemon(project_dir: &Path, interval_secs: u64) -> Result<()> {
     Ok(())
 }
 
+/// Start the sync daemon as a background process.
+fn run_start(project_dir: &Path, interval_secs: u64) -> Result<()> {
+    let config = SyncConfig::from_project_dir(project_dir, interval_secs);
+    let pid = sync::start_daemon(&config).context("starting sync daemon")?;
+    println!("sync daemon started (pid={pid})");
+    Ok(())
+}
+
+/// Stop the sync daemon.
+fn run_stop(project_dir: &Path) -> Result<()> {
+    let config = SyncConfig::from_project_dir(project_dir, DEFAULT_SYNC_INTERVAL_SECS);
+    sync::stop_daemon(&config).context("stopping sync daemon")?;
+    println!("sync daemon stopped");
+    Ok(())
+}
+
 /// Show the sync daemon status.
 fn run_status(project_dir: &Path) {
     let config = SyncConfig::from_project_dir(project_dir, DEFAULT_SYNC_INTERVAL_SECS);
+    let status = sync::daemon_status(&config);
 
-    match sync::read_pid_file(&config.pid_path) {
-        Ok(pid_file) => {
-            println!("sync daemon: running");
-            println!("  pid: {}", pid_file.pid);
-            println!("  sessions: {}", pid_file.sessions.len());
-            println!("  ref_count: {}", pid_file.ref_count);
-            for session in &pid_file.sessions {
-                println!("    - {session}");
-            }
+    if status.running {
+        println!("sync daemon: running");
+        if let Some(pid) = status.pid {
+            println!("  pid: {pid}");
         }
-        Err(_) => {
-            println!("sync daemon: not running");
-        }
-    }
-
-    // Show sync state.
-    match sync::read_sync_state(&config.sync_state_path) {
-        Ok(state) => {
-            if state.last_sync_vv.is_some() {
-                println!("last sync: completed (version vector stored)");
-            } else {
-                println!("last sync: never");
-            }
-        }
-        Err(_) => {
-            println!("last sync: unknown");
-        }
+    } else {
+        println!("sync daemon: not running");
     }
 
     // Show peer ID.
-    match sync::ensure_peer_id(&config.runtime_dir) {
-        Ok(peer_id) => println!("peer id: {}", peer_id.as_str()),
-        Err(_) => println!("peer id: not set"),
+    if let Some(ref peer_id) = status.peer_id {
+        println!("  peer_id: {peer_id}");
+    } else {
+        println!("  peer_id: not set");
+    }
+
+    // Show session count.
+    println!("  sessions: {}", status.session_count);
+
+    // Show last sync status.
+    if status.last_sync_completed {
+        println!("  last_sync: completed");
+    } else {
+        println!("  last_sync: never");
+    }
+
+    // Show detailed PID file info if available.
+    if let Ok(pid_file) = sync::read_pid_file(&config.pid_path) {
+        println!("  ref_count: {}", pid_file.ref_count);
+        for session in &pid_file.sessions {
+            println!("    - {session}");
+        }
     }
 }
 
@@ -317,7 +358,72 @@ mod tests {
     fn test_sync_config_default_interval() {
         let dir = std::path::Path::new("/tmp/project");
         let config = SyncConfig::from_project_dir(dir, DEFAULT_SYNC_INTERVAL_SECS);
-        assert_eq!(config.interval.as_secs(), 30);
+        assert_eq!(config.interval.as_secs(), 5);
+    }
+
+    // -- dispatch tests for Start/Stop --
+
+    #[test]
+    fn test_dispatch_stop_no_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_with_dir(dir.path(), &SyncCommand::Stop);
+        // Should error because no PID file exists.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dispatch_stop_with_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+
+        let pf = PidFile::new(99_999_999);
+        sync::write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let result = run_with_dir(dir.path(), &SyncCommand::Stop);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dispatch_start_already_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+
+        // Write PID file with current PID (alive).
+        let pf = PidFile::new(std::process::id());
+        sync::write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let result = run_with_dir(dir.path(), &SyncCommand::Start { interval: 5 });
+        assert!(result.is_ok());
+    }
+
+    // -- enhanced status tests --
+
+    #[test]
+    fn test_status_with_daemon_status_struct() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&coord_dir).unwrap();
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+
+        // Write alive daemon PID file with sessions.
+        let mut pf = PidFile::new(std::process::id());
+        pf.add_session(&session("ses-status-test"));
+        sync::write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        // Sync state with version vector.
+        let state = sync::SyncState {
+            last_sync_vv: Some(vec![42]),
+        };
+        sync::write_sync_state(&coord_dir.join("sync-state.json"), &state).unwrap();
+
+        // Peer ID.
+        std::fs::write(runtime_dir.join("peer-id"), "test-peer").unwrap();
+
+        run_status(dir.path());
+        // Exercises all branches of enhanced status output.
     }
 
     // -- run_daemon specific tests --

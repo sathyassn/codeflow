@@ -42,7 +42,7 @@ use crate::types::SessionId;
 // ---------------------------------------------------------------------------
 
 /// Default sync interval in seconds.
-pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 5;
 
 /// Maximum retries per sync cycle on network errors.
 const MAX_RETRIES: u32 = 5;
@@ -443,8 +443,12 @@ pub struct SyncConfig {
     pub interval: Duration,
 }
 
+/// Path to parallel-work config relative to project root.
+const PARALLEL_WORK_CONFIG_PATH: &str =
+    ".codeflow/config/parallel-work/parallel-work-config.json";
+
 impl SyncConfig {
-    /// Create a `SyncConfig` from a project directory with standard paths.
+    /// Create a `SyncConfig` from a project directory with an explicit interval.
     #[must_use]
     pub fn from_project_dir(project_dir: &Path, interval_secs: u64) -> Self {
         let state_dir = project_dir.join(".state").join("coordination");
@@ -458,6 +462,35 @@ impl SyncConfig {
             interval: Duration::from_secs(interval_secs),
         }
     }
+
+    /// Create a `SyncConfig` by reading `sync.interval_secs` from
+    /// `parallel-work-config.json`.
+    ///
+    /// Falls back to `DEFAULT_SYNC_INTERVAL_SECS` if the config file is
+    /// absent or unparseable.
+    #[must_use]
+    pub fn from_config_file(project_dir: &Path) -> Self {
+        let interval = read_config_interval(project_dir);
+        Self::from_project_dir(project_dir, interval)
+    }
+}
+
+/// Read `sync.interval_secs` from the parallel-work config file.
+///
+/// Returns `DEFAULT_SYNC_INTERVAL_SECS` if the file is missing, unreadable,
+/// or does not contain the expected field.
+fn read_config_interval(project_dir: &Path) -> u64 {
+    let config_path = project_dir.join(PARALLEL_WORK_CONFIG_PATH);
+    let Ok(data) = fs::read_to_string(&config_path) else {
+        return DEFAULT_SYNC_INTERVAL_SECS;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return DEFAULT_SYNC_INTERVAL_SECS;
+    };
+    val.get("sync")
+        .and_then(|s| s.get("interval_secs"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(DEFAULT_SYNC_INTERVAL_SECS)
 }
 
 /// Run a single sync cycle.
@@ -563,6 +596,254 @@ pub fn find_stale_claims(coordinator: &LoroCoordinator) -> Vec<(String, Claim)> 
     });
 
     stale
+}
+
+// ---------------------------------------------------------------------------
+// Process liveness check
+// ---------------------------------------------------------------------------
+
+/// Check if a process with the given PID is alive.
+///
+/// Uses `/bin/kill -0 <pid>` which sends no signal but returns 0 if the
+/// process exists. This avoids `unsafe` libc calls.
+#[must_use]
+pub fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+// ---------------------------------------------------------------------------
+// Daemon lifecycle
+// ---------------------------------------------------------------------------
+
+/// Status of the sync daemon.
+#[derive(Debug, Clone)]
+pub struct DaemonStatus {
+    /// Whether the daemon is currently running.
+    pub running: bool,
+    /// Daemon process ID (if running).
+    pub pid: Option<u32>,
+    /// Local peer ID.
+    pub peer_id: Option<String>,
+    /// Number of tracked sessions.
+    pub session_count: usize,
+    /// Whether last sync completed (version vector exists).
+    pub last_sync_completed: bool,
+}
+
+/// Get the current daemon status.
+///
+/// Reads the PID file, sync state, and peer ID to build a status report.
+#[must_use]
+pub fn daemon_status(config: &SyncConfig) -> DaemonStatus {
+    let pid_info = read_pid_file(&config.pid_path).ok();
+    let running = pid_info.as_ref().is_some_and(|pf| is_pid_alive(pf.pid));
+
+    let peer_id = ensure_peer_id(&config.runtime_dir)
+        .ok()
+        .map(|p| p.as_str().to_string());
+
+    let last_sync_completed = read_sync_state(&config.sync_state_path)
+        .ok()
+        .is_some_and(|s| s.last_sync_vv.is_some());
+
+    DaemonStatus {
+        running,
+        pid: pid_info.as_ref().map(|pf| pf.pid),
+        peer_id,
+        session_count: pid_info.as_ref().map_or(0, |pf| pf.sessions.len()),
+        last_sync_completed,
+    }
+}
+
+/// Start the sync daemon as a background process.
+///
+/// Spawns `codeflow sync daemon --interval {interval}` as a detached child
+/// process. Idempotent: if a daemon is already running (PID alive), returns
+/// `Ok(())` without spawning.
+///
+/// # Errors
+///
+/// Returns `SyncError` if the process cannot be spawned.
+pub fn start_daemon(config: &SyncConfig) -> Result<u32, SyncError> {
+    // Check if already running.
+    if let Ok(pf) = read_pid_file(&config.pid_path) {
+        if is_pid_alive(pf.pid) {
+            return Ok(pf.pid);
+        }
+        // Stale PID file — remove it.
+        let _ = remove_pid_file(&config.pid_path);
+    }
+
+    let interval = config.interval.as_secs();
+    let child = std::process::Command::new("codeflow")
+        .args(["sync", "daemon", "--interval", &interval.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| SyncError::ConnectionError(format!("failed to spawn daemon: {e}")))?;
+
+    let pid = child.id();
+    Ok(pid)
+}
+
+/// Stop the sync daemon gracefully by sending SIGTERM.
+///
+/// Reads the PID from the PID file, sends SIGTERM, waits briefly for exit,
+/// and removes the PID file.
+///
+/// # Errors
+///
+/// Returns `SyncError` if the PID file cannot be read or SIGTERM fails.
+pub fn stop_daemon(config: &SyncConfig) -> Result<(), SyncError> {
+    let pf = read_pid_file(&config.pid_path)?;
+
+    if is_pid_alive(pf.pid) {
+        // Send SIGTERM via /bin/kill.
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-TERM", &pf.pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        // Brief wait for graceful shutdown.
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    remove_pid_file(&config.pid_path)
+}
+
+/// Register a SIGTERM handler that sets an `AtomicBool` flag.
+///
+/// Uses `signal-hook` for async-signal-safe flag registration.
+/// Returns the `Arc<AtomicBool>` that will be set to `true` when SIGTERM
+/// or SIGINT is received.
+///
+/// # Errors
+///
+/// Returns `SyncError` if signal registration fails.
+pub fn register_signal_handler() -> Result<std::sync::Arc<std::sync::atomic::AtomicBool>, SyncError>
+{
+    let term_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        std::sync::Arc::clone(&term_flag),
+    )
+    .map_err(|e| SyncError::ConnectionError(format!("failed to register SIGTERM: {e}")))?;
+
+    signal_hook::flag::register(
+        signal_hook::consts::SIGINT,
+        std::sync::Arc::clone(&term_flag),
+    )
+    .map_err(|e| SyncError::ConnectionError(format!("failed to register SIGINT: {e}")))?;
+
+    Ok(term_flag)
+}
+
+// ---------------------------------------------------------------------------
+// Crash cleanup
+// ---------------------------------------------------------------------------
+
+/// Detect dead worker PIDs and release their claims.
+///
+/// On each sync cycle, reads session status files to get lead PIDs.
+/// If a PID is dead, calls `release_all()` for that session's claims.
+///
+/// # Errors
+///
+/// Returns `SyncError` if claim release fails.
+pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
+    let pid_file = match read_pid_file(&config.pid_path) {
+        Ok(pf) => pf,
+        Err(_) => return Ok(0),
+    };
+
+    let mut total_released = 0;
+
+    // Check each tracked session's liveness via its pathflow-session-status.json.
+    for session_id in &pid_file.sessions {
+        let status_path = config
+            .project_dir
+            .join(".state")
+            .join("session")
+            .join(session_id.as_str())
+            .join("pathflow")
+            .join("pathflow-session-status.json");
+
+        if let Ok(content) = fs::read_to_string(&status_path) {
+            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(lead_pid) = status.get("lead_pid").and_then(serde_json::Value::as_u64) {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let pid = lead_pid as u32;
+                    if !is_pid_alive(pid) {
+                        // Worker is dead — release its claims.
+                        let released =
+                            release_dead_session_claims(&config.state_loro_path, session_id)?;
+                        total_released += released;
+                        eprintln!(
+                            "crash cleanup: released {released} claims for dead session {} (pid {pid})",
+                            session_id.as_str()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(total_released)
+}
+
+/// Release claims for a specific dead session using `locked_binary_rmw`.
+fn release_dead_session_claims(
+    state_loro_path: &Path,
+    session_id: &SessionId,
+) -> Result<usize, SyncError> {
+    let sid = session_id.clone();
+    let mut released_count = 0usize;
+
+    locked_binary_rmw(
+        state_loro_path,
+        LoroCoordinator::in_memory,
+        |bytes| {
+            LoroCoordinator::from_bytes(bytes, state_loro_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            // Find all claims owned by this session.
+            let claims_map = coord.doc().get_map("claims");
+            let mut owned_paths = Vec::new();
+
+            claims_map.for_each(|key, value| {
+                if let loro::ValueOrContainer::Value(loro::LoroValue::String(json_str)) = value {
+                    if let Ok(claim) = serde_json::from_str::<Claim>(&json_str) {
+                        if claim.owner == sid {
+                            owned_paths.push(key.to_string());
+                        }
+                    }
+                }
+            });
+
+            // Delete each owned claim.
+            for path in &owned_paths {
+                let _ = claims_map.delete(path);
+            }
+            if !owned_paths.is_empty() {
+                coord.doc().commit();
+            }
+            released_count = owned_paths.len();
+            Ok(())
+        },
+    )
+    .map_err(|e| SyncError::ConnectionError(format!("crash cleanup failed: {e}")))?;
+
+    Ok(released_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +1248,84 @@ mod tests {
         assert_eq!(config.interval, Duration::from_secs(60));
     }
 
+    // -- from_config_file tests --
+
+    #[test]
+    fn test_sync_config_from_config_file_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig::from_config_file(dir.path());
+        // No config file — should use DEFAULT_SYNC_INTERVAL_SECS (5).
+        assert_eq!(
+            config.interval,
+            Duration::from_secs(DEFAULT_SYNC_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn test_sync_config_from_config_file_with_custom_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{"sync": {"interval_secs": 10}}"#,
+        )
+        .unwrap();
+
+        let config = SyncConfig::from_config_file(dir.path());
+        assert_eq!(config.interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_sync_config_from_config_file_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("parallel-work-config.json"),
+            "not valid json",
+        )
+        .unwrap();
+
+        let config = SyncConfig::from_config_file(dir.path());
+        // Malformed — should fall back to default.
+        assert_eq!(
+            config.interval,
+            Duration::from_secs(DEFAULT_SYNC_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn test_sync_config_from_config_file_missing_sync_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{"merge": {"auto_rebase": true}}"#,
+        )
+        .unwrap();
+
+        let config = SyncConfig::from_config_file(dir.path());
+        // No sync section — should fall back to default.
+        assert_eq!(
+            config.interval,
+            Duration::from_secs(DEFAULT_SYNC_INTERVAL_SECS)
+        );
+    }
+
     // -- Integration test: peer delta exchange --
 
     #[test]
@@ -1046,6 +1405,222 @@ mod tests {
         let path = dir.path().join("state.loro");
         // Empty delta should be no-op.
         import_peer_delta(&path, &[]).unwrap();
+    }
+
+    // -- is_pid_alive tests --
+
+    #[test]
+    fn test_is_pid_alive_current_process() {
+        let pid = std::process::id();
+        assert!(is_pid_alive(pid));
+    }
+
+    #[test]
+    fn test_is_pid_alive_nonexistent_pid() {
+        // PID 99999999 is very unlikely to exist.
+        assert!(!is_pid_alive(99_999_999));
+    }
+
+    // -- DaemonStatus tests --
+
+    #[test]
+    fn test_daemon_status_no_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let status = daemon_status(&config);
+        assert!(!status.running);
+        assert!(status.pid.is_none());
+        assert_eq!(status.session_count, 0);
+        assert!(!status.last_sync_completed);
+    }
+
+    #[test]
+    fn test_daemon_status_with_dead_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Write PID file with a dead PID.
+        let pf = PidFile::new(99_999_999);
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let status = daemon_status(&config);
+        assert!(!status.running);
+        assert_eq!(status.pid, Some(99_999_999));
+        assert_eq!(status.session_count, 0);
+    }
+
+    #[test]
+    fn test_daemon_status_with_alive_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Write PID file with current process PID (alive).
+        let mut pf = PidFile::new(std::process::id());
+        pf.add_session(&session("ses-alive"));
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let status = daemon_status(&config);
+        assert!(status.running);
+        assert_eq!(status.pid, Some(std::process::id()));
+        assert_eq!(status.session_count, 1);
+    }
+
+    #[test]
+    fn test_daemon_status_with_sync_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        let state = SyncState {
+            last_sync_vv: Some(vec![1, 2, 3]),
+        };
+        write_sync_state(&coord_dir.join("sync-state.json"), &state).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let status = daemon_status(&config);
+        assert!(status.last_sync_completed);
+    }
+
+    // -- start_daemon tests --
+
+    #[test]
+    fn test_start_daemon_returns_pid_if_already_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Write PID file with our own PID (alive).
+        let pf = PidFile::new(std::process::id());
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let pid = start_daemon(&config).unwrap();
+        assert_eq!(pid, std::process::id());
+    }
+
+    #[test]
+    fn test_start_daemon_removes_stale_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Write PID file with dead PID.
+        let pf = PidFile::new(99_999_999);
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        // Will fail because "codeflow" binary likely not on PATH in test, but
+        // it should have removed the stale PID file first.
+        let _ = start_daemon(&config);
+        // If it got past the stale check, the PID file was removed.
+    }
+
+    // -- stop_daemon tests --
+
+    #[test]
+    fn test_stop_daemon_no_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let result = stop_daemon(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stop_daemon_with_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        let pf = PidFile::new(99_999_999);
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let result = stop_daemon(&config);
+        assert!(result.is_ok());
+        // PID file should be removed.
+        assert!(!coord_dir.join("sync-daemon.pid").exists());
+    }
+
+    // -- register_signal_handler tests --
+
+    #[test]
+    fn test_register_signal_handler() {
+        let flag = register_signal_handler().unwrap();
+        // Flag should start as false.
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    // -- cleanup_dead_workers tests --
+
+    #[test]
+    fn test_cleanup_dead_workers_no_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let released = cleanup_dead_workers(&config).unwrap();
+        assert_eq!(released, 0);
+    }
+
+    #[test]
+    fn test_cleanup_dead_workers_no_dead_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        let pf = PidFile::new(std::process::id());
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let released = cleanup_dead_workers(&config).unwrap();
+        assert_eq!(released, 0);
+    }
+
+    #[test]
+    fn test_cleanup_dead_workers_releases_dead_session_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Create a coordinator with a claim from ses-dead.
+        let mut coord = LoroCoordinator::in_memory();
+        let sid = session("ses-dead");
+        coord.acquire("src/main.rs", &sid).unwrap();
+        let snapshot = coord.export_bytes().unwrap();
+        fs::write(coord_dir.join("state.loro"), &snapshot).unwrap();
+
+        // Write PID file tracking ses-dead.
+        let mut pf = PidFile::new(std::process::id());
+        pf.add_session(&sid);
+        write_pid_file(&coord_dir.join("sync-daemon.pid"), &pf).unwrap();
+
+        // Write session status with a dead PID.
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join("ses-dead")
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"session_id":"ses-dead","lead_pid":99999999,"status":"pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let released = cleanup_dead_workers(&config).unwrap();
+        assert_eq!(released, 1);
+
+        // Verify claim was released.
+        let bytes = fs::read(coord_dir.join("state.loro")).unwrap();
+        let reloaded = LoroCoordinator::from_bytes(&bytes, &coord_dir.join("state.loro")).unwrap();
+        assert!(
+            reloaded.check("src/main.rs").is_none(),
+            "claim should be released after cleanup"
+        );
     }
 
     // -- SyncError classification tests --

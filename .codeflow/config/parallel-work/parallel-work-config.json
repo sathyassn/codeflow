@@ -5,7 +5,7 @@
     "base_dir": ".git-worktrees"
   },
   "sync": {
-    "interval_secs": 30,
+    "interval_secs": 5,
     "auto_start": true
   },
   "merge": {

@@ -24,6 +24,7 @@ sha2 = "0.10"
 tokio = { workspace = true }
 loro = { workspace = true }
 which = "7"
+signal-hook = "0.3"
 
 [dev-dependencies]
 proptest = { workspace = true }

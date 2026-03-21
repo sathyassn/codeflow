@@ -3504,10 +3504,7 @@ mod tests {
     /// Write a parallel-work config with `worktree.mode=always` into the tempdir.
     /// Required for tests that expect worktree creation on startup.
     fn write_worktree_always_config(dir: &Path) {
-        let config_dir = dir
-            .join(".codeflow")
-            .join("config")
-            .join("parallel-work");
+        let config_dir = dir.join(".codeflow").join("config").join("parallel-work");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(
             config_dir.join("parallel-work-config.json"),

@@ -120,6 +120,69 @@ fn find_target_ref<'r>(
         .map_err(|_| GitError::RefNotFound(format!("neither {remote_ref} nor {local_ref} exists")))
 }
 
+/// Result of a rebase attempt.
+#[derive(Debug, Clone)]
+pub enum RebaseResult {
+    /// Rebase completed successfully.
+    Success,
+    /// Rebase aborted due to conflicts.
+    ConflictAborted {
+        /// Files that had conflicts during rebase.
+        conflicting_files: Vec<String>,
+    },
+}
+
+/// Attempt to rebase the current branch onto the target branch.
+///
+/// Runs `git rebase <target_branch>` as a subprocess. If rebase fails due
+/// to conflicts, aborts the rebase and returns `ConflictAborted`.
+///
+/// # Arguments
+///
+/// * `repo_path` - Path to the git repository.
+/// * `target_branch` - Branch to rebase onto (e.g., "main").
+///
+/// # Errors
+///
+/// Returns `GitError` if git commands fail for non-conflict reasons.
+pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseResult, GitError> {
+    let output = std::process::Command::new("git")
+        .args(["rebase", target_branch])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| GitError::MergeFailed(format!("failed to run git rebase: {e}")))?;
+
+    if output.status.success() {
+        return Ok(RebaseResult::Success);
+    }
+
+    // Rebase failed — collect conflict info from status and abort.
+    let status_output = std::process::Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .current_dir(repo_path)
+        .output()
+        .ok();
+
+    let conflicting_files = status_output
+        .as_ref()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Abort the in-progress rebase.
+    let _ = std::process::Command::new("git")
+        .args(["rebase", "--abort"])
+        .current_dir(repo_path)
+        .output();
+
+    Ok(RebaseResult::ConflictAborted { conflicting_files })
+}
+
 /// Collect file paths from merge conflicts in the index.
 fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
     let mut paths = Vec::new();
@@ -450,6 +513,130 @@ mod tests {
         assert!(
             matches!(err, GitError::RefNotFound(_)),
             "expected RefNotFound, got: {err}"
+        );
+    }
+
+    // -- RebaseResult tests --
+
+    #[test]
+    fn test_rebase_result_success_debug() {
+        let result = RebaseResult::Success;
+        let debug = format!("{result:?}");
+        assert!(debug.contains("Success"));
+    }
+
+    #[test]
+    fn test_rebase_result_conflict_aborted_debug() {
+        let result = RebaseResult::ConflictAborted {
+            conflicting_files: vec!["a.rs".to_string()],
+        };
+        let debug = format!("{result:?}");
+        assert!(debug.contains("ConflictAborted"));
+        assert!(debug.contains("a.rs"));
+    }
+
+    #[test]
+    fn test_rebase_result_clone() {
+        let result = RebaseResult::ConflictAborted {
+            conflicting_files: vec!["b.rs".to_string()],
+        };
+        let cloned = result.clone();
+        if let RebaseResult::ConflictAborted { conflicting_files } = cloned {
+            assert_eq!(conflicting_files, vec!["b.rs".to_string()]);
+        } else {
+            panic!("expected ConflictAborted");
+        }
+    }
+
+    // -- attempt_rebase tests --
+
+    #[test]
+    fn test_attempt_rebase_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_file(dir.path(), "base.txt", "base\n");
+
+        // Create target branch at initial commit.
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("target", &head, false).unwrap();
+        }
+
+        // Add a non-conflicting commit on main.
+        commit_file(
+            &repo,
+            dir.path(),
+            "feature.txt",
+            "new file\n",
+            "add feature",
+        );
+
+        // Add a commit on target (different file).
+        repo.set_head("refs/heads/target").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        commit_file(&repo, dir.path(), "other.txt", "other file\n", "add other");
+
+        // Switch back to main.
+        repo.set_head("refs/heads/main").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+
+        let result = attempt_rebase(dir.path(), "target").unwrap();
+        assert!(matches!(result, RebaseResult::Success));
+    }
+
+    #[test]
+    fn test_attempt_rebase_with_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_file(dir.path(), "file.txt", "base\n");
+
+        // Create target branch.
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("target", &head, false).unwrap();
+        }
+
+        // Modify file on target.
+        repo.set_head("refs/heads/target").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        commit_file(
+            &repo,
+            dir.path(),
+            "file.txt",
+            "target change\n",
+            "target edit",
+        );
+
+        // Modify same file on main (conflicting).
+        repo.set_head("refs/heads/main").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        commit_file(&repo, dir.path(), "file.txt", "main change\n", "main edit");
+
+        let result = attempt_rebase(dir.path(), "target").unwrap();
+        assert!(
+            matches!(result, RebaseResult::ConflictAborted { .. }),
+            "expected ConflictAborted, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_attempt_rebase_nonexistent_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_repo_with_file(dir.path(), "file.txt", "content\n");
+
+        // Rebase onto a branch that doesn't exist — should fail.
+        let result = attempt_rebase(dir.path(), "nonexistent-branch-xyz");
+        assert!(result.is_ok());
+        // git rebase on a nonexistent branch returns an error exit code,
+        // which we treat as ConflictAborted.
+        assert!(
+            matches!(
+                result.as_ref().unwrap(),
+                RebaseResult::ConflictAborted { .. }
+            ),
+            "expected ConflictAborted for nonexistent branch, got {result:?}"
         );
     }
 

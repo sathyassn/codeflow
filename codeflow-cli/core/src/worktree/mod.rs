@@ -25,7 +25,8 @@ pub use cleanup::CleanupOpts;
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, count_active, list_active, locked_deregister_worktree,
-    locked_read_registry, locked_register_with_limit, read_registry, write_registry,
+    locked_read_registry, locked_register_with_limit, maybe_auto_start_daemon,
+    maybe_auto_stop_daemon, read_registry, write_registry,
 };
 
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
@@ -286,10 +287,7 @@ impl WorktreeManager {
     /// # Errors
     ///
     /// Returns `WorktreeError::Io` or `WorktreeError::Yaml` on registry access failure.
-    pub fn cleanup_stale(
-        &self,
-        opts: &CleanupOpts,
-    ) -> Result<Vec<String>, WorktreeError> {
+    pub fn cleanup_stale(&self, opts: &CleanupOpts) -> Result<Vec<String>, WorktreeError> {
         let reg = registry::locked_read_registry(&self.registry_path)?;
         let mut removed = Vec::new();
 
@@ -343,10 +341,7 @@ impl WorktreeManager {
                 stale_entries.push(entry.name.clone());
                 if !dry_run {
                     let wt_path_str = entry.path.clone();
-                    registry::locked_deregister_worktree(
-                        &self.registry_path,
-                        &wt_path_str,
-                    )?;
+                    registry::locked_deregister_worktree(&self.registry_path, &wt_path_str)?;
                 }
             }
         }

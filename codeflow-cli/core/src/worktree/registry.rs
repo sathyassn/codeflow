@@ -307,6 +307,69 @@ pub fn locked_deregister_worktree(
     .map_err(|e| WorktreeError::Yaml(format!("locked deregister: {e}")))
 }
 
+/// Trigger daemon auto-start if active worktree count transitions above 1.
+///
+/// Should be called AFTER a successful worktree registration (outside the
+/// registry lock). Reads the registry count, and if count > 1, starts the
+/// sync daemon. The interval is read from `parallel-work-config.json`.
+///
+/// # Errors
+///
+/// Returns `WorktreeError` if the registry cannot be read.
+pub fn maybe_auto_start_daemon(
+    registry_path: &Path,
+    project_dir: &std::path::Path,
+) -> Result<(), WorktreeError> {
+    let reg = locked_read_registry(registry_path)?;
+    let active = count_active(&reg);
+
+    if active > 1 {
+        let config = crate::coordination::sync::SyncConfig::from_config_file(project_dir);
+        match crate::coordination::sync::start_daemon(&config) {
+            Ok(pid) => {
+                eprintln!("sync daemon auto-started (pid={pid}, active_worktrees={active})");
+            }
+            Err(e) => {
+                eprintln!("sync daemon auto-start failed: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Trigger daemon auto-stop if active worktree count drops to 1 or below.
+///
+/// Should be called AFTER a successful worktree deregistration (outside the
+/// registry lock). Reads the registry count, and if count <= 1, stops the
+/// sync daemon. The config is read from `parallel-work-config.json`.
+///
+/// # Errors
+///
+/// Returns `WorktreeError` if the registry cannot be read.
+pub fn maybe_auto_stop_daemon(
+    registry_path: &Path,
+    project_dir: &std::path::Path,
+) -> Result<(), WorktreeError> {
+    let reg = locked_read_registry(registry_path)?;
+    let active = count_active(&reg);
+
+    if active <= 1 {
+        let config = crate::coordination::sync::SyncConfig::from_config_file(project_dir);
+        match crate::coordination::sync::stop_daemon(&config) {
+            Ok(()) => {
+                eprintln!("sync daemon auto-stopped (active_worktrees={active})");
+            }
+            Err(e) => {
+                // Not an error if daemon wasn't running.
+                eprintln!("sync daemon auto-stop: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Convert days since Unix epoch to (year, month, day).
 pub(crate) fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant's civil_from_days.
@@ -696,6 +759,86 @@ session_id: ses-123
         let active = list_active(&reg);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].name, "active-1");
+    }
+
+    // -- auto-start/stop daemon tests --
+
+    #[test]
+    fn test_maybe_auto_start_daemon_below_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join("worktrees.yaml");
+
+        // Register 1 active worktree — should NOT trigger daemon start.
+        let entry = WorktreeEntry {
+            name: "wt-1".to_string(),
+            path: "/tmp/wt/1".to_string(),
+            branch: "feat/one".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        locked_register_with_limit(&reg_path, &entry, 3).unwrap();
+
+        // Should succeed without starting daemon (count == 1, threshold > 1).
+        let result = maybe_auto_start_daemon(&reg_path, dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_maybe_auto_stop_daemon_above_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join("worktrees.yaml");
+
+        // Register 2 active worktrees — should NOT trigger daemon stop.
+        for i in 0..2 {
+            let entry = WorktreeEntry {
+                name: format!("wt-{i}"),
+                path: format!("/tmp/wt/{i}"),
+                branch: format!("feat/{i}"),
+                created_at: "2026-03-07T10:00:00Z".to_string(),
+                status: "active".to_string(),
+                session_id: None,
+                task_id: None,
+            };
+            locked_register_with_limit(&reg_path, &entry, 3).unwrap();
+        }
+
+        // Should succeed without stopping daemon (count == 2, threshold <= 1).
+        let result = maybe_auto_stop_daemon(&reg_path, dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_maybe_auto_stop_daemon_at_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join("worktrees.yaml");
+
+        // Register 1 active worktree — should trigger daemon stop attempt.
+        let entry = WorktreeEntry {
+            name: "wt-only".to_string(),
+            path: "/tmp/wt/only".to_string(),
+            branch: "feat/only".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        locked_register_with_limit(&reg_path, &entry, 3).unwrap();
+
+        // Should succeed — stop attempt is a no-op when no daemon is running.
+        let result = maybe_auto_stop_daemon(&reg_path, dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_maybe_auto_start_daemon_no_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join("nonexistent.yaml");
+
+        // With no registry, count is 0 — should not start daemon.
+        let result = maybe_auto_start_daemon(&reg_path, dir.path());
+        assert!(result.is_ok());
     }
 
     // -- locked_register_with_limit tests --

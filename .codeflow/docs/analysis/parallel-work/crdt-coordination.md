@@ -177,7 +177,7 @@ Phase A uses Loro CRDT as a direct crate dependency in the pure Rust CLI (from E
 | Replace state.json with state.loro | Migrate claims system from JSON read-modify-write to Loro Map CRDT. Direct `loro` crate API -- no FFI. Loro handles all coordination natively. | L |
 | Wire claims into PreToolUse hooks | Add claim acquisition to gate-check hook. Before Edit/Write, acquire exclusive claim on target file pattern via Loro Map. Release on stage completion. | L |
 | Fencing token validation via Loro | Fencing tokens stored in Loro Map. PreToolUse validates token matches latest for claimed resource. | M |
-| Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Uses native Loro API directly (same binary). Started by SessionStart hook, stops when no active sessions. Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Sync interval: 5s default (target; current code default: 30s), configurable via `parallel-work-config.json`. Retry with backoff on network partition. Peer ID stored at `.state/runtime/peer-id`. | L |
+| Implement sync daemon logic | `codeflow sync daemon` subcommand (from Epic 0 Phase 0E). Uses native Loro API directly (same binary). Started by SessionStart hook, stops when no active sessions. Same-machine: compaction and health for shared `state.loro`. Multi-machine: exports Loro deltas via `doc.export(updates(&last_sync_vv))`, pushes to per-peer git ref `refs/coordination/loro/{peer-id}`, fetches all peer refs, imports deltas. Sync interval: 5s default, configurable via `parallel-work-config.json` `sync.interval_secs`. Retry with backoff on network partition. Peer ID stored at `.state/runtime/peer-id`. | L |
 | Clean up unused state.loro artifact | Remove current unused 483-byte `state.loro` file. Replace with real Loro-managed state. | S |
 
 ### Extended Scope: Knowledge Graph Sync
@@ -500,8 +500,8 @@ LoroTree.move(                          (no move)
             │ Immediate     │    │                 │
             │ (shared fs)   │    │ Latency:        │
             │               │    │ 5s default      │
-            │               │    │ (target; cur:   │
-            │               │    │  30s)           │
+            │               │    │ (config-driven) │
+            │               │    │                 │
             └───────────────┘    └─────────────────┘
 
 One CRDT engine. Two transports. Zero coordination logic differences.
@@ -521,7 +521,7 @@ This section addresses how Loro delta sync works across machines. A background s
 | Transport | Scope | Mechanism | Latency |
 |-----------|-------|-----------|---------|
 | Same-machine | Parallel sessions on one machine | Shared `state.loro` file (symlinked into each worktree) | Immediate (filesystem) |
-| Multi-machine | Sessions across machines | `codeflow sync daemon` (Rust CLI subcommand) exports Loro deltas to per-peer git ref (`refs/coordination/loro/{peer-id}`), fetches all peer refs | 5 seconds default (target; current code default: 30s), configurable via `parallel-work-config.json` |
+| Multi-machine | Sessions across machines | `codeflow sync daemon` (Rust CLI subcommand) exports Loro deltas to per-peer git ref (`refs/coordination/loro/{peer-id}`), fetches all peer refs | 5 seconds default, configurable via `parallel-work-config.json` `sync.interval_secs` |
 
 Both transports use the same Loro CRDT engine. The `codeflow sync daemon` subcommand manages the multi-machine transport and also handles compaction and health monitoring for same-machine shared state.
 
@@ -529,42 +529,53 @@ Both transports use the same Loro CRDT engine. The `codeflow sync daemon` subcom
 
 **Subcommand:** `codeflow sync daemon`
 
-A long-running process (spawned as a subcommand of the Rust CLI binary) that manages Loro state synchronization using the native Loro API directly. Runs within the same binary as the CLI -- no separate binary, no FFI overhead. Started by the SessionStart hook, stops automatically when no active sessions remain.
+A long-running process (spawned as a subcommand of the Rust CLI binary) that manages Loro state synchronization using the native Loro API directly. Runs within the same binary as the CLI -- no separate binary, no FFI overhead.
+
+**Daemon lifecycle (auto-start/stop):** The daemon starts and stops automatically based on the `WorktreeRegistry` active worktree count. The functions `maybe_auto_start_daemon()` and `maybe_auto_stop_daemon()` in `codeflow-cli/core/src/worktree/registry.rs` trigger on registry mutations:
+
+- `maybe_auto_start_daemon()` is called after a successful worktree registration. If `count_active() > 1`, it calls `start_daemon()` which spawns `codeflow sync daemon` as a detached child process.
+- `maybe_auto_stop_daemon()` is called after a successful worktree deregistration. If `count_active() <= 1`, it calls `stop_daemon()` which sends SIGTERM to the daemon process and removes the PID file.
+
+Both functions read the sync interval from `parallel-work-config.json` `sync.interval_secs` via `SyncConfig::from_config_file()` (default 5s if the config is absent or the key is missing).
+
+**Manual CLI control:**
+
+```bash
+codeflow sync start   # Start the daemon if not already running
+codeflow sync stop    # Send SIGTERM and remove PID file
+codeflow sync status  # Report running/stopped, PID, peer_id, session_count, last_sync_completed
+```
+
+**SIGTERM handling:** The daemon registers an async-signal-safe handler via `signal_hook::flag::register()` (the `signal-hook` crate). The handler sets an `Arc<AtomicBool>` flag. The daemon's main loop checks this flag on each iteration and exits cleanly when it is set.
 
 ```text
-SessionStart hook
+WorktreeRegistry transition
     |
     v
-Is daemon already running? (PID file at .state/coordination/sync-daemon.pid)
+count_active() > 1?
     |
-    +--- YES --> Register session with daemon (increment ref count)
+    +--- YES --> maybe_auto_start_daemon()
+    |              start_daemon() spawns: codeflow sync daemon --interval 5
+    |              Daemon writes PID to .state/coordination/sync-daemon.pid
+    |              Daemon reads peer ID from .state/runtime/peer-id
+    |              (format: {username}-{hostname}, created on first run)
     |
-    +--- NO ---> Start daemon:
-                   codeflow sync daemon --interval 5s
-                 Daemon reads peer ID from .state/runtime/peer-id
-                   (format: {username}-{hostname}, created on first run)
-                 Register session (ref count = 1)
+    +--- NO ---> (already running or no parallel sessions)
+
+count_active() <= 1?
     |
-    v
-Session runs normally...
+    +--- YES --> maybe_auto_stop_daemon()
+    |              stop_daemon() sends SIGTERM to daemon PID
+    |              Daemon receives SIGTERM, sets AtomicBool flag, exits loop
+    |              PID file removed from .state/coordination/sync-daemon.pid
     |
-    v
-SessionEnd hook
-    |
-    v
-Deregister session (decrement ref count)
-    |
-    v
-Ref count == 0?
-    |
-    +--- YES --> Daemon shuts down gracefully
-    +--- NO ---> Daemon continues for remaining sessions
+    +--- NO ---> (other worktrees still active, daemon continues)
 ```
 
 **Daemon sync loop (multi-machine):**
 
 ```text
-Every sync interval (5s default (target; current code default: 30s), configurable via parallel-work-config.json):
+Every sync interval (5s default, configurable via parallel-work-config.json sync.interval_secs):
     |
     v
 1. Export new deltas since last sync:
@@ -631,9 +642,78 @@ Each daemon writes to a per-peer ref under a shared namespace:
 **Same-machine daemon responsibilities:**
 
 For same-machine parallel sessions (shared `state.loro` via symlink), the daemon subcommand does not perform sync (the file is already shared). Instead, it handles:
+
 - **Compaction:** Periodically calls `doc.export(snapshot)` to write a fresh `state.loro`, preventing unbounded op-log growth
 - **Health monitoring:** Detects stale claims (TTL expired), logs warnings, optionally auto-releases
 - **Crash recovery:** On startup, validates `state.loro` integrity. If corrupt, rebuilds from peer ref history (`refs/coordination/loro/*`) or JSONL event ledger
+- **Dead worker cleanup:** On each sync cycle, calls `cleanup_dead_workers()` to detect crashed sessions and force-release their claims (see Crash Cleanup below)
+
+### Crash Cleanup (Dead Worker Detection)
+
+On each sync cycle, `cleanup_dead_workers()` (`codeflow-cli/core/src/coordination/sync.rs:761`) runs as part of the daemon loop. It:
+
+1. Reads the PID file at `.state/coordination/sync-daemon.pid` to get the list of tracked sessions
+2. For each tracked session, reads its `pathflow-session-status.json` to get the `lead_pid`
+3. Checks whether the process is alive using `is_pid_alive(pid)` (`/bin/kill -0 <pid>`)
+4. If the process is dead, calls `release_dead_session_claims()` to release all CRDT claims held by that session
+
+This runs every 5 seconds (sync interval), so crashed worker claims are released within 5-10 seconds — the fast path for crash recovery.
+
+```text
+Each sync cycle (every 5s):
+    |
+    v
+cleanup_dead_workers()
+    |
+    v
+Read PID file: tracked sessions list
+    |
+    v
+For each session:
+    Read .state/session/{SID}/pathflow/pathflow-session-status.json
+    Get lead_pid
+    is_pid_alive(lead_pid)?
+        |
+        +--- YES --> session is alive, no action
+        |
+        +--- NO  --> release_dead_session_claims(session_id)
+                     eprintln: "crash cleanup: released N claims for dead session ..."
+```
+
+### Auto-Rebase for Merge Conflict Resolution
+
+Before PR creation, the autorun worker calls `check_merge_conflicts()` to detect whether the feature branch conflicts with the target branch. If conflicts exist and `merge.auto_rebase` is `true` in `parallel-work-config.json`, the worker calls `attempt_rebase(repo_path, target_branch)` (`codeflow-cli/core/src/git/conflict.rs:148`).
+
+`attempt_rebase()` runs `git rebase <target_branch>` and returns one of:
+
+| Result | Meaning | Next Action |
+|--------|---------|-------------|
+| `RebaseResult::Success` | Rebase completed — branch now applies cleanly to target | Proceed with PR creation |
+| `RebaseResult::ConflictAborted` | Rebase had conflicts — `git rebase --abort` was run | Mark task blocked, log conflict details, skip to next task |
+
+`max_rebase_attempts` in `parallel-work-config.json` (default 3) controls how many rebase attempts the orchestrator makes before giving up.
+
+```text
+Before PR creation:
+    |
+    v
+check_merge_conflicts()
+    |
+    +--- No conflicts ---> Proceed with PR creation
+    |
+    +--- Conflicts found ---> merge.auto_rebase == true?
+                |
+                +--- YES --> attempt_rebase(repo_path, target_branch)
+                |               |
+                |               +--- RebaseResult::Success --> Proceed with PR
+                |               |
+                |               +--- RebaseResult::ConflictAborted
+                |                       Mark task blocked
+                |                       Log conflicting files
+                |                       Worker skips to next task
+                |
+                +--- NO  --> Mark task blocked, log conflict
+```
 
 ### Network Partition Behavior
 
@@ -652,7 +732,7 @@ For same-machine parallel sessions (shared `state.loro` via symlink), the daemon
 |----------|-----------|-----------------|-----------------|
 | Same machine, parallel sessions | Shared file (symlink) | Immediate (filesystem) | Microseconds |
 | Same machine, separate worktrees | Shared file (symlink) | Immediate (filesystem) | Microseconds |
-| Multi-machine, daemon sync | Git ref push/fetch (periodic) | 5 seconds default (target; current code default: 30s) (configurable via parallel-work-config.json) | Sync interval |
+| Multi-machine, daemon sync | Git ref push/fetch (periodic) | 5 seconds default (configurable via `parallel-work-config.json` `sync.interval_secs`) | Sync interval |
 | Multi-machine, daemon (network partition) | Local accumulation, sync on reconnect | Minutes to hours (partition duration) | Partition duration (TTL mitigates) |
 
 **Critical observation:** Same-machine parallel sessions (the primary use case) have effectively zero sync latency because all worktrees share the same `state.loro` file via symlink. The daemon's multi-machine sync adds 5 seconds of latency by default, which is acceptable for claim coordination where TTLs are measured in minutes.
@@ -711,7 +791,7 @@ Edit file foo.go                     Edit file bar.go
 Acquire claim (Loro Map)             Acquire claim (Loro Map)
     |                                     |
     v                                     v
-codeflow sync daemon (5s default (target; current code default: 30s)):    codeflow sync daemon (5s default (target; current code default: 30s)):
+codeflow sync daemon (5s default interval):    codeflow sync daemon (5s default interval):
   delta = doc.export(                  delta = doc.export(
     updates(&last_sync_vv))              updates(&last_sync_vv))
   push refs/coord/loro/dev-1         push refs/coord/loro/ci-1

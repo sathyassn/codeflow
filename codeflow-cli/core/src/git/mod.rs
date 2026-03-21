@@ -4,4 +4,4 @@
 
 pub mod conflict;
 
-pub use conflict::{ConflictResult, check_merge_conflicts};
+pub use conflict::{ConflictResult, RebaseResult, attempt_rebase, check_merge_conflicts};

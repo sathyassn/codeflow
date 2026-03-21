@@ -791,7 +791,7 @@ Parallel Batch Execution (above) covers intra-session parallelism — multiple t
 | Claims | CRDT-based file claims prevent concurrent edits to the same file (enforced via scope_policy — soft/hard/permissive — using `Coordinator::acquire`) |
 | Fencing tokens | Monotonic `FencingToken` values ensure claim validity across crashes |
 | Merge queue | FIFO queue serializes PR merges to prevent conflicts (`merge_queue::enqueue/dequeue`) |
-| Sync daemon | Propagates CRDT state between worktrees via git ref transport (5s default interval (target; current: 30s), `sync::run_sync_cycle`) |
+| Sync daemon | Propagates CRDT state between worktrees via git ref transport (5s interval, `sync::run_sync_cycle`). Auto-starts when worktree count > 1, auto-stops when <= 1. Crash cleanup detects dead workers and releases claims. |
 
 **Worktree layout (shared vs local state):**
 
@@ -815,6 +815,10 @@ Parallel Batch Execution (above) covers intra-session parallelism — multiple t
 - `claims::acquire_batch(coordinator, paths, session_id)` — batch claim acquisition
 - `merge_queue::enqueue(coordinator, entry)` / `dequeue(coordinator)` — PR merge ordering
 - `sync::run_sync_cycle(config, peer_id)` — CRDT state propagation between worktrees
+- `sync::start_daemon(project_dir, interval_secs)` / `sync::stop_daemon(project_dir)` — daemon lifecycle
+- `sync::daemon_status(project_dir)` — daemon health check (running, pid, peer_id, sessions)
+- `sync::cleanup_dead_workers(config)` — dead worker detection and claim release
+- `conflict::attempt_rebase(repo_path, target_branch)` — auto-rebase with RebaseResult (Success/ConflictAborted)
 
 ### Teammate Name Preservation
 

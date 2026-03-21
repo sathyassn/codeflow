@@ -46,10 +46,7 @@ fn run_status(project_dir: &Path) -> Result<()> {
                 if active.is_empty() {
                     println!("  (none)");
                 } else {
-                    println!(
-                        "  {:<20} {:<30} {:<20} TASK",
-                        "NAME", "BRANCH", "SESSION"
-                    );
+                    println!("  {:<20} {:<30} {:<20} TASK", "NAME", "BRANCH", "SESSION");
                     for entry in &active {
                         println!(
                             "  {:<20} {:<30} {:<20} {}",
@@ -104,10 +101,7 @@ fn run_status(project_dir: &Path) -> Result<()> {
                 if len == 0 {
                     println!("  (empty)");
                 } else {
-                    println!(
-                        "  {:<5} {:<20} {:<20} BRANCH",
-                        "POS", "SESSION", "TASK"
-                    );
+                    println!("  {:<5} {:<20} {:<20} BRANCH", "POS", "SESSION", "TASK");
                     for i in 0..len {
                         match codeflow_core::coordination::merge_queue::peek_at(&coord, i) {
                             Ok(Some(entry)) => {
@@ -163,7 +157,11 @@ fn print_recent_events(events_path: &Path) {
 
     let start = lines.len().saturating_sub(MAX_RECENT_EVENTS);
     let recent = &lines[start..];
-    println!("  (showing last {} of {} events)", recent.len(), lines.len());
+    println!(
+        "  (showing last {} of {} events)",
+        recent.len(),
+        lines.len()
+    );
 
     for line in recent {
         // Extract the event type and timestamp for display.
@@ -172,10 +170,7 @@ fn print_recent_events(events_path: &Path) {
                 .get("type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let timestamp = val
-                .get("timestamp")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
+            let timestamp = val.get("timestamp").and_then(|v| v.as_str()).unwrap_or("-");
             let session = val
                 .get("session_id")
                 .and_then(|v| v.as_str())
@@ -211,18 +206,16 @@ mod tests {
         std::fs::create_dir_all(&state_dir).unwrap();
         let registry_path = state_dir.join("worktrees.yaml");
 
-        let mut reg =
-            codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        reg.worktrees
-            .push(codeflow_core::worktree::WorktreeEntry {
-                name: "ses-test".to_string(),
-                path: "/tmp/wt/test".to_string(),
-                branch: "feat/test".to_string(),
-                created_at: "2026-03-21T10:00:00Z".to_string(),
-                status: "active".to_string(),
-                session_id: Some("ses-001".to_string()),
-                task_id: Some("TSK-001".to_string()),
-            });
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "ses-test".to_string(),
+            path: "/tmp/wt/test".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-21T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-001".to_string()),
+            task_id: Some("TSK-001".to_string()),
+        });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
         let result = run_status(dir.path());
@@ -236,8 +229,7 @@ mod tests {
         std::fs::create_dir_all(&state_dir).unwrap();
         let registry_path = state_dir.join("worktrees.yaml");
 
-        let reg =
-            codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
+        let reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
         let result = run_status(dir.path());
@@ -327,8 +319,7 @@ mod tests {
         // Also write a registry.
         let state_dir = dir.path().join(".state");
         let registry_path = state_dir.join("worktrees.yaml");
-        let reg =
-            codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
+        let reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
         let result = run_status(dir.path());
