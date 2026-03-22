@@ -189,8 +189,8 @@ mod tests {
 
     #[test]
     fn test_coordination_status_with_merge_queue_entries() {
-        use codeflow_core::coordination::merge_queue;
         use codeflow_core::coordination::Coordinator;
+        use codeflow_core::coordination::merge_queue;
 
         let dir = tempfile::tempdir().unwrap();
         let coord_dir = dir.path().join(".state").join("coordination");

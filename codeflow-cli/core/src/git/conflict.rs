@@ -106,7 +106,7 @@ pub fn check_merge_conflicts(
 /// Tries in order:
 /// 1. `refs/remotes/origin/{target_branch}`
 /// 2. `refs/heads/{target_branch}` (local branch)
-fn find_target_ref<'r>(
+pub(crate) fn find_target_ref<'r>(
     repo: &'r git2::Repository,
     target_branch: &str,
 ) -> Result<git2::Reference<'r>, GitError> {

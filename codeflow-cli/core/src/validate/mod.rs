@@ -167,7 +167,7 @@ const PII_PATTERNS: &[&str] = &[
     "identity",
 ];
 
-fn get_string_field(data: &HashMap<String, serde_yaml::Value>, key: &str) -> String {
+pub(crate) fn get_string_field(data: &HashMap<String, serde_yaml::Value>, key: &str) -> String {
     match data.get(key) {
         Some(serde_yaml::Value::String(s)) => {
             if s == "null" || s == "~" {
@@ -183,7 +183,7 @@ fn get_string_field(data: &HashMap<String, serde_yaml::Value>, key: &str) -> Str
     }
 }
 
-fn is_field_empty(data: &HashMap<String, serde_yaml::Value>, key: &str) -> bool {
+pub(crate) fn is_field_empty(data: &HashMap<String, serde_yaml::Value>, key: &str) -> bool {
     match data.get(key) {
         None | Some(serde_yaml::Value::Null) => true,
         Some(serde_yaml::Value::String(s)) => s.is_empty() || s == "null" || s == "~",
@@ -192,7 +192,7 @@ fn is_field_empty(data: &HashMap<String, serde_yaml::Value>, key: &str) -> bool 
     }
 }
 
-fn get_bool_field(data: &HashMap<String, serde_yaml::Value>, key: &str) -> (bool, bool) {
+pub(crate) fn get_bool_field(data: &HashMap<String, serde_yaml::Value>, key: &str) -> (bool, bool) {
     match data.get(key) {
         Some(serde_yaml::Value::Bool(b)) => (*b, true),
         Some(serde_yaml::Value::String(s)) => match s.as_str() {
@@ -579,7 +579,9 @@ fn validate_raise_pr_auto_merge(data: &HashMap<String, serde_yaml::Value>) -> Ve
     Vec::new()
 }
 
-fn validate_autorun_acceptance(data: &HashMap<String, serde_yaml::Value>) -> Vec<ValidationError> {
+pub(crate) fn validate_autorun_acceptance(
+    data: &HashMap<String, serde_yaml::Value>,
+) -> Vec<ValidationError> {
     let (autorun, set) = get_bool_field(data, "autorun_eligible");
     if !set || !autorun {
         return Vec::new();
@@ -593,7 +595,7 @@ fn validate_autorun_acceptance(data: &HashMap<String, serde_yaml::Value>) -> Vec
     Vec::new()
 }
 
-fn validate_autorun_file_scope(
+pub(crate) fn validate_autorun_file_scope(
     data: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<ValidationError> {
     let (autorun, set) = get_bool_field(data, "autorun_eligible");
@@ -609,7 +611,7 @@ fn validate_autorun_file_scope(
     Vec::new()
 }
 
-fn validate_autorun_scope_policy(
+pub(crate) fn validate_autorun_scope_policy(
     data: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<ValidationError> {
     let (autorun, set) = get_bool_field(data, "autorun_eligible");
@@ -1120,10 +1122,7 @@ Related
     #[test]
     fn test_autorun_file_scope_empty_is_error() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(true),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(true));
         // file_scope empty.
         let errs = validate_autorun_file_scope(&data);
         assert!(!errs.is_empty());
@@ -1134,15 +1133,10 @@ Related
     #[test]
     fn test_autorun_file_scope_present_passes() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(true),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(true));
         data.insert(
             "file_scope".into(),
-            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
-                "src/main.rs".into(),
-            )]),
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("src/main.rs".into())]),
         );
         let errs = validate_autorun_file_scope(&data);
         assert!(errs.is_empty());
@@ -1151,10 +1145,7 @@ Related
     #[test]
     fn test_autorun_file_scope_not_autorun_passes() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(false),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(false));
         // file_scope empty is fine if not autorun.
         let errs = validate_autorun_file_scope(&data);
         assert!(errs.is_empty());
@@ -1165,10 +1156,7 @@ Related
     #[test]
     fn test_autorun_permissive_is_error() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(true),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(true));
         data.insert(
             "scope_policy".into(),
             serde_yaml::Value::String("permissive".into()),
@@ -1182,10 +1170,7 @@ Related
     #[test]
     fn test_autorun_soft_passes() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(true),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(true));
         data.insert(
             "scope_policy".into(),
             serde_yaml::Value::String("soft".into()),
@@ -1197,10 +1182,7 @@ Related
     #[test]
     fn test_autorun_hard_passes() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(true),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(true));
         data.insert(
             "scope_policy".into(),
             serde_yaml::Value::String("hard".into()),
@@ -1212,10 +1194,7 @@ Related
     #[test]
     fn test_not_autorun_permissive_passes() {
         let mut data = HashMap::new();
-        data.insert(
-            "autorun_eligible".into(),
-            serde_yaml::Value::Bool(false),
-        );
+        data.insert("autorun_eligible".into(), serde_yaml::Value::Bool(false));
         data.insert(
             "scope_policy".into(),
             serde_yaml::Value::String("permissive".into()),

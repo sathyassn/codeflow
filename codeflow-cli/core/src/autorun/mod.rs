@@ -10,7 +10,7 @@ pub mod config;
 pub mod orchestrator;
 pub mod worker;
 
-pub use batch::{BatchFile, ParsedBatch, TaskSpec};
+pub use batch::{BatchFile, ParsedBatch, TaskSpec, resolve_task_path, validate_batch_extended};
 pub use config::{AutorunConfig, ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
 pub use worker::{

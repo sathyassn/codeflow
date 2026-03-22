@@ -1,7 +1,7 @@
 //! YAML batch file parsing with validation and topological sorting.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -10,8 +10,11 @@ use crate::error::AutorunError;
 /// Default maximum concurrent workers.
 pub const DEFAULT_MAX_WORKERS: usize = 3;
 
-/// Branches that cannot be auto-merged into.
-const PROTECTED_BRANCHES: &[&str] = &["main", "master", "production"];
+/// Fallback protected branches when enforcement-policy.json is missing.
+const DEFAULT_PROTECTED_BRANCHES: &[&str] = &["main", "master", "release/*", "production"];
+
+/// Path to the enforcement policy config relative to the project root.
+const ENFORCEMENT_POLICY_PATH: &str = ".codeflow/config/enforcement/enforcement-policy.json";
 
 /// Top-level structure of a YAML batch file.
 #[derive(Debug, Clone, Deserialize)]
@@ -82,10 +85,31 @@ pub fn parse_batch_file(path: &Path) -> Result<ParsedBatch, AutorunError> {
 ///
 /// Same as [`parse_batch_file`].
 pub fn parse_batch_data(data: &str, file_path: &str) -> Result<ParsedBatch, AutorunError> {
+    parse_batch_data_with_project_dir(data, file_path, None)
+}
+
+/// Parse and validate batch YAML data with an optional project directory for
+/// loading protected branches from enforcement-policy.json.
+///
+/// # Errors
+///
+/// Same as [`parse_batch_file`].
+pub fn parse_batch_data_with_project_dir(
+    data: &str,
+    file_path: &str,
+    project_dir: Option<&Path>,
+) -> Result<ParsedBatch, AutorunError> {
     let bf: BatchFile =
         serde_yaml::from_str(data).map_err(|e| AutorunError::Yaml(e.to_string()))?;
 
-    validate_batch(&bf)?;
+    let protected_branches: Vec<String> = match project_dir {
+        Some(dir) => load_protected_branches(dir),
+        None => DEFAULT_PROTECTED_BRANCHES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
+    validate_batch(&bf, &protected_branches)?;
 
     let order = topological_sort(&bf.tasks)?;
 
@@ -115,8 +139,113 @@ pub fn parse_batch_data(data: &str, file_path: &str) -> Result<ParsedBatch, Auto
     })
 }
 
+/// Load protected branches from enforcement-policy.json, falling back to defaults.
+///
+/// Reads `merge_protection.protected_branches` from the enforcement policy config.
+/// Returns default list if the file does not exist or cannot be parsed.
+fn load_protected_branches(project_dir: &Path) -> Vec<String> {
+    let path = project_dir.join(ENFORCEMENT_POLICY_PATH);
+    let data = match std::fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(_) => {
+            return DEFAULT_PROTECTED_BRANCHES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
+        }
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => {
+            return DEFAULT_PROTECTED_BRANCHES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
+        }
+    };
+
+    if let Some(branches) = parsed
+        .get("merge_protection")
+        .and_then(|mp| mp.get("protected_branches"))
+        .and_then(|pb| pb.as_array())
+    {
+        let result: Vec<String> = branches
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if result.is_empty() {
+            DEFAULT_PROTECTED_BRANCHES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        } else {
+            result
+        }
+    } else {
+        DEFAULT_PROTECTED_BRANCHES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    }
+}
+
+/// Check whether a branch name matches a protected branch pattern.
+///
+/// Supports exact matches and `prefix/*` wildcard patterns (e.g. `release/*`).
+fn is_protected_branch(target: &str, protected: &[String]) -> bool {
+    for pattern in protected {
+        if pattern.ends_with("/*") {
+            let prefix = &pattern[..pattern.len() - 1]; // "release/" from "release/*"
+            if target.starts_with(prefix) {
+                return true;
+            }
+        } else if target == pattern {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve a task format ID to its markdown file path.
+///
+/// Replicates the path construction logic from `worker::build_task_prompt_from_file`.
+/// Task ID format: `{AREA}-TSK-{epic_NNN}-{seq_NNN}`.
+///
+/// # Errors
+///
+/// Returns `AutorunError::MissingTask` if the task ID format is invalid or
+/// contains path traversal characters.
+pub fn resolve_task_path(project_dir: &Path, task_id: &str) -> Result<PathBuf, AutorunError> {
+    let parts: Vec<&str> = task_id.split('-').collect();
+    if parts.len() < 4 || parts[1] != "TSK" {
+        return Err(AutorunError::MissingTask(format!(
+            "invalid task ID format: {task_id} (expected AREA-TSK-NNN-NNN)"
+        )));
+    }
+
+    // Reject path traversal characters.
+    for part in &parts {
+        if part.contains("..") || part.contains('/') || part.contains('\\') {
+            return Err(AutorunError::MissingTask(format!(
+                "task ID contains path traversal characters: {task_id}"
+            )));
+        }
+    }
+
+    let area = parts[0];
+    let epic_num = parts[2];
+    Ok(project_dir
+        .join("project-management")
+        .join("epics")
+        .join(area)
+        .join(format!("{area}-EPC-{epic_num}"))
+        .join("tasks")
+        .join(format!("{task_id}.md")))
+}
+
 /// Validate a batch file for structural and semantic errors.
-fn validate_batch(bf: &BatchFile) -> Result<(), AutorunError> {
+fn validate_batch(bf: &BatchFile, protected_branches: &[String]) -> Result<(), AutorunError> {
     if bf.tasks.is_empty() {
         return Err(AutorunError::InvalidBatch("no tasks defined".into()));
     }
@@ -159,18 +288,161 @@ fn validate_batch(bf: &BatchFile) -> Result<(), AutorunError> {
         } else {
             &bf.target
         };
-        for &protected in PROTECTED_BRANCHES {
-            if target == protected {
-                return Err(AutorunError::ProtectedMerge(format!(
-                    "cannot auto_merge into {target:?}"
-                )));
-            }
-        }
-        if target.starts_with("release/") {
+        if is_protected_branch(target, protected_branches) {
             return Err(AutorunError::ProtectedMerge(format!(
                 "cannot auto_merge into {target:?}"
             )));
         }
+    }
+
+    Ok(())
+}
+
+/// Extended validation: reads task markdown files, checks autorun fields,
+/// detects file_scope overlaps, validates target_branch, and reconciles
+/// max_workers with max_concurrent.
+///
+/// Call after `parse_batch_file()` / `parse_batch_data()` with the resulting
+/// `ParsedBatch`.
+///
+/// # Errors
+///
+/// Returns `AutorunError::InvalidBatch` for any validation failure.
+pub fn validate_batch_extended(
+    batch: &mut ParsedBatch,
+    project_dir: &Path,
+) -> Result<(), AutorunError> {
+    let protected_branches = load_protected_branches(project_dir);
+    let config = crate::autorun::config::load_config(project_dir)?;
+
+    // Reconcile max_workers with max_concurrent.
+    let effective = batch.max_workers.min(config.worktree.max_concurrent);
+    if batch.max_workers > config.worktree.max_concurrent {
+        eprintln!(
+            "WARNING: max_workers ({}) exceeds worktree.max_concurrent ({}), capping to {}",
+            batch.max_workers, config.worktree.max_concurrent, effective
+        );
+    }
+    batch.max_workers = effective;
+
+    // Build dependency map for overlap detection.
+    let dep_set: HashMap<&str, HashSet<&str>> = batch
+        .tasks
+        .iter()
+        .map(|t| {
+            let deps: HashSet<&str> = t.depends_on.iter().map(String::as_str).collect();
+            (t.id.as_str(), deps)
+        })
+        .collect();
+
+    // Track file_scope per task for overlap detection.
+    let mut task_scopes: Vec<(&str, &[String])> = Vec::with_capacity(batch.tasks.len());
+
+    for task in &batch.tasks {
+        let task_path = resolve_task_path(project_dir, &task.id)?;
+
+        let content = std::fs::read(&task_path).map_err(|e| {
+            AutorunError::MissingTask(format!(
+                "reading task markdown {}: {e}",
+                task_path.display()
+            ))
+        })?;
+
+        let (data, _body) = crate::validate::parse_frontmatter(&content).map_err(|e| {
+            AutorunError::InvalidBatch(format!("parsing frontmatter for {}: {e}", task.id))
+        })?;
+
+        // Check autorun_eligible.
+        let (autorun_eligible, ae_set) = crate::validate::get_bool_field(&data, "autorun_eligible");
+        if !ae_set || !autorun_eligible {
+            return Err(AutorunError::InvalidBatch(format!(
+                "task {} has autorun_eligible=false or missing",
+                task.id
+            )));
+        }
+
+        // Check acceptance not empty.
+        let acceptance_errs = crate::validate::validate_autorun_acceptance(&data);
+        if !acceptance_errs.is_empty() {
+            return Err(AutorunError::InvalidBatch(format!(
+                "task {}: {}",
+                task.id, acceptance_errs[0]
+            )));
+        }
+
+        // Check scope_policy not permissive.
+        let scope_errs = crate::validate::validate_autorun_scope_policy(&data);
+        if !scope_errs.is_empty() {
+            return Err(AutorunError::InvalidBatch(format!(
+                "task {}: {}",
+                task.id, scope_errs[0]
+            )));
+        }
+
+        // Check file_scope not empty.
+        let fscope_errs = crate::validate::validate_autorun_file_scope(&data);
+        if !fscope_errs.is_empty() {
+            return Err(AutorunError::InvalidBatch(format!(
+                "task {}: {}",
+                task.id, fscope_errs[0]
+            )));
+        }
+
+        task_scopes.push((&task.id, &task.file_scope));
+    }
+
+    // Detect file_scope overlaps between concurrent (non-dependent) tasks.
+    for i in 0..task_scopes.len() {
+        for j in (i + 1)..task_scopes.len() {
+            let (id_a, scope_a) = task_scopes[i];
+            let (id_b, scope_b) = task_scopes[j];
+
+            // Skip if one depends on the other (dependency serializes access).
+            let a_deps = dep_set.get(id_a).cloned().unwrap_or_default();
+            let b_deps = dep_set.get(id_b).cloned().unwrap_or_default();
+            if a_deps.contains(id_b) || b_deps.contains(id_a) {
+                continue;
+            }
+
+            // Check for overlapping paths.
+            let set_a: HashSet<&str> = scope_a.iter().map(String::as_str).collect();
+            let overlaps: Vec<&str> = scope_b
+                .iter()
+                .filter(|p| set_a.contains(p.as_str()))
+                .map(String::as_str)
+                .collect();
+            if !overlaps.is_empty() {
+                return Err(AutorunError::InvalidBatch(format!(
+                    "concurrent tasks {} and {} have overlapping file_scope: {}",
+                    id_a,
+                    id_b,
+                    overlaps.join(", ")
+                )));
+            }
+        }
+    }
+
+    // Validate target_branch if specified.
+    let target = if batch.target.is_empty() {
+        "main"
+    } else {
+        &batch.target
+    };
+
+    // Check target branch exists via git2.
+    if let Ok(repo) = git2::Repository::discover(project_dir) {
+        if crate::git::conflict::find_target_ref(&repo, target).is_err() {
+            return Err(AutorunError::InvalidBatch(format!(
+                "target_branch {target:?} does not exist (checked refs/remotes/origin/{target} and refs/heads/{target})"
+            )));
+        }
+    }
+
+    // Check protected branch + auto_merge.
+    if batch.auto_merge && is_protected_branch(target, &protected_branches) {
+        return Err(AutorunError::ProtectedMerge(format!(
+            "cannot auto_merge into {target:?}"
+        )));
     }
 
     Ok(())
@@ -578,5 +850,500 @@ tasks:
         let yaml = "tasks:\n  - id: task-a\n    scope_policy: hard\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert_eq!(batch.tasks[0].scope_policy.as_deref(), Some("hard"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: create task markdown with frontmatter
+    // -----------------------------------------------------------------------
+
+    fn make_task_markdown(fields: &str) -> String {
+        format!(
+            "---\n{fields}\n---\n\n# Task\n\n## Description\n\nTest.\n\n\
+             ## Approach\n\nTest.\n\n## Files\n\nNone.\n\n\
+             ## Acceptance Criteria\n\n1. Test\n\n## Dependencies\n\nNone.\n\n\
+             ## Verification\n\nNone.\n\n## Stage Reports\n\nNone.\n\n## Notes\n\nNone.\n"
+        )
+    }
+
+    /// Create a valid task markdown for autorun.
+    fn valid_task_fields(task_id: &str, epic_num: &str, area: &str) -> String {
+        format!(
+            "id: \"task-{task_id}\"\n\
+             format_id: \"{area}-TSK-{epic_num}-001\"\n\
+             epic_id: \"epic-test\"\n\
+             epic_format_id: \"{area}-EPC-{epic_num}\"\n\
+             title: \"Test task\"\n\
+             description: \"Test\"\n\
+             status: todo\n\
+             area_type: \"{area}\"\n\
+             work_type: \"FEAT\"\n\
+             domain: \"GENL\"\n\
+             origin: planned\n\
+             file_scope:\n  - \"src/foo.rs\"\n\
+             scope_policy: soft\n\
+             autorun_eligible: true\n\
+             acceptance:\n  - \"criterion 1\"\n\
+             raise_pr: true\n\
+             auto_merge: false\n\
+             created_at: \"2026-01-01T00:00:00Z\"\n\
+             updated_at: \"2026-01-01T00:00:00Z\""
+        )
+    }
+
+    /// Set up a project dir with a task markdown file and enforcement policy.
+    fn setup_project_with_task(dir: &std::path::Path, task_id: &str, fields: &str) {
+        // Task path: project-management/epics/INF/INF-EPC-023/tasks/{task_id}.md
+        let parts: Vec<&str> = task_id.split('-').collect();
+        let area = parts[0];
+        let epic_num = parts[2];
+        let task_dir = dir
+            .join("project-management")
+            .join("epics")
+            .join(area)
+            .join(format!("{area}-EPC-{epic_num}"))
+            .join("tasks");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let task_path = task_dir.join(format!("{task_id}.md"));
+        std::fs::write(&task_path, make_task_markdown(fields)).unwrap();
+
+        // Enforcement policy.
+        let policy_dir = dir.join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&policy_dir).unwrap();
+        let policy = r#"{
+            "merge_protection": {
+                "protected_branches": ["main", "master", "release/*", "production"]
+            }
+        }"#;
+        std::fs::write(policy_dir.join("enforcement-policy.json"), policy).unwrap();
+
+        // Parallel work config (defaults are fine, but create the dir).
+        let pw_dir = dir.join(".codeflow/config/parallel-work");
+        std::fs::create_dir_all(&pw_dir).unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: resolve_task_path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_task_path_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = resolve_task_path(dir.path(), "INF-TSK-023-031").unwrap();
+        assert!(
+            path.ends_with("project-management/epics/INF/INF-EPC-023/tasks/INF-TSK-023-031.md")
+        );
+    }
+
+    #[test]
+    fn test_resolve_task_path_invalid_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = resolve_task_path(dir.path(), "BADFORMAT");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid task ID format")
+        );
+    }
+
+    #[test]
+    fn test_resolve_task_path_traversal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = resolve_task_path(dir.path(), "INF-TSK-../../../etc-001");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path traversal"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: is_protected_branch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_protected_branch_exact_match() {
+        let branches = vec!["main".into(), "master".into(), "production".into()];
+        assert!(is_protected_branch("main", &branches));
+        assert!(is_protected_branch("master", &branches));
+        assert!(!is_protected_branch("develop", &branches));
+    }
+
+    #[test]
+    fn test_is_protected_branch_wildcard() {
+        let branches = vec!["release/*".into()];
+        assert!(is_protected_branch("release/v1.0", &branches));
+        assert!(is_protected_branch("release/hotfix", &branches));
+        assert!(!is_protected_branch("releases/v1.0", &branches));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: load_protected_branches
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_protected_branches_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&policy_dir).unwrap();
+        let policy = r#"{
+            "merge_protection": {
+                "protected_branches": ["main", "master", "release/*", "production"]
+            }
+        }"#;
+        std::fs::write(policy_dir.join("enforcement-policy.json"), policy).unwrap();
+
+        let branches = load_protected_branches(dir.path());
+        assert_eq!(branches, vec!["main", "master", "release/*", "production"]);
+    }
+
+    #[test]
+    fn test_load_protected_branches_missing_file_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let branches = load_protected_branches(dir.path());
+        assert_eq!(
+            branches,
+            DEFAULT_PROTECTED_BRANCHES
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_load_protected_branches_malformed_json_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&policy_dir).unwrap();
+        std::fs::write(
+            policy_dir.join("enforcement-policy.json"),
+            "{{not valid json",
+        )
+        .unwrap();
+
+        let branches = load_protected_branches(dir.path());
+        assert_eq!(branches.len(), 4);
+        assert!(branches.contains(&"main".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: validate_batch_extended
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extended_autorun_eligible_false_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF")
+            .replace("autorun_eligible: true", "autorun_eligible: false");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("autorun_eligible=false"),
+            "expected autorun_eligible error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_extended_empty_acceptance_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF")
+            .replace("acceptance:\n  - \"criterion 1\"", "acceptance: []");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("acceptance"),
+            "expected acceptance error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_extended_scope_policy_permissive_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF")
+            .replace("scope_policy: soft", "scope_policy: permissive");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("scope_policy") || err.contains("permissive"),
+            "expected scope_policy error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_extended_empty_file_scope_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF")
+            .replace("file_scope:\n  - \"src/foo.rs\"", "file_scope: []");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("file_scope"),
+            "expected file_scope error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_extended_concurrent_overlap_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Task A
+        let fields_a = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields_a);
+
+        // Task B with same file_scope but no dependency
+        let fields_b = valid_task_fields("t2", "023", "INF").replace(
+            "format_id: \"INF-TSK-023-001\"",
+            "format_id: \"INF-TSK-023-002\"",
+        );
+        // Write task B to a separate task file
+        let task_dir_b = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-023/tasks");
+        std::fs::write(
+            task_dir_b.join("INF-TSK-023-002.md"),
+            make_task_markdown(&fields_b),
+        )
+        .unwrap();
+
+        let yaml = "tasks:\n  \
+            - id: INF-TSK-023-001\n    \
+              file_scope:\n      - src/foo.rs\n  \
+            - id: INF-TSK-023-002\n    \
+              file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overlapping file_scope"),
+            "expected overlap error, got: {err}"
+        );
+        assert!(err.contains("src/foo.rs"));
+    }
+
+    #[test]
+    fn test_extended_dependent_overlap_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Task A
+        let fields_a = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields_a);
+
+        // Task B depends on A — overlapping file_scope is allowed
+        let fields_b = valid_task_fields("t2", "023", "INF").replace(
+            "format_id: \"INF-TSK-023-001\"",
+            "format_id: \"INF-TSK-023-002\"",
+        );
+        let task_dir_b = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-023/tasks");
+        std::fs::write(
+            task_dir_b.join("INF-TSK-023-002.md"),
+            make_task_markdown(&fields_b),
+        )
+        .unwrap();
+
+        let yaml = "tasks:\n  \
+            - id: INF-TSK-023-001\n    \
+              file_scope:\n      - src/foo.rs\n  \
+            - id: INF-TSK-023-002\n    \
+              depends_on: [INF-TSK-023-001]\n    \
+              file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        // Should not error — dependency serializes access.
+        assert!(
+            result.is_ok(),
+            "dependent tasks with overlap should be allowed, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_extended_max_workers_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        // Default max_concurrent is 3, request 10 workers.
+        let yaml = "max_workers: 10\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert_eq!(batch.max_workers, 10);
+
+        let result = validate_batch_extended(&mut batch, dir.path());
+        // Validation should succeed (capping is not an error, just a warning).
+        assert!(
+            result.is_ok(),
+            "max_workers capping should succeed, got: {:?}",
+            result.unwrap_err()
+        );
+        assert_eq!(
+            batch.max_workers, 3,
+            "max_workers should be capped to max_concurrent (3)"
+        );
+    }
+
+    #[test]
+    fn test_extended_project_dir_parameter() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        // Should accept the project_dir parameter without error.
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(
+            result.is_ok(),
+            "project_dir parameter should be accepted, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_extended_missing_task_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        // Set up enforcement policy but NOT the task markdown.
+        let policy_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&policy_dir).unwrap();
+        std::fs::write(
+            policy_dir.join("enforcement-policy.json"),
+            r#"{"merge_protection":{"protected_branches":["main"]}}"#,
+        )
+        .unwrap();
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("reading task markdown")
+        );
+    }
+
+    #[test]
+    fn test_extended_valid_batch_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "tasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(
+            result.is_ok(),
+            "valid batch should pass, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_extended_protected_branch_auto_merge_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        let yaml = "auto_merge: true\ntarget: develop\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        // Passes because "develop" is not protected.
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(result.is_ok(), "non-protected target should pass");
+    }
+
+    #[test]
+    fn test_extended_auto_merge_release_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
+
+        // auto_merge=true with "release/v1.0" should be caught by validate_batch.
+        let yaml = "auto_merge: true\ntarget: release/v1.0\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("release/v1.0"));
+    }
+
+    #[test]
+    fn test_extended_no_overlap_different_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Task A with scope foo.rs
+        let fields_a = valid_task_fields("t1", "023", "INF");
+        setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields_a);
+
+        // Task B with scope bar.rs (different, no overlap)
+        let fields_b = valid_task_fields("t2", "023", "INF")
+            .replace(
+                "format_id: \"INF-TSK-023-001\"",
+                "format_id: \"INF-TSK-023-002\"",
+            )
+            .replace(
+                "file_scope:\n  - \"src/foo.rs\"",
+                "file_scope:\n  - \"src/bar.rs\"",
+            );
+        let task_dir = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-023/tasks");
+        std::fs::write(
+            task_dir.join("INF-TSK-023-002.md"),
+            make_task_markdown(&fields_b),
+        )
+        .unwrap();
+
+        let yaml = "tasks:\n  \
+            - id: INF-TSK-023-001\n    \
+              file_scope:\n      - src/foo.rs\n  \
+            - id: INF-TSK-023-002\n    \
+              file_scope:\n      - src/bar.rs\n";
+        let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        let result = validate_batch_extended(&mut batch, dir.path());
+        assert!(
+            result.is_ok(),
+            "non-overlapping scopes should pass, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_batch_data_with_project_dir_loads_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create enforcement policy with custom protected branches.
+        let policy_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&policy_dir).unwrap();
+        std::fs::write(
+            policy_dir.join("enforcement-policy.json"),
+            r#"{"merge_protection":{"protected_branches":["main","custom-protected"]}}"#,
+        )
+        .unwrap();
+
+        // auto_merge=true targeting custom-protected should fail.
+        let yaml = "auto_merge: true\ntarget: custom-protected\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data_with_project_dir(yaml, "test.yaml", Some(dir.path()));
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("custom-protected"),
+            "should reject custom protected branch"
+        );
     }
 }

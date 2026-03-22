@@ -3534,7 +3534,10 @@ mod tests {
             "codeflow-cli/core/src/hooks/pre_tool_use.rs",
             &scope
         ));
-        assert!(!GateCheck::is_in_scope("codeflow-cli/cli/src/main.rs", &scope));
+        assert!(!GateCheck::is_in_scope(
+            "codeflow-cli/cli/src/main.rs",
+            &scope
+        ));
     }
 
     #[test]
@@ -3544,7 +3547,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_permissive_allows_all() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3591,7 +3594,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_hard_blocks_out_of_scope() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3638,7 +3641,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_hard_allows_in_scope() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3685,7 +3688,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_soft_allows_in_scope() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3732,7 +3735,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_soft_out_of_scope_unclaimed_allows() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3781,7 +3784,7 @@ mod tests {
     fn test_scope_policy_soft_out_of_scope_conflict_blocks() {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();
@@ -3838,7 +3841,7 @@ mod tests {
 
     #[test]
     fn test_scope_policy_default_is_soft() {
-        use crate::session::active_task::{set_active_task, ActiveTask};
+        use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
 
         let dir = tempfile::tempdir().unwrap();

@@ -167,9 +167,7 @@ pub(crate) enum MergeConflictAction {
     /// Conflicts resolved via rebase — continue to merge queue.
     RebasedSuccessfully,
     /// Conflicts remain after all rebase attempts — return merge_conflict status.
-    MergeConflict {
-        error: String,
-    },
+    MergeConflict { error: String },
 }
 
 /// Resolve merge conflicts using config-driven rebase with retry.
@@ -198,9 +196,7 @@ where
     if !merge_config.auto_rebase {
         let files = &conflict_result.conflicting_files;
         return MergeConflictAction::MergeConflict {
-            error: format!(
-                "merge conflicts with {target}: {files:?} (auto_rebase disabled)"
-            ),
+            error: format!("merge conflicts with {target}: {files:?} (auto_rebase disabled)"),
         };
     }
 
@@ -213,9 +209,7 @@ where
                 last_conflicts.clear();
                 break;
             }
-            Ok(crate::git::conflict::RebaseResult::ConflictAborted {
-                conflicting_files,
-            }) => {
+            Ok(crate::git::conflict::RebaseResult::ConflictAborted { conflicting_files }) => {
                 last_conflicts = conflicting_files;
                 if attempt < max_attempts {
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1724,7 +1718,9 @@ Read and implement.
             || Ok(conflicts_with(vec!["a.rs"])),
             || {
                 attempt_count += 1;
-                Err(crate::error::GitError::MergeFailed("git rebase failed".into()))
+                Err(crate::error::GitError::MergeFailed(
+                    "git rebase failed".into(),
+                ))
             },
         )
         .await;

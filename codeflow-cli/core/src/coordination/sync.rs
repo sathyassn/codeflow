@@ -444,8 +444,7 @@ pub struct SyncConfig {
 }
 
 /// Path to parallel-work config relative to project root.
-const PARALLEL_WORK_CONFIG_PATH: &str =
-    ".codeflow/config/parallel-work/parallel-work-config.json";
+const PARALLEL_WORK_CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.json";
 
 impl SyncConfig {
     /// Create a `SyncConfig` from a project directory with an explicit interval.
