@@ -78,28 +78,46 @@ pub trait DataStore: Send + Sync {
     ) -> Result<Vec<MemoryEvent>, DbError>;
 
     // -- Autorun --
+    // These methods use explicit `impl Future + Send` because they are called
+    // from `TmuxWorker::run()` which requires `Send` futures (spawned via tokio::spawn).
 
-    async fn create_autorun_session(&self, session: &AutorunSession) -> Result<(), DbError>;
-    async fn get_autorun_session(&self, id: &str) -> Result<Option<AutorunSession>, DbError>;
-    async fn update_autorun_session(
+    fn create_autorun_session(
+        &self,
+        session: &AutorunSession,
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
+
+    fn get_autorun_session(
+        &self,
+        id: &str,
+    ) -> impl std::future::Future<Output = Result<Option<AutorunSession>, DbError>> + Send;
+
+    fn update_autorun_session(
         &self,
         id: &str,
         update: AutorunSessionUpdate,
-    ) -> Result<(), DbError>;
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
 
-    async fn create_autorun_worker(&self, worker: &AutorunWorker) -> Result<(), DbError>;
-    async fn update_autorun_worker(
+    fn create_autorun_worker(
+        &self,
+        worker: &AutorunWorker,
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
+
+    fn update_autorun_worker(
         &self,
         id: &str,
         update: AutorunWorkerUpdate,
-    ) -> Result<(), DbError>;
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
 
-    async fn create_autorun_task_run(&self, run: &AutorunTaskRun) -> Result<(), DbError>;
-    async fn update_autorun_task_run(
+    fn create_autorun_task_run(
+        &self,
+        run: &AutorunTaskRun,
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
+
+    fn update_autorun_task_run(
         &self,
         id: &str,
         update: AutorunTaskRunUpdate,
-    ) -> Result<(), DbError>;
+    ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
 
     // -- Generic query --
 
@@ -113,6 +131,51 @@ pub trait DataStore: Send + Sync {
         &self,
         events: impl Iterator<Item = crate::ledger::Event> + Send,
     ) -> Result<SyncResult, DbError>;
+}
+
+// ---------------------------------------------------------------------------
+// NoopStore: no-op DataStore fallback when DB is unavailable
+// ---------------------------------------------------------------------------
+
+/// A no-op `DataStore` implementation that silently succeeds on all writes
+/// and returns empty results on all reads. Used as a fallback when the real
+/// database cannot be opened.
+pub struct NoopStore;
+
+impl DataStore for NoopStore {
+    async fn apply_schema(&self) -> Result<(), DbError> { Ok(()) }
+    async fn check_integrity(&self) -> Result<(), DbError> { Ok(()) }
+    async fn create_session(&self, _: &Session) -> Result<(), DbError> { Ok(()) }
+    async fn get_session(&self, _: &str) -> Result<Option<Session>, DbError> { Ok(None) }
+    async fn update_session(&self, _: &str, _: SessionUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn list_sessions(&self, _: SessionFilter) -> Result<Vec<Session>, DbError> { Ok(vec![]) }
+    async fn create_epic(&self, _: &Epic) -> Result<(), DbError> { Ok(()) }
+    async fn get_epic(&self, _: &str) -> Result<Option<Epic>, DbError> { Ok(None) }
+    async fn get_epic_by_format_id(&self, _: &FormatId) -> Result<Option<Epic>, DbError> { Ok(None) }
+    async fn update_epic(&self, _: &str, _: EpicUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn list_epics(&self, _: EpicFilter) -> Result<Vec<Epic>, DbError> { Ok(vec![]) }
+    async fn create_task(&self, _: &Task) -> Result<(), DbError> { Ok(()) }
+    async fn get_task(&self, _: &str) -> Result<Option<Task>, DbError> { Ok(None) }
+    async fn get_task_by_format_id(&self, _: &FormatId) -> Result<Option<Task>, DbError> { Ok(None) }
+    async fn update_task(&self, _: &str, _: TaskUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn list_tasks(&self, _: TaskFilter) -> Result<Vec<Task>, DbError> { Ok(vec![]) }
+    async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError> { Ok(None) }
+    async fn set_active_work(&self, _: &ActiveWork) -> Result<(), DbError> { Ok(()) }
+    async fn clear_active_work(&self, _: &str) -> Result<(), DbError> { Ok(()) }
+    async fn create_memory_event(&self, _: &MemoryEvent) -> Result<(), DbError> { Ok(()) }
+    async fn list_memory_events(&self, _: MemoryEventFilter) -> Result<Vec<MemoryEvent>, DbError> { Ok(vec![]) }
+    async fn create_autorun_session(&self, _: &AutorunSession) -> Result<(), DbError> { Ok(()) }
+    async fn get_autorun_session(&self, _: &str) -> Result<Option<AutorunSession>, DbError> { Ok(None) }
+    async fn update_autorun_session(&self, _: &str, _: AutorunSessionUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> { Ok(()) }
+    async fn update_autorun_worker(&self, _: &str, _: AutorunWorkerUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn create_autorun_task_run(&self, _: &AutorunTaskRun) -> Result<(), DbError> { Ok(()) }
+    async fn update_autorun_task_run(&self, _: &str, _: AutorunTaskRunUpdate) -> Result<(), DbError> { Ok(()) }
+    async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
+    async fn sync_from_events(&self, events: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> {
+        let count = events.count() as u64;
+        Ok(SyncResult { events_processed: count, ..Default::default() })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +200,9 @@ pub mod mock {
         tasks: Mutex<HashMap<String, Task>>,
         active_work: Mutex<Option<ActiveWork>>,
         memory_events: Mutex<Vec<MemoryEvent>>,
+        pub autorun_sessions: Mutex<HashMap<String, AutorunSession>>,
+        pub autorun_workers: Mutex<HashMap<String, AutorunWorker>>,
+        pub autorun_task_runs: Mutex<HashMap<String, AutorunTaskRun>>,
     }
 
     impl MockStore {
@@ -290,43 +356,106 @@ pub mod mock {
             Ok(self.memory_events.lock().unwrap().clone())
         }
 
-        async fn create_autorun_session(&self, _session: &AutorunSession) -> Result<(), DbError> {
+        async fn create_autorun_session(&self, session: &AutorunSession) -> Result<(), DbError> {
+            self.autorun_sessions
+                .lock()
+                .unwrap()
+                .insert(session.id.clone(), session.clone());
             Ok(())
         }
 
-        async fn get_autorun_session(&self, _id: &str) -> Result<Option<AutorunSession>, DbError> {
-            Ok(None)
+        async fn get_autorun_session(&self, id: &str) -> Result<Option<AutorunSession>, DbError> {
+            Ok(self.autorun_sessions.lock().unwrap().get(id).cloned())
         }
 
         async fn update_autorun_session(
             &self,
-            _id: &str,
-            _update: AutorunSessionUpdate,
+            id: &str,
+            update: AutorunSessionUpdate,
         ) -> Result<(), DbError> {
+            if let Some(s) = self.autorun_sessions.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    s.status = status;
+                }
+                if let Some(v) = update.completed_tasks {
+                    s.completed_tasks = v;
+                }
+                if let Some(v) = update.failed_tasks {
+                    s.failed_tasks = v;
+                }
+                if let Some(v) = update.skipped_tasks {
+                    s.skipped_tasks = v;
+                }
+                if let Some(v) = update.completed_at {
+                    s.completed_at = Some(v);
+                }
+            }
             Ok(())
         }
 
-        async fn create_autorun_worker(&self, _worker: &AutorunWorker) -> Result<(), DbError> {
+        async fn create_autorun_worker(&self, worker: &AutorunWorker) -> Result<(), DbError> {
+            self.autorun_workers
+                .lock()
+                .unwrap()
+                .insert(worker.id.clone(), worker.clone());
             Ok(())
         }
 
         async fn update_autorun_worker(
             &self,
-            _id: &str,
-            _update: AutorunWorkerUpdate,
+            id: &str,
+            update: AutorunWorkerUpdate,
         ) -> Result<(), DbError> {
+            if let Some(w) = self.autorun_workers.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    w.status = status;
+                }
+                if let Some(v) = update.completed_at {
+                    w.completed_at = Some(v);
+                }
+                if let Some(v) = update.pr_number {
+                    w.pr_number = Some(v);
+                }
+            }
             Ok(())
         }
 
-        async fn create_autorun_task_run(&self, _run: &AutorunTaskRun) -> Result<(), DbError> {
+        async fn create_autorun_task_run(&self, run: &AutorunTaskRun) -> Result<(), DbError> {
+            self.autorun_task_runs
+                .lock()
+                .unwrap()
+                .insert(run.id.clone(), run.clone());
             Ok(())
         }
 
         async fn update_autorun_task_run(
             &self,
-            _id: &str,
-            _update: AutorunTaskRunUpdate,
+            id: &str,
+            update: AutorunTaskRunUpdate,
         ) -> Result<(), DbError> {
+            if let Some(r) = self.autorun_task_runs.lock().unwrap().get_mut(id) {
+                if let Some(status) = update.status {
+                    r.status = status;
+                }
+                if let Some(v) = update.completed_at {
+                    r.completed_at = Some(v);
+                }
+                if let Some(v) = update.exit_code {
+                    r.exit_code = Some(v);
+                }
+                if let Some(v) = update.error_message {
+                    r.error_message = Some(v);
+                }
+                if let Some(v) = update.merge_conflicts {
+                    r.merge_conflicts = Some(v);
+                }
+                if let Some(v) = update.pr_number {
+                    r.pr_number = Some(v);
+                }
+                if let Some(v) = update.pr_url {
+                    r.pr_url = Some(v);
+                }
+            }
             Ok(())
         }
 
@@ -748,13 +877,17 @@ pub mod mock {
                 total_tasks: 1,
                 completed_tasks: 0,
                 failed_tasks: 0,
+                pid: None,
+                skipped_tasks: 0,
                 created_at: "2026-03-08T00:00:00Z".into(),
                 completed_at: None,
             })
             .await
             .unwrap();
 
-        assert!(store.get_autorun_session("ar-1").await.unwrap().is_none());
+        let fetched = store.get_autorun_session("ar-1").await.unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().total_tasks, 1);
 
         store
             .update_autorun_session("ar-1", AutorunSessionUpdate::default())
@@ -770,6 +903,8 @@ pub mod mock {
                 status: crate::types::AutorunWorkerStatus::Queued,
                 tmux_session: None,
                 worktree_path: None,
+                file_scope: vec![],
+                scope_policy: "soft".into(),
                 pr_number: None,
                 started_at: None,
                 completed_at: None,
@@ -793,6 +928,9 @@ pub mod mock {
                 worktree_path: None,
                 pr_number: None,
                 pr_url: None,
+                blocked_reason: None,
+                claim_conflicts: None,
+                merge_conflicts: None,
                 started_at: None,
                 completed_at: None,
                 duration_seconds: None,

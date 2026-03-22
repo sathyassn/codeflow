@@ -119,16 +119,22 @@ pub trait WorkerRunner: Send + Sync {
 /// Each worker creates a per-worker git worktree for filesystem isolation.
 /// The worktree is created before Claude invocation and cleaned up on all
 /// exit paths (success, failure, timeout).
-pub struct TmuxWorker<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> {
+pub struct TmuxWorker<
+    T: TmuxRunner,
+    C: ClaudeInvoker,
+    W: WorktreeProvider,
+    S: crate::store::DataStore = crate::store::NoopStore,
+> {
     pub tmux: T,
     pub claude: C,
     pub worktree: W,
     pub timeout: Duration,
     pub project_dir: PathBuf,
+    pub store: std::sync::Arc<S>,
 }
 
 impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> TmuxWorker<T, C, W> {
-    /// Create a new `TmuxWorker` with the default timeout.
+    /// Create a new `TmuxWorker` with the default timeout and no-op store.
     #[must_use]
     pub fn new(tmux: T, claude: C, worktree: W, project_dir: PathBuf) -> Self {
         Self {
@@ -137,10 +143,11 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> TmuxWorker<T, C, W> {
             worktree,
             timeout: DEFAULT_WORKER_TIMEOUT,
             project_dir,
+            store: std::sync::Arc::new(crate::store::NoopStore),
         }
     }
 
-    /// Create a new `TmuxWorker` with a custom timeout.
+    /// Create a new `TmuxWorker` with a custom timeout and no-op store.
     #[must_use]
     pub fn with_timeout(
         tmux: T,
@@ -155,6 +162,31 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> TmuxWorker<T, C, W> {
             worktree,
             timeout,
             project_dir,
+            store: std::sync::Arc::new(crate::store::NoopStore),
+        }
+    }
+}
+
+impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::DataStore>
+    TmuxWorker<T, C, W, S>
+{
+    /// Create a new `TmuxWorker` with a custom timeout and data store.
+    #[must_use]
+    pub fn with_store(
+        tmux: T,
+        claude: C,
+        worktree: W,
+        project_dir: PathBuf,
+        timeout: Duration,
+        store: std::sync::Arc<S>,
+    ) -> Self {
+        Self {
+            tmux,
+            claude,
+            worktree,
+            timeout,
+            project_dir,
+            store,
         }
     }
 }
@@ -234,7 +266,9 @@ where
     }
 }
 
-impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for TmuxWorker<T, C, W> {
+impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::DataStore>
+    WorkerRunner for TmuxWorker<T, C, W, S>
+{
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
         let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
 
@@ -318,6 +352,65 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
         // Create the tmux session.
         self.tmux.create_session(&tmux_name).await?;
 
+        // Create autorun_worker record at spawn.
+        let now = chrono::Utc::now().to_rfc3339();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let worker_record = crate::models::AutorunWorker {
+            id: cfg.worker_id.clone(),
+            session_id: cfg.session_id.clone(),
+            worker_num: cfg.worker_num as i32,
+            task_id: cfg.task_id.clone(),
+            status: crate::types::AutorunWorkerStatus::Running,
+            tmux_session: Some(tmux_name.clone()),
+            worktree_path: Some(wt_info.path.to_string_lossy().into_owned()),
+            file_scope: cfg.file_scope.clone(),
+            scope_policy: cfg.scope_policy.clone(),
+            pr_number: None,
+            started_at: Some(now.clone()),
+            completed_at: None,
+        };
+        if let Err(e) = self.store.create_autorun_worker(&worker_record).await {
+            eprintln!("warning: failed to create autorun_worker record: {e}");
+        }
+
+        // Create autorun_task_run record at task start.
+        let task_run_id = format!("atr-{}", cfg.task_id);
+        let task_run_record = crate::models::AutorunTaskRun {
+            id: task_run_id.clone(),
+            worker_id: cfg.worker_id.clone(),
+            task_id: cfg.task_id.clone(),
+            session_id: cfg.session_id.clone(),
+            status: crate::types::AutorunTaskRunStatus::Running,
+            branch_name: None,
+            worktree_path: Some(wt_info.path.to_string_lossy().into_owned()),
+            pr_number: None,
+            pr_url: None,
+            blocked_reason: None,
+            claim_conflicts: None,
+            merge_conflicts: None,
+            started_at: Some(now),
+            completed_at: None,
+            duration_seconds: None,
+            exit_code: None,
+            error_message: None,
+            verification_result: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        if let Err(e) = self.store.create_autorun_task_run(&task_run_record).await {
+            eprintln!("warning: failed to create autorun_task_run record: {e}");
+        }
+
+        // Emit worker_started event.
+        Self::emit_autorun_event(
+            &self.project_dir,
+            &crate::coordination::types::events::AutorunEvent::WorkerStarted {
+                session_id: cfg.session_id.clone(),
+                worker_id: cfg.worker_id.clone(),
+                task_id: cfg.task_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+
         // Build task prompt from task markdown, falling back to generic prompt.
         let (prompt, acceptance_criteria) =
             match build_task_prompt_from_file(&self.project_dir, &cfg.task_id) {
@@ -371,6 +464,43 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
                 .await;
 
                 if let MergeConflictAction::MergeConflict { error } = action {
+                    // Update DB records before early return to avoid orphaned running records.
+                    let completed_at = chrono::Utc::now().to_rfc3339();
+                    let _ = self
+                        .store
+                        .update_autorun_worker(
+                            &cfg.worker_id,
+                            crate::models::AutorunWorkerUpdate {
+                                status: Some(crate::types::AutorunWorkerStatus::Failed),
+                                completed_at: Some(completed_at.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                    let _ = self
+                        .store
+                        .update_autorun_task_run(
+                            &task_run_id,
+                            crate::models::AutorunTaskRunUpdate {
+                                status: Some(crate::types::AutorunTaskRunStatus::Failed),
+                                error_message: Some(error.clone()),
+                                merge_conflicts: Some(vec![error.clone()]),
+                                completed_at: Some(completed_at.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                    Self::emit_autorun_event(
+                        &self.project_dir,
+                        &crate::coordination::types::events::AutorunEvent::WorkerFailed {
+                            session_id: cfg.session_id.clone(),
+                            worker_id: cfg.worker_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            error: error.clone(),
+                            timestamp: completed_at,
+                        },
+                    );
+
                     return Ok(WorkerResult {
                         worker_id: cfg.worker_id,
                         task_id: cfg.task_id,
@@ -440,7 +570,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
             eprintln!("warning: daemon auto-stop check failed: {e}");
         }
 
-        match result {
+        let worker_result = match result {
             Ok(Ok(invoke_result)) => {
                 let status = if invoke_result.exit_code == 0 {
                     "completed"
@@ -448,12 +578,12 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
                     "failed"
                 };
                 Ok(WorkerResult {
-                    worker_id: cfg.worker_id,
-                    task_id: cfg.task_id,
+                    worker_id: cfg.worker_id.clone(),
+                    task_id: cfg.task_id.clone(),
                     status: status.into(),
                     exit_code: invoke_result.exit_code,
                     pr_number: invoke_result.pr_number,
-                    pr_url: invoke_result.pr_url,
+                    pr_url: invoke_result.pr_url.clone(),
                     branch_name: invoke_result.branch_name,
                     error: String::new(),
                     duration_sec: 0,
@@ -464,8 +594,8 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
                 cfg.task_id
             ))),
             Err(_) => Ok(WorkerResult {
-                worker_id: cfg.worker_id,
-                task_id: cfg.task_id,
+                worker_id: cfg.worker_id.clone(),
+                task_id: cfg.task_id.clone(),
                 status: "timeout".into(),
                 exit_code: 124, // standard timeout exit code
                 pr_number: 0,
@@ -474,6 +604,183 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
                 error: "worker exceeded timeout".into(),
                 duration_sec: 0,
             }),
+        };
+
+        // Update autorun_worker and autorun_task_run at completion.
+        let completed_at = chrono::Utc::now().to_rfc3339();
+        match &worker_result {
+            Ok(wr) => {
+                let worker_status = match wr.status.as_str() {
+                    "completed" => crate::types::AutorunWorkerStatus::Completed,
+                    "timeout" => crate::types::AutorunWorkerStatus::Timeout,
+                    _ => crate::types::AutorunWorkerStatus::Failed,
+                };
+                let task_run_status = match wr.status.as_str() {
+                    "completed" => crate::types::AutorunTaskRunStatus::Completed,
+                    "timeout" => crate::types::AutorunTaskRunStatus::Timeout,
+                    "skipped" => crate::types::AutorunTaskRunStatus::Skipped,
+                    _ => crate::types::AutorunTaskRunStatus::Failed,
+                };
+
+                // Update worker record.
+                if let Err(e) = self
+                    .store
+                    .update_autorun_worker(
+                        &cfg.worker_id,
+                        crate::models::AutorunWorkerUpdate {
+                            status: Some(worker_status),
+                            pr_number: if wr.pr_number > 0 {
+                                Some(wr.pr_number)
+                            } else {
+                                None
+                            },
+                            completed_at: Some(completed_at.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    eprintln!("warning: failed to update autorun_worker: {e}");
+                }
+
+                // Update task_run record.
+                if let Err(e) = self
+                    .store
+                    .update_autorun_task_run(
+                        &task_run_id,
+                        crate::models::AutorunTaskRunUpdate {
+                            status: Some(task_run_status),
+                            pr_number: if wr.pr_number > 0 {
+                                Some(wr.pr_number)
+                            } else {
+                                None
+                            },
+                            pr_url: if wr.pr_url.is_empty() {
+                                None
+                            } else {
+                                Some(wr.pr_url.clone())
+                            },
+                            exit_code: Some(i64::from(wr.exit_code)),
+                            completed_at: Some(completed_at.clone()),
+                            error_message: if wr.error.is_empty() {
+                                None
+                            } else {
+                                Some(wr.error.clone())
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    eprintln!("warning: failed to update autorun_task_run: {e}");
+                }
+
+                // Emit completion event.
+                let event = match wr.status.as_str() {
+                    "completed" => {
+                        crate::coordination::types::events::AutorunEvent::WorkerCompleted {
+                            session_id: cfg.session_id.clone(),
+                            worker_id: cfg.worker_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            pr_number: if wr.pr_number > 0 {
+                                Some(wr.pr_number)
+                            } else {
+                                None
+                            },
+                            timestamp: completed_at.clone(),
+                        }
+                    }
+                    "timeout" => {
+                        crate::coordination::types::events::AutorunEvent::WorkerTimeout {
+                            session_id: cfg.session_id.clone(),
+                            worker_id: cfg.worker_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            timestamp: completed_at.clone(),
+                        }
+                    }
+                    "skipped" => {
+                        crate::coordination::types::events::AutorunEvent::WorkerCancelled {
+                            session_id: cfg.session_id.clone(),
+                            worker_id: cfg.worker_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            reason: wr.error.clone(),
+                            timestamp: completed_at.clone(),
+                        }
+                    }
+                    _ => crate::coordination::types::events::AutorunEvent::WorkerFailed {
+                        session_id: cfg.session_id.clone(),
+                        worker_id: cfg.worker_id.clone(),
+                        task_id: cfg.task_id.clone(),
+                        error: wr.error.clone(),
+                        timestamp: completed_at,
+                    },
+                };
+                Self::emit_autorun_event(&self.project_dir, &event);
+            }
+            Err(e) => {
+                // Worker errored — update records with failed status.
+                let _ = self
+                    .store
+                    .update_autorun_worker(
+                        &cfg.worker_id,
+                        crate::models::AutorunWorkerUpdate {
+                            status: Some(crate::types::AutorunWorkerStatus::Failed),
+                            completed_at: Some(completed_at.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                let _ = self
+                    .store
+                    .update_autorun_task_run(
+                        &task_run_id,
+                        crate::models::AutorunTaskRunUpdate {
+                            status: Some(crate::types::AutorunTaskRunStatus::Failed),
+                            error_message: Some(e.to_string()),
+                            completed_at: Some(completed_at.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                Self::emit_autorun_event(
+                    &self.project_dir,
+                    &crate::coordination::types::events::AutorunEvent::WorkerFailed {
+                        session_id: cfg.session_id.clone(),
+                        worker_id: cfg.worker_id.clone(),
+                        task_id: cfg.task_id.clone(),
+                        error: e.to_string(),
+                        timestamp: completed_at,
+                    },
+                );
+            }
+        }
+
+        worker_result
+    }
+}
+
+impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::DataStore>
+    TmuxWorker<T, C, W, S>
+{
+    /// Emit an autorun event to the JSONL ledger.
+    fn emit_autorun_event(
+        project_dir: &std::path::Path,
+        event: &crate::coordination::types::events::AutorunEvent,
+    ) {
+        let ledger_dir = project_dir.join(".state/ledger");
+        let file_path = ledger_dir.join(crate::ledger::files::AUTORUN_EVENTS);
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string(event) {
+            use std::io::Write;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path);
+            if let Ok(mut f) = file {
+                let _ = writeln!(f, "{json}");
+            }
         }
     }
 }
@@ -1822,5 +2129,244 @@ Read and implement.
         // The format is "{prefix}{worker_num}" = "codeflow-ses01km9-w3"
         let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
         assert_eq!(tmux_name, "codeflow-ses01km9-w3");
+    }
+
+    // -- DB write tests using MockStore --
+
+    fn make_worker_cfg(session_id: &str, task_id: &str) -> WorkerConfig {
+        WorkerConfig {
+            session_id: session_id.into(),
+            worker_id: format!("arw-{task_id}"),
+            worker_num: 1,
+            task_id: task_id.into(),
+            batch_name: "test-batch".into(),
+            auto_merge: false,
+            target: String::new(),
+            tmux_prefix: "codeflow-test-w".into(),
+            file_scope: vec!["src/**/*.rs".into()],
+            scope_policy: "soft".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_creates_autorun_worker_record() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(0);
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-wr-test", "task-a");
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "completed");
+
+        // Verify autorun_worker was created and updated.
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-task-a").unwrap();
+        assert_eq!(aw.task_id, "task-a");
+        assert_eq!(aw.file_scope, vec!["src/**/*.rs"]);
+        assert_eq!(aw.scope_policy, "soft");
+        assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Completed);
+        assert!(aw.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_worker_creates_autorun_task_run_record() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(0);
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-tr-test", "task-b");
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "completed");
+
+        // Verify autorun_task_run was created and updated.
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-task-b").unwrap();
+        assert_eq!(atr.task_id, "task-b");
+        assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Completed);
+        assert_eq!(atr.exit_code, Some(0));
+        assert!(atr.completed_at.is_some());
+        assert_eq!(atr.pr_number, Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_worker_updates_records_on_failure() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(1); // non-zero exit code
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-fail", "task-fail");
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "failed");
+
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-task-fail").unwrap();
+        assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Failed);
+
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-task-fail").unwrap();
+        assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
+        assert_eq!(atr.exit_code, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_worker_updates_records_on_claude_error() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            FailingClaude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-err", "task-err");
+        let result = worker.run(cfg).await;
+        assert!(result.is_err());
+
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-task-err").unwrap();
+        assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Failed);
+        assert!(aw.completed_at.is_some());
+
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-task-err").unwrap();
+        assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
+        assert!(atr.error_message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_worker_updates_records_on_timeout() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            SlowClaude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_millis(50), // very short timeout
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-to", "task-to");
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "timeout");
+
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-task-to").unwrap();
+        assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Timeout);
+
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-task-to").unwrap();
+        assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Timeout);
+    }
+
+    #[tokio::test]
+    async fn test_worker_emits_events_to_jsonl() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(0);
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store,
+        );
+
+        let cfg = make_worker_cfg("ses-ev", "task-ev");
+        worker.run(cfg).await.unwrap();
+
+        let events_path = project_dir
+            .path()
+            .join(".state/ledger/autorun-events.jsonl");
+        assert!(events_path.exists(), "autorun-events.jsonl should exist");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        assert!(
+            content.contains("worker_started"),
+            "should contain worker_started event"
+        );
+        assert!(
+            content.contains("worker_completed"),
+            "should contain worker_completed event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_emit_autorun_event_creates_file() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let event =
+            crate::coordination::types::events::AutorunEvent::BatchStarted {
+                session_id: "ses-test".into(),
+                batch_name: "test".into(),
+                total_tasks: 1,
+                timestamp: "2026-03-21T00:00:00Z".into(),
+            };
+        TmuxWorker::<MockTmux, MockClaude, MockWorktree>::emit_autorun_event(
+            project_dir.path(),
+            &event,
+        );
+        let path = project_dir
+            .path()
+            .join(".state/ledger/autorun-events.jsonl");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("batch_started"));
     }
 }

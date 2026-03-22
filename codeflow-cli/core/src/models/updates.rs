@@ -37,6 +37,7 @@ pub struct AutorunSessionUpdate {
     pub status: Option<AutorunSessionStatus>,
     pub completed_tasks: Option<i32>,
     pub failed_tasks: Option<i32>,
+    pub skipped_tasks: Option<i32>,
     pub completed_at: Option<String>,
 }
 
@@ -45,6 +46,8 @@ pub struct AutorunWorkerUpdate {
     pub status: Option<AutorunWorkerStatus>,
     pub tmux_session: Option<String>,
     pub worktree_path: Option<String>,
+    pub file_scope: Option<Vec<String>>,
+    pub scope_policy: Option<String>,
     pub pr_number: Option<i64>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -55,6 +58,9 @@ pub struct AutorunTaskRunUpdate {
     pub status: Option<AutorunTaskRunStatus>,
     pub pr_number: Option<i64>,
     pub pr_url: Option<String>,
+    pub blocked_reason: Option<String>,
+    pub claim_conflicts: Option<Vec<String>>,
+    pub merge_conflicts: Option<Vec<String>>,
     pub completed_at: Option<String>,
     pub duration_seconds: Option<i64>,
     pub exit_code: Option<i64>,
@@ -151,6 +157,7 @@ mod tests {
         assert!(u.status.is_none());
         assert!(u.completed_tasks.is_none());
         assert!(u.failed_tasks.is_none());
+        assert!(u.skipped_tasks.is_none());
         assert!(u.completed_at.is_none());
     }
 
@@ -160,10 +167,12 @@ mod tests {
             status: Some(AutorunSessionStatus::Completed),
             completed_tasks: Some(5),
             failed_tasks: Some(0),
+            skipped_tasks: Some(1),
             completed_at: Some("2026-03-07T02:00:00Z".to_string()),
         };
         assert_eq!(u.completed_tasks, Some(5));
         assert_eq!(u.failed_tasks, Some(0));
+        assert_eq!(u.skipped_tasks, Some(1));
     }
 
     #[test]

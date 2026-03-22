@@ -59,6 +59,17 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         | "merge_conflict_detected"
         | "merge_rebase_attempted" => Ok(files::COORDINATION_EVENTS),
 
+        // autorun-events.jsonl
+        "batch_started"
+        | "batch_completed"
+        | "batch_aborted"
+        | "worker_started"
+        | "worker_completed"
+        | "worker_failed"
+        | "worker_timeout"
+        | "worker_blocked"
+        | "worker_cancelled" => Ok(files::AUTORUN_EVENTS),
+
         _ => Err(LedgerError::UnknownEventType(event_type.to_string())),
     }
 }
@@ -184,6 +195,27 @@ mod tests {
     }
 
     #[test]
+    fn test_autorun_events_route_to_autorun() {
+        for event_type in &[
+            "batch_started",
+            "batch_completed",
+            "batch_aborted",
+            "worker_started",
+            "worker_completed",
+            "worker_failed",
+            "worker_timeout",
+            "worker_blocked",
+            "worker_cancelled",
+        ] {
+            assert_eq!(
+                route_event_type(event_type).unwrap(),
+                files::AUTORUN_EVENTS,
+                "{event_type} should route to autorun-events.jsonl"
+            );
+        }
+    }
+
+    #[test]
     fn test_unknown_event_type_returns_error() {
         let result = route_event_type("totally_unknown");
         assert!(result.is_err());
@@ -202,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_all_ledger_event_variants_routable() {
-        // All 32 LedgerEvent variant event_type strings must be routable.
+        // All LedgerEvent variant event_type strings plus autorun events must be routable.
         let all_variants = [
             "session_start",
             "session_end",
@@ -242,6 +274,16 @@ mod tests {
             "scope_expansion",
             "merge_conflict_detected",
             "merge_rebase_attempted",
+            // Autorun events
+            "batch_started",
+            "batch_completed",
+            "batch_aborted",
+            "worker_started",
+            "worker_completed",
+            "worker_failed",
+            "worker_timeout",
+            "worker_blocked",
+            "worker_cancelled",
         ];
         for event_type in &all_variants {
             assert!(

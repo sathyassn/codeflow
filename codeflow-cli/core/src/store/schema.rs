@@ -49,6 +49,41 @@ mod tests {
     }
 
     #[test]
+    fn schema_contains_autorun_new_fields() {
+        // autorun_session new fields (INF-TSK-023-032)
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE pid"),
+            "autorun_session missing pid field"
+        );
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE skipped_tasks"),
+            "autorun_session missing skipped_tasks field"
+        );
+        // autorun_worker new fields
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE file_scope    ON TABLE autorun_worker"),
+            "autorun_worker missing file_scope field"
+        );
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE scope_policy  ON TABLE autorun_worker"),
+            "autorun_worker missing scope_policy field"
+        );
+        // autorun_task_run new fields
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE blocked_reason"),
+            "autorun_task_run missing blocked_reason field"
+        );
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE claim_conflicts"),
+            "autorun_task_run missing claim_conflicts field"
+        );
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE merge_conflicts"),
+            "autorun_task_run missing merge_conflicts field"
+        );
+    }
+
+    #[test]
     fn schema_uses_overwrite() {
         // Every DEFINE statement should use OVERWRITE for idempotency.
         // Statements may span multiple lines, ending with `;`.

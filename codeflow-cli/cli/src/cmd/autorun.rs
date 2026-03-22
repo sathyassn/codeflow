@@ -52,15 +52,23 @@ async fn run_with_dir(project_dir: &Path) -> Result<()> {
         tmux: RealTmux,
         worker_timeout,
     };
-    let worker = codeflow_core::autorun::TmuxWorker::with_timeout(
+    // Construct the data store for recording autorun state.
+    let db_dir = project_dir.join(".state/db");
+    let store = codeflow_core::store::SurrealStore::open(&db_dir)
+        .await
+        .context("opening data store for autorun")?;
+    let store = std::sync::Arc::new(store);
+
+    let worker = codeflow_core::autorun::TmuxWorker::with_store(
         tmux,
         claude,
         worktree_provider,
         project_dir.to_path_buf(),
         worker_timeout,
+        store.clone(),
     );
 
-    let orchestrator = codeflow_core::autorun::Orchestrator::new(worker);
+    let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
 
     let results = orchestrator
         .execute(session_id.as_str(), &parsed, project_dir)

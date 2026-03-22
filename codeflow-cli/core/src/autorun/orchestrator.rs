@@ -47,8 +47,9 @@ pub struct WorkerResult {
 
 /// Manages task sequencing and worker lifecycle using semaphore-based
 /// concurrency control.
-pub struct Orchestrator<R: WorkerRunner> {
+pub struct Orchestrator<R: WorkerRunner, S: crate::store::DataStore = crate::store::NoopStore> {
     runner: Arc<R>,
+    store: Arc<S>,
 }
 
 /// Shared mutable state for tracking task completion during batch execution.
@@ -72,11 +73,12 @@ impl ExecutionState {
     }
 }
 
-impl<R: WorkerRunner + 'static> Orchestrator<R> {
-    /// Create a new orchestrator with the given worker runner.
-    pub fn new(runner: R) -> Self {
+impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrator<R, S> {
+    /// Create a new orchestrator with the given worker runner and data store.
+    pub fn new(runner: R, store: Arc<S>) -> Self {
         Self {
             runner: Arc::new(runner),
+            store,
         }
     }
 
@@ -94,6 +96,40 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
         batch: &ParsedBatch,
         project_dir: &std::path::Path,
     ) -> Result<Vec<WorkerResult>, AutorunError> {
+        let batch_name = batch.name.clone();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let total_tasks_i32 = batch.order.len().min(i32::MAX as usize) as i32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let max_workers_i32 = batch.max_workers.min(i32::MAX as usize) as i32;
+
+        // Create autorun_session record at batch start.
+        let ar_session = crate::models::AutorunSession {
+            id: session_id.to_string(),
+            batch_file: String::new(),
+            batch_name: Some(batch_name.clone()),
+            status: crate::types::AutorunSessionStatus::Running,
+            max_session_workers: max_workers_i32,
+            total_tasks: total_tasks_i32,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: Some(i64::from(std::process::id())),
+            skipped_tasks: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            completed_at: None,
+        };
+        if let Err(e) = self.store.create_autorun_session(&ar_session).await {
+            eprintln!("warning: failed to create autorun_session record: {e}");
+        }
+
+        // Emit batch_started event.
+        let batch_started = crate::coordination::types::events::AutorunEvent::BatchStarted {
+            session_id: session_id.to_string(),
+            batch_name: batch_name.clone(),
+            total_tasks: total_tasks_i32,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        Self::emit_autorun_event(project_dir, &batch_started);
+
         let dep_map: HashMap<&str, Vec<&str>> = batch
             .tasks
             .iter()
@@ -134,7 +170,79 @@ impl<R: WorkerRunner + 'static> Orchestrator<R> {
         }
 
         let final_results = state.results.lock().await.clone();
+
+        // Compute final counts.
+        let completed_count = final_results
+            .iter()
+            .filter(|r| r.status == "completed")
+            .count();
+        let failed_count = final_results
+            .iter()
+            .filter(|r| r.status == "failed" || r.status == "timeout")
+            .count();
+        let skipped_count = final_results
+            .iter()
+            .filter(|r| r.status == "skipped")
+            .count();
+
+        let final_status = if failed_count > 0 {
+            crate::types::AutorunSessionStatus::Failed
+        } else {
+            crate::types::AutorunSessionStatus::Completed
+        };
+
+        // Update autorun_session at batch end.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let session_update = crate::models::AutorunSessionUpdate {
+            status: Some(final_status),
+            completed_tasks: Some(completed_count.min(i32::MAX as usize) as i32),
+            failed_tasks: Some(failed_count.min(i32::MAX as usize) as i32),
+            skipped_tasks: Some(skipped_count.min(i32::MAX as usize) as i32),
+            completed_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+        if let Err(e) = self
+            .store
+            .update_autorun_session(session_id, session_update)
+            .await
+        {
+            eprintln!("warning: failed to update autorun_session record: {e}");
+        }
+
+        // Emit batch_completed event.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let batch_end = crate::coordination::types::events::AutorunEvent::BatchCompleted {
+            session_id: session_id.to_string(),
+            batch_name: batch_name.clone(),
+            completed_tasks: completed_count.min(i32::MAX as usize) as i32,
+            failed_tasks: failed_count.min(i32::MAX as usize) as i32,
+            skipped_tasks: skipped_count.min(i32::MAX as usize) as i32,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        Self::emit_autorun_event(project_dir, &batch_end);
+
         Ok(final_results)
+    }
+
+    /// Emit an autorun event to the JSONL ledger.
+    fn emit_autorun_event(
+        project_dir: &std::path::Path,
+        event: &crate::coordination::types::events::AutorunEvent,
+    ) {
+        let ledger_dir = project_dir.join(".state/ledger");
+        let file_path = ledger_dir.join(crate::ledger::files::AUTORUN_EVENTS);
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string(event) {
+            use std::io::Write;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path);
+            if let Ok(mut f) = file {
+                let _ = writeln!(f, "{json}");
+            }
+        }
     }
 
     /// Scan the task order and dispatch any tasks whose dependencies are met.
@@ -285,6 +393,10 @@ mod tests {
     use crate::error::AutorunError;
     use std::sync::atomic::{AtomicI32, Ordering};
 
+    fn mock_store() -> Arc<crate::store::mock::MockStore> {
+        Arc::new(crate::store::mock::MockStore::new())
+    }
+
     // Mock runner that tracks execution order.
     struct OrderTracker {
         counter: Arc<AtomicI32>,
@@ -346,7 +458,7 @@ mod tests {
     async fn test_orchestrator_linear_execution() {
         let runner = OrderTracker::new();
         let order_ref = runner.order.clone();
-        let orch = Orchestrator::new(runner);
+        let orch = Orchestrator::new(runner, mock_store());
         let project_dir = tempfile::tempdir().unwrap();
 
         let batch =
@@ -369,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrator_parallel_execution() {
         let runner = OrderTracker::new();
-        let orch = Orchestrator::new(runner);
+        let orch = Orchestrator::new(runner, mock_store());
         let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n  - id: c\n");
@@ -384,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_orchestrator_dependency_failure_skips_dependents() {
-        let orch = Orchestrator::new(FailingRunner);
+        let orch = Orchestrator::new(FailingRunner, mock_store());
         let project_dir = tempfile::tempdir().unwrap();
 
         let batch =
@@ -406,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrator_single_task() {
         let runner = OrderTracker::new();
-        let orch = Orchestrator::new(runner);
+        let orch = Orchestrator::new(runner, mock_store());
         let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch("tasks:\n  - id: only\n");
@@ -424,7 +536,7 @@ mod tests {
     async fn test_orchestrator_diamond_dependency() {
         let runner = OrderTracker::new();
         let order_ref = runner.order.clone();
-        let orch = Orchestrator::new(runner);
+        let orch = Orchestrator::new(runner, mock_store());
         let project_dir = tempfile::tempdir().unwrap();
 
         let batch = make_batch(
@@ -567,7 +679,7 @@ mod tests {
             max_observed: max_concurrent_observed.clone(),
             current: current_concurrent,
         };
-        let orch = Orchestrator::new(tracker);
+        let orch = Orchestrator::new(tracker, mock_store());
 
         // 4 independent tasks, max_workers=5, but max_concurrent=2 from config.
         let batch =
@@ -585,5 +697,114 @@ mod tests {
             max_seen <= 2,
             "max concurrent workers should be <= 2 (min(5, 2)), but saw {max_seen}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_creates_session_record_at_batch_start() {
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("tasks:\n  - id: a\n");
+        orch.execute("ses-db-test", &batch, project_dir.path())
+            .await
+            .unwrap();
+
+        let sessions = store.autorun_sessions.lock().unwrap();
+        let session = sessions.get("ses-db-test").unwrap();
+        assert_eq!(session.total_tasks, 1);
+        assert!(session.pid.is_some());
+        assert!(session.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_updates_session_at_batch_end_completed() {
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("tasks:\n  - id: a\n  - id: b\n");
+        orch.execute("ses-end-test", &batch, project_dir.path())
+            .await
+            .unwrap();
+
+        let sessions = store.autorun_sessions.lock().unwrap();
+        let session = sessions.get("ses-end-test").unwrap();
+        assert_eq!(
+            session.status,
+            crate::types::AutorunSessionStatus::Completed
+        );
+        assert_eq!(session.completed_tasks, 2);
+        assert_eq!(session.failed_tasks, 0);
+        assert_eq!(session.skipped_tasks, 0);
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_updates_session_at_batch_end_with_failures() {
+        let store = mock_store();
+        let orch = Orchestrator::new(FailingRunner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch =
+            make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n");
+        orch.execute("ses-fail-test", &batch, project_dir.path())
+            .await
+            .unwrap();
+
+        let sessions = store.autorun_sessions.lock().unwrap();
+        let session = sessions.get("ses-fail-test").unwrap();
+        assert_eq!(session.status, crate::types::AutorunSessionStatus::Failed);
+        // a fails, b is skipped
+        assert_eq!(session.completed_tasks, 0);
+        assert_eq!(session.failed_tasks, 1);
+        assert_eq!(session.skipped_tasks, 1);
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_emits_batch_events_to_jsonl() {
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store);
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("tasks:\n  - id: a\n");
+        orch.execute("ses-event-test", &batch, project_dir.path())
+            .await
+            .unwrap();
+
+        // Check that autorun-events.jsonl was written.
+        let events_path = project_dir
+            .path()
+            .join(".state/ledger/autorun-events.jsonl");
+        assert!(events_path.exists(), "autorun-events.jsonl should exist");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        assert!(
+            content.contains("batch_started"),
+            "should contain batch_started event"
+        );
+        assert!(
+            content.contains("batch_completed"),
+            "should contain batch_completed event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_session_batch_name_recorded() {
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("name: my-batch\ntasks:\n  - id: a\n");
+        orch.execute("ses-name", &batch, project_dir.path())
+            .await
+            .unwrap();
+
+        let sessions = store.autorun_sessions.lock().unwrap();
+        let session = sessions.get("ses-name").unwrap();
+        assert_eq!(session.batch_name.as_deref(), Some("my-batch"));
+        assert_eq!(session.total_tasks, 1);
     }
 }

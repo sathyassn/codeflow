@@ -169,6 +169,8 @@ DEFINE FIELD OVERWRITE max_session_workers ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE total_tasks         ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE completed_tasks     ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE failed_tasks        ON TABLE autorun_session TYPE int;
+DEFINE FIELD OVERWRITE pid                 ON TABLE autorun_session TYPE option<int>;
+DEFINE FIELD OVERWRITE skipped_tasks       ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_session TYPE string;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_session TYPE option<string>;
 
@@ -179,6 +181,8 @@ DEFINE FIELD OVERWRITE task_id       ON TABLE autorun_worker TYPE string;
 DEFINE FIELD OVERWRITE status        ON TABLE autorun_worker TYPE string;
 DEFINE FIELD OVERWRITE tmux_session  ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE worktree_path ON TABLE autorun_worker TYPE option<string>;
+DEFINE FIELD OVERWRITE file_scope    ON TABLE autorun_worker TYPE array<string>;
+DEFINE FIELD OVERWRITE scope_policy  ON TABLE autorun_worker TYPE string;
 DEFINE FIELD OVERWRITE pr_number     ON TABLE autorun_worker TYPE option<int>;
 DEFINE FIELD OVERWRITE started_at    ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at  ON TABLE autorun_worker TYPE option<string>;
@@ -192,6 +196,9 @@ DEFINE FIELD OVERWRITE branch_name         ON TABLE autorun_task_run TYPE option
 DEFINE FIELD OVERWRITE worktree_path       ON TABLE autorun_task_run TYPE option<string>;
 DEFINE FIELD OVERWRITE pr_number           ON TABLE autorun_task_run TYPE option<int>;
 DEFINE FIELD OVERWRITE pr_url              ON TABLE autorun_task_run TYPE option<string>;
+DEFINE FIELD OVERWRITE blocked_reason      ON TABLE autorun_task_run TYPE option<string>;
+DEFINE FIELD OVERWRITE claim_conflicts     ON TABLE autorun_task_run TYPE option<array<string>>;
+DEFINE FIELD OVERWRITE merge_conflicts     ON TABLE autorun_task_run TYPE option<array<string>>;
 DEFINE FIELD OVERWRITE started_at          ON TABLE autorun_task_run TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_task_run TYPE option<string>;
 DEFINE FIELD OVERWRITE duration_seconds    ON TABLE autorun_task_run TYPE option<int>;
