@@ -159,6 +159,87 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> TmuxWorker<T, C, W> {
     }
 }
 
+/// Outcome of merge conflict resolution.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MergeConflictAction {
+    /// No conflicts detected, or conflict check failed (warn and continue).
+    Continue,
+    /// Conflicts resolved via rebase — continue to merge queue.
+    RebasedSuccessfully,
+    /// Conflicts remain after all rebase attempts — return merge_conflict status.
+    MergeConflict {
+        error: String,
+    },
+}
+
+/// Resolve merge conflicts using config-driven rebase with retry.
+///
+/// Extracted from `TmuxWorker::run()` for testability. Takes closures for
+/// `check_merge_conflicts` and `attempt_rebase` to avoid git dependencies in tests.
+pub(crate) async fn resolve_merge_conflicts<F, R>(
+    target: &str,
+    merge_config: &crate::autorun::config::MergeConfig,
+    check_conflicts: F,
+    mut attempt_rebase_fn: R,
+) -> MergeConflictAction
+where
+    F: FnOnce() -> Result<crate::git::conflict::ConflictResult, crate::error::GitError>,
+    R: FnMut() -> Result<crate::git::conflict::RebaseResult, crate::error::GitError>,
+{
+    let conflict_result = match check_conflicts() {
+        Ok(cr) if cr.has_conflicts => cr,
+        Ok(_) => return MergeConflictAction::Continue,
+        Err(e) => {
+            eprintln!("warning: merge conflict check failed: {e}");
+            return MergeConflictAction::Continue;
+        }
+    };
+
+    if !merge_config.auto_rebase {
+        let files = &conflict_result.conflicting_files;
+        return MergeConflictAction::MergeConflict {
+            error: format!(
+                "merge conflicts with {target}: {files:?} (auto_rebase disabled)"
+            ),
+        };
+    }
+
+    let max_attempts = merge_config.max_rebase_attempts;
+    let mut last_conflicts = conflict_result.conflicting_files;
+
+    for attempt in 1..=max_attempts {
+        match attempt_rebase_fn() {
+            Ok(crate::git::conflict::RebaseResult::Success) => {
+                last_conflicts.clear();
+                break;
+            }
+            Ok(crate::git::conflict::RebaseResult::ConflictAborted {
+                conflicting_files,
+            }) => {
+                last_conflicts = conflicting_files;
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: attempt_rebase failed: {e}");
+                last_conflicts.clear();
+                break;
+            }
+        }
+    }
+
+    if last_conflicts.is_empty() {
+        MergeConflictAction::RebasedSuccessfully
+    } else {
+        MergeConflictAction::MergeConflict {
+            error: format!(
+                "merge conflicts with {target} after {max_attempts} rebase attempts: {last_conflicts:?}"
+            ),
+        }
+    }
+}
+
 impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for TmuxWorker<T, C, W> {
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
         let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
@@ -278,20 +359,35 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider> WorkerRunner for Tmux
         })
         .await;
 
-        // Check for merge conflicts before PR creation.
+        // Merge conflict detection and remediation.
         if let Ok(Ok(ref invoke_result)) = result {
             if invoke_result.exit_code == 0 && !cfg.target.is_empty() {
-                match crate::git::conflict::check_merge_conflicts(&wt_info.path, &cfg.target) {
-                    Ok(conflict_result) if conflict_result.has_conflicts => {
-                        eprintln!(
-                            "warning: merge conflicts detected with {}: {:?}",
-                            cfg.target, conflict_result.conflicting_files
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("warning: merge conflict check failed: {e}");
-                    }
-                    _ => {}
+                let merge_config = crate::autorun::config::load_config(&self.project_dir)
+                    .unwrap_or_default()
+                    .merge;
+
+                let wt_path = wt_info.path.clone();
+                let target = cfg.target.clone();
+                let action = resolve_merge_conflicts(
+                    &target,
+                    &merge_config,
+                    || crate::git::conflict::check_merge_conflicts(&wt_path, &target),
+                    || crate::git::conflict::attempt_rebase(&wt_path, &target),
+                )
+                .await;
+
+                if let MergeConflictAction::MergeConflict { error } = action {
+                    return Ok(WorkerResult {
+                        worker_id: cfg.worker_id,
+                        task_id: cfg.task_id,
+                        status: "merge_conflict".into(),
+                        exit_code: 1,
+                        pr_number: 0,
+                        pr_url: String::new(),
+                        branch_name: String::new(),
+                        error,
+                        duration_sec: 0,
+                    });
                 }
             }
         }
@@ -1463,6 +1559,252 @@ Read and implement.
             !err.to_string().contains("path traversal"),
             "valid task ID must not be rejected for path traversal"
         );
+    }
+
+    // -- resolve_merge_conflicts tests --
+
+    use crate::autorun::config::MergeConfig;
+    use crate::git::conflict::{ConflictResult, RebaseResult};
+
+    fn conflicts_with(files: Vec<&str>) -> ConflictResult {
+        ConflictResult {
+            has_conflicts: true,
+            conflicting_files: files.into_iter().map(String::from).collect(),
+            target_branch: "main".into(),
+        }
+    }
+
+    fn no_conflicts() -> ConflictResult {
+        ConflictResult {
+            has_conflicts: false,
+            conflicting_files: Vec::new(),
+            target_branch: "main".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_no_conflicts() {
+        let config = MergeConfig::default();
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(no_conflicts()),
+            || unreachable!("should not attempt rebase when no conflicts"),
+        )
+        .await;
+        assert_eq!(action, MergeConflictAction::Continue);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_check_error() {
+        let config = MergeConfig::default();
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Err(crate::error::GitError::MergeFailed("git failed".into())),
+            || unreachable!("should not attempt rebase when check fails"),
+        )
+        .await;
+        assert_eq!(action, MergeConflictAction::Continue);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_auto_rebase_false() {
+        let config = MergeConfig {
+            auto_rebase: false,
+            ..MergeConfig::default()
+        };
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["file.rs"])),
+            || unreachable!("should not attempt rebase when auto_rebase=false"),
+        )
+        .await;
+        match action {
+            MergeConflictAction::MergeConflict { ref error } => {
+                assert!(error.contains("auto_rebase disabled"), "got: {error}");
+                assert!(error.contains("file.rs"), "got: {error}");
+            }
+            other => panic!("expected MergeConflict, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_rebase_success_first_attempt() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 3,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["a.rs"])),
+            || {
+                attempt_count += 1;
+                Ok(RebaseResult::Success)
+            },
+        )
+        .await;
+        assert_eq!(action, MergeConflictAction::RebasedSuccessfully);
+        assert_eq!(attempt_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_rebase_success_second_attempt() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 3,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["a.rs"])),
+            || {
+                attempt_count += 1;
+                if attempt_count == 1 {
+                    Ok(RebaseResult::ConflictAborted {
+                        conflicting_files: vec!["a.rs".into()],
+                    })
+                } else {
+                    Ok(RebaseResult::Success)
+                }
+            },
+        )
+        .await;
+        assert_eq!(action, MergeConflictAction::RebasedSuccessfully);
+        assert_eq!(attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_all_attempts_exhausted() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 2,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["conflict.rs"])),
+            || {
+                attempt_count += 1;
+                Ok(RebaseResult::ConflictAborted {
+                    conflicting_files: vec!["conflict.rs".into()],
+                })
+            },
+        )
+        .await;
+        assert_eq!(attempt_count, 2);
+        match action {
+            MergeConflictAction::MergeConflict { ref error } => {
+                assert!(error.contains("after 2 rebase attempts"), "got: {error}");
+                assert!(error.contains("conflict.rs"), "got: {error}");
+            }
+            other => panic!("expected MergeConflict, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_rebase_git_error() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 3,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["a.rs"])),
+            || {
+                attempt_count += 1;
+                Err(crate::error::GitError::MergeFailed("git rebase failed".into()))
+            },
+        )
+        .await;
+        // Git error should warn and continue to merge queue, not return merge_conflict.
+        assert_eq!(action, MergeConflictAction::RebasedSuccessfully);
+        assert_eq!(attempt_count, 1, "should stop retrying after git error");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_git_error_on_second_attempt() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 3,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["a.rs"])),
+            || {
+                attempt_count += 1;
+                if attempt_count == 1 {
+                    Ok(RebaseResult::ConflictAborted {
+                        conflicting_files: vec!["a.rs".into()],
+                    })
+                } else {
+                    Err(crate::error::GitError::MergeFailed("git broke".into()))
+                }
+            },
+        )
+        .await;
+        // Second attempt git error: warn and continue.
+        assert_eq!(action, MergeConflictAction::RebasedSuccessfully);
+        assert_eq!(attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_merge_conflicts_max_attempts_one() {
+        let config = MergeConfig {
+            auto_rebase: true,
+            max_rebase_attempts: 1,
+            ..MergeConfig::default()
+        };
+        let mut attempt_count = 0;
+        let action = resolve_merge_conflicts(
+            "main",
+            &config,
+            || Ok(conflicts_with(vec!["b.rs"])),
+            || {
+                attempt_count += 1;
+                Ok(RebaseResult::ConflictAborted {
+                    conflicting_files: vec!["b.rs".into()],
+                })
+            },
+        )
+        .await;
+        assert_eq!(attempt_count, 1);
+        match action {
+            MergeConflictAction::MergeConflict { ref error } => {
+                assert!(error.contains("after 1 rebase attempts"), "got: {error}");
+            }
+            other => panic!("expected MergeConflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_merge_conflict_action_debug() {
+        let action = MergeConflictAction::Continue;
+        assert_eq!(format!("{action:?}"), "Continue");
+
+        let action = MergeConflictAction::RebasedSuccessfully;
+        assert_eq!(format!("{action:?}"), "RebasedSuccessfully");
+
+        let action = MergeConflictAction::MergeConflict {
+            error: "test".into(),
+        };
+        let debug = format!("{action:?}");
+        assert!(debug.contains("MergeConflict"));
+        assert!(debug.contains("test"));
     }
 
     #[test]
