@@ -170,7 +170,12 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
 
     let results = orchestrator
-        .execute(session_id.as_str(), &parsed, project_dir)
+        .execute(
+            session_id.as_str(),
+            &parsed,
+            project_dir,
+            async { tokio::signal::ctrl_c().await.ok(); },
+        )
         .await
         .context("executing autorun batch")?;
 

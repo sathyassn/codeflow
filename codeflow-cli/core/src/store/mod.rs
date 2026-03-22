@@ -475,6 +475,44 @@ pub mod mock {
         }
     }
 
+    /// DataStore that returns Err from `create_autorun_session` and
+    /// `update_autorun_session`. All other methods delegate to `NoopStore`.
+    /// Used to test store error warning paths in orchestrator.
+    pub struct FailingAutorunStore;
+    #[rustfmt::skip]
+    impl DataStore for FailingAutorunStore {
+        async fn apply_schema(&self) -> Result<(), DbError> { Ok(()) }
+        async fn check_integrity(&self) -> Result<(), DbError> { Ok(()) }
+        async fn create_session(&self, _: &Session) -> Result<(), DbError> { Ok(()) }
+        async fn get_session(&self, _: &str) -> Result<Option<Session>, DbError> { Ok(None) }
+        async fn update_session(&self, _: &str, _: SessionUpdate) -> Result<(), DbError> { Ok(()) }
+        async fn list_sessions(&self, _: SessionFilter) -> Result<Vec<Session>, DbError> { Ok(vec![]) }
+        async fn create_epic(&self, _: &Epic) -> Result<(), DbError> { Ok(()) }
+        async fn get_epic(&self, _: &str) -> Result<Option<Epic>, DbError> { Ok(None) }
+        async fn get_epic_by_format_id(&self, _: &FormatId) -> Result<Option<Epic>, DbError> { Ok(None) }
+        async fn update_epic(&self, _: &str, _: EpicUpdate) -> Result<(), DbError> { Ok(()) }
+        async fn list_epics(&self, _: EpicFilter) -> Result<Vec<Epic>, DbError> { Ok(vec![]) }
+        async fn create_task(&self, _: &Task) -> Result<(), DbError> { Ok(()) }
+        async fn get_task(&self, _: &str) -> Result<Option<Task>, DbError> { Ok(None) }
+        async fn get_task_by_format_id(&self, _: &FormatId) -> Result<Option<Task>, DbError> { Ok(None) }
+        async fn update_task(&self, _: &str, _: TaskUpdate) -> Result<(), DbError> { Ok(()) }
+        async fn list_tasks(&self, _: TaskFilter) -> Result<Vec<Task>, DbError> { Ok(vec![]) }
+        async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError> { Ok(None) }
+        async fn set_active_work(&self, _: &ActiveWork) -> Result<(), DbError> { Ok(()) }
+        async fn clear_active_work(&self, _: &str) -> Result<(), DbError> { Ok(()) }
+        async fn create_memory_event(&self, _: &MemoryEvent) -> Result<(), DbError> { Ok(()) }
+        async fn list_memory_events(&self, _: MemoryEventFilter) -> Result<Vec<MemoryEvent>, DbError> { Ok(vec![]) }
+        async fn create_autorun_session(&self, _: &AutorunSession) -> Result<(), DbError> { Err(DbError::Query("test: forced failure".into())) }
+        async fn get_autorun_session(&self, _: &str) -> Result<Option<AutorunSession>, DbError> { Ok(None) }
+        async fn update_autorun_session(&self, _: &str, _: AutorunSessionUpdate) -> Result<(), DbError> { Err(DbError::Query("test: forced failure".into())) }
+        async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> { Ok(()) }
+        async fn update_autorun_worker(&self, _: &str, _: AutorunWorkerUpdate) -> Result<(), DbError> { Ok(()) }
+        async fn create_autorun_task_run(&self, _: &AutorunTaskRun) -> Result<(), DbError> { Ok(()) }
+        async fn update_autorun_task_run(&self, _: &str, _: AutorunTaskRunUpdate) -> Result<(), DbError> { Ok(()) }
+        async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
+        async fn sync_from_events(&self, e: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> { Ok(SyncResult { events_processed: e.count() as u64, ..Default::default() }) }
+    }
+
     // -- MockStore tests (criterion 9) --
 
     /// Helper: exercises DataStore trait methods via generic function.

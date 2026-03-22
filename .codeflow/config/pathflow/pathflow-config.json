@@ -465,7 +465,7 @@
           "assigned_to": "cf-git-operations",
           "operation": "sync-local: checkout main/target branch, git pull origin {branch}, delete merged feature branch. MUST verify main is actually updated (git log --oneline -3 main should show the merge commit). Do NOT pull on the feature branch.",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF6-TSK-08] when creating this task in the tracker.",
-          "enforcement_note": "⛔ STRICTLY SEQUENTIAL: The team lead MUST verify that PF6-TSK-08 (record-pr-outcome) has status=completed BEFORE dispatching sync-local to cf-git-operations. Do NOT send the sync-local message to cf-git-operations until cf-knowledge-layer confirms record-pr-outcome is done. Sending both in parallel causes sync-local to pull main first, which activates branch protection hooks that block record-pr-outcome writes. This ordering violation is the root cause of missing pr_outcome JSONL entries."
+          "enforcement_note": "You MUST execute this task's operation. ⛔ STRICTLY SEQUENTIAL: Verify that PF6-TSK-08 (record-pr-outcome) has status=completed BEFORE dispatching sync-local to cf-git-operations. Do NOT send the sync-local message to cf-git-operations until cf-knowledge-layer confirms record-pr-outcome is done. Sending both in parallel causes sync-local to pull main first, which activates branch protection hooks that block record-pr-outcome writes. This ordering violation is the root cause of missing pr_outcome JSONL entries."
         }
       ],
       "required_tasks": [
