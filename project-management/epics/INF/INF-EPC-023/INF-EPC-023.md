@@ -3,7 +3,7 @@ id: "epic-01kk0s6b6k9qmhkq79hpz22rka"
 format_id: "INF-EPC-023"
 title: "Parallel Execution Core (Epic A)"
 summary: "Implement parallel PathFlow sessions: Loro CRDT coordination, git worktree isolation, singleton scoping, autorun integration, and sync daemon"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -104,7 +104,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-033 | Autorun config section | complete | S | normal | F: Autorun Readiness |
 | INF-TSK-023-034 | Pre-flight checks + CLI args | complete | M | normal | F: Autorun Readiness |
 | INF-TSK-023-035 | Orchestrator graceful shutdown | complete | M | normal | F: Autorun Readiness |
-| INF-TSK-023-036 | Agent autorun SOPs | todo | M | normal | F: Autorun Readiness |
+| INF-TSK-023-036 | Agent autorun SOPs | complete | M | normal | F: Autorun Readiness |
 | INF-TSK-023-037 | Autorun session management commands | complete | L | normal | F: Autorun Readiness |
 | INF-TSK-023-038 | Batch report generation | complete | S | normal | F: Autorun Readiness |
 

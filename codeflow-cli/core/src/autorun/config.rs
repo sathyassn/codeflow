@@ -114,7 +114,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            interval_secs: 30,
+            interval_secs: crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS,
             auto_start: true,
         }
     }
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(cfg.worktree.mode, WorktreeMode::Autorun);
         assert_eq!(cfg.worktree.max_concurrent, 3);
         assert_eq!(cfg.worktree.base_dir, ".git-worktrees");
-        assert_eq!(cfg.sync.interval_secs, 30);
+        assert_eq!(cfg.sync.interval_secs, crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS);
         assert!(cfg.sync.auto_start);
         assert!(cfg.merge.auto_rebase);
         assert!(cfg.merge.queue_enabled);
@@ -252,6 +252,19 @@ mod tests {
             cfg.autorun.report_dir,
             "project-management/tracking/autorun"
         );
+    }
+
+    // -- M5: Sync interval alignment test --
+
+    #[test]
+    fn test_sync_config_default_matches_constant() {
+        let cfg = SyncConfig::default();
+        assert_eq!(
+            cfg.interval_secs,
+            crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS,
+            "SyncConfig default should match DEFAULT_SYNC_INTERVAL_SECS constant"
+        );
+        assert_eq!(cfg.interval_secs, 5);
     }
 
     // -- Config loading tests --
@@ -435,7 +448,7 @@ mod tests {
     fn full_config_from_spec_example() {
         let json = r#"{
             "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees" },
-            "sync": { "interval_secs": 30, "auto_start": true },
+            "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
             "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": "project-management/tracking/autorun" }

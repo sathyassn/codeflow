@@ -108,6 +108,7 @@ pub fn write_registry(path: &Path, registry: &WorktreeRegistry) -> Result<(), Wo
 ///
 /// - `WorktreeError::Io` on filesystem errors.
 /// - `WorktreeError::Yaml` on parse/serialize errors.
+#[cfg(test)]
 pub fn register_worktree(registry_path: &Path, entry: WorktreeEntry) -> Result<(), WorktreeError> {
     let mut registry = if registry_path.exists() {
         read_registry(registry_path)?

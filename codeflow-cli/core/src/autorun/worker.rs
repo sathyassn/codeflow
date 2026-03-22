@@ -306,14 +306,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         );
 
         // Pre-acquire claims for file_scope at startup via acquire_batch().
-        // TODO(INF-TSK-023-033): When blocked_behavior is added to AutorunConfig,
-        // check claim acquisition failures against blocked_behavior config:
-        // - "skip_and_continue": return WorkerResult { status: "blocked", .. }
-        // - "fail": return Err(AutorunError::WorkerFailed(...))
-        // Currently, claim failures are warned and execution continues.
         let state_path = self.project_dir.join(".state/coordination/state.loro");
         if !cfg.file_scope.is_empty() {
             let scope_refs: Vec<&str> = cfg.file_scope.iter().map(String::as_str).collect();
+            let mut claim_conflicts: Vec<String> = Vec::new();
             match crate::file_lock::locked_binary_rmw(
                 &state_path,
                 crate::coordination::loro::LoroCoordinator::in_memory,
@@ -323,14 +319,58 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 },
                 |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
                 |coord| {
-                    let _ =
-                        crate::coordination::claims::acquire_batch(coord, &scope_refs, &worker_sid);
+                    match crate::coordination::claims::acquire_batch(coord, &scope_refs, &worker_sid)
+                    {
+                        Ok((_acquired, conflicts)) => {
+                            for (path, _err) in &conflicts {
+                                claim_conflicts.push(path.clone());
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("warning: acquire_batch error: {e}");
+                        }
+                    }
                     Ok(())
                 },
             ) {
                 Ok(()) => {}
                 Err(e) => {
                     eprintln!("warning: claim acquisition failed: {e}");
+                }
+            }
+            if !claim_conflicts.is_empty() {
+                eprintln!(
+                    "claim conflicts detected for {} file(s): {:?}",
+                    claim_conflicts.len(),
+                    claim_conflicts,
+                );
+                match cfg.blocked_behavior.as_str() {
+                    "fail" => {
+                        // Cleanup worktree before returning error.
+                        if let Err(e) = self.worktree.cleanup(&wt_name) {
+                            eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
+                        }
+                        return Err(AutorunError::WorkerFailed(format!(
+                            "claim conflict on files: {claim_conflicts:?}",
+                        )));
+                    }
+                    _ => {
+                        // "skip_and_continue" (default): mark worker as blocked.
+                        if let Err(e) = self.worktree.cleanup(&wt_name) {
+                            eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
+                        }
+                        return Ok(WorkerResult {
+                            worker_id: cfg.worker_id,
+                            task_id: cfg.task_id,
+                            status: "blocked".into(),
+                            exit_code: 0,
+                            pr_number: 0,
+                            pr_url: String::new(),
+                            branch_name: String::new(),
+                            error: format!("claim conflict on files: {claim_conflicts:?}"),
+                            duration_sec: 0,
+                        });
+                    }
                 }
             }
         }
@@ -352,8 +392,11 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         // Create the tmux session.
         self.tmux.create_session(&tmux_name).await?;
 
+        // Capture start time for duration tracking.
+        let start_time = chrono::Utc::now();
+
         // Create autorun_worker record at spawn.
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = start_time.to_rfc3339();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let worker_record = crate::models::AutorunWorker {
             id: cfg.worker_id.clone(),
@@ -365,6 +408,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             worktree_path: Some(wt_info.path.to_string_lossy().into_owned()),
             file_scope: cfg.file_scope.clone(),
             scope_policy: cfg.scope_policy.clone(),
+            worker_session_id: Some(worker_sid.as_str().to_owned()),
             pr_number: None,
             started_at: Some(now.clone()),
             completed_at: None,
@@ -463,7 +507,39 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 )
                 .await;
 
+                // Emit coordination events for merge conflict detection/rebase.
+                match &action {
+                    MergeConflictAction::MergeConflict { .. } => {
+                        crate::autorun::emit_coordination_event(
+                            &self.project_dir,
+                            &crate::coordination::types::events::CoordinationEvent::MergeConflictDetected {
+                                session_id: worker_sid.clone(),
+                                branch: invoke_result.branch_name.clone(),
+                                target_branch: target.clone(),
+                                task_id: Some(cfg.task_id.clone()),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            },
+                        );
+                    }
+                    MergeConflictAction::RebasedSuccessfully => {
+                        crate::autorun::emit_coordination_event(
+                            &self.project_dir,
+                            &crate::coordination::types::events::CoordinationEvent::MergeRebaseAttempted {
+                                session_id: worker_sid.clone(),
+                                branch: invoke_result.branch_name.clone(),
+                                target_branch: target.clone(),
+                                success: true,
+                                task_id: Some(cfg.task_id.clone()),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            },
+                        );
+                    }
+                    MergeConflictAction::Continue => {}
+                }
+
                 if let MergeConflictAction::MergeConflict { error } = action {
+                    // Compute elapsed before DB write so duration_seconds is recorded.
+                    let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
                     // Update DB records before early return to avoid orphaned running records.
                     let completed_at = chrono::Utc::now().to_rfc3339();
                     let _ = self
@@ -486,6 +562,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                                 error_message: Some(error.clone()),
                                 merge_conflicts: Some(vec![error.clone()]),
                                 completed_at: Some(completed_at.clone()),
+                                duration_seconds: Some(elapsed),
                                 ..Default::default()
                             },
                         )
@@ -510,7 +587,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         pr_url: String::new(),
                         branch_name: String::new(),
                         error,
-                        duration_sec: 0,
+                        duration_sec: elapsed,
                     });
                 }
             }
@@ -548,7 +625,20 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 Ok(())
             },
         ) {
-            Ok(()) => {}
+            Ok(()) => {
+                // Emit ClaimReleased event for each file in scope.
+                for path in &cfg.file_scope {
+                    crate::autorun::emit_coordination_event(
+                        &self.project_dir,
+                        &crate::coordination::types::events::CoordinationEvent::ClaimReleased {
+                            session_id: worker_sid.clone(),
+                            path: path.clone(),
+                            task_id: Some(cfg.task_id.clone()),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        },
+                    );
+                }
+            }
             Err(e) => {
                 eprintln!("warning: claim release failed: {e}");
             }
@@ -570,6 +660,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             eprintln!("warning: daemon auto-stop check failed: {e}");
         }
 
+        let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
         let worker_result = match result {
             Ok(Ok(invoke_result)) => {
                 let status = if invoke_result.exit_code == 0 {
@@ -586,7 +677,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     pr_url: invoke_result.pr_url.clone(),
                     branch_name: invoke_result.branch_name,
                     error: String::new(),
-                    duration_sec: 0,
+                    duration_sec: elapsed,
                 })
             }
             Ok(Err(e)) => Err(AutorunError::WorkerFailed(format!(
@@ -602,7 +693,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 pr_url: String::new(),
                 branch_name: String::new(),
                 error: "worker exceeded timeout".into(),
-                duration_sec: 0,
+                duration_sec: elapsed,
             }),
         };
 
@@ -644,6 +735,11 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 }
 
                 // Update task_run record.
+                let verification = match wr.status.as_str() {
+                    "completed" => Some("pass".to_string()),
+                    "timeout" => Some("timeout".to_string()),
+                    _ => Some("fail".to_string()),
+                };
                 if let Err(e) = self
                     .store
                     .update_autorun_task_run(
@@ -662,10 +758,17 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             },
                             exit_code: Some(i64::from(wr.exit_code)),
                             completed_at: Some(completed_at.clone()),
+                            duration_seconds: Some(elapsed),
                             error_message: if wr.error.is_empty() {
                                 None
                             } else {
                                 Some(wr.error.clone())
+                            },
+                            verification_result: verification,
+                            branch_name: if wr.branch_name.is_empty() {
+                                None
+                            } else {
+                                Some(wr.branch_name.clone())
                             },
                             ..Default::default()
                         },
@@ -738,6 +841,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             status: Some(crate::types::AutorunTaskRunStatus::Failed),
                             error_message: Some(e.to_string()),
                             completed_at: Some(completed_at.clone()),
+                            verification_result: Some("fail".to_string()),
                             ..Default::default()
                         },
                     )
@@ -767,21 +871,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         project_dir: &std::path::Path,
         event: &crate::coordination::types::events::AutorunEvent,
     ) {
-        let ledger_dir = project_dir.join(".state/ledger");
-        let file_path = ledger_dir.join(crate::ledger::files::AUTORUN_EVENTS);
-        if let Some(parent) = file_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string(event) {
-            use std::io::Write;
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path);
-            if let Ok(mut f) = file {
-                let _ = writeln!(f, "{json}");
-            }
-        }
+        crate::autorun::emit_autorun_event(project_dir, event);
     }
 }
 
@@ -1224,6 +1314,7 @@ mod tests {
             tmux_prefix: "codeflow-worker".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
+            blocked_behavior: "skip_and_continue".into(),
         }
     }
 
@@ -2125,6 +2216,7 @@ Read and implement.
             tmux_prefix: "codeflow-ses01km9-w".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
+            blocked_behavior: "skip_and_continue".into(),
         };
         // The format is "{prefix}{worker_num}" = "codeflow-ses01km9-w3"
         let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
@@ -2145,6 +2237,7 @@ Read and implement.
             tmux_prefix: "codeflow-test-w".into(),
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "soft".into(),
+            blocked_behavior: "skip_and_continue".into(),
         }
     }
 

@@ -1,7 +1,7 @@
 ---
 title: "Autorun System Specification"
 version: "1.0.0"
-status: proposed
+status: implemented
 epic: INF-EPC-023
 created_at: "2026-03-21"
 updated_at: "2026-03-21"

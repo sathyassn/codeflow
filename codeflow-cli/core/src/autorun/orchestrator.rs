@@ -31,6 +31,9 @@ pub struct WorkerConfig {
     /// Scope policy for this worker: "soft", "hard", or "permissive".
     /// Defaults to "soft" when not specified in the task definition.
     pub scope_policy: String,
+    /// Behavior on claim conflict: "skip_and_continue" or "fail".
+    /// Defaults to "skip_and_continue".
+    pub blocked_behavior: String,
 }
 
 /// Result of a worker execution.
@@ -114,6 +117,23 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         project_dir: &std::path::Path,
         shutdown: F,
     ) -> Result<Vec<WorkerResult>, AutorunError> {
+        self.execute_with_batch_file(session_id, batch, project_dir, "", shutdown)
+            .await
+    }
+
+    /// Execute a batch with an explicit batch_file path recorded in the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AutorunError` if batch execution cannot proceed.
+    pub async fn execute_with_batch_file<F: std::future::Future<Output = ()>>(
+        &self,
+        session_id: &str,
+        batch: &ParsedBatch,
+        project_dir: &std::path::Path,
+        batch_file: &str,
+        shutdown: F,
+    ) -> Result<Vec<WorkerResult>, AutorunError> {
         let batch_name = batch.name.clone();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let total_tasks_i32 = batch.order.len().min(i32::MAX as usize) as i32;
@@ -123,7 +143,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         // Create autorun_session record at batch start.
         let ar_session = crate::models::AutorunSession {
             id: session_id.to_string(),
-            batch_file: String::new(),
+            batch_file: batch_file.to_string(),
             batch_name: Some(batch_name.clone()),
             status: crate::types::AutorunSessionStatus::Running,
             max_session_workers: max_workers_i32,
@@ -161,10 +181,9 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
 
         // Bound the semaphore by the global worktree limit to prevent
         // exceeding worktree.max_concurrent even if batch.max_workers is larger.
-        let effective_workers = match crate::autorun::config::load_config(project_dir) {
-            Ok(config) => batch.max_workers.min(config.worktree.max_concurrent),
-            Err(_) => batch.max_workers,
-        };
+        let loaded_config = crate::autorun::config::load_config(project_dir).unwrap_or_default();
+        let effective_workers = batch.max_workers.min(loaded_config.worktree.max_concurrent);
+        let blocked_behavior = loaded_config.autorun.blocked_behavior.clone();
         let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
 
@@ -183,15 +202,23 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                         break;
                     }
 
+                    // Check for external abort marker file.
+                    let abort_marker = project_dir.join(format!(".state/runtime/abort-{session_id}"));
+                    if abort_marker.exists() {
+                        eprintln!("\nAbort marker detected — aborting batch...");
+                        state.abort.store(true, Ordering::SeqCst);
+                        break;
+                    }
+
                     let launched_any = self
-                        .dispatch_ready_tasks(session_id, batch, &dep_map, &state)
+                        .dispatch_ready_tasks(session_id, batch, project_dir, &dep_map, &state, &blocked_behavior)
                         .await;
 
                     if !launched_any {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                 }
-            } => false,
+            } => state.abort.load(Ordering::SeqCst),
 
             // Branch 2: shutdown signal received — set abort flag and break out.
             () = &mut shutdown => {
@@ -377,21 +404,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         project_dir: &std::path::Path,
         event: &crate::coordination::types::events::AutorunEvent,
     ) {
-        let ledger_dir = project_dir.join(".state/ledger");
-        let file_path = ledger_dir.join(crate::ledger::files::AUTORUN_EVENTS);
-        if let Some(parent) = file_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string(event) {
-            use std::io::Write;
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path);
-            if let Ok(mut f) = file {
-                let _ = writeln!(f, "{json}");
-            }
-        }
+        crate::autorun::emit_autorun_event(project_dir, event);
     }
 
     /// Scan the task order and dispatch any tasks whose dependencies are met.
@@ -402,8 +415,10 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         &self,
         session_id: &str,
         batch: &ParsedBatch,
+        project_dir: &std::path::Path,
         dep_map: &HashMap<&str, Vec<&str>>,
         state: &ExecutionState,
+        blocked_behavior: &str,
     ) -> bool {
         // Abort gate: stop dispatching new tasks once abort is requested.
         if state.abort.load(Ordering::SeqCst) {
@@ -464,10 +479,22 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             launched_any = true;
             state.running.lock().await.insert(task_id.clone());
             let task_spec = batch.tasks.iter().find(|t| t.id == *task_id);
-            let file_scope = task_spec.map(|t| t.file_scope.clone()).unwrap_or_default();
+
+            // Read file_scope and scope_policy from task markdown (source of truth).
+            // Batch TaskSpec values are optional overrides.
+            let (md_file_scope, md_scope_policy) =
+                crate::autorun::batch::read_task_scope(task_id, project_dir)
+                    .unwrap_or_else(|_| (vec![], "soft".to_string()));
+
+            let file_scope =
+                if task_spec.is_some_and(|t| !t.file_scope.is_empty()) {
+                    task_spec.unwrap().file_scope.clone() // batch override
+                } else {
+                    md_file_scope // task markdown (source of truth)
+                };
             let scope_policy = task_spec
                 .and_then(|t| t.scope_policy.clone())
-                .unwrap_or_else(|| "soft".to_string());
+                .unwrap_or(md_scope_policy);
             let tmux_prefix = format!("codeflow-{}-w", &session_id[..session_id.len().min(8)]);
             let tmux_name = format!("{tmux_prefix}{}", idx + 1);
             let handle = Self::spawn_worker(
@@ -483,6 +510,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     tmux_prefix,
                     file_scope,
                     scope_policy,
+                    blocked_behavior: blocked_behavior.to_string(),
                 },
                 state.completed.clone(),
                 state.failed.clone(),
@@ -763,6 +791,7 @@ mod tests {
             tmux_prefix: "worker".into(),
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "hard".into(),
+            blocked_behavior: "skip_and_continue".into(),
         };
         assert_eq!(cfg.task_id, "task-a");
         assert_eq!(cfg.worker_num, 1);
@@ -1050,7 +1079,7 @@ mod tests {
         state.abort.store(true, Ordering::SeqCst);
 
         let launched = orch
-            .dispatch_ready_tasks("ses-abort", &batch, &dep_map, &state)
+            .dispatch_ready_tasks("ses-abort", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
             .await;
 
         assert!(!launched, "dispatch should return false when abort is set");
@@ -1103,7 +1132,7 @@ mod tests {
         let orch = Orchestrator::new(SlowRunner, mock_store());
 
         // Dispatch 'a', let it complete.
-        orch.dispatch_ready_tasks("ses-partial", &batch, &dep_map, &state)
+        orch.dispatch_ready_tasks("ses-partial", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
             .await;
         // Wait for 'a' to complete.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1113,7 +1142,7 @@ mod tests {
 
         // Confirm abort gate works.
         let launched = orch
-            .dispatch_ready_tasks("ses-partial", &batch, &dep_map, &state)
+            .dispatch_ready_tasks("ses-partial", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
             .await;
         assert!(!launched, "no new tasks after abort");
 
@@ -1451,6 +1480,7 @@ mod tests {
                 tmux_prefix: "test-w".into(),
                 file_scope: vec![],
                 scope_policy: "soft".into(),
+                blocked_behavior: "skip_and_continue".into(),
             },
             completed.clone(),
             failed.clone(),
@@ -1662,7 +1692,7 @@ mod tests {
         state.running.lock().await.insert("b".into());
 
         let launched = orch
-            .dispatch_ready_tasks("ses-skip", &batch, &dep_map, &state)
+            .dispatch_ready_tasks("ses-skip", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
             .await;
 
         // Only "c" should be dispatched.
@@ -1696,7 +1726,7 @@ mod tests {
         let state = ExecutionState::new(1);
 
         let launched = orch
-            .dispatch_ready_tasks("ses-sem", &batch, &dep_map, &state)
+            .dispatch_ready_tasks("ses-sem", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
             .await;
         assert!(launched);
 
@@ -1828,6 +1858,103 @@ mod tests {
         assert!(
             last_line.contains("batch_aborted"),
             "last event should be batch_aborted, not batch_completed"
+        );
+    }
+
+    // -- L5: Abort marker file triggers abort --
+
+    #[tokio::test]
+    async fn test_abort_marker_file_triggers_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_id = "ses-marker-test";
+
+        // Create the runtime dir and abort marker file.
+        let runtime_dir = dir.path().join(".state/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let marker_path = runtime_dir.join(format!("abort-{session_id}"));
+        std::fs::write(&marker_path, "abort").unwrap();
+
+        // Use an instant runner.
+        struct InstantRunner;
+        impl WorkerRunner for InstantRunner {
+            async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+                Ok(WorkerResult {
+                    worker_id: cfg.worker_id,
+                    task_id: cfg.task_id,
+                    status: "completed".into(),
+                    exit_code: 0,
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    error: String::new(),
+                    branch_name: String::new(),
+                    duration_sec: 0,
+                })
+            }
+        }
+
+        let batch = make_batch("max_workers: 1\ntasks:\n  - id: marker-task\n");
+        let store = mock_store();
+        let orch = Orchestrator::new(InstantRunner, store);
+
+        let results = orch
+            .execute(session_id, &batch, dir.path(), std::future::pending())
+            .await
+            .unwrap();
+
+        // The abort marker should have been detected — task should be skipped.
+        let has_skipped = results.iter().any(|r| r.status == "skipped");
+        assert!(
+            has_skipped || results.is_empty(),
+            "abort marker should prevent task dispatch or cause skip"
+        );
+    }
+
+    // -- M4: batch_file field populated --
+
+    #[tokio::test]
+    async fn test_execute_with_batch_file_records_path() {
+        let dir = tempfile::tempdir().unwrap();
+
+        struct NoopRunner;
+        impl WorkerRunner for NoopRunner {
+            async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+                Ok(WorkerResult {
+                    worker_id: cfg.worker_id,
+                    task_id: cfg.task_id,
+                    status: "completed".into(),
+                    exit_code: 0,
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    error: String::new(),
+                    branch_name: String::new(),
+                    duration_sec: 0,
+                })
+            }
+        }
+
+        let batch = make_batch("max_workers: 1\ntasks:\n  - id: bf-test\n");
+        let store = mock_store();
+        let orch = Orchestrator::new(NoopRunner, store.clone());
+
+        let results = orch
+            .execute_with_batch_file(
+                "ses-bf-test",
+                &batch,
+                dir.path(),
+                "/path/to/batch.yaml",
+                std::future::pending(),
+            )
+            .await
+            .unwrap();
+
+        assert!(!results.is_empty(), "should have results");
+
+        // Verify batch_file was set on the session record.
+        let sessions = store.autorun_sessions.lock().unwrap();
+        let session = sessions.get("ses-bf-test").unwrap();
+        assert_eq!(
+            session.batch_file, "/path/to/batch.yaml",
+            "batch_file should be recorded in the session"
         );
     }
 }

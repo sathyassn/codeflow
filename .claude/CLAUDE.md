@@ -206,7 +206,7 @@ Route to pipeline by work type:
 Rework loop (if applicable):
     WS-REV ---changes_requested---> back to primary stage
     |                               (max 3 iterations)
-    WS-QA  ---fail--> back to WS-DEV (max 2 retries)
+    WS-QA  ---fail--> back to WS-DEV (max 3 retries)
     |
     v (all stages pass)
 PF5-VERIFY                                              [team-lead]
@@ -305,7 +305,7 @@ SESSION END
   5. Spawn next stage's teammate, passing context (previous teammate remains active)
 - All PF4 on-demand teammates remain active through PF5/PF6 and are shut down at PF7-END
 - Rework: If WS-REV returns `changes_requested`, re-assign work to primary stage teammate (still active, no re-spawn needed) (max 3 iterations)
-- Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 2 retries)
+- Rework: If WS-QA returns `fail`, re-assign to cf-development (still active, no re-spawn needed) (max 3 retries)
 - If limits exceeded: Escalate to user (interactive) or mark `blocked` + PF7-END (autorun)
 
 🔒 **STAGE COMPLETION INVARIANT (PF4-TSK-05, PF4-TSK-06, PF4-TSK-07):**
@@ -418,6 +418,31 @@ In autorun mode (no human present), phase transitions happen automatically:
 - **Parallel workers:** Each autorun worker runs in its own worktree via `WorktreeProvider` trait. Workers pre-claim file_scope entries at startup via acquire_batch(). Claims are enforced via scope_policy (soft by default for autorun). Merge conflicts are detected via `check_merge_conflicts()` before PR creation. The merge queue (`coordination/merge_queue.rs`) serializes PR merges across concurrent workers.
 - **Configuration:** All parallel execution settings are in `.codeflow/config/parallel-work/parallel-work-config.json` (4 sections: worktree, sync, merge, claims). Config is optional — defaults apply when absent. See `autorun/config.rs` for loading and validation.
 - **Coordination events:** Claim lifecycle events (acquired, conflict, released, scope expansion) are emitted to `coordination-events.jsonl` via `ledger/routing.rs`. Event types are defined in `coordination/types/events.rs`.
+
+**Lead autorun detection:** The lead detects autorun mode by checking for the `AUTORUN_SESSION_ID` environment variable. When set, the lead operates autonomously without user prompts at any phase boundary.
+
+**Environment variables:**
+
+| Variable | Purpose | Set By |
+|----------|---------|--------|
+| `AUTORUN_SESSION_ID` | Autorun session identifier; presence indicates autorun mode | CLI orchestrator (`autorun.rs`) |
+| `AUTORUN_TASK_ID` | Pre-assigned task ID from the batch file | CLI orchestrator |
+| `AUTORUN_ACCEPTANCE` | Base64-encoded acceptance criteria extracted from task markdown | CLI orchestrator |
+| `CODEFLOW_WORKTREE_PATH` | Path to the worker's isolated git worktree | Worker setup (`worker.rs`) |
+
+**Per-phase autorun behavior diff:**
+
+| Phase | Interactive | Autorun |
+|-------|------------|---------|
+| PF1-INIT | Same | Same |
+| PF2-CONTEXT | Present active work options to user, wait for choice | Skip active work prompt -- task pre-assigned via `AUTORUN_TASK_ID` |
+| PF3-CLASSIFY | Classify from user request | Classify from task `work_type` in WorkGraph |
+| PF4-EXECUTE | Spawn teammates, wait for user if blocked | Spawn teammates, resolve autonomously or mark `blocked` |
+| PF5-VERIFY | Same | Same |
+| PF6-COMPLETE | Notify user to merge PR via GitHub UI | `auto_merge=true` + non-protected: auto-merge. Otherwise: task complete, no merge wait. |
+| PF7-END | Same | Same |
+
+**Tracking decision in autorun:** There is no "wait for user request" step. The task is pre-assigned. The tracking decision is always `tracked` -- autorun does not handle untracked sessions.
 
 ### 4.5 Scenario Navigator
 
@@ -1412,6 +1437,9 @@ codeflow-cli/                         # Rust CLI workspace
 │   ├── sync-state.json               #   Sync daemon state
 │   └── sync-daemon.pid               #   Sync daemon PID file
 ├── worktrees.yaml                    # Worktree registry (active worktrees)
+├── autorun/                          # Autorun session state
+│   ├── sessions/                     # Per-session autorun state
+│   └── batches/                      # Batch execution records
 ├── backups/                          # State backups
 └── registry/                         # Component registry
 

@@ -1,0 +1,30 @@
+# Parallel Independent Batch
+# ===========================
+# Three independent tasks running concurrently with 3 workers.
+# No dependencies — all tasks start immediately (semaphore-bounded).
+#
+# File scope must NOT overlap between concurrent tasks. The Loro CRDT
+# claim system enforces this at runtime: if two workers try to claim
+# the same file, the second is blocked (scope_policy=soft) or rejected
+# (scope_policy=hard). Use validate_batch_extended() overlap detection
+# at parse time to catch overlaps before workers start.
+#
+# Usage:
+#   codeflow autorun run --batch .codeflow/config/autorun/examples/parallel-independent.yaml
+#
+# Task Requirements:
+#   Each task ID must have a corresponding markdown file at:
+#     project-management/epics/{AREA}/{AREA}-EPC-{NNN}/tasks/{task-id}.md
+#   The task markdown MUST contain frontmatter with:
+#     autorun_eligible: true       — marks task as safe for autonomous execution
+#     acceptance: [list]           — at least one acceptance criterion
+#     file_scope: [list]           — file paths this task may modify (non-overlapping)
+#     scope_policy: soft or hard   — NOT permissive (forbidden for autorun)
+
+name: parallel-independent
+max_workers: 3
+auto_merge: false
+tasks:
+  - id: AREA-TSK-NNN-001
+  - id: AREA-TSK-NNN-002
+  - id: AREA-TSK-NNN-003

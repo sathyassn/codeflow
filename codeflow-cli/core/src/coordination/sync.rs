@@ -265,6 +265,9 @@ fn whoami_hostname() -> String {
 ///
 /// Returns `SyncError` if lock acquisition, load, or write fails.
 pub fn run_compaction(state_loro_path: &Path) -> Result<(), SyncError> {
+    // Collect active session IDs from the worktree registry for merge queue cleanup.
+    let active_sessions = collect_active_sessions(state_loro_path);
+
     locked_binary_rmw(
         state_loro_path,
         LoroCoordinator::in_memory,
@@ -285,10 +288,43 @@ pub fn run_compaction(state_loro_path: &Path) -> Result<(), SyncError> {
                 }
                 coord.doc().commit();
             }
+
+            // Merge queue stale entry cleanup: remove entries from crashed workers.
+            if let Err(e) =
+                crate::coordination::merge_queue::cleanup_stale_entries(coord, &active_sessions)
+            {
+                eprintln!("warning: merge queue stale cleanup failed: {e}");
+            }
+
             Ok(())
         },
     )
     .map_err(|e| SyncError::ConnectionError(format!("compaction failed: {e}")))
+}
+
+/// Collect active session IDs from the worktree registry.
+///
+/// Uses the state.loro parent directory to find the worktrees.yaml file.
+/// Returns an empty set if the registry cannot be read.
+fn collect_active_sessions(state_loro_path: &Path) -> std::collections::HashSet<String> {
+    // state.loro is at .state/coordination/state.loro
+    // worktrees.yaml is at .state/worktrees.yaml
+    let mut sessions = std::collections::HashSet::new();
+    if let Some(coord_dir) = state_loro_path.parent() {
+        if let Some(state_dir) = coord_dir.parent() {
+            let registry_path = state_dir.join("worktrees.yaml");
+            if let Ok(registry) = crate::worktree::read_registry(&registry_path) {
+                for entry in &registry.worktrees {
+                    if entry.status == "active" {
+                        if let Some(ref sid) = entry.session_id {
+                            sessions.insert(sid.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sessions
 }
 
 // ---------------------------------------------------------------------------

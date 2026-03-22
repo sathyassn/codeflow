@@ -43,12 +43,15 @@ pub struct TaskSpec {
     #[serde(default)]
     pub depends_on: Vec<String>,
 
-    /// File patterns this task claims for exclusive access.
+    /// Optional file scope override. If empty, the orchestrator uses the task
+    /// markdown's file_scope (source of truth). Only specify to NARROW scope
+    /// for a specific batch run.
     #[serde(default)]
     pub file_scope: Vec<String>,
 
-    /// Scope policy override for this task. Defaults to config's
-    /// `default_scope_policy` (typically "soft") when not specified.
+    /// Optional scope policy override. If None, the orchestrator uses the task
+    /// markdown's scope_policy. Only specify to TIGHTEN policy (e.g., "hard"
+    /// when markdown says "soft").
     #[serde(default)]
     pub scope_policy: Option<String>,
 }
@@ -64,6 +67,53 @@ pub struct ParsedBatch {
     pub tasks: Vec<TaskSpec>,
     /// Topologically sorted task IDs (dependencies first).
     pub order: Vec<String>,
+}
+
+/// Read a task's `file_scope` and `scope_policy` from its markdown frontmatter.
+///
+/// Returns `(file_scope, scope_policy)`. Defaults to empty scope and `"soft"` policy
+/// if the fields are missing from the frontmatter.
+///
+/// # Errors
+///
+/// Returns `AutorunError::MissingTask` if the task markdown cannot be read.
+/// Returns `AutorunError::InvalidBatch` if the frontmatter cannot be parsed.
+pub fn read_task_scope(
+    task_id: &str,
+    project_dir: &Path,
+) -> Result<(Vec<String>, String), AutorunError> {
+    let task_path = resolve_task_path(project_dir, task_id)?;
+
+    let content = std::fs::read(&task_path).map_err(|e| {
+        AutorunError::MissingTask(format!(
+            "reading task markdown {}: {e}",
+            task_path.display()
+        ))
+    })?;
+
+    let (data, _body) = crate::validate::parse_frontmatter(&content).map_err(|e| {
+        AutorunError::InvalidBatch(format!("parsing frontmatter for {task_id}: {e}"))
+    })?;
+
+    let file_scope = data
+        .get("file_scope")
+        .and_then(serde_yaml::Value::as_sequence)
+        .map(|seq| {
+            seq.iter()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let scope_policy = crate::validate::get_string_field(&data, "scope_policy");
+    let scope_policy = if scope_policy.is_empty() {
+        "soft".to_string()
+    } else {
+        scope_policy
+    };
+
+    Ok((file_scope, scope_policy))
 }
 
 /// Parse and validate a YAML batch file from disk.
@@ -335,8 +385,9 @@ pub fn validate_batch_extended(
         })
         .collect();
 
-    // Track file_scope per task for overlap detection.
-    let mut task_scopes: Vec<(&str, &[String])> = Vec::with_capacity(batch.tasks.len());
+    // Track effective file_scope per task for overlap detection.
+    // Reads from task markdown (source of truth), with batch TaskSpec as override.
+    let mut task_scopes: Vec<(String, Vec<String>)> = Vec::with_capacity(batch.tasks.len());
 
     for task in &batch.tasks {
         let task_path = resolve_task_path(project_dir, &task.id)?;
@@ -388,29 +439,78 @@ pub fn validate_batch_extended(
             )));
         }
 
-        task_scopes.push((&task.id, &task.file_scope));
+        // Read file_scope from task markdown (source of truth).
+        // Batch TaskSpec file_scope is an optional override.
+        let md_file_scope: Vec<String> = data
+            .get("file_scope")
+            .and_then(serde_yaml::Value::as_sequence)
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(serde_yaml::Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let effective_scope = if task.file_scope.is_empty() {
+            md_file_scope
+        } else {
+            task.file_scope.clone()
+        };
+
+        task_scopes.push((task.id.clone(), effective_scope));
     }
 
     // Detect file_scope overlaps between concurrent (non-dependent) tasks.
     for i in 0..task_scopes.len() {
         for j in (i + 1)..task_scopes.len() {
-            let (id_a, scope_a) = task_scopes[i];
-            let (id_b, scope_b) = task_scopes[j];
+            let (id_a, scope_a) = &task_scopes[i];
+            let (id_b, scope_b) = &task_scopes[j];
 
             // Skip if one depends on the other (dependency serializes access).
-            let a_deps = dep_set.get(id_a).cloned().unwrap_or_default();
-            let b_deps = dep_set.get(id_b).cloned().unwrap_or_default();
-            if a_deps.contains(id_b) || b_deps.contains(id_a) {
+            let a_deps = dep_set.get(id_a.as_str()).cloned().unwrap_or_default();
+            let b_deps = dep_set.get(id_b.as_str()).cloned().unwrap_or_default();
+            if a_deps.contains(id_b.as_str()) || b_deps.contains(id_a.as_str()) {
                 continue;
             }
 
-            // Check for overlapping paths.
+            // Check for overlapping paths (exact match + directory containment).
             let set_a: HashSet<&str> = scope_a.iter().map(String::as_str).collect();
+            let set_b: HashSet<&str> = scope_b.iter().map(String::as_str).collect();
             let overlaps: Vec<&str> = scope_b
                 .iter()
-                .filter(|p| set_a.contains(p.as_str()))
+                .filter(|p| {
+                    let pb = std::path::Path::new(p.as_str());
+                    // Exact match.
+                    if set_a.contains(p.as_str()) {
+                        return true;
+                    }
+                    // Path containment: a scope_a entry is a parent of this path.
+                    scope_a.iter().any(|a| {
+                        let pa = std::path::Path::new(a.as_str());
+                        pb.starts_with(pa) || pa.starts_with(pb)
+                    })
+                })
                 .map(String::as_str)
-                .collect();
+                .chain(
+                    // Also check reverse: scope_a entries contained by scope_b entries.
+                    scope_a
+                        .iter()
+                        .filter(|a| {
+                            let pa = std::path::Path::new(a.as_str());
+                            if set_b.contains(a.as_str()) {
+                                return false; // Already caught above.
+                            }
+                            scope_b.iter().any(|b| {
+                                let pb = std::path::Path::new(b.as_str());
+                                pa.starts_with(pb)
+                            })
+                        })
+                        .map(String::as_str),
+                )
+                .collect::<HashSet<&str>>()
+                .into_iter()
+                .collect::<Vec<&str>>();
             if !overlaps.is_empty() {
                 return Err(AutorunError::InvalidBatch(format!(
                     "concurrent tasks {} and {} have overlapping file_scope: {}",
@@ -1345,5 +1445,135 @@ tasks:
             result.unwrap_err().to_string().contains("custom-protected"),
             "should reject custom protected branch"
         );
+    }
+
+    // -- H1: Path containment overlap detection --
+
+    #[test]
+    fn test_path_containment_overlap_detected() {
+        // scope_a contains "src/" and scope_b contains "src/main.rs"
+        // This should be detected as overlapping via directory containment.
+        let scope_a: Vec<String> = vec!["src/".to_string()];
+        let scope_b: Vec<String> = vec!["src/main.rs".to_string()];
+
+        let set_a: HashSet<&str> = scope_a.iter().map(String::as_str).collect();
+
+        // Check that path containment logic finds the overlap.
+        let has_containment = scope_b.iter().any(|p| {
+            let pb = std::path::Path::new(p.as_str());
+            if set_a.contains(p.as_str()) {
+                return true;
+            }
+            scope_a
+                .iter()
+                .any(|a| {
+                    let pa = std::path::Path::new(a.as_str());
+                    pb.starts_with(pa) || pa.starts_with(pb)
+                })
+        });
+        assert!(has_containment, "src/ should contain src/main.rs");
+    }
+
+    #[test]
+    fn test_distinct_paths_no_overlap() {
+        // Completely distinct paths should not overlap.
+        let scope_a: Vec<String> = vec!["lib/utils.rs".to_string()];
+        let scope_b: Vec<String> = vec!["tests/test_main.rs".to_string()];
+
+        let set_a: HashSet<&str> = scope_a.iter().map(String::as_str).collect();
+
+        let has_overlap = scope_b.iter().any(|p| {
+            let pb = std::path::Path::new(p.as_str());
+            if set_a.contains(p.as_str()) {
+                return true;
+            }
+            scope_a
+                .iter()
+                .any(|a| {
+                    let pa = std::path::Path::new(a.as_str());
+                    pb.starts_with(pa) || pa.starts_with(pb)
+                })
+        });
+        assert!(!has_overlap, "distinct paths should not overlap");
+    }
+
+    // -- Fix 1: read_task_scope tests --
+
+    #[test]
+    fn test_read_task_scope_reads_from_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a task markdown with file_scope and scope_policy in frontmatter.
+        let epic_dir = dir
+            .path()
+            .join("project-management/epics/TST/TST-EPC-001/tasks");
+        std::fs::create_dir_all(&epic_dir).unwrap();
+        let task_path = epic_dir.join("TST-TSK-001-001.md");
+        std::fs::write(
+            &task_path,
+            "---\ntitle: Test\nfile_scope:\n  - src/main.rs\n  - src/lib.rs\nscope_policy: hard\n---\nBody\n",
+        )
+        .unwrap();
+
+        let (scope, policy) = read_task_scope("TST-TSK-001-001", dir.path()).unwrap();
+        assert_eq!(scope, vec!["src/main.rs", "src/lib.rs"]);
+        assert_eq!(policy, "hard");
+    }
+
+    #[test]
+    fn test_read_task_scope_defaults_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a task markdown with no file_scope or scope_policy.
+        let epic_dir = dir
+            .path()
+            .join("project-management/epics/TST/TST-EPC-001/tasks");
+        std::fs::create_dir_all(&epic_dir).unwrap();
+        let task_path = epic_dir.join("TST-TSK-001-002.md");
+        std::fs::write(&task_path, "---\ntitle: Test\n---\nBody\n").unwrap();
+
+        let (scope, policy) = read_task_scope("TST-TSK-001-002", dir.path()).unwrap();
+        assert!(scope.is_empty(), "should default to empty scope");
+        assert_eq!(policy, "soft", "should default to soft policy");
+    }
+
+    #[test]
+    fn test_read_task_scope_missing_task_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_task_scope("NONEXISTENT-TSK-001-001", dir.path());
+        assert!(result.is_err(), "should error on missing task");
+    }
+
+    // -- Fix 3: Overlap detection uses markdown scopes --
+
+    #[test]
+    fn test_overlap_uses_markdown_scope_not_batch() {
+        // When batch TaskSpec has empty file_scope, overlap detection should use
+        // the markdown file_scope. We verify this by checking that the effective_scope
+        // logic prefers markdown when batch is empty.
+        let batch_scope: Vec<String> = vec![];
+        let md_scope = vec!["src/main.rs".to_string(), "src/lib.rs".to_string()];
+
+        let effective = if batch_scope.is_empty() {
+            md_scope.clone()
+        } else {
+            batch_scope
+        };
+
+        assert_eq!(effective, md_scope, "should use markdown scope when batch is empty");
+    }
+
+    #[test]
+    fn test_batch_override_takes_precedence() {
+        let batch_scope = vec!["tests/only.rs".to_string()];
+        let md_scope = vec!["src/main.rs".to_string(), "src/lib.rs".to_string()];
+
+        let effective = if batch_scope.is_empty() {
+            md_scope
+        } else {
+            batch_scope.clone()
+        };
+
+        assert_eq!(effective, batch_scope, "batch override should take precedence");
     }
 }

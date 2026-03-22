@@ -84,6 +84,31 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Defer, dismiss, or classify any identified issue as "minor" or "non-blocking" — fix it before commit
 - Leave TODO comments as a substitute for fixing known issues
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker with no human present.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start. If set, operate in autorun mode.
+
+**Decision tiers in autorun:**
+
+| Tier | Interactive | Autorun |
+|------|------------|---------|
+| 1 (standard, reversible) | Proceed autonomously | Proceed autonomously |
+| 2 (trade-offs, preferences) | Recommend to lead | Make best decision, document rationale in commit message |
+| 3 (ambiguous, breaking) | Ask user first | Make best decision, document rationale in PR description |
+
+**Rework handling:** Accept rework from cf-review or cf-quality-assurance without confirmation prompts. Address every finding and re-request commit immediately.
+
+**Stage timeout:** `stage_timeout_minutes` (default 60) bounds your total execution time. If approaching the timeout, prioritize completing core acceptance criteria over polish.
+
+**Constraints:**
+
+- No `DEV-BLOCKED` escalations expecting user response -- resolve autonomously or document limitation in the task doc
+- No interactive prompts or confirmation requests
+- `AUTORUN_TASK_ID` provides the pre-assigned task ID
+- `AUTORUN_ACCEPTANCE` (base64-encoded) provides acceptance criteria
+
 ## Execution Steps
 
 ### Step 1: Receive Assignment

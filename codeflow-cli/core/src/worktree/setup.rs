@@ -115,7 +115,10 @@ pub(crate) fn create_worktree(
         task_id: None,
     };
 
-    registry::register_worktree(mgr.registry_path(), entry.clone())?;
+    let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
+        .map(|c| c.worktree.max_concurrent)
+        .unwrap_or(3);
+    registry::locked_register_with_limit(mgr.registry_path(), &entry, max_concurrent)?;
 
     Ok(entry)
 }
@@ -182,7 +185,10 @@ pub(crate) fn create_detached_worktree(
         task_id: None,
     };
 
-    registry::register_worktree(mgr.registry_path(), entry.clone())?;
+    let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
+        .map(|c| c.worktree.max_concurrent)
+        .unwrap_or(3);
+    registry::locked_register_with_limit(mgr.registry_path(), &entry, max_concurrent)?;
 
     Ok(entry)
 }

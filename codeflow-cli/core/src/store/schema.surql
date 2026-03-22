@@ -183,6 +183,7 @@ DEFINE FIELD OVERWRITE tmux_session  ON TABLE autorun_worker TYPE option<string>
 DEFINE FIELD OVERWRITE worktree_path ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE file_scope    ON TABLE autorun_worker TYPE array<string>;
 DEFINE FIELD OVERWRITE scope_policy  ON TABLE autorun_worker TYPE string;
+DEFINE FIELD OVERWRITE worker_session_id ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE pr_number     ON TABLE autorun_worker TYPE option<int>;
 DEFINE FIELD OVERWRITE started_at    ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at  ON TABLE autorun_worker TYPE option<string>;

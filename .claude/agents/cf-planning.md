@@ -91,6 +91,24 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 For example, when planning INF-EPC-008, the planning session is tracked as PLN-TSK-001-NNN under PLN-EPC-001. The resulting implementation tasks (INF-TSK-008-*) go under INF-EPC-008. This separation ensures planning work is tracked in the PLN area while implementation work stays in its target area.
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, planned tasks may be executed autonomously by autorun workers.
+
+**Batch decomposition guidance:** When creating tasks for autorun execution, ensure:
+
+- Each task has a non-overlapping `file_scope` to prevent claim conflicts between concurrent workers
+- `acceptance` criteria are specific, measurable, and verifiable without human judgment (e.g., "function X exists in file Y with signature Z" not "code is well-structured")
+- Avoid subjective criteria like "clean", "readable", "well-documented" -- use concrete checks instead
+
+**scope_policy selection:**
+
+| Context | Policy | Rationale |
+|---------|--------|-----------|
+| Standard tasks | `soft` | Default. Claims acquired at startup; out-of-scope edits attempt dynamic claim. |
+| Schema/security-critical tasks | `hard` | Strict boundary. Out-of-scope edits blocked immediately. |
+| `autorun_eligible: true` tasks | NEVER `permissive` | `permissive` disables claim enforcement, causing undetected conflicts between parallel workers. |
+
 ## Execution Steps
 
 ### Step 1: Receive Assignment

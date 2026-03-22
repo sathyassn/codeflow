@@ -77,6 +77,23 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Leave placeholder text (`{placeholder}`) in final documents
 - Use hard tabs (convert to spaces)
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker with no human present.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start.
+
+**Scope policy awareness:** In autorun mode, your file claims are pre-acquired at worker startup via `acquire_batch()`. If you attempt to edit a file outside your `file_scope`, the claim system will:
+
+- `scope_policy=soft`: attempt dynamic claim acquisition. If another worker holds the file, you will receive a `ClaimConflict` block (exit 2).
+- `scope_policy=hard`: block immediately for any out-of-scope file.
+
+**DOCS pipeline in autorun:** WS-DOCS -> WS-REV (no WS-QA). The review stage operates autonomously with `max_rework_iterations` (default 3) bounding the rework loop.
+
+**Rework handling:** Accept rework from cf-review without prompts. Address every finding and re-request commit immediately.
+
+**No prompts:** Do not prompt for clarification on documentation scope or style choices. Use existing project conventions and acceptance criteria as the guide.
+
 ## Execution Steps
 
 ### Step 1: Receive Assignment

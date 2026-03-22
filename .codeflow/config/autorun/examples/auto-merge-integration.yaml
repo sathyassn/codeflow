@@ -1,0 +1,43 @@
+# Auto-Merge Integration Branch Batch
+# =====================================
+# Tasks with auto_merge enabled. Worker PRs are automatically merged
+# to an integration branch (not main) after CI passes.
+#
+# Integration branch convention:
+#   main
+#     └── autorun/sprint-42           ← integration branch (created off main)
+#           ├── feat/task-001         ← worker branch (created off integration)
+#           └── feat/task-002         ← worker branch (created off integration)
+#
+# After all workers complete, a human reviews the summary PR from the
+# integration branch to main.
+#
+# Protected branch restriction:
+#   auto_merge: true REQUIRES target to be a non-protected branch.
+#   Protected branches (main, master, release/*, production) are FORBIDDEN
+#   with auto_merge — validation rejects at batch parse time.
+#
+# Merge queue:
+#   Worker PRs are serialized through the Loro CRDT merge queue (FIFO).
+#   Each worker enqueues before merge and dequeues after, preventing
+#   concurrent merges that could cause conflicts.
+#
+# Usage:
+#   codeflow autorun run --batch .codeflow/config/autorun/examples/auto-merge-integration.yaml
+#
+# Task Requirements:
+#   Each task ID must have a corresponding markdown file at:
+#     project-management/epics/{AREA}/{AREA}-EPC-{NNN}/tasks/{task-id}.md
+#   The task markdown MUST contain frontmatter with:
+#     autorun_eligible: true       — marks task as safe for autonomous execution
+#     acceptance: [list]           — at least one acceptance criterion
+#     file_scope: [list]           — file paths this task may modify
+#     scope_policy: soft or hard   — NOT permissive (forbidden for autorun)
+
+name: sprint-42
+max_workers: 3
+auto_merge: true
+target: autorun/sprint-42
+tasks:
+  - id: FRT-TSK-001-001
+  - id: FRT-TSK-001-002

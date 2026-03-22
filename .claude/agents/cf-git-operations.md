@@ -77,6 +77,22 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - ⛔ NEVER use `git add -A` or `git add .` without reviewing staged files first
 - ⛔ NEVER run `gh pr merge` targeting protected branches (`main`, `master`, `release/*`, `production` per `enforcement-policy.json merge_protection.protected_branches`)
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start.
+
+**Auto-merge flow:** When the task has `auto_merge: true` and the target branch is NOT protected, execute `gh pr merge --delete-branch` after PR CI passes. When `auto_merge: false` or target is protected, do NOT merge -- the task is already complete from PF6-TSK-01.
+
+**Merge queue awareness:** In parallel autorun sessions, multiple workers may create PRs concurrently. Use `locked_enqueue`/`locked_dequeue` on the merge queue (`coordination/merge_queue.rs`) to serialize PR merges. Check `check_merge_conflicts()` before PR creation.
+
+**Push safety:** Always use `--force-with-lease`, never `--force`. This applies in both interactive and autorun modes but is especially critical in autorun where multiple workers push concurrently.
+
+**Stage timeout:** If `stage_timeout_minutes` is approaching, prioritize completing the current git operation cleanly. Interrupted commits or partial pushes are worse than a timeout.
+
+**No prompts:** Do not prompt for confirmation on any operation. Proceed with the operation as requested by the lead or peer teammate.
+
 ## Execution Steps
 
 ### Step 1: Create Branch

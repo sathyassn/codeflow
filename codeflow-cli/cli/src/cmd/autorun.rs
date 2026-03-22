@@ -198,6 +198,8 @@ fn check_target_branch(project_dir: &Path, target: &str) -> Result<()> {
 }
 
 async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
     // Phase 1: Pre-flight checks (before batch parse).
     preflight_checks(project_dir)?;
 
@@ -206,8 +208,12 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
         anyhow::bail!("no autorun batch file found at {}", batch_path.display());
     }
 
-    let parsed = codeflow_core::autorun::batch::parse_batch_file(batch_path)
+    let mut parsed = codeflow_core::autorun::batch::parse_batch_file(batch_path)
         .context("parsing autorun batch")?;
+
+    // Phase 2b: Extended validation (autorun_eligible, file_scope, scope_policy, overlaps).
+    codeflow_core::autorun::validate_batch_extended(&mut parsed, project_dir)
+        .context("extended batch validation")?;
 
     // Phase 3: Target branch check (after parse, before execution).
     check_target_branch(project_dir, &parsed.target)?;
@@ -239,6 +245,10 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
     let store = codeflow_core::store::SurrealStore::open(&db_dir)
         .await
         .context("opening data store for autorun")?;
+    store
+        .apply_schema()
+        .await
+        .context("applying database schema for autorun")?;
     let store = std::sync::Arc::new(store);
 
     let worker = codeflow_core::autorun::TmuxWorker::with_store(
@@ -255,10 +265,11 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
     let start_time = chrono::Utc::now();
 
     let results = orchestrator
-        .execute(
+        .execute_with_batch_file(
             session_id.as_str(),
             &parsed,
             project_dir,
+            &batch_path.to_string_lossy(),
             async { tokio::signal::ctrl_c().await.ok(); },
         )
         .await
@@ -728,21 +739,45 @@ async fn run_cancel(project_dir: &Path, task_id: &str) -> Result<()> {
     }
 
     // Step 6: Release claims for this worker (via CRDT coordination).
-    // The worker's claims are keyed by an ephemeral per-worker SessionId
-    // generated at runtime (worker.rs:285) which is NOT persisted in the DB.
-    // From the CLI cancel command, we cannot recover this SessionId, so we
-    // cannot call claims::release_all(). The CRDT claims system has TTL-based
-    // expiry (default 4200s from parallel-work-config.json) that will
-    // automatically reclaim these slots. For immediate release, the worker
-    // process itself performs cleanup in its finally block (worker.rs:537-552).
     let state_path = project_dir.join(".state/coordination/state.loro");
     if state_path.exists() && !worker.file_scope.is_empty() {
-        eprintln!(
-            "note: {} file claim(s) for worker {} will expire via TTL \
-             (worker session ID not available for immediate release)",
-            worker.file_scope.len(),
-            worker.id,
-        );
+        if let Some(ref wsid) = worker.worker_session_id {
+            let sid = codeflow_core::types::SessionId::new_unchecked(wsid);
+            match codeflow_core::file_lock::locked_binary_rmw(
+                &state_path,
+                codeflow_core::coordination::loro::LoroCoordinator::in_memory,
+                |bytes| {
+                    codeflow_core::coordination::loro::LoroCoordinator::from_bytes(
+                        bytes,
+                        &state_path,
+                    )
+                    .map_err(|e| format!("load coordinator: {e}"))
+                },
+                |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+                |coord| {
+                    let _ = codeflow_core::coordination::claims::release_all(coord, &sid);
+                    Ok(())
+                },
+            ) {
+                Ok(()) => {
+                    eprintln!(
+                        "released {} file claim(s) for worker {}",
+                        worker.file_scope.len(),
+                        worker.id,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("warning: claim release failed for worker {}: {e}", worker.id);
+                }
+            }
+        } else {
+            eprintln!(
+                "note: {} file claim(s) for worker {} will expire via TTL \
+                 (worker session ID not available for immediate release)",
+                worker.file_scope.len(),
+                worker.id,
+            );
+        }
     }
 
     // Step 7: Kill tmux session.
@@ -1841,6 +1876,7 @@ tasks:
             tmux_prefix: "worker".into(),
             file_scope: vec!["src/main.rs".into()],
             scope_policy: "soft".into(),
+            blocked_behavior: "skip_and_continue".into(),
         };
         assert_eq!(cfg.task_id, "task-test");
         assert_eq!(cfg.scope_policy, "soft");
@@ -2843,6 +2879,7 @@ tasks:
                 worktree_path: None,
                 file_scope: vec![],
                 scope_policy: "soft".into(),
+                worker_session_id: None,
                 pr_number: None,
                 started_at: None,
                 completed_at: None,
@@ -2904,6 +2941,7 @@ tasks:
                     worktree_path: None,
                     file_scope: vec![],
                     scope_policy: "soft".into(),
+                    worker_session_id: None,
                     pr_number: None,
                     started_at: Some(now.clone()),
                     completed_at: None,
@@ -3098,6 +3136,7 @@ tasks:
                     worktree_path: None,
                     file_scope: vec![],
                     scope_policy: "soft".into(),
+                    worker_session_id: None,
                     pr_number: None,
                     started_at: None,
                     completed_at: None,
@@ -3141,6 +3180,7 @@ tasks:
                 worktree_path: None,
                 file_scope: vec![],
                 scope_policy: "soft".into(),
+                worker_session_id: None,
                 pr_number: None,
                 started_at: None,
                 completed_at: None,
@@ -3248,6 +3288,7 @@ tasks:
             worktree_path: None,
             file_scope: vec![],
             scope_policy: "soft".into(),
+            worker_session_id: None,
             pr_number: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             completed_at: None,

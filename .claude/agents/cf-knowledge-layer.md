@@ -80,6 +80,20 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Execute DB operations without validating required fields
 - Allow teammates to bypass you for direct DB/JSONL access
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start.
+
+**Auto-register from env:** When `AUTORUN_TASK_ID` is set, use it directly as the task_id for `begin_work` instead of waiting for user selection. Skip the "active work found?" prompt -- the task is pre-assigned.
+
+**Block-task operation:** When rework iterations or QA retries are exhausted, the lead will request a `block-task` operation. Record a `task_blocked` event in the ledger with the reason (e.g., "max_rework_iterations exceeded", "max_qa_retries exceeded") and update the task status to `blocked`.
+
+**Stage timeout recording:** When a stage times out, record a `stage_timeout` event in `pathflow-events.jsonl` with the stage name, elapsed seconds, and timeout threshold.
+
+**No prompts:** Do not prompt for clarification on ambiguous task data -- use the data as provided. Log warnings for missing optional fields but proceed.
+
 ## Execution Steps
 
 ### Three-Tier Data Model

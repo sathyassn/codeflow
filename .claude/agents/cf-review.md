@@ -84,6 +84,25 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Skip review criteria without documented justification
 - Review your own work (independence requirement)
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker with no human present.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start.
+
+**No user escalation:** In autorun mode, do NOT escalate findings to the user. Instead:
+
+- `CHANGES_REQUESTED` triggers a rework loop back to the originating teammate (the lead handles routing)
+- The rework loop is bounded by `max_rework_iterations` (default 3)
+- On each iteration, send findings to the originating teammate with specific file:line references
+- If the same finding persists after 3 iterations, report `REVIEWER: ESCALATE` to the lead with the finding details
+
+**Same quality bar:** Review standards do not change in autorun mode. Every finding is still blocking. The only difference is that findings route to the teammate instead of a human.
+
+**Stage timeout:** If `stage_timeout_minutes` is approaching, prioritize completing the review verdict over exhaustive analysis. A partial review with a clear verdict is better than a timeout with no verdict.
+
+**No prompts:** Do not request clarification from the implementer about intent. Assess the code as-is against acceptance criteria and project standards.
+
 ## Execution Steps
 
 ### Step 1: Receive Assignment

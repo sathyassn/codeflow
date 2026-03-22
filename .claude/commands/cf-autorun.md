@@ -34,12 +34,14 @@ Apply cognitive operations throughout execution:
 
 | Subcommand | Usage | Purpose |
 |------------|-------|---------|
-| `start <batch-file>` | `/cf-autorun start sprint-tasks.yaml` | Start autorun session from batch definition |
-| `status [session-id]` | `/cf-autorun status` | Show session/worker status |
-| `sessions` | `/cf-autorun sessions` | List all autorun sessions |
-| `stop <session-id>` | `/cf-autorun stop ses-abc123` | Stop a running session |
-| `cleanup --merged` | `/cf-autorun cleanup --merged` | Clean up merged PRs and worktrees |
-| `logs <session-id>` | `/cf-autorun logs ses-abc123` | View session logs |
+| `run` | `/cf-autorun run --batch tasks.yaml` | Execute a batch of tasks in parallel worktrees |
+| `status` | `/cf-autorun status` | Show status of active autorun batches |
+| `attach <task_id>` | `/cf-autorun attach INF-TSK-023-001` | Attach to a running worker's tmux session |
+| `logs <task_id>` | `/cf-autorun logs INF-TSK-023-001` | View logs from a worker's tmux session |
+| `cancel <task_id>` | `/cf-autorun cancel INF-TSK-023-001` | Cancel a single running worker |
+| `abort` | `/cf-autorun abort --batch ses-abc123` | Abort an entire batch (cancel all running, skip pending) |
+| `results` | `/cf-autorun results --batch ses-abc123` | Display results from a batch execution |
+| `history` | `/cf-autorun history --limit 10` | Show historical autorun batch executions |
 
 **Use When:**
 
@@ -71,45 +73,59 @@ Launches independent workers that each run their own PF1-PF7 pipeline.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `subcommand` | Yes | One of: `start`, `status`, `sessions`, `stop`, `cleanup`, `logs` |
-| `batch-file` | For `start` | Path to batch definition YAML file |
-| `session-id` | For `stop`, `logs`; optional for `status` | Autorun session identifier |
+| `subcommand` | Yes | One of: `run`, `status`, `attach`, `logs`, `cancel`, `abort`, `results`, `history` |
+| `--batch <path>` | For `run` | Path to batch definition YAML file (default: `.codeflow/config/autorun/batch.yaml`) |
+| `<task_id>` | For `attach`, `logs`, `cancel` | Task ID of the worker to interact with |
+| `--batch <session_id>` | For `status`, `abort`, `results` (optional) | Filter to specific batch session |
 
 **Flags:**
 
 | Flag | Short | Applies To | Description | Default |
 |------|-------|------------|-------------|---------|
-| `--merged` | | `cleanup` | Clean up only merged PRs and their worktrees | Required for cleanup |
-| `--max-workers` | `-w` | `start` | Override max concurrent workers | Config default (3) |
-| `--timeout` | `-t` | `start` | Override per-task timeout | Config default (1h) |
-| `--dry-run` | | `start` | Validate batch without launching workers | false |
+| `--batch <path>` | `-b` | `run` | Path to YAML batch file | `.codeflow/config/autorun/batch.yaml` |
+| `--batch <session_id>` | | `status`, `abort`, `results` | Filter to specific batch session | (all active) |
+| `--follow` | `-f` | `logs` | Stream output (poll at 500ms) | false |
+| `--limit` | | `history` | Maximum number of batches to show | 10 |
+| `--since` | | `history` | Filter batches started after ISO date | (none) |
+| `--status` | | `history` | Filter by status (completed, failed, aborted) | (none) |
+| `--batch-name` | | `history` | Filter by batch name pattern (substring) | (none) |
+| `--all` | | `history` | Show all batches (overrides --limit) | false |
 
 **Examples:**
 
 ```bash
-# Start autorun from batch file
-/cf-autorun start .state/autorun/batches/sprint-tasks.yaml
+# Execute a batch of tasks
+/cf-autorun run --batch .state/autorun/batches/sprint-tasks.yaml
 
 # Check overall status
 /cf-autorun status
 
-# Check specific session
-/cf-autorun status ses-abc123
+# Check specific batch
+/cf-autorun status --batch ses-abc123
 
-# List all sessions
-/cf-autorun sessions
+# Attach to a running worker
+/cf-autorun attach INF-TSK-023-001
 
-# Stop a running session
-/cf-autorun stop ses-abc123
+# View worker logs
+/cf-autorun logs INF-TSK-023-001
 
-# View logs
-/cf-autorun logs ses-abc123
+# Follow worker logs in real-time
+/cf-autorun logs INF-TSK-023-001 --follow
 
-# Clean up after PR merge
-/cf-autorun cleanup --merged
+# Cancel a single worker
+/cf-autorun cancel INF-TSK-023-001
 
-# Dry run to validate batch
-/cf-autorun start sprint-tasks.yaml --dry-run
+# Abort an entire batch
+/cf-autorun abort --batch ses-abc123
+
+# View batch results
+/cf-autorun results --batch ses-abc123
+
+# Show recent batch history
+/cf-autorun history --limit 5
+
+# Show all completed batches since a date
+/cf-autorun history --status completed --since 2026-03-01
 ```
 
 ---
@@ -311,7 +327,7 @@ Show per-worker status and event timeline
 
 **Step 1: Parse Subcommand**
 
-- Identify subcommand (`start`, `status`, `sessions`, `stop`, `cleanup`, `logs`)
+- Identify subcommand (`run`, `status`, `attach`, `logs`, `cancel`, `abort`, `results`, `history`)
 - Parse subcommand-specific arguments and flags
 - Route to appropriate handler
 
@@ -341,7 +357,7 @@ Show per-worker status and event timeline
 **Step 5: Monitor Progress (start only)**
 
 - Track worker status via session files
-- LLM-based Stop hook (Haiku) verifies completion per worker
+- LLM-based Stop hook (Sonnet) verifies completion per worker
 - Workers create PRs when their PathFlow completes successfully
 - Report failures and timeouts
 
@@ -374,17 +390,17 @@ Show per-worker status and event timeline
 |------|------|---------|
 | SessionStart | Session start | Load cf-working-protocol |
 | UserPromptSubmit | `/cf-autorun` invoked | Validate invocation |
-| Stop (in workers) | Worker task completes | Haiku-based completion verification |
+| Stop (in workers) | Worker task completes | Sonnet-based completion verification |
 
 **Worker-Level Hooks:**
 
-Each worker runs as an independent Claude session with its own hook lifecycle. The Stop hook in each worker uses a Haiku-class model to verify acceptance criteria are met before marking the task complete.
+Each worker runs as an independent Claude session with its own hook lifecycle. The Stop hook in each worker uses a Sonnet-class model to verify acceptance criteria are met before marking the task complete.
 
 ```text
 Worker Stop Hook Flow:
   Worker reaches stop point
     ↓
-  Haiku evaluates: Are acceptance criteria met?
+  Sonnet evaluates: Are acceptance criteria met?
     ↓
   ├── Met → Worker creates PR, marks task complete
   └── Not met → Worker continues or times out
@@ -415,26 +431,45 @@ Worker Stop Hook Flow:
 
 ### Batch File Format
 
+Minimal batch file — task IDs and dependencies only. File scope, scope policy,
+and acceptance criteria come from the task markdown (source of truth).
+
 ```yaml
-# .state/autorun/batches/sprint-tasks.yaml
-name: Sprint 42 Tasks
-description: Authentication feature tasks
+name: my-batch
+max_workers: 3
+auto_merge: false
 tasks:
-  - FRT-TSK-001-001
-  - FRT-TSK-001-002
-  - FRT-TSK-001-003
-target_branch: develop          # REQUIRED when auto_merge:true; must NOT be a protected branch
-auto_merge: false               # true: auto-merge worker PRs to target_branch; false: leave for human review
-max_session_workers: 3
-timeout: 1h
+  - id: FRT-TSK-001-001
+  - id: FRT-TSK-001-002
+  - id: FRT-TSK-001-003
+    depends_on:
+      - FRT-TSK-001-001
+      - FRT-TSK-001-002
 ```
+
+See `.codeflow/config/autorun/examples/` for annotated examples:
+`simple-sequential.yaml`, `parallel-independent.yaml`,
+`auto-merge-integration.yaml`, `complex-dependencies.yaml`.
+
+**Field reference:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Human-readable batch name |
+| `max_workers` | int | No | Max concurrent workers (default: 3) |
+| `auto_merge` | bool | No | Auto-merge worker PRs (default: false) |
+| `target` | string | When `auto_merge:true` | Target branch for PRs; must NOT be protected |
+| `tasks[].id` | string | Yes | Task ID matching WorkGraph |
+| `tasks[].depends_on` | list | No | Task IDs that must complete first |
+| `tasks[].file_scope` | list | No | Override file scope (narrows task markdown scope) |
+| `tasks[].scope_policy` | string | No | Override scope policy (tightens task markdown policy) |
 
 **Validation Rules:**
 
 | Rule | Condition | Result |
 |------|-----------|--------|
-| `auto_merge:true` requires `target_branch` | `auto_merge:true` and `target_branch` is null | Validation error at batch parsing time |
-| `auto_merge:true` + protected target is FORBIDDEN | `auto_merge:true` and `target_branch` is main, master, release/\*, or production | Validation error at batch parsing time |
+| `auto_merge:true` requires `target` | `auto_merge:true` and `target` is empty | Validation error at batch parsing time |
+| `auto_merge:true` + protected target is FORBIDDEN | `auto_merge:true` and `target` is main, master, release/\*, or production | Validation error at batch parsing time |
 | `auto_merge:false` terminal state | Workers with `auto_merge:false` end in `complete` | Worker creates PR but does not merge; task is already complete |
 
 **Deprecated fields:**
@@ -442,6 +477,10 @@ timeout: 1h
 | Field | Status | Replacement |
 |-------|--------|-------------|
 | `auto_commit` | Deprecated | Commits are always created by workers via cf-git-operations. Field is ignored if present. |
+| `target_branch` | Renamed | Use `target` instead |
+| `max_session_workers` | Renamed | Use `max_workers` instead |
+| `description` | Removed | Not used by the batch parser |
+| `timeout` | Removed | Use `autorun.worker_timeout_secs` in `parallel-work-config.json` instead |
 
 ### Integration Branch Convention
 

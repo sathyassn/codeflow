@@ -1,0 +1,32 @@
+# Simple Sequential Batch
+# ========================
+# Two tasks running one after the other. The second task starts only
+# after the first completes successfully. If the first fails, the second
+# is skipped automatically.
+#
+# PRs are created targeting main for human review (auto_merge: false).
+#
+# Usage:
+#   codeflow autorun run --batch .codeflow/config/autorun/examples/simple-sequential.yaml
+#
+# Task Requirements:
+#   Each task ID must have a corresponding markdown file at:
+#     project-management/epics/{AREA}/{AREA}-EPC-{NNN}/tasks/{task-id}.md
+#   The task markdown MUST contain frontmatter with:
+#     autorun_eligible: true       — marks task as safe for autonomous execution
+#     acceptance: [list]           — at least one acceptance criterion
+#     file_scope: [list]           — file paths this task may modify
+#     scope_policy: soft or hard   — NOT permissive (forbidden for autorun)
+#
+# The task markdown is the source of truth for file_scope, scope_policy,
+# and acceptance criteria. The batch file only specifies task IDs,
+# execution order (dependencies), and batch-level settings.
+
+name: simple-sequential
+max_workers: 1
+auto_merge: false
+tasks:
+  - id: AREA-TSK-NNN-001
+  - id: AREA-TSK-NNN-002
+    depends_on:
+      - AREA-TSK-NNN-001

@@ -84,6 +84,20 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - Classify any finding as non-blocking, advisory, or informational — there are no non-blocking findings
 - Write tests that depend on execution order or external state
 
+### Autorun Behavior
+
+When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker with no human present.
+
+**Detection:** Check `std::env::var("AUTORUN_SESSION_ID")` at session start.
+
+**QA retry exhaustion:** The QA retry loop is bounded by `max_qa_retries` (default 3). On each FAIL verdict, cf-development receives the failure details and reworks. If after 3 retries the QA gate still fails, report `QA-ESCALATE: {n} retries exhausted. Remaining failures: {details}` to the lead. In autorun, the lead marks the task as `blocked` and skips to PF7-END.
+
+**Stage timeout:** `stage_timeout_minutes` (default 60) bounds your total execution time. If approaching the timeout, prioritize completing the test execution and verdict over additional exploratory testing.
+
+**Test execution:** Test execution is identical in autorun and interactive modes. Run `codeflow test --mode full --coverage` and report results objectively.
+
+**No prompts:** Do not prompt for clarification on test scope or acceptance criteria. Use the criteria as provided and assess pass/fail objectively.
+
 ## Execution Steps
 
 ### WS-QA: Quality Gate

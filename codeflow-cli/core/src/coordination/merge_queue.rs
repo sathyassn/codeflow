@@ -200,6 +200,45 @@ pub fn locked_dequeue(
     Ok(result)
 }
 
+/// Remove stale entries whose session_id is not in the set of active sessions.
+///
+/// Iterates the queue in reverse to avoid index invalidation when deleting.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` if any entry cannot be parsed.
+pub fn cleanup_stale_entries<S: std::hash::BuildHasher>(
+    coordinator: &LoroCoordinator,
+    active_sessions: &std::collections::HashSet<String, S>,
+) -> Result<usize, CoordinationError> {
+    let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
+    let len = queue.len();
+    if len == 0 {
+        return Ok(0);
+    }
+
+    // Collect indices of stale entries (iterate in reverse for safe deletion).
+    let mut stale_indices = Vec::new();
+    for i in (0..len).rev() {
+        if let Some(entry) = read_entry_at(&queue, i)? {
+            if !active_sessions.contains(entry.session_id.as_str()) {
+                stale_indices.push(i);
+            }
+        }
+    }
+
+    let removed = stale_indices.len();
+    for idx in stale_indices {
+        queue.delete(idx, 1)?;
+    }
+
+    if removed > 0 {
+        coordinator.doc().commit();
+    }
+
+    Ok(removed)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -734,5 +773,71 @@ mod proptests {
                 "merge must be commutative: same entries regardless of order"
             );
         }
+    }
+}
+
+// -- M1: Stale entry cleanup tests (outside proptest module) --
+
+#[cfg(test)]
+mod stale_cleanup_tests {
+    use super::*;
+
+    fn session(id: &str) -> SessionId {
+        SessionId::new_unchecked(id)
+    }
+
+    fn make_entry(sid: &str, task: &str, branch: &str, ts: &str) -> MergeQueueEntry {
+        MergeQueueEntry {
+            session_id: session(sid),
+            task_id: task.to_string(),
+            branch: branch.to_string(),
+            pr_ready_at: ts.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_cleanup_stale_entries_removes_orphaned() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry("ses-active", "t1", "feat/a", "2026-01-01T00:00:00Z");
+        let e2 = make_entry("ses-dead", "t2", "feat/b", "2026-01-01T00:00:00Z");
+        enqueue(&coord, &e1).unwrap();
+        enqueue(&coord, &e2).unwrap();
+        assert_eq!(queue_len(&coord), 2);
+
+        let mut active = std::collections::HashSet::new();
+        active.insert("ses-active".to_string());
+
+        let removed = cleanup_stale_entries(&coord, &active).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(queue_len(&coord), 1);
+
+        // The remaining entry should be the active one.
+        let front = peek(&coord).unwrap().unwrap();
+        assert_eq!(front.session_id.as_str(), "ses-active");
+    }
+
+    #[test]
+    fn test_cleanup_stale_entries_preserves_all_active() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry("ses-a", "t1", "feat/a", "2026-01-01T00:00:00Z");
+        let e2 = make_entry("ses-b", "t2", "feat/b", "2026-01-01T00:00:00Z");
+        enqueue(&coord, &e1).unwrap();
+        enqueue(&coord, &e2).unwrap();
+
+        let mut active = std::collections::HashSet::new();
+        active.insert("ses-a".to_string());
+        active.insert("ses-b".to_string());
+
+        let removed = cleanup_stale_entries(&coord, &active).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(queue_len(&coord), 2);
+    }
+
+    #[test]
+    fn test_cleanup_stale_entries_empty_queue() {
+        let coord = LoroCoordinator::in_memory();
+        let active = std::collections::HashSet::new();
+        let removed = cleanup_stale_entries(&coord, &active).unwrap();
+        assert_eq!(removed, 0);
     }
 }

@@ -1,6 +1,6 @@
 {
   "worktree": {
-    "mode": "autorun",
+    "mode": "always",
     "max_concurrent": 3,
     "base_dir": ".git-worktrees"
   },

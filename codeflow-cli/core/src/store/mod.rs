@@ -442,6 +442,9 @@ pub mod mock {
                 if let Some(v) = update.pr_number {
                     w.pr_number = Some(v);
                 }
+                if let Some(v) = update.worker_session_id {
+                    w.worker_session_id = Some(v);
+                }
             }
             Ok(())
         }
@@ -1051,6 +1054,7 @@ pub mod mock {
                 worktree_path: None,
                 file_scope: vec![],
                 scope_policy: "soft".into(),
+                worker_session_id: None,
                 pr_number: None,
                 started_at: None,
                 completed_at: None,
@@ -1146,6 +1150,7 @@ pub mod mock {
             worktree_path: None,
             file_scope: vec![],
             scope_policy: "soft".into(),
+            worker_session_id: None,
             pr_number: None,
             started_at: None,
             completed_at: None,

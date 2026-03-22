@@ -702,7 +702,7 @@
   "rework": {
     "max_rework_iterations": 3,
     "max_qa_retries": 3,
-    "stage_timeout_minutes": 30,
+    "stage_timeout_minutes": 60,
     "escalation": "lead",
     "precedence_note": "Stage-level rework limits take precedence over these global defaults"
   },

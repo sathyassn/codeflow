@@ -43,6 +43,8 @@ pub struct AutorunWorker {
     pub file_scope: Vec<String>,
     #[serde(default = "default_scope_policy")]
     pub scope_policy: String,
+    #[serde(default)]
+    pub worker_session_id: Option<String>,
     pub pr_number: Option<i64>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -185,12 +187,14 @@ mod tests {
             worktree_path: Some("/tmp/wt".into()),
             file_scope: vec!["src/**/*.rs".into(), "tests/".into()],
             scope_policy: "hard".into(),
+            worker_session_id: Some("ses-test-123".into()),
             pr_number: None,
             started_at: Some("2026-03-21T00:00:00Z".into()),
             completed_at: None,
         };
         assert_eq!(worker.file_scope.len(), 2);
         assert_eq!(worker.scope_policy, "hard");
+        assert_eq!(worker.worker_session_id.as_deref(), Some("ses-test-123"));
     }
 
     #[test]
@@ -206,12 +210,14 @@ mod tests {
             worktree_path: None,
             file_scope: vec![],
             scope_policy: default_scope_policy(),
+            worker_session_id: None,
             pr_number: None,
             started_at: None,
             completed_at: None,
         };
         assert!(worker.file_scope.is_empty());
         assert_eq!(worker.scope_policy, "soft");
+        assert!(worker.worker_session_id.is_none());
     }
 
     #[test]
