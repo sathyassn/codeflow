@@ -1,4 +1,4 @@
-use crate::types::{AreaType, EpicStatus, SessionStatus, TaskStatus, WorkType};
+use crate::types::{AreaType, AutorunSessionStatus, EpicStatus, SessionStatus, TaskStatus, WorkType};
 
 #[derive(Debug, Default)]
 pub struct SessionFilter {
@@ -22,6 +22,15 @@ pub struct TaskFilter {
     pub work_type: Option<WorkType>,
     pub assignee_id: Option<String>,
     pub autorun_eligible: Option<bool>,
+}
+
+#[derive(Debug, Default)]
+pub struct AutorunSessionFilter {
+    pub status: Option<AutorunSessionStatus>,
+    pub batch_name: Option<String>,
+    pub since: Option<String>,
+    pub limit: Option<u32>,
+    pub all: bool,
 }
 
 #[derive(Debug, Default)]
@@ -140,5 +149,36 @@ mod tests {
         assert!(format!("{tf:?}").contains("TaskFilter"));
         let mf = MemoryEventFilter::default();
         assert!(format!("{mf:?}").contains("MemoryEventFilter"));
+    }
+
+    #[test]
+    fn test_autorun_session_filter_default_all_none() {
+        let f = AutorunSessionFilter::default();
+        assert!(f.status.is_none());
+        assert!(f.batch_name.is_none());
+        assert!(f.since.is_none());
+        assert!(f.limit.is_none());
+        assert!(!f.all);
+    }
+
+    #[test]
+    fn test_autorun_session_filter_with_all_fields() {
+        let f = AutorunSessionFilter {
+            status: Some(AutorunSessionStatus::Running),
+            batch_name: Some("refactor".to_string()),
+            since: Some("2026-03-01T00:00:00Z".to_string()),
+            limit: Some(5),
+            all: false,
+        };
+        assert_eq!(f.status, Some(AutorunSessionStatus::Running));
+        assert_eq!(f.batch_name.as_deref(), Some("refactor"));
+        assert_eq!(f.since.as_deref(), Some("2026-03-01T00:00:00Z"));
+        assert_eq!(f.limit, Some(5));
+    }
+
+    #[test]
+    fn test_autorun_session_filter_debug() {
+        let f = AutorunSessionFilter::default();
+        assert!(format!("{f:?}").contains("AutorunSessionFilter"));
     }
 }

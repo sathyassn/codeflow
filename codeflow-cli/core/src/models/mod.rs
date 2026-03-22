@@ -12,7 +12,7 @@ pub mod user;
 pub use active_work::ActiveWork;
 pub use autorun::{AutorunSession, AutorunTaskRun, AutorunWorker};
 pub use epic::Epic;
-pub use filters::{EpicFilter, MemoryEventFilter, SessionFilter, TaskFilter};
+pub use filters::{AutorunSessionFilter, EpicFilter, MemoryEventFilter, SessionFilter, TaskFilter};
 pub use memory::MemoryEvent;
 pub use session::Session;
 pub use task::Task;

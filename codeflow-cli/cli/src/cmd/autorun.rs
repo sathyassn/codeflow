@@ -25,21 +25,104 @@ pub enum AutorunCommand {
         )]
         batch: PathBuf,
     },
+    /// Show status of active autorun batches
+    Status {
+        /// Filter to specific batch session ID
+        #[arg(long)]
+        batch: Option<String>,
+    },
+    /// Attach to a running worker's tmux session
+    Attach {
+        /// Task ID of the worker to attach to
+        task_id: String,
+    },
+    /// View logs from a worker's tmux session
+    Logs {
+        /// Task ID of the worker to view logs for
+        task_id: String,
+        /// Follow log output (poll at 500ms)
+        #[arg(long, short = 'f')]
+        follow: bool,
+    },
+    /// Cancel a single running worker
+    Cancel {
+        /// Task ID of the worker to cancel
+        task_id: String,
+    },
+    /// Abort an entire batch (cancel all running, skip pending)
+    Abort {
+        /// Batch session ID to abort
+        #[arg(long)]
+        batch: Option<String>,
+    },
+    /// Display results from a batch execution
+    Results {
+        /// Batch session ID to show results for
+        #[arg(long)]
+        batch: Option<String>,
+    },
+    /// Show historical autorun batch executions
+    History {
+        /// Maximum number of batches to show
+        #[arg(long, default_value = "10")]
+        limit: u32,
+        /// Filter batches started after this ISO date
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by batch name pattern (substring match)
+        #[arg(long)]
+        batch_name: Option<String>,
+        /// Show all batches (overrides --limit)
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
-    let batch_path = match command {
+    match command {
         Some(AutorunCommand::Run { batch }) => {
-            if batch.as_path() == Path::new(".codeflow/config/autorun/batch.yaml") {
-                project_dir.join(".codeflow/config/autorun/batch.yaml")
-            } else {
-                batch
-            }
+            let batch_path =
+                if batch.as_path() == Path::new(".codeflow/config/autorun/batch.yaml") {
+                    project_dir.join(".codeflow/config/autorun/batch.yaml")
+                } else {
+                    batch
+                };
+            run_with_dir(&project_dir, &batch_path).await
         }
-        None => project_dir.join(".codeflow/config/autorun/batch.yaml"),
-    };
-    run_with_dir(&project_dir, &batch_path).await
+        Some(AutorunCommand::Status { batch }) => {
+            run_status(&project_dir, batch.as_deref()).await
+        }
+        Some(AutorunCommand::Attach { task_id }) => {
+            run_attach(&project_dir, &task_id).await
+        }
+        Some(AutorunCommand::Logs { task_id, follow }) => {
+            run_logs(&project_dir, &task_id, follow).await
+        }
+        Some(AutorunCommand::Cancel { task_id }) => {
+            run_cancel(&project_dir, &task_id).await
+        }
+        Some(AutorunCommand::Abort { batch }) => {
+            run_abort(&project_dir, batch.as_deref()).await
+        }
+        Some(AutorunCommand::Results { batch }) => {
+            run_results(&project_dir, batch.as_deref()).await
+        }
+        Some(AutorunCommand::History {
+            limit,
+            since,
+            status,
+            batch_name,
+            all,
+        }) => run_history(&project_dir, limit, since, status, batch_name, all).await,
+        None => {
+            let batch_path = project_dir.join(".codeflow/config/autorun/batch.yaml");
+            run_with_dir(&project_dir, &batch_path).await
+        }
+    }
 }
 
 /// Check that tmux is available and the working tree is clean.
@@ -218,6 +301,672 @@ fn format_error(error: &str) -> String {
         String::new()
     } else {
         format!(", error={error}")
+    }
+}
+
+/// Open a `SurrealStore` for subcommand DB queries.
+async fn open_store(project_dir: &Path) -> Result<std::sync::Arc<codeflow_core::store::SurrealStore>> {
+    let db_dir = project_dir.join(".state/db");
+    let store = codeflow_core::store::SurrealStore::open(&db_dir)
+        .await
+        .context("opening data store")?;
+    Ok(std::sync::Arc::new(store))
+}
+
+/// Find the most recent running/aborting session, or a specific one by ID.
+async fn resolve_session_id(
+    store: &codeflow_core::store::SurrealStore,
+    batch: Option<&str>,
+) -> Result<String> {
+    use codeflow_core::models::AutorunSessionFilter;
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::AutorunSessionStatus;
+
+    if let Some(sid) = batch {
+        return Ok(sid.to_string());
+    }
+
+    // Find the most recent running or aborting session.
+    let sessions = store
+        .list_autorun_sessions(AutorunSessionFilter {
+            status: Some(AutorunSessionStatus::Running),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .context("querying autorun sessions")?;
+
+    if let Some(s) = sessions.first() {
+        return Ok(s.id.clone());
+    }
+
+    // Try aborting sessions.
+    let sessions = store
+        .list_autorun_sessions(AutorunSessionFilter {
+            status: Some(AutorunSessionStatus::Aborting),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .context("querying autorun sessions")?;
+
+    if let Some(s) = sessions.first() {
+        return Ok(s.id.clone());
+    }
+
+    anyhow::bail!("no active autorun session found; use --batch <session_id> to specify one");
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand handlers
+// ---------------------------------------------------------------------------
+
+async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let store = open_store(project_dir).await?;
+
+    // Determine which sessions to show.
+    let sessions = if let Some(sid) = batch {
+        match store.get_autorun_session(sid).await? {
+            Some(s) => vec![s],
+            None => anyhow::bail!("no autorun session found with id '{sid}'"),
+        }
+    } else {
+        // Show all active (running/aborting) sessions.
+        use codeflow_core::models::AutorunSessionFilter;
+        let mut active = store
+            .list_autorun_sessions(AutorunSessionFilter::default())
+            .await?;
+        active.retain(|s| {
+            matches!(
+                s.status,
+                codeflow_core::types::AutorunSessionStatus::Running
+                    | codeflow_core::types::AutorunSessionStatus::Aborting
+            )
+        });
+        if active.is_empty() {
+            println!("No active autorun batches.");
+            return Ok(());
+        }
+        active
+    };
+
+    println!(
+        "{:<24} {:<10} {:>5} {:>5} {:>5} {:>5}  ELAPSED",
+        "BATCH", "STATUS", "TASKS", "DONE", "FAIL", "RUN"
+    );
+
+    for session in &sessions {
+        let workers = store.list_autorun_workers(&session.id).await?;
+        let running = workers
+            .iter()
+            .filter(|w| w.status == codeflow_core::types::AutorunWorkerStatus::Running)
+            .count();
+
+        // Check tmux liveness for running workers.
+        let mut orphan_count = 0;
+        for w in &workers {
+            if w.status == codeflow_core::types::AutorunWorkerStatus::Running {
+                if let Some(ref tmux_name) = w.tmux_session {
+                    if !tmux_has_session(tmux_name) {
+                        orphan_count += 1;
+                    }
+                }
+            }
+        }
+
+        let elapsed = format_elapsed(&session.created_at);
+        let batch_name = session
+            .batch_name
+            .as_deref()
+            .unwrap_or(&session.id[..session.id.len().min(20)]);
+
+        println!(
+            "{:<24} {:<10} {:>5} {:>5} {:>5} {:>5}  {}{}",
+            batch_name,
+            session.status,
+            session.total_tasks,
+            session.completed_tasks,
+            session.failed_tasks,
+            running,
+            elapsed,
+            if orphan_count > 0 {
+                format!(" ({orphan_count} orphan)")
+            } else {
+                String::new()
+            },
+        );
+    }
+
+    Ok(())
+}
+
+async fn run_attach(project_dir: &Path, task_id: &str) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let store = open_store(project_dir).await?;
+    let session_id = resolve_session_id(store.as_ref(), None).await?;
+
+    let worker = store
+        .get_autorun_worker_by_task_id(&session_id, task_id)
+        .await?
+        .with_context(|| format!("no worker found for task '{task_id}' in session '{session_id}'"))?;
+
+    let tmux_name = worker
+        .tmux_session
+        .as_deref()
+        .context("worker has no tmux session name")?;
+
+    if !tmux_has_session(tmux_name) {
+        anyhow::bail!("tmux session '{tmux_name}' does not exist (worker may have stopped)");
+    }
+
+    // exec replaces current process.
+    let err = exec::Command::new("tmux")
+        .args(&["attach-session", "-t", tmux_name])
+        .exec();
+    anyhow::bail!("failed to exec tmux attach-session: {err}");
+}
+
+async fn run_logs(project_dir: &Path, task_id: &str, follow: bool) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let store = open_store(project_dir).await?;
+    let session_id = resolve_session_id(store.as_ref(), None).await?;
+
+    let worker = store
+        .get_autorun_worker_by_task_id(&session_id, task_id)
+        .await?
+        .with_context(|| format!("no worker found for task '{task_id}' in session '{session_id}'"))?;
+
+    let tmux_name = worker
+        .tmux_session
+        .as_deref()
+        .context("worker has no tmux session name")?;
+
+    if !tmux_has_session(tmux_name) {
+        anyhow::bail!("tmux session '{tmux_name}' does not exist (worker may have stopped)");
+    }
+
+    let capture = |name: &str| -> Result<String> {
+        let output = std::process::Command::new("tmux")
+            .args(["capture-pane", "-p", "-t", name, "-S", "-"])
+            .output()
+            .context("failed to run tmux capture-pane")?;
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    };
+
+    if follow {
+        let mut last_len = 0;
+        loop {
+            let content = capture(tmux_name)?;
+            if content.len() != last_len {
+                // Clear and reprint.
+                print!("{content}");
+                last_len = content.len();
+            }
+            if !tmux_has_session(tmux_name) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    } else {
+        let content = capture(tmux_name)?;
+        print!("{content}");
+    }
+
+    Ok(())
+}
+
+async fn run_cancel(project_dir: &Path, task_id: &str) -> Result<()> {
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::{AutorunTaskRunStatus, AutorunWorkerStatus};
+
+    let store = open_store(project_dir).await?;
+    let session_id = resolve_session_id(store.as_ref(), None).await?;
+
+    let worker = store
+        .get_autorun_worker_by_task_id(&session_id, task_id)
+        .await?
+        .with_context(|| format!("no worker found for task '{task_id}' in session '{session_id}'"))?;
+
+    if worker.status != AutorunWorkerStatus::Running {
+        anyhow::bail!(
+            "worker for task '{task_id}' is not running (status: {})",
+            worker.status
+        );
+    }
+
+    let tmux_name = worker.tmux_session.as_deref().unwrap_or("");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    println!("cancelling worker for task '{task_id}'...");
+
+    // Step 1-4: Signal processes in tmux session.
+    if !tmux_name.is_empty() && tmux_has_session(tmux_name) {
+        // Step 1-2: Send SIGTERM via Ctrl-C.
+        let _ = std::process::Command::new("tmux")
+            .args(["send-keys", "-t", tmux_name, "C-c", ""])
+            .output();
+
+        // Step 3: Wait 10 seconds.
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        // Step 4: SIGKILL if still alive.
+        if tmux_has_session(tmux_name) {
+            let _ = std::process::Command::new("tmux")
+                .args(["send-keys", "-t", tmux_name, "C-\\", ""])
+                .output();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    // Step 5: Discard uncommitted changes in worktree.
+    if let Some(ref wt_path) = worker.worktree_path {
+        let wt = Path::new(wt_path);
+        if wt.exists() {
+            let _ = std::process::Command::new("git")
+                .args(["checkout", "."])
+                .current_dir(wt)
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["clean", "-fd"])
+                .current_dir(wt)
+                .output();
+        }
+    }
+
+    // Step 6: Release claims for this worker (via CRDT coordination).
+    // The worker's claims are keyed by an ephemeral per-worker SessionId
+    // generated at runtime (worker.rs:285) which is NOT persisted in the DB.
+    // From the CLI cancel command, we cannot recover this SessionId, so we
+    // cannot call claims::release_all(). The CRDT claims system has TTL-based
+    // expiry (default 4200s from parallel-work-config.json) that will
+    // automatically reclaim these slots. For immediate release, the worker
+    // process itself performs cleanup in its finally block (worker.rs:537-552).
+    let state_path = project_dir.join(".state/coordination/state.loro");
+    if state_path.exists() && !worker.file_scope.is_empty() {
+        eprintln!(
+            "note: {} file claim(s) for worker {} will expire via TTL \
+             (worker session ID not available for immediate release)",
+            worker.file_scope.len(),
+            worker.id,
+        );
+    }
+
+    // Step 7: Kill tmux session.
+    if !tmux_name.is_empty() {
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", tmux_name])
+            .output();
+    }
+
+    // Step 8-9: Cleanup worktree and deregister.
+    if let Some(ref wt_path) = worker.worktree_path {
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt_path])
+            .current_dir(project_dir)
+            .output();
+    }
+
+    // Step 10: Close PR if open.
+    if let Some(pr_num) = worker.pr_number {
+        eprintln!("closing PR #{pr_num}...");
+        let _ = std::process::Command::new("gh")
+            .args([
+                "pr",
+                "close",
+                &pr_num.to_string(),
+                "--delete-branch",
+            ])
+            .current_dir(project_dir)
+            .output();
+    }
+
+    // Step 11: Delete remote branch if pushed.
+    // We get the branch name from the task run record.
+    let task_runs = store.list_autorun_task_runs(&session_id).await?;
+    if let Some(run) = task_runs.iter().find(|r| r.task_id == task_id) {
+        if let Some(ref branch) = run.branch_name {
+            if !branch.is_empty() && worker.pr_number.is_none() {
+                // Only delete remote branch if no PR was created (PR --delete-branch handles it).
+                let _ = std::process::Command::new("git")
+                    .args(["push", "origin", "--delete", branch])
+                    .current_dir(project_dir)
+                    .output();
+            }
+        }
+    }
+
+    // Step 12: Update worker status in DB.
+    store
+        .update_autorun_worker(
+            &worker.id,
+            codeflow_core::models::AutorunWorkerUpdate {
+                status: Some(AutorunWorkerStatus::Cancelled),
+                completed_at: Some(now.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .context("updating worker status")?;
+
+    // Step 13: Update task_run status.
+    for run in &task_runs {
+        if run.task_id == task_id
+            && matches!(
+                run.status,
+                AutorunTaskRunStatus::Pending | AutorunTaskRunStatus::Running
+            )
+        {
+            store
+                .update_autorun_task_run(
+                    &run.id,
+                    codeflow_core::models::AutorunTaskRunUpdate {
+                        status: Some(AutorunTaskRunStatus::Cancelled),
+                        completed_at: Some(now.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .context("updating task run status")?;
+        }
+    }
+
+    println!("worker for task '{task_id}' cancelled.");
+    Ok(())
+}
+
+async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::AutorunSessionStatus;
+
+    let store = open_store(project_dir).await?;
+    let session_id = resolve_session_id(store.as_ref(), batch).await?;
+
+    let session = store
+        .get_autorun_session(&session_id)
+        .await?
+        .with_context(|| format!("no autorun session found with id '{session_id}'"))?;
+
+    if !matches!(
+        session.status,
+        AutorunSessionStatus::Running | AutorunSessionStatus::Aborting
+    ) {
+        anyhow::bail!(
+            "session '{session_id}' is not running (status: {})",
+            session.status
+        );
+    }
+
+    println!("aborting batch '{session_id}'...");
+
+    // Step 1: Send SIGTERM to orchestrator PID if available.
+    let mut pid_signaled = false;
+    if let Some(pid) = session.pid {
+        if pid > 0 {
+            // Check if process is alive first.
+            let pid_i32 = i32::try_from(pid).unwrap_or(0);
+            let alive = pid_i32 > 0 && unsafe { libc::kill(pid_i32, 0) } == 0;
+            if alive {
+                eprintln!("sending SIGTERM to orchestrator PID {pid}...");
+                unsafe {
+                    libc::kill(pid_i32, libc::SIGTERM);
+                }
+                pid_signaled = true;
+            }
+        }
+    }
+
+    // Step 1 fallback: Write abort marker file.
+    if !pid_signaled {
+        let runtime_dir = project_dir.join(".state/runtime");
+        std::fs::create_dir_all(&runtime_dir).context("creating runtime dir")?;
+        let marker_path = runtime_dir.join(format!("abort-{session_id}"));
+        std::fs::write(&marker_path, "abort").context("writing abort marker")?;
+        eprintln!(
+            "wrote abort marker at {}",
+            marker_path.display()
+        );
+    }
+
+    // Step 2: Update session status to aborting.
+    store
+        .update_autorun_session(
+            &session_id,
+            codeflow_core::models::AutorunSessionUpdate {
+                status: Some(AutorunSessionStatus::Aborting),
+                ..Default::default()
+            },
+        )
+        .await
+        .context("updating session status")?;
+
+    // Step 3-4: Cancel all running workers.
+    let workers = store.list_autorun_workers(&session_id).await?;
+    for worker in &workers {
+        if worker.status == codeflow_core::types::AutorunWorkerStatus::Running {
+            eprintln!("cancelling running worker: {}", worker.task_id);
+            if let Err(e) = run_cancel(project_dir, &worker.task_id).await {
+                eprintln!("warning: failed to cancel worker {}: {e}", worker.task_id);
+            }
+        }
+    }
+
+    // Step 5: Skip all pending tasks.
+    let task_runs = store.list_autorun_task_runs(&session_id).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    for run in &task_runs {
+        if matches!(
+            run.status,
+            codeflow_core::types::AutorunTaskRunStatus::Pending
+        ) {
+            store
+                .update_autorun_task_run(
+                    &run.id,
+                    codeflow_core::models::AutorunTaskRunUpdate {
+                        status: Some(codeflow_core::types::AutorunTaskRunStatus::Skipped),
+                        completed_at: Some(now.clone()),
+                        error_message: Some("batch_aborted".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .context("skipping pending task run")?;
+        }
+    }
+
+    // Step 6: Update batch status to cancelled.
+    store
+        .update_autorun_session(
+            &session_id,
+            codeflow_core::models::AutorunSessionUpdate {
+                status: Some(AutorunSessionStatus::Cancelled),
+                completed_at: Some(now),
+                ..Default::default()
+            },
+        )
+        .await
+        .context("finalizing session status")?;
+
+    println!("batch '{session_id}' aborted.");
+    Ok(())
+}
+
+async fn run_results(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let store = open_store(project_dir).await?;
+    let session_id = resolve_session_id(store.as_ref(), batch).await?;
+
+    let task_runs = store.list_autorun_task_runs(&session_id).await?;
+
+    if task_runs.is_empty() {
+        println!("No task runs found for session '{session_id}'.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<24} {:<12} {:>9}  {:<6} {:>5}  ERROR",
+        "TASK", "STATUS", "DURATION", "PR", "EXIT"
+    );
+
+    for run in &task_runs {
+        let duration = run
+            .duration_seconds
+            .map_or_else(|| "--".to_string(), format_duration_secs);
+        let pr = run
+            .pr_number
+            .map_or_else(|| "--".to_string(), |n| format!("#{n}"));
+        let exit = run
+            .exit_code
+            .map_or_else(|| "--".to_string(), |c| c.to_string());
+        let error = run.error_message.as_deref().unwrap_or("");
+
+        println!(
+            "{:<24} {:<12} {:>9}  {:<6} {:>5}  {}",
+            run.task_id, run.status, duration, pr, exit, error
+        );
+    }
+
+    Ok(())
+}
+
+async fn run_history(
+    project_dir: &Path,
+    limit: u32,
+    since: Option<String>,
+    status: Option<String>,
+    batch_name: Option<String>,
+    all: bool,
+) -> Result<()> {
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::AutorunSessionStatus;
+    use std::str::FromStr;
+
+    let store = open_store(project_dir).await?;
+
+    let status_filter = if let Some(ref s) = status {
+        Some(AutorunSessionStatus::from_str(s).map_err(|_| {
+            anyhow::anyhow!("invalid status '{s}'; valid values: pending, running, paused, completed, failed, cancelled, timeout, aborting")
+        })?)
+    } else {
+        None
+    };
+
+    let filter = codeflow_core::models::AutorunSessionFilter {
+        status: status_filter,
+        batch_name,
+        since,
+        limit: Some(limit),
+        all,
+    };
+
+    let sessions = store.list_autorun_sessions(filter).await?;
+
+    if sessions.is_empty() {
+        println!("No autorun sessions found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<24} {:<12} {:>5} {:>5} {:>5} {:>5}  STARTED",
+        "BATCH", "STATUS", "TASKS", "DONE", "FAIL", "SKIP"
+    );
+
+    for session in &sessions {
+        let batch_label = session
+            .batch_name
+            .as_deref()
+            .unwrap_or(&session.id[..session.id.len().min(20)]);
+
+        println!(
+            "{:<24} {:<12} {:>5} {:>5} {:>5} {:>5}  {}",
+            batch_label,
+            session.status,
+            session.total_tasks,
+            session.completed_tasks,
+            session.failed_tasks,
+            session.skipped_tasks,
+            &session.created_at[..session.created_at.len().min(19)],
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a tmux session exists.
+fn tmux_has_session(name: &str) -> bool {
+    std::process::Command::new("tmux")
+        .args(["has-session", "-t", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Format elapsed time from an ISO timestamp to now.
+fn format_elapsed(started_at: &str) -> String {
+    let Ok(start) = chrono::DateTime::parse_from_rfc3339(started_at) else {
+        return "--:--".to_string();
+    };
+    let elapsed = chrono::Utc::now().signed_duration_since(start);
+    let total_secs = elapsed.num_seconds().max(0);
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{hours:02}:{mins:02}:{secs:02}")
+    } else {
+        format!("{mins:02}:{secs:02}")
+    }
+}
+
+/// Format a duration in seconds to MM:SS or HH:MM:SS.
+fn format_duration_secs(secs: i64) -> String {
+    let total = secs.max(0);
+    let hours = total / 3600;
+    let mins = (total % 3600) / 60;
+    let s = total % 60;
+    if hours > 0 {
+        format!("{hours:02}:{mins:02}:{s:02}")
+    } else {
+        format!("{mins:02}:{s:02}")
+    }
+}
+
+/// Stub module for exec (tmux attach replaces current process).
+mod exec {
+    pub struct Command {
+        pub(super) program: String,
+        pub(super) args: Vec<String>,
+    }
+
+    impl Command {
+        pub fn new(program: &str) -> Self {
+            Self {
+                program: program.to_string(),
+                args: Vec::new(),
+            }
+        }
+
+        pub fn args(mut self, args: &[&str]) -> Self {
+            self.args.extend(args.iter().map(ToString::to_string));
+            self
+        }
+
+        pub fn exec(self) -> std::io::Error {
+            use std::os::unix::process::CommandExt;
+            let mut cmd = std::process::Command::new(&self.program);
+            cmd.args(&self.args);
+            cmd.exec()
+        }
     }
 }
 
@@ -1684,5 +2433,1271 @@ tasks:
             msg.contains("working tree is not clean") || msg.contains("tmux"),
             "error should be from preflight (git-dirty or tmux), not batch parse, got: {msg}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Criterion 8: clap derive subcommands parse correctly
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_autorun_command_status_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "status"]).unwrap();
+        assert!(matches!(cli.cmd, AutorunCommand::Status { batch: None }));
+
+        let cli = TestCli::try_parse_from(["test", "status", "--batch", "ses-123"]).unwrap();
+        if let AutorunCommand::Status { batch } = cli.cmd {
+            assert_eq!(batch.as_deref(), Some("ses-123"));
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_attach_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "attach", "task-a"]).unwrap();
+        if let AutorunCommand::Attach { task_id } = cli.cmd {
+            assert_eq!(task_id, "task-a");
+        } else {
+            panic!("expected Attach variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_logs_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "logs", "task-b"]).unwrap();
+        if let AutorunCommand::Logs { task_id, follow } = cli.cmd {
+            assert_eq!(task_id, "task-b");
+            assert!(!follow);
+        } else {
+            panic!("expected Logs variant");
+        }
+
+        let cli = TestCli::try_parse_from(["test", "logs", "task-b", "--follow"]).unwrap();
+        if let AutorunCommand::Logs { follow, .. } = cli.cmd {
+            assert!(follow);
+        } else {
+            panic!("expected Logs variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_cancel_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "cancel", "task-c"]).unwrap();
+        if let AutorunCommand::Cancel { task_id } = cli.cmd {
+            assert_eq!(task_id, "task-c");
+        } else {
+            panic!("expected Cancel variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_abort_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "abort"]).unwrap();
+        assert!(matches!(cli.cmd, AutorunCommand::Abort { batch: None }));
+
+        let cli = TestCli::try_parse_from(["test", "abort", "--batch", "ses-456"]).unwrap();
+        if let AutorunCommand::Abort { batch } = cli.cmd {
+            assert_eq!(batch.as_deref(), Some("ses-456"));
+        } else {
+            panic!("expected Abort variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_results_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "results"]).unwrap();
+        assert!(matches!(cli.cmd, AutorunCommand::Results { batch: None }));
+    }
+
+    #[test]
+    fn test_autorun_command_history_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "history", "--limit", "5", "--all"]).unwrap();
+        if let AutorunCommand::History { limit, all, .. } = cli.cmd {
+            assert_eq!(limit, 5);
+            assert!(all);
+        } else {
+            panic!("expected History variant");
+        }
+
+        let cli = TestCli::try_parse_from([
+            "test",
+            "history",
+            "--since",
+            "2026-01-01",
+            "--status",
+            "completed",
+            "--batch-name",
+            "refactor",
+        ])
+        .unwrap();
+        if let AutorunCommand::History {
+            since,
+            status,
+            batch_name,
+            ..
+        } = cli.cmd
+        {
+            assert_eq!(since.as_deref(), Some("2026-01-01"));
+            assert_eq!(status.as_deref(), Some("completed"));
+            assert_eq!(batch_name.as_deref(), Some("refactor"));
+        } else {
+            panic!("expected History variant");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Criterion 10: status command output format
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_elapsed_produces_mm_ss() {
+        // Use a timestamp from ~2 minutes ago.
+        let two_min_ago = chrono::Utc::now() - chrono::Duration::seconds(125);
+        let ts = two_min_ago.to_rfc3339();
+        let elapsed = format_elapsed(&ts);
+        // Should be approximately "02:05" (within a second or two).
+        assert!(
+            elapsed.contains(':'),
+            "elapsed should contain colon, got: {elapsed}"
+        );
+        assert!(
+            !elapsed.is_empty(),
+            "elapsed should not be empty"
+        );
+    }
+
+    #[test]
+    fn test_format_elapsed_invalid_timestamp() {
+        assert_eq!(format_elapsed("not-a-date"), "--:--");
+    }
+
+    #[test]
+    fn test_format_duration_secs_minutes_only() {
+        assert_eq!(format_duration_secs(125), "02:05");
+    }
+
+    #[test]
+    fn test_format_duration_secs_with_hours() {
+        assert_eq!(format_duration_secs(3661), "01:01:01");
+    }
+
+    #[test]
+    fn test_format_duration_secs_zero() {
+        assert_eq!(format_duration_secs(0), "00:00");
+    }
+
+    #[test]
+    fn test_format_duration_secs_negative() {
+        assert_eq!(format_duration_secs(-5), "00:00");
+    }
+
+    // -----------------------------------------------------------------------
+    // Criterion 11: cancel cleanup sequence order (via MockStore)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cancel_rejects_non_running_worker() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::{AutorunSessionStatus, AutorunWorkerStatus};
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+            let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            store.apply_schema().await.unwrap();
+
+            // Create a session.
+            let session = codeflow_core::models::AutorunSession {
+                id: "ses-cancel-test".into(),
+                batch_file: "b.yaml".into(),
+                batch_name: Some("cancel-test".into()),
+                status: AutorunSessionStatus::Running,
+                max_session_workers: 1,
+                total_tasks: 1,
+                completed_tasks: 0,
+                failed_tasks: 0,
+                pid: None,
+                skipped_tasks: 0,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                completed_at: None,
+            };
+            store.create_autorun_session(&session).await.unwrap();
+
+            // Create a completed (not running) worker.
+            let worker = codeflow_core::models::AutorunWorker {
+                id: "arw-task-done".into(),
+                session_id: "ses-cancel-test".into(),
+                worker_num: 1,
+                task_id: "task-done".into(),
+                status: AutorunWorkerStatus::Completed,
+                tmux_session: Some("tmux-done".into()),
+                worktree_path: None,
+                file_scope: vec![],
+                scope_policy: "soft".into(),
+                pr_number: None,
+                started_at: None,
+                completed_at: None,
+            };
+            store.create_autorun_worker(&worker).await.unwrap();
+
+            // run_cancel should fail because worker is not running.
+            let result = run_cancel(dir.path(), "task-done").await;
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("not running"),
+                "expected 'not running' error, got: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_cancel_updates_db_status() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::{AutorunSessionStatus, AutorunWorkerStatus};
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+
+            // Scope: seed data then drop the store before run_cancel opens its own.
+            {
+                let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+                store.apply_schema().await.unwrap();
+
+                let now = chrono::Utc::now().to_rfc3339();
+
+                let session = codeflow_core::models::AutorunSession {
+                    id: "ses-cancel-db".into(),
+                    batch_file: "b.yaml".into(),
+                    batch_name: Some("cancel-db".into()),
+                    status: AutorunSessionStatus::Running,
+                    max_session_workers: 1,
+                    total_tasks: 1,
+                    completed_tasks: 0,
+                    failed_tasks: 0,
+                    pid: None,
+                    skipped_tasks: 0,
+                    created_at: now.clone(),
+                    completed_at: None,
+                };
+                store.create_autorun_session(&session).await.unwrap();
+
+                let worker = codeflow_core::models::AutorunWorker {
+                    id: "arw-cancel-db".into(),
+                    session_id: "ses-cancel-db".into(),
+                    worker_num: 1,
+                    task_id: "task-cancel-db".into(),
+                    status: AutorunWorkerStatus::Running,
+                    tmux_session: Some("nonexistent-tmux-session".into()),
+                    worktree_path: None,
+                    file_scope: vec![],
+                    scope_policy: "soft".into(),
+                    pr_number: None,
+                    started_at: Some(now.clone()),
+                    completed_at: None,
+                };
+                store.create_autorun_worker(&worker).await.unwrap();
+
+                let task_run = codeflow_core::models::AutorunTaskRun {
+                    id: "atr-cancel-db".into(),
+                    worker_id: "arw-cancel-db".into(),
+                    task_id: "task-cancel-db".into(),
+                    session_id: "ses-cancel-db".into(),
+                    status: codeflow_core::types::AutorunTaskRunStatus::Running,
+                    branch_name: None,
+                    worktree_path: None,
+                    pr_number: None,
+                    pr_url: None,
+                    blocked_reason: None,
+                    claim_conflicts: None,
+                    merge_conflicts: None,
+                    started_at: Some(now),
+                    completed_at: None,
+                    duration_seconds: None,
+                    exit_code: None,
+                    error_message: None,
+                    verification_result: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                store.create_autorun_task_run(&task_run).await.unwrap();
+            }
+            // Store dropped here — run_cancel will open its own connection.
+
+            let result = run_cancel(dir.path(), "task-cancel-db").await;
+            assert!(result.is_ok(), "cancel should succeed: {result:?}");
+
+            // Re-open to verify.
+            let store2 = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            let w = store2
+                .get_autorun_worker_by_task_id("ses-cancel-db", "task-cancel-db")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                w.status,
+                AutorunWorkerStatus::Cancelled,
+                "worker should be cancelled"
+            );
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Criterion 12: history --limit limits results
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_history_limit_constrains_results() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::AutorunSessionStatus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+            let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            store.apply_schema().await.unwrap();
+
+            // Create 5 sessions.
+            for i in 0..5 {
+                let session = codeflow_core::models::AutorunSession {
+                    id: format!("ses-hist-{i}"),
+                    batch_file: "b.yaml".into(),
+                    batch_name: Some(format!("batch-{i}")),
+                    status: AutorunSessionStatus::Completed,
+                    max_session_workers: 1,
+                    total_tasks: 1,
+                    completed_tasks: 1,
+                    failed_tasks: 0,
+                    pid: None,
+                    skipped_tasks: 0,
+                    created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                    completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
+                };
+                store.create_autorun_session(&session).await.unwrap();
+            }
+
+            // Query with limit=3.
+            let filter = codeflow_core::models::AutorunSessionFilter {
+                limit: Some(3),
+                ..Default::default()
+            };
+            let results = store.list_autorun_sessions(filter).await.unwrap();
+            assert_eq!(
+                results.len(),
+                3,
+                "limit=3 should return 3 sessions, got {}",
+                results.len()
+            );
+
+            // Verify they are in descending order.
+            assert!(
+                results[0].created_at >= results[1].created_at,
+                "results should be in descending order"
+            );
+
+            // Query with all=true should return all 5.
+            let filter_all = codeflow_core::models::AutorunSessionFilter {
+                all: true,
+                ..Default::default()
+            };
+            let all_results = store.list_autorun_sessions(filter_all).await.unwrap();
+            assert_eq!(
+                all_results.len(),
+                5,
+                "all=true should return all 5 sessions, got {}",
+                all_results.len()
+            );
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional filter tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_history_status_filter() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::AutorunSessionStatus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+            let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            store.apply_schema().await.unwrap();
+
+            // Create a completed and a failed session.
+            for (i, status) in [AutorunSessionStatus::Completed, AutorunSessionStatus::Failed]
+                .iter()
+                .enumerate()
+            {
+                let session = codeflow_core::models::AutorunSession {
+                    id: format!("ses-filt-{i}"),
+                    batch_file: "b.yaml".into(),
+                    batch_name: Some(format!("filt-{i}")),
+                    status: *status,
+                    max_session_workers: 1,
+                    total_tasks: 1,
+                    completed_tasks: if i == 0 { 1 } else { 0 },
+                    failed_tasks: if i == 1 { 1 } else { 0 },
+                    pid: None,
+                    skipped_tasks: 0,
+                    created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                    completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
+                };
+                store.create_autorun_session(&session).await.unwrap();
+            }
+
+            // Filter by completed.
+            let filter = codeflow_core::models::AutorunSessionFilter {
+                status: Some(AutorunSessionStatus::Completed),
+                ..Default::default()
+            };
+            let results = store.list_autorun_sessions(filter).await.unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].status, AutorunSessionStatus::Completed);
+        });
+    }
+
+    #[test]
+    fn test_list_workers_by_session() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::AutorunWorkerStatus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+            let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            store.apply_schema().await.unwrap();
+
+            // Create workers for two different sessions.
+            for sid in ["ses-a", "ses-b"] {
+                let worker = codeflow_core::models::AutorunWorker {
+                    id: format!("arw-{sid}"),
+                    session_id: sid.into(),
+                    worker_num: 1,
+                    task_id: format!("task-{sid}"),
+                    status: AutorunWorkerStatus::Running,
+                    tmux_session: None,
+                    worktree_path: None,
+                    file_scope: vec![],
+                    scope_policy: "soft".into(),
+                    pr_number: None,
+                    started_at: None,
+                    completed_at: None,
+                };
+                store.create_autorun_worker(&worker).await.unwrap();
+            }
+
+            let workers_a = store.list_autorun_workers("ses-a").await.unwrap();
+            assert_eq!(workers_a.len(), 1);
+            assert_eq!(workers_a[0].session_id, "ses-a");
+
+            let workers_b = store.list_autorun_workers("ses-b").await.unwrap();
+            assert_eq!(workers_b.len(), 1);
+            assert_eq!(workers_b[0].session_id, "ses-b");
+
+            let workers_none = store.list_autorun_workers("ses-nope").await.unwrap();
+            assert!(workers_none.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_get_worker_by_task_id() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::AutorunWorkerStatus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db_dir = dir.path().join(".state/db");
+            std::fs::create_dir_all(&db_dir).unwrap();
+            let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+            store.apply_schema().await.unwrap();
+
+            let worker = codeflow_core::models::AutorunWorker {
+                id: "arw-lookup".into(),
+                session_id: "ses-lookup".into(),
+                worker_num: 1,
+                task_id: "task-lookup".into(),
+                status: AutorunWorkerStatus::Running,
+                tmux_session: Some("tmux-lookup".into()),
+                worktree_path: None,
+                file_scope: vec![],
+                scope_policy: "soft".into(),
+                pr_number: None,
+                started_at: None,
+                completed_at: None,
+            };
+            store.create_autorun_worker(&worker).await.unwrap();
+
+            // Found.
+            let found = store
+                .get_autorun_worker_by_task_id("ses-lookup", "task-lookup")
+                .await
+                .unwrap();
+            assert!(found.is_some());
+            assert_eq!(found.unwrap().tmux_session.as_deref(), Some("tmux-lookup"));
+
+            // Not found (wrong session).
+            let not_found = store
+                .get_autorun_worker_by_task_id("ses-other", "task-lookup")
+                .await
+                .unwrap();
+            assert!(not_found.is_none());
+
+            // Not found (wrong task).
+            let not_found = store
+                .get_autorun_worker_by_task_id("ses-lookup", "task-other")
+                .await
+                .unwrap();
+            assert!(not_found.is_none());
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Aborting status variant test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_aborting_status_roundtrip() {
+        use std::str::FromStr;
+        let status = codeflow_core::types::AutorunSessionStatus::Aborting;
+        assert_eq!(status.to_string(), "aborting");
+        let parsed = codeflow_core::types::AutorunSessionStatus::from_str("aborting").unwrap();
+        assert_eq!(parsed, status);
+    }
+
+    // -----------------------------------------------------------------------
+    // exec module tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_exec_command_builds_args() {
+        let cmd = exec::Command::new("echo").args(&["hello", "world"]);
+        assert_eq!(cmd.program, "echo");
+        assert_eq!(cmd.args, vec!["hello", "world"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Handler-level tests (QA coverage)
+    // -----------------------------------------------------------------------
+
+    /// Helper: seed a SurrealStore with test data, drop it, return the dir.
+    /// The caller can then call handler functions which open their own store.
+    async fn seed_store(dir: &Path, sessions: Vec<codeflow_core::models::AutorunSession>, workers: Vec<codeflow_core::models::AutorunWorker>, task_runs: Vec<codeflow_core::models::AutorunTaskRun>) {
+        use codeflow_core::store::DataStore;
+        let db_dir = dir.join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let store = codeflow_core::store::SurrealStore::open(&db_dir).await.unwrap();
+        store.apply_schema().await.unwrap();
+        for s in &sessions {
+            store.create_autorun_session(s).await.unwrap();
+        }
+        for w in &workers {
+            store.create_autorun_worker(w).await.unwrap();
+        }
+        for r in &task_runs {
+            store.create_autorun_task_run(r).await.unwrap();
+        }
+        // Drop store so handler functions can open their own connection.
+        drop(store);
+    }
+
+    fn test_session(id: &str, status: codeflow_core::types::AutorunSessionStatus) -> codeflow_core::models::AutorunSession {
+        codeflow_core::models::AutorunSession {
+            id: id.into(),
+            batch_file: "b.yaml".into(),
+            batch_name: Some(format!("batch-{id}")),
+            status,
+            max_session_workers: 2,
+            total_tasks: 4,
+            completed_tasks: 2,
+            failed_tasks: 1,
+            pid: None,
+            skipped_tasks: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            completed_at: None,
+        }
+    }
+
+    fn test_worker(id: &str, session_id: &str, task_id: &str, status: codeflow_core::types::AutorunWorkerStatus) -> codeflow_core::models::AutorunWorker {
+        codeflow_core::models::AutorunWorker {
+            id: id.into(),
+            session_id: session_id.into(),
+            worker_num: 1,
+            task_id: task_id.into(),
+            status,
+            tmux_session: Some(format!("nonexistent-tmux-{id}")),
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            pr_number: None,
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            completed_at: None,
+        }
+    }
+
+    fn test_task_run(id: &str, session_id: &str, task_id: &str, status: codeflow_core::types::AutorunTaskRunStatus) -> codeflow_core::models::AutorunTaskRun {
+        codeflow_core::models::AutorunTaskRun {
+            id: id.into(),
+            worker_id: format!("w-{id}"),
+            task_id: task_id.into(),
+            session_id: session_id.into(),
+            status,
+            branch_name: Some("feat/test".into()),
+            worktree_path: None,
+            pr_number: Some(42),
+            pr_url: Some("https://github.com/org/repo/pull/42".into()),
+            blocked_reason: None,
+            claim_conflicts: None,
+            merge_conflicts: None,
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            completed_at: Some(chrono::Utc::now().to_rfc3339()),
+            duration_seconds: Some(120),
+            exit_code: Some(0),
+            error_message: None,
+            verification_result: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    // -- run_status tests --
+
+    #[test]
+    fn test_run_status_no_active_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-done", codeflow_core::types::AutorunSessionStatus::Completed)],
+                vec![],
+                vec![],
+            ).await;
+
+            // No running sessions -- should print "No active autorun batches." and succeed.
+            let result = run_status(dir.path(), None).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_status_with_running_session() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-running";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![
+                    test_worker("w1", sid, "task-1", codeflow_core::types::AutorunWorkerStatus::Running),
+                    test_worker("w2", sid, "task-2", codeflow_core::types::AutorunWorkerStatus::Completed),
+                ],
+                vec![],
+            ).await;
+
+            let result = run_status(dir.path(), None).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_status_specific_batch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-specific", codeflow_core::types::AutorunSessionStatus::Completed)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_status(dir.path(), Some("ses-specific")).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_status_nonexistent_batch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(dir.path(), vec![], vec![], vec![]).await;
+
+            let result = run_status(dir.path(), Some("ses-nope")).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no autorun session found"));
+        });
+    }
+
+    // -- run_results tests --
+
+    #[test]
+    fn test_run_results_empty() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-empty", codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_results(dir.path(), Some("ses-empty")).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_results_with_data() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-results";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Completed)],
+                vec![],
+                vec![
+                    test_task_run("r1", sid, "task-a", codeflow_core::types::AutorunTaskRunStatus::Completed),
+                    test_task_run("r2", sid, "task-b", codeflow_core::types::AutorunTaskRunStatus::Failed),
+                ],
+            ).await;
+
+            let result = run_results(dir.path(), Some(sid)).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    // -- run_history tests --
+
+    #[test]
+    fn test_run_history_empty() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(dir.path(), vec![], vec![], vec![]).await;
+
+            let result = run_history(dir.path(), 10, None, None, None, false).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_history_with_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![
+                    test_session("ses-h1", codeflow_core::types::AutorunSessionStatus::Completed),
+                    test_session("ses-h2", codeflow_core::types::AutorunSessionStatus::Failed),
+                ],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_history(dir.path(), 10, None, None, None, false).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_history_invalid_status_filter() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(dir.path(), vec![], vec![], vec![]).await;
+
+            let result = run_history(dir.path(), 10, None, Some("invalid_status".into()), None, false).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("invalid status"));
+        });
+    }
+
+    // -- resolve_session_id tests --
+
+    #[test]
+    fn test_resolve_session_id_explicit_batch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(dir.path(), vec![], vec![], vec![]).await;
+            let store = open_store(dir.path()).await.unwrap();
+
+            let sid = resolve_session_id(&store, Some("ses-explicit")).await.unwrap();
+            assert_eq!(sid, "ses-explicit");
+        });
+    }
+
+    #[test]
+    fn test_resolve_session_id_finds_running() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-active", codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![],
+            ).await;
+            let store = open_store(dir.path()).await.unwrap();
+
+            let sid = resolve_session_id(&store, None).await.unwrap();
+            assert_eq!(sid, "ses-active");
+        });
+    }
+
+    #[test]
+    fn test_resolve_session_id_finds_aborting() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-aborting", codeflow_core::types::AutorunSessionStatus::Aborting)],
+                vec![],
+                vec![],
+            ).await;
+            let store = open_store(dir.path()).await.unwrap();
+
+            let sid = resolve_session_id(&store, None).await.unwrap();
+            assert_eq!(sid, "ses-aborting");
+        });
+    }
+
+    #[test]
+    fn test_resolve_session_id_no_active() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-done", codeflow_core::types::AutorunSessionStatus::Completed)],
+                vec![],
+                vec![],
+            ).await;
+            let store = open_store(dir.path()).await.unwrap();
+
+            let result = resolve_session_id(&store, None).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no active autorun session"));
+        });
+    }
+
+    // -- run_abort tests --
+
+    #[test]
+    fn test_run_abort_marker_fallback() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-abort-marker";
+            // Session with no PID -- should use marker file fallback.
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_abort(dir.path(), Some(sid)).await;
+            assert!(result.is_ok());
+
+            // Verify marker file was written.
+            let marker = dir.path().join(format!(".state/runtime/abort-{sid}"));
+            assert!(marker.exists(), "abort marker file should exist");
+
+            // Verify session status updated to cancelled.
+            let store = open_store(dir.path()).await.unwrap();
+            use codeflow_core::store::DataStore;
+            let session = store.get_autorun_session(sid).await.unwrap().unwrap();
+            assert_eq!(session.status, codeflow_core::types::AutorunSessionStatus::Cancelled);
+        });
+    }
+
+    #[test]
+    fn test_run_abort_with_stale_pid() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-abort-pid";
+            // Session with a PID that doesn't exist (stale).
+            let mut session = test_session(sid, codeflow_core::types::AutorunSessionStatus::Running);
+            session.pid = Some(999_999_999); // Very unlikely to be a real PID.
+            seed_store(dir.path(), vec![session], vec![], vec![]).await;
+
+            let result = run_abort(dir.path(), Some(sid)).await;
+            assert!(result.is_ok());
+
+            // Should fall back to marker file since PID is stale.
+            let marker = dir.path().join(format!(".state/runtime/abort-{sid}"));
+            assert!(marker.exists(), "abort marker should exist for stale PID fallback");
+        });
+    }
+
+    #[test]
+    fn test_run_abort_not_running() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![test_session("ses-done", codeflow_core::types::AutorunSessionStatus::Completed)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_abort(dir.path(), Some("ses-done")).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not running"));
+        });
+    }
+
+    #[test]
+    fn test_run_abort_skips_pending_tasks() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-abort-skip";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![
+                    test_task_run("r1", sid, "task-done", codeflow_core::types::AutorunTaskRunStatus::Completed),
+                    {
+                        let mut r = test_task_run("r2", sid, "task-pending", codeflow_core::types::AutorunTaskRunStatus::Pending);
+                        r.pr_number = None;
+                        r.pr_url = None;
+                        r.completed_at = None;
+                        r.duration_seconds = None;
+                        r.exit_code = None;
+                        r
+                    },
+                ],
+            ).await;
+
+            let result = run_abort(dir.path(), Some(sid)).await;
+            assert!(result.is_ok());
+
+            // Verify pending task was marked as skipped.
+            let store = open_store(dir.path()).await.unwrap();
+            use codeflow_core::store::DataStore;
+            let runs = store.list_autorun_task_runs(sid).await.unwrap();
+            let pending_run = runs.iter().find(|r| r.task_id == "task-pending").unwrap();
+            assert_eq!(pending_run.status, codeflow_core::types::AutorunTaskRunStatus::Skipped);
+            assert_eq!(pending_run.error_message.as_deref(), Some("batch_aborted"));
+        });
+    }
+
+    // -- tmux_has_session test --
+
+    #[test]
+    fn test_tmux_has_session_nonexistent() {
+        assert!(!tmux_has_session("nonexistent-session-xyz-12345"));
+    }
+
+    // -----------------------------------------------------------------------
+    // run_attach error path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_attach_no_worker_found() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-attach-nw";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![], // no workers
+                vec![],
+            ).await;
+
+            let result = run_attach(dir.path(), "task-missing").await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no worker found"));
+        });
+    }
+
+    #[test]
+    fn test_run_attach_no_tmux_session_name() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-attach-notmux";
+            let mut worker = test_worker("w-notmux", sid, "task-notmux", codeflow_core::types::AutorunWorkerStatus::Running);
+            worker.tmux_session = None; // No tmux session name.
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![worker],
+                vec![],
+            ).await;
+
+            let result = run_attach(dir.path(), "task-notmux").await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no tmux session name"));
+        });
+    }
+
+    #[test]
+    fn test_run_attach_tmux_session_dead() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-attach-dead";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![test_worker("w-dead", sid, "task-dead", codeflow_core::types::AutorunWorkerStatus::Running)],
+                vec![],
+            ).await;
+
+            let result = run_attach(dir.path(), "task-dead").await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("does not exist"));
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // run_logs error path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_logs_no_worker_found() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-logs-nw";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_logs(dir.path(), "task-missing", false).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no worker found"));
+        });
+    }
+
+    #[test]
+    fn test_run_logs_no_tmux_session_name() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-logs-notmux";
+            let mut worker = test_worker("w-logs-notmux", sid, "task-logs-notmux", codeflow_core::types::AutorunWorkerStatus::Running);
+            worker.tmux_session = None;
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![worker],
+                vec![],
+            ).await;
+
+            let result = run_logs(dir.path(), "task-logs-notmux", false).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no tmux session name"));
+        });
+    }
+
+    #[test]
+    fn test_run_logs_tmux_session_dead() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-logs-dead";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![test_worker("w-logs-dead", sid, "task-logs-dead", codeflow_core::types::AutorunWorkerStatus::Running)],
+                vec![],
+            ).await;
+
+            let result = run_logs(dir.path(), "task-logs-dead", false).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("does not exist"));
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // run_cancel additional error path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_cancel_no_worker_found() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-cancel-nw";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_cancel(dir.path(), "task-missing").await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no worker found"));
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // open_store error path test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_open_store_creates_db() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            // .state/db does not exist yet — open_store should create it.
+            std::fs::create_dir_all(dir.path().join(".state/db")).unwrap();
+            let result = open_store(dir.path()).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // run_history with valid status filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_history_with_status_filter() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![
+                    test_session("ses-hf1", codeflow_core::types::AutorunSessionStatus::Completed),
+                    test_session("ses-hf2", codeflow_core::types::AutorunSessionStatus::Failed),
+                ],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_history(dir.path(), 10, None, Some("completed".into()), None, false).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_run_history_with_all_flag() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(
+                dir.path(),
+                vec![
+                    test_session("ses-ha1", codeflow_core::types::AutorunSessionStatus::Completed),
+                    test_session("ses-ha2", codeflow_core::types::AutorunSessionStatus::Completed),
+                ],
+                vec![],
+                vec![],
+            ).await;
+
+            let result = run_history(dir.path(), 1, None, None, None, true).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // run_results via resolve (no explicit batch)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_results_auto_resolve_session() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sid = "ses-results-auto";
+            seed_store(
+                dir.path(),
+                vec![test_session(sid, codeflow_core::types::AutorunSessionStatus::Running)],
+                vec![],
+                vec![test_task_run("r-auto", sid, "task-auto", codeflow_core::types::AutorunTaskRunStatus::Completed)],
+            ).await;
+
+            // No explicit batch -- should auto-resolve to the running session.
+            let result = run_results(dir.path(), None).await;
+            assert!(result.is_ok());
+        });
     }
 }

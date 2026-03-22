@@ -700,6 +700,92 @@ impl DataStore for SurrealStore {
         Ok(())
     }
 
+    async fn list_autorun_sessions(
+        &self,
+        filter: crate::models::AutorunSessionFilter,
+    ) -> Result<Vec<AutorunSession>, DbError> {
+        let mut query = String::from("SELECT * FROM autorun_session");
+        let mut conditions: Vec<String> = Vec::new();
+        let mut bindings: Vec<(String, serde_json::Value)> = Vec::new();
+
+        if let Some(ref status) = filter.status {
+            conditions.push("status = $filter_status".to_string());
+            bindings.push(("filter_status".into(), serde_json::json!(status.to_string())));
+        }
+        if let Some(ref name) = filter.batch_name {
+            conditions.push("batch_name CONTAINS $filter_name".to_string());
+            bindings.push(("filter_name".into(), serde_json::json!(name)));
+        }
+        if let Some(ref since) = filter.since {
+            conditions.push("created_at > $filter_since".to_string());
+            bindings.push(("filter_since".into(), serde_json::json!(since)));
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" ORDER BY created_at DESC");
+
+        if !filter.all {
+            let limit = filter.limit.unwrap_or(10);
+            use std::fmt::Write;
+            let _ = write!(query, " LIMIT {limit}");
+        }
+
+        let mut q = self.db.query(&query);
+        for (key, val) in bindings {
+            q = q.bind((key, val));
+        }
+        let mut response = q.await?;
+        let results: Vec<AutorunSession> = response.take(0)?;
+        Ok(results)
+    }
+
+    async fn list_autorun_workers(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<AutorunWorker>, DbError> {
+        let mut response = self
+            .db
+            .query("SELECT * FROM autorun_worker WHERE session_id = $sid ORDER BY worker_num")
+            .bind(("sid", session_id.to_string()))
+            .await?;
+        let results: Vec<AutorunWorker> = response.take(0)?;
+        Ok(results)
+    }
+
+    async fn list_autorun_task_runs(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<AutorunTaskRun>, DbError> {
+        let mut response = self
+            .db
+            .query("SELECT * FROM autorun_task_run WHERE session_id = $sid ORDER BY created_at")
+            .bind(("sid", session_id.to_string()))
+            .await?;
+        let results: Vec<AutorunTaskRun> = response.take(0)?;
+        Ok(results)
+    }
+
+    async fn get_autorun_worker_by_task_id(
+        &self,
+        session_id: &str,
+        task_id: &str,
+    ) -> Result<Option<AutorunWorker>, DbError> {
+        let mut response = self
+            .db
+            .query(
+                "SELECT * FROM autorun_worker WHERE session_id = $sid AND task_id = $tid LIMIT 1",
+            )
+            .bind(("sid", session_id.to_string()))
+            .bind(("tid", task_id.to_string()))
+            .await?;
+        let results: Vec<AutorunWorker> = response.take(0)?;
+        Ok(results.into_iter().next())
+    }
+
     // -- Generic query --
 
     async fn query_to_json(&self, query: &str) -> Result<serde_json::Value, DbError> {

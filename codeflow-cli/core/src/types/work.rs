@@ -283,7 +283,7 @@ impl FromStr for ActiveWorkStatus {
 /// Autorun session status values.
 ///
 /// Aligned with schema CHECK constraint:
-/// `CHECK(status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled', 'timeout'))`
+/// `CHECK(status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled', 'timeout', 'aborting'))`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutorunSessionStatus {
@@ -294,6 +294,7 @@ pub enum AutorunSessionStatus {
     Failed,
     Cancelled,
     Timeout,
+    Aborting,
 }
 
 impl fmt::Display for AutorunSessionStatus {
@@ -306,6 +307,7 @@ impl fmt::Display for AutorunSessionStatus {
             Self::Failed => f.write_str("failed"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::Timeout => f.write_str("timeout"),
+            Self::Aborting => f.write_str("aborting"),
         }
     }
 }
@@ -322,6 +324,7 @@ impl FromStr for AutorunSessionStatus {
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
             "timeout" => Ok(Self::Timeout),
+            "aborting" => Ok(Self::Aborting),
             _ => Err(ParseEnumError {
                 enum_name: "AutorunSessionStatus",
                 value: s.to_string(),
