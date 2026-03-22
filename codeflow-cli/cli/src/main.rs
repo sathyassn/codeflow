@@ -34,7 +34,10 @@ enum Command {
     /// Update `CodeFlow`
     Update,
     /// Autorun batch execution
-    Autorun,
+    Autorun {
+        #[command(subcommand)]
+        command: Option<cmd::autorun::AutorunCommand>,
+    },
     /// Ledger operations
     Ledger,
     /// Show welcome message
@@ -119,7 +122,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Doctor => cmd::doctor::run().await,
         Command::Config { command } => cmd::config::run(command),
         Command::Update => cmd::update::run(),
-        Command::Autorun => cmd::autorun::run().await,
+        Command::Autorun { command } => cmd::autorun::run(command).await,
         Command::Ledger => cmd::ledger::run(),
         Command::Welcome => cmd::welcome::run(),
         Command::Internal => cmd::internal::run(),
@@ -489,5 +492,33 @@ mod tests {
         let result = Cli::try_parse_from(["codeflow", "--version"]);
         let err = result.expect_err("--version returns an error");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+
+    // -- Autorun subcommand parsing --
+
+    #[test]
+    fn test_autorun_run_subcommand_parses() {
+        let result = Cli::try_parse_from(["codeflow", "autorun", "run"]);
+        assert!(result.is_ok(), "autorun run should parse");
+    }
+
+    #[test]
+    fn test_autorun_run_with_batch_flag_parses() {
+        let result =
+            Cli::try_parse_from(["codeflow", "autorun", "run", "--batch", "/tmp/batch.yaml"]);
+        assert!(
+            result.is_ok(),
+            "autorun run --batch should parse: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_autorun_no_subcommand_still_parses() {
+        // Backwards compatibility: bare "autorun" still works (Option<AutorunCommand> = None).
+        let result = Cli::try_parse_from(["codeflow", "autorun"]);
+        assert!(
+            result.is_ok(),
+            "bare autorun should still parse for backwards compat: {result:?}"
+        );
     }
 }

@@ -8,27 +8,126 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
+use clap::Subcommand;
 
 use crate::helpers;
 
-pub async fn run() -> Result<()> {
-    let project_dir = helpers::detect_project_dir()?;
-    run_with_dir(&project_dir).await
+/// Autorun subcommands.
+#[derive(Debug, Subcommand)]
+pub enum AutorunCommand {
+    /// Execute a batch of tasks in parallel worktrees
+    Run {
+        /// Path to YAML batch file
+        #[arg(
+            long,
+            short = 'b',
+            default_value = ".codeflow/config/autorun/batch.yaml"
+        )]
+        batch: PathBuf,
+    },
 }
 
-async fn run_with_dir(project_dir: &Path) -> Result<()> {
-    let batch_path = project_dir
-        .join(".codeflow")
-        .join("config")
-        .join("autorun")
-        .join("batch.yaml");
+pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
+    let project_dir = helpers::detect_project_dir()?;
+    let batch_path = match command {
+        Some(AutorunCommand::Run { batch }) => {
+            if batch.as_path() == Path::new(".codeflow/config/autorun/batch.yaml") {
+                project_dir.join(".codeflow/config/autorun/batch.yaml")
+            } else {
+                batch
+            }
+        }
+        None => project_dir.join(".codeflow/config/autorun/batch.yaml"),
+    };
+    run_with_dir(&project_dir, &batch_path).await
+}
 
+/// Check that tmux is available and the working tree is clean.
+///
+/// These checks run BEFORE batch parsing to fail fast on environment issues.
+fn preflight_checks(project_dir: &Path) -> Result<()> {
+    check_tmux_available()?;
+    check_git_clean(project_dir)?;
+    Ok(())
+}
+
+/// Verify tmux is installed and in PATH.
+fn check_tmux_available() -> Result<()> {
+    let output = std::process::Command::new("which")
+        .arg("tmux")
+        .output()
+        .context("failed to run 'which tmux'")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "tmux is not installed or not in PATH. \
+             Install tmux to use autorun: https://github.com/tmux/tmux"
+        );
+    }
+    Ok(())
+}
+
+/// Verify the git working tree is clean (no uncommitted changes).
+fn check_git_clean(project_dir: &Path) -> Result<()> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(project_dir)
+        .output()
+        .context("failed to run 'git status --porcelain'")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().is_empty() {
+        anyhow::bail!(
+            "working tree is not clean; commit or stash changes before autorun:\n{}",
+            stdout.trim()
+        );
+    }
+    Ok(())
+}
+
+/// Verify the target branch exists locally or at origin.
+///
+/// This check runs AFTER batch parsing (needs `ParsedBatch.target`) but BEFORE
+/// orchestrator execution, to fail fast on invalid target branch.
+fn check_target_branch(project_dir: &Path, target: &str) -> Result<()> {
+    let local = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", target])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .context("failed to run git rev-parse")?;
+    if local.status.success() {
+        return Ok(());
+    }
+
+    let remote_ref = format!("refs/remotes/origin/{target}");
+    let remote = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", &remote_ref])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .context("failed to run git rev-parse for remote")?;
+    if remote.status.success() {
+        return Ok(());
+    }
+
+    anyhow::bail!("target branch '{target}' does not exist locally or at origin/{target}");
+}
+
+async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
+    // Phase 1: Pre-flight checks (before batch parse).
+    preflight_checks(project_dir)?;
+
+    // Phase 2: Parse batch.
     if !batch_path.exists() {
         anyhow::bail!("no autorun batch file found at {}", batch_path.display());
     }
 
-    let parsed = codeflow_core::autorun::batch::parse_batch_file(&batch_path)
+    let parsed = codeflow_core::autorun::batch::parse_batch_file(batch_path)
         .context("parsing autorun batch")?;
+
+    // Phase 3: Target branch check (after parse, before execution).
+    check_target_branch(project_dir, &parsed.target)?;
 
     let config =
         codeflow_core::autorun::load_config(project_dir).context("loading parallel-work config")?;
@@ -433,13 +532,43 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
 mod tests {
     use super::*;
 
+    /// Initialize a minimal git repo (with one commit) so preflight's git-clean check passes.
+    fn init_git_repo(dir: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
+    /// Commit all files in the repo so the working tree is clean for preflight.
+    fn commit_all(dir: &Path) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add files"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
     // -- run_with_dir: missing batch file --
 
     #[test]
     fn test_autorun_no_batch_file() {
         let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let batch_path = dir.path().join(".codeflow/config/autorun/batch.yaml");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path()));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -453,19 +582,15 @@ mod tests {
     #[test]
     fn test_autorun_with_valid_batch() {
         let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
         let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
         std::fs::create_dir_all(&batch_dir).unwrap();
-        std::fs::write(
-            batch_dir.join("batch.yaml"),
-            "name: test-batch\ntasks:\n  - id: task-1\n",
-        )
-        .unwrap();
+        let batch_path = batch_dir.join("batch.yaml");
+        std::fs::write(&batch_path, "name: test-batch\ntasks:\n  - id: task-1\n").unwrap();
+        commit_all(dir.path());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        // This will fail at tmux level in CI, but should get past parsing.
-        // We verify it doesn't fail on config/parse.
-        let result = rt.block_on(run_with_dir(dir.path()));
-        // Result might be ok (mock tmux) or err (no tmux in CI) — either is fine.
-        // The important thing is it gets past config loading.
+        // Will fail at target branch check or tmux level, but should get past parsing.
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
         let _ = result;
     }
 
@@ -474,11 +599,14 @@ mod tests {
     #[test]
     fn test_autorun_with_invalid_yaml() {
         let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
         let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
         std::fs::create_dir_all(&batch_dir).unwrap();
-        std::fs::write(batch_dir.join("batch.yaml"), "{{invalid yaml").unwrap();
+        let batch_path = batch_dir.join("batch.yaml");
+        std::fs::write(&batch_path, "{{invalid yaml").unwrap();
+        commit_all(dir.path());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path()));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
         assert!(result.is_err());
         let msg = format!("{:#}", result.unwrap_err());
         assert!(
@@ -1363,10 +1491,12 @@ tasks:
     #[test]
     fn test_run_with_dir_generates_session_id_and_prints_batch_info() {
         let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
         let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
         std::fs::create_dir_all(&batch_dir).unwrap();
+        let batch_path = batch_dir.join("batch.yaml");
         std::fs::write(
-            batch_dir.join("batch.yaml"),
+            &batch_path,
             "name: session-gen-test\nmax_workers: 2\ntasks:\n  - id: task-a\n  - id: task-b\n",
         )
         .unwrap();
@@ -1383,26 +1513,31 @@ tasks:
             r#"{ "claims": { "default_scope_policy": "hard" } }"#,
         )
         .unwrap();
+        commit_all(dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path()));
-        // Will fail at orchestrator/tmux level, but exercises config + batch + session ID paths.
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        // Will fail at target branch or orchestrator/tmux level, but exercises
+        // config + batch + session ID paths.
         let _ = result;
     }
 
     #[test]
     fn test_run_with_dir_with_multiple_tasks_and_config() {
         let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
         let batch_dir = dir.path().join(".codeflow").join("config").join("autorun");
         std::fs::create_dir_all(&batch_dir).unwrap();
+        let batch_path = batch_dir.join("batch.yaml");
         std::fs::write(
-            batch_dir.join("batch.yaml"),
+            &batch_path,
             "name: multi\nmax_workers: 1\ntasks:\n  - id: t1\n    file_scope: [src/a.rs]\n    scope_policy: soft\n  - id: t2\n    depends_on: [t1]\n",
         )
         .unwrap();
+        commit_all(dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path()));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
         let _ = result;
     }
 
@@ -1426,5 +1561,123 @@ tasks:
         let parsed = codeflow_core::autorun::batch::parse_batch_file(&batch_path).unwrap();
         assert!(parsed.tasks[0].file_scope.is_empty());
         assert!(parsed.tasks[0].scope_policy.is_none());
+    }
+
+    // -- Pre-flight checks --
+
+    #[test]
+    fn test_preflight_checks_pass_in_clean_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        // tmux should be available in dev environments; git repo is clean.
+        let result = preflight_checks(dir.path());
+        // In CI without tmux this will fail on tmux check — that's acceptable.
+        // If tmux is present, both checks pass.
+        match &result {
+            Ok(()) => {} // Both checks passed.
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("tmux"),
+                    "only acceptable failure is tmux not found, got: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_check_tmux_available_returns_result() {
+        let result = check_tmux_available();
+        // In most dev environments tmux is installed (Ok), in CI it may not be (Err).
+        // Either is valid — we're testing it doesn't panic.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_check_git_clean_in_clean_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let result = check_git_clean(dir.path());
+        assert!(result.is_ok(), "clean repo should pass: {result:?}");
+    }
+
+    #[test]
+    fn test_check_git_clean_dirty_repo_returns_error_with_files() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        // Create an untracked file to make the tree dirty.
+        std::fs::write(dir.path().join("dirty-file.txt"), "uncommitted").unwrap();
+        let result = check_git_clean(dir.path());
+        assert!(result.is_err(), "dirty repo should fail");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("working tree is not clean"),
+            "error should mention dirty tree, got: {msg}"
+        );
+        assert!(
+            msg.contains("dirty-file.txt"),
+            "error should list dirty files, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_check_target_branch_exists_locally() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        // The default branch (usually "main" or "master") should be recognized
+        // by rev-parse. We create a known branch to be deterministic.
+        std::process::Command::new("git")
+            .args(["branch", "test-target"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let result = check_target_branch(dir.path(), "test-target");
+        assert!(
+            result.is_ok(),
+            "existing local branch should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_target_branch_nonexistent_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let result = check_target_branch(dir.path(), "nonexistent-branch-xyz-999");
+        assert!(result.is_err(), "nonexistent branch should fail");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("does not exist locally or at origin"),
+            "error should be descriptive, got: {msg}"
+        );
+        assert!(
+            msg.contains("nonexistent-branch-xyz-999"),
+            "error should name the branch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_preflight_git_dirty_fails_before_batch_parse() {
+        // Verifies ordering: preflight runs BEFORE batch parsing.
+        // If a batch file exists but git is dirty, we should get the git-dirty
+        // error, not a batch parse error.
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("dirty.txt"), "dirty").unwrap();
+
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        let batch_path = batch_dir.join("batch.yaml");
+        std::fs::write(&batch_path, "name: test\ntasks:\n  - id: t1\n").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        // Should fail on git-dirty, not on batch parse or tmux.
+        // In CI without tmux, tmux failure comes first — that's also pre-batch.
+        assert!(
+            msg.contains("working tree is not clean") || msg.contains("tmux"),
+            "error should be from preflight (git-dirty or tmux), not batch parse, got: {msg}"
+        );
     }
 }
