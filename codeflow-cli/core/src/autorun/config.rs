@@ -35,12 +35,18 @@ pub struct ParallelWorkConfig {
 pub struct AutorunConfig {
     /// Worker timeout in seconds (default: 3600 = 60 minutes).
     pub worker_timeout_secs: u64,
+    /// Behavior when a task is blocked: "skip_and_continue" or "fail".
+    pub blocked_behavior: String,
+    /// Directory for autorun reports (relative to project root).
+    pub report_dir: String,
 }
 
 impl Default for AutorunConfig {
     fn default() -> Self {
         Self {
             worker_timeout_secs: 3600,
+            blocked_behavior: "skip_and_continue".to_string(),
+            report_dir: "project-management/tracking/autorun".to_string(),
         }
     }
 }
@@ -204,6 +210,19 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
             "merge.max_rebase_attempts must be >= 1".to_string(),
         ));
     }
+    if config.autorun.worker_timeout_secs < 60 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.worker_timeout_secs must be >= 60, got {}",
+            config.autorun.worker_timeout_secs
+        )));
+    }
+    let valid_behaviors = ["skip_and_continue", "fail"];
+    if !valid_behaviors.contains(&config.autorun.blocked_behavior.as_str()) {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.blocked_behavior must be one of {:?}, got '{}'",
+            valid_behaviors, config.autorun.blocked_behavior
+        )));
+    }
     Ok(())
 }
 
@@ -227,6 +246,12 @@ mod tests {
         assert_eq!(cfg.claims.default_scope_policy, "soft");
         assert_eq!(cfg.claims.ttl_secs, 4200);
         assert!(cfg.claims.capture_events);
+        assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
+        assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
+        assert_eq!(
+            cfg.autorun.report_dir,
+            "project-management/tracking/autorun"
+        );
     }
 
     // -- Config loading tests --
@@ -413,7 +438,7 @@ mod tests {
             "sync": { "interval_secs": 30, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
-            "autorun": { "worker_timeout_secs": 3600 }
+            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": "project-management/tracking/autorun" }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg, ParallelWorkConfig::default());
@@ -438,13 +463,17 @@ mod tests {
     fn autorun_config_default() {
         let cfg = AutorunConfig::default();
         assert_eq!(cfg.worker_timeout_secs, 3600);
+        assert_eq!(cfg.blocked_behavior, "skip_and_continue");
+        assert_eq!(cfg.report_dir, "project-management/tracking/autorun");
     }
 
     #[test]
     fn autorun_config_custom() {
-        let json = r#"{ "autorun": { "worker_timeout_secs": 7200 } }"#;
+        let json = r#"{ "autorun": { "worker_timeout_secs": 7200, "blocked_behavior": "fail", "report_dir": "custom/reports" } }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 7200);
+        assert_eq!(cfg.autorun.blocked_behavior, "fail");
+        assert_eq!(cfg.autorun.report_dir, "custom/reports");
     }
 
     #[test]
@@ -452,16 +481,54 @@ mod tests {
         let json = r#"{}"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
+        assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
+        assert_eq!(cfg.autorun.report_dir, "project-management/tracking/autorun");
     }
 
     #[test]
     fn full_config_with_autorun() {
         let json = r#"{
             "worktree": { "mode": "autorun", "max_concurrent": 3 },
-            "autorun": { "worker_timeout_secs": 1800 }
+            "autorun": { "worker_timeout_secs": 1800, "blocked_behavior": "fail", "report_dir": "reports/autorun" }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 1800);
+        assert_eq!(cfg.autorun.blocked_behavior, "fail");
+        assert_eq!(cfg.autorun.report_dir, "reports/autorun");
         assert_eq!(cfg.worktree.max_concurrent, 3);
+    }
+
+    // -- Autorun validation tests --
+
+    #[test]
+    fn validate_blocked_behavior_invalid_rejected() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.blocked_behavior = "invalid_value".to_string();
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("blocked_behavior"));
+    }
+
+    #[test]
+    fn validate_blocked_behavior_valid_accepted() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.blocked_behavior = "skip_and_continue".to_string();
+        assert!(validate_config(&cfg).is_ok());
+        cfg.autorun.blocked_behavior = "fail".to_string();
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_worker_timeout_too_low_rejected() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.worker_timeout_secs = 59;
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("worker_timeout_secs"));
+    }
+
+    #[test]
+    fn validate_worker_timeout_boundary_accepted() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.worker_timeout_secs = 60;
+        assert!(validate_config(&cfg).is_ok());
     }
 }
