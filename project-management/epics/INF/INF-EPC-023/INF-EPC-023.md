@@ -106,7 +106,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-035 | Orchestrator graceful shutdown | complete | M | normal | F: Autorun Readiness |
 | INF-TSK-023-036 | Agent autorun SOPs | todo | M | normal | F: Autorun Readiness |
 | INF-TSK-023-037 | Autorun session management commands | complete | L | normal | F: Autorun Readiness |
-| INF-TSK-023-038 | Batch report generation | todo | S | normal | F: Autorun Readiness |
+| INF-TSK-023-038 | Batch report generation | complete | S | normal | F: Autorun Readiness |
 
 ### Dependency DAG
 

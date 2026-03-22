@@ -276,7 +276,11 @@ where
 // ---------------------------------------------------------------------------
 
 /// Atomically write file contents: write to `.tmp` sibling then rename.
-pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
+///
+/// # Errors
+///
+/// Returns an I/O error if writing the temporary file or renaming it fails.
+pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, data)?;
     fs::rename(&tmp_path, path).inspect_err(|_| {

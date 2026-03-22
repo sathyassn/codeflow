@@ -252,6 +252,8 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
 
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
 
+    let start_time = chrono::Utc::now();
+
     let results = orchestrator
         .execute(
             session_id.as_str(),
@@ -262,7 +264,155 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
         .await
         .context("executing autorun batch")?;
 
+    let end_time = chrono::Utc::now();
+
+    // Generate batch report (best-effort: log errors but don't block return).
+    let report_dir = project_dir.join(&config.autorun.report_dir);
+    let batch_file_display = batch_path.display().to_string();
+    let report_meta = BatchReportMeta {
+        project_dir,
+        report_dir: &report_dir,
+        batch_name: &parsed.name,
+        session_id: session_id.as_str(),
+        batch_path: &batch_file_display,
+        start_time,
+        end_time,
+    };
+    match generate_batch_report(&report_meta, &results) {
+        Ok(path) => eprintln!("report: {}", path.display()),
+        Err(e) => eprintln!("warning: failed to generate batch report: {e}"),
+    }
+
     report_results(&results)
+}
+
+/// Metadata for a batch report.
+struct BatchReportMeta<'a> {
+    project_dir: &'a Path,
+    report_dir: &'a Path,
+    batch_name: &'a str,
+    session_id: &'a str,
+    batch_path: &'a str,
+    start_time: chrono::DateTime<chrono::Utc>,
+    end_time: chrono::DateTime<chrono::Utc>,
+}
+
+/// Generate a markdown batch report file.
+///
+/// Returns the path to the generated report on success.
+fn generate_batch_report(
+    meta: &BatchReportMeta<'_>,
+    results: &[codeflow_core::autorun::WorkerResult],
+) -> Result<PathBuf> {
+    let BatchReportMeta {
+        project_dir,
+        report_dir,
+        batch_name,
+        session_id,
+        batch_path,
+        start_time,
+        end_time,
+    } = meta;
+    let duration = *end_time - *start_time;
+    let duration_display = format_duration_human(duration.num_seconds());
+
+    // Determine overall batch status.
+    let failed = results.iter().filter(|r| r.status == "failed").count();
+    let timed_out = results.iter().filter(|r| r.status == "timeout").count();
+    let completed = results.iter().filter(|r| r.status == "completed").count();
+    let skipped = results.iter().filter(|r| r.status == "skipped").count();
+
+    let batch_status = if failed > 0 || timed_out > 0 {
+        "Failed"
+    } else if completed == 0 && skipped == results.len() {
+        "Aborted"
+    } else {
+        "Completed"
+    };
+
+    // Build markdown content.
+    use std::fmt::Write;
+
+    let mut md = String::new();
+    writeln!(md, "# Autorun Batch Report: {batch_name}\n").unwrap();
+    writeln!(md, "| Field | Value |").unwrap();
+    writeln!(md, "|-------|-------|").unwrap();
+    writeln!(md, "| Session ID | {session_id} |").unwrap();
+    writeln!(md, "| Batch File | {batch_path} |").unwrap();
+    writeln!(
+        md,
+        "| Start Time | {} |",
+        start_time.format("%Y-%m-%d %H:%M:%S UTC")
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| End Time | {} |",
+        end_time.format("%Y-%m-%d %H:%M:%S UTC")
+    )
+    .unwrap();
+    writeln!(md, "| Duration | {duration_display} |").unwrap();
+    writeln!(md, "| Status | {batch_status} |").unwrap();
+    writeln!(md, "\n## Task Results\n").unwrap();
+    writeln!(md, "| Task ID | Status | Duration | PR | Exit Code | Error |").unwrap();
+    writeln!(md, "|---------|--------|----------|----|-----------|-------|").unwrap();
+
+    for r in results {
+        let pr_col = if r.pr_number > 0 {
+            if r.pr_url.is_empty() {
+                format!("#{}", r.pr_number)
+            } else {
+                format!("[#{}]({})", r.pr_number, r.pr_url)
+            }
+        } else {
+            "-".to_string()
+        };
+        let error_col = if r.error.is_empty() { "-" } else { &r.error };
+        writeln!(
+            md,
+            "| {} | {} | {}s | {} | {} | {} |",
+            r.task_id, r.status, r.duration_sec, pr_col, r.exit_code, error_col
+        )
+        .unwrap();
+    }
+
+    writeln!(md, "\n## Summary\n").unwrap();
+    writeln!(md, "- Completed: {completed}").unwrap();
+    writeln!(md, "- Failed: {failed}").unwrap();
+    writeln!(md, "- Skipped: {skipped}").unwrap();
+    writeln!(md, "- Timed Out: {timed_out}").unwrap();
+
+    // Ensure report directory exists.
+    let abs_report_dir = if report_dir.is_absolute() {
+        report_dir.to_path_buf()
+    } else {
+        project_dir.join(report_dir)
+    };
+    std::fs::create_dir_all(&abs_report_dir)
+        .with_context(|| format!("creating report directory {}", abs_report_dir.display()))?;
+
+    // Write report file.
+    let date_str = start_time.format("%Y-%m-%d").to_string();
+    let filename = format!("{batch_name}-{date_str}.md");
+    let report_path = abs_report_dir.join(&filename);
+    codeflow_core::file_lock::atomic_write(&report_path, md.as_bytes())
+        .with_context(|| format!("writing batch report to {}", report_path.display()))?;
+
+    Ok(report_path)
+}
+
+/// Format seconds into a human-readable duration string.
+fn format_duration_human(total_secs: i64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {secs}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {secs}s")
+    } else {
+        format!("{secs}s")
+    }
 }
 
 /// Report execution results and return error if any tasks failed or timed out.
@@ -3699,5 +3849,256 @@ tasks:
             let result = run_results(dir.path(), None).await;
             assert!(result.is_ok());
         });
+    }
+
+    // -- Batch report generation tests --
+
+    fn make_worker_result(
+        task_id: &str,
+        status: &str,
+        exit_code: i32,
+        pr_number: i64,
+        pr_url: &str,
+        error: &str,
+        duration_sec: i64,
+    ) -> codeflow_core::autorun::WorkerResult {
+        codeflow_core::autorun::WorkerResult {
+            worker_id: format!("w-{task_id}"),
+            task_id: task_id.to_string(),
+            status: status.to_string(),
+            exit_code,
+            pr_number,
+            pr_url: pr_url.to_string(),
+            error: error.to_string(),
+            branch_name: format!("feat/{task_id}"),
+            duration_sec,
+        }
+    }
+
+    #[test]
+    fn test_batch_report_contains_correct_markdown_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(120);
+        let results = vec![
+            make_worker_result("task-1", "completed", 0, 42, "https://github.com/pr/42", "", 60),
+            make_worker_result("task-2", "failed", 1, 0, "", "build error", 30),
+        ];
+
+        let meta = BatchReportMeta {
+            project_dir: dir.path(),
+            report_dir: &report_dir,
+            batch_name: "test-batch",
+            session_id: "ses-test-123",
+            batch_path: "batch.yaml",
+            start_time: start,
+            end_time: end,
+        };
+        let path = generate_batch_report(&meta, &results).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Header
+        assert!(content.contains("# Autorun Batch Report: test-batch"));
+        // Metadata table
+        assert!(content.contains("| Session ID | ses-test-123 |"));
+        assert!(content.contains("| Batch File | batch.yaml |"));
+        assert!(content.contains("| Duration | 2m 0s |"));
+        assert!(content.contains("| Status | Failed |"));
+        // Task results table header
+        assert!(content.contains("| Task ID | Status | Duration | PR | Exit Code | Error |"));
+        // Task rows
+        assert!(content.contains("| task-1 | completed | 60s | [#42](https://github.com/pr/42) | 0 | - |"));
+        assert!(content.contains("| task-2 | failed | 30s | - | 1 | build error |"));
+        // Summary section
+        assert!(content.contains("## Summary"));
+        assert!(content.contains("- Completed: 1"));
+        assert!(content.contains("- Failed: 1"));
+    }
+
+    fn make_report_meta<'a>(
+        project_dir: &'a Path,
+        report_dir: &'a Path,
+        batch_name: &'a str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> BatchReportMeta<'a> {
+        BatchReportMeta {
+            project_dir,
+            report_dir,
+            batch_name,
+            session_id: "ses-1",
+            batch_path: "b.yaml",
+            start_time: start,
+            end_time: end,
+        }
+    }
+
+    #[test]
+    fn test_batch_report_filename_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::DateTime::parse_from_rfc3339("2026-03-22T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let end = start + chrono::Duration::seconds(10);
+        let meta = make_report_meta(dir.path(), &report_dir, "my-batch", start, end);
+
+        let path = generate_batch_report(&meta, &[]).unwrap();
+
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        assert_eq!(filename, "my-batch-2026-03-22.md");
+    }
+
+    #[test]
+    fn test_batch_report_creates_directory_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("nested").join("reports");
+        assert!(!report_dir.exists());
+
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(1);
+        let meta = make_report_meta(dir.path(), &report_dir, "dir-test", start, end);
+
+        let path = generate_batch_report(&meta, &[]).unwrap();
+
+        assert!(report_dir.exists());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_batch_report_empty_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(5);
+        let meta = make_report_meta(dir.path(), &report_dir, "empty-batch", start, end);
+
+        let path = generate_batch_report(&meta, &[]).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("# Autorun Batch Report: empty-batch"));
+        assert!(content.contains("- Completed: 0"));
+        assert!(content.contains("- Failed: 0"));
+        assert!(content.contains("- Skipped: 0"));
+        assert!(content.contains("- Timed Out: 0"));
+        // Table header present but no data rows
+        assert!(content.contains("| Task ID | Status | Duration | PR | Exit Code | Error |"));
+    }
+
+    #[test]
+    fn test_batch_report_mixed_statuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(300);
+        let meta = make_report_meta(dir.path(), &report_dir, "mixed", start, end);
+        let results = vec![
+            make_worker_result("task-a", "completed", 0, 10, "https://gh/10", "", 100),
+            make_worker_result("task-b", "failed", 1, 0, "", "segfault", 50),
+            make_worker_result("task-c", "skipped", 0, 0, "", "", 0),
+            make_worker_result("task-d", "timeout", -1, 0, "", "exceeded 3600s", 3600),
+        ];
+
+        let path = generate_batch_report(&meta, &results).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("- Completed: 1"));
+        assert!(content.contains("- Failed: 1"));
+        assert!(content.contains("- Skipped: 1"));
+        assert!(content.contains("- Timed Out: 1"));
+        assert!(content.contains("| Status | Failed |"));
+    }
+
+    #[test]
+    fn test_batch_report_pr_column_formatting() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(10);
+        let meta = make_report_meta(dir.path(), &report_dir, "pr-test", start, end);
+        let results = vec![
+            make_worker_result("with-pr", "completed", 0, 55, "https://gh/pr/55", "", 10),
+            make_worker_result("no-pr", "completed", 0, 0, "", "", 10),
+            make_worker_result("pr-no-url", "completed", 0, 99, "", "", 10),
+        ];
+
+        let path = generate_batch_report(&meta, &results).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[#55](https://gh/pr/55)"), "PR with URL should be a link");
+        assert!(content.contains("| no-pr | completed | 10s | - |"), "No PR should show dash");
+        assert!(content.contains("| #99 |"), "PR without URL should show plain number");
+    }
+
+    #[test]
+    fn test_batch_report_aborted_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(5);
+        let meta = make_report_meta(dir.path(), &report_dir, "aborted", start, end);
+        let results = vec![
+            make_worker_result("task-x", "skipped", 0, 0, "", "", 0),
+            make_worker_result("task-y", "skipped", 0, 0, "", "", 0),
+        ];
+
+        let path = generate_batch_report(&meta, &results).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("| Status | Aborted |"));
+        assert!(content.contains("- Skipped: 2"));
+        assert!(content.contains("- Completed: 0"));
+    }
+
+    #[test]
+    fn test_batch_report_file_exists_after_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(1);
+        let meta = make_report_meta(dir.path(), &report_dir, "atomic-test", start, end);
+
+        let path = generate_batch_report(
+            &meta,
+            &[make_worker_result("t1", "completed", 0, 0, "", "", 5)],
+        )
+        .unwrap();
+
+        // Verify file exists and is readable (atomic_write completed successfully).
+        assert!(path.exists(), "report file must exist after atomic_write");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.is_empty(), "report file must not be empty");
+        // Verify no leftover .tmp file.
+        let tmp_path = path.with_extension("tmp");
+        assert!(!tmp_path.exists(), "no .tmp file should remain after atomic_write");
+    }
+
+    #[test]
+    fn test_format_duration_human() {
+        assert_eq!(format_duration_human(0), "0s");
+        assert_eq!(format_duration_human(45), "45s");
+        assert_eq!(format_duration_human(60), "1m 0s");
+        assert_eq!(format_duration_human(125), "2m 5s");
+        assert_eq!(format_duration_human(3661), "1h 1m 1s");
+        assert_eq!(format_duration_human(7200), "2h 0m 0s");
+    }
+
+    #[test]
+    fn test_batch_report_completed_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(60);
+        let meta = make_report_meta(dir.path(), &report_dir, "success", start, end);
+        let results = vec![
+            make_worker_result("task-1", "completed", 0, 1, "", "", 30),
+            make_worker_result("task-2", "completed", 0, 2, "", "", 30),
+        ];
+
+        let path = generate_batch_report(&meta, &results).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("| Status | Completed |"));
     }
 }
