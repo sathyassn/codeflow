@@ -101,7 +101,7 @@ This epic depends on Epic 0 (INF-EPC-022) being complete. Epics B (Data Layer St
 | INF-TSK-023-030 | Wire merge conflict remediation | complete | M | normal | F: Autorun Readiness |
 | INF-TSK-023-031 | Comprehensive batch validation | complete | L | high | F: Autorun Readiness |
 | INF-TSK-023-032 | Wire autorun DB + event recording | complete | L | high | F: Autorun Readiness |
-| INF-TSK-023-033 | Autorun config section | todo | S | normal | F: Autorun Readiness |
+| INF-TSK-023-033 | Autorun config section | complete | S | normal | F: Autorun Readiness |
 | INF-TSK-023-034 | Pre-flight checks + CLI args | todo | M | normal | F: Autorun Readiness |
 | INF-TSK-023-035 | Orchestrator graceful shutdown | todo | M | normal | F: Autorun Readiness |
 | INF-TSK-023-036 | Agent autorun SOPs | todo | M | normal | F: Autorun Readiness |
