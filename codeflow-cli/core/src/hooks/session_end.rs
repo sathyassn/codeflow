@@ -1683,7 +1683,7 @@ mod tests {
 
         // Create worktree via the manager.
         let mgr = crate::worktree::WorktreeManager::new(dir.path())
-            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+            .with_registry_path(dir.path().join(".state/worktrees/worktrees.yaml"));
         let branch = crate::types::BranchName::new_unchecked("feat/test-cleanup");
         mgr.setup("test-wt", &branch).unwrap();
 
@@ -1742,7 +1742,7 @@ mod tests {
             .unwrap();
 
         let mgr = crate::worktree::WorktreeManager::new(dir.path())
-            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+            .with_registry_path(dir.path().join(".state/worktrees/worktrees.yaml"));
         let branch = crate::types::BranchName::new_unchecked("feat/crash-test");
         mgr.setup("crash-wt", &branch).unwrap();
 

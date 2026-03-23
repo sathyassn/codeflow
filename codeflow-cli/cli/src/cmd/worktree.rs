@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_cleanup_empty_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn test_cleanup_stale_entry_removed() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "stale-wt".to_string(),
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_cleanup_dry_run_does_not_modify() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "stale-wt".to_string(),
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn test_cleanup_force_includes_orphaned() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
 
         // Create a directory that's an orphaned worktree (exists but no .git).
         let wt_dir = dir.path().join(".git-worktrees/orphan-wt");
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_prune_consistent_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn test_prune_detects_stale_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "ghost-wt".to_string(),
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_prune_detects_orphaned_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn test_prune_dry_run_does_not_modify() {
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "ghost-wt".to_string(),
@@ -462,7 +462,7 @@ mod tests {
     fn test_prune_concurrent_access() {
         // Verify locked access by running prune in sequence.
         let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "s1".to_string(),
@@ -504,7 +504,7 @@ mod tests {
             .unwrap();
 
         let mgr = WorktreeManager::new(dir.path())
-            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+            .with_registry_path(dir.path().join(".state/worktrees/worktrees.yaml"));
 
         // Create a worktree.
         let branch = codeflow_core::types::BranchName::new_unchecked("feat/prune-test");

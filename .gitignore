@@ -1,6 +1,9 @@
 # Claude Code local settings (personal)
 .claude/settings.local.json
 
+# Parallel work local config (personal overrides)
+.codeflow/config/parallel-work/parallel-work-config.local.json
+
 # State files - Untracked (machine-specific, regeneratable)
 # coordination, logs, runtime are untracked (no trailing slash to match symlinks in worktrees)
 # ledger/ is tracked (Tier 0 rebuild authority data)
@@ -22,7 +25,7 @@
 !.state/session/.gitkeep
 
 # Worktree registry (machine-specific runtime state)
-.state/worktrees.*
+.state/worktrees/
 
 # Lock files across all .state/ directories
 .state/**/*.lock

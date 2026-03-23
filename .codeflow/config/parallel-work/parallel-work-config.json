@@ -1,8 +1,13 @@
 {
+  "_local_override": "Copy this file to parallel-work-config.local.json (gitignored) to override per-machine. Only include fields you want to change. Env var CODEFLOW_WORKTREE_MODE also overrides worktree.mode.",
   "worktree": {
     "mode": "always",
-    "max_concurrent": 3,
-    "base_dir": ".git-worktrees"
+    "max_concurrent": 5,
+    "base_dir": ".git-worktrees",
+    "shared_files": [
+      ".claude/settings.local.json",
+      ".codeflow/config/parallel-work/parallel-work-config.local.json"
+    ]
   },
   "sync": {
     "interval_secs": 5,

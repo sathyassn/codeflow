@@ -108,6 +108,12 @@ pub(crate) fn create_worktree(
     // Install git hooks in the worktree.
     install_hooks(mgr.project_dir(), &wt_path)?;
 
+    // Symlink shared files (local overrides, etc.).
+    setup_shared_file_symlinks(mgr.project_dir(), &wt_path)?;
+
+    // Migrate registry from old location if needed.
+    super::migrate_registry_path(mgr.project_dir());
+
     // Register in the YAML registry.
     let entry = WorktreeEntry {
         name: name.to_string(),
@@ -178,6 +184,12 @@ pub(crate) fn create_detached_worktree(
     // Install git hooks in the worktree.
     install_hooks(mgr.project_dir(), &wt_path)?;
 
+    // Symlink shared files (local overrides, etc.).
+    setup_shared_file_symlinks(mgr.project_dir(), &wt_path)?;
+
+    // Migrate registry from old location if needed.
+    super::migrate_registry_path(mgr.project_dir());
+
     // Register in the YAML registry with empty branch (set later at PF3).
     // NOTE: registry write is not locked; parallel sessions may race.
     // See file_lock.rs for locked_binary_rmw pattern.
@@ -244,6 +256,47 @@ fn setup_shared_symlinks(project_dir: &Path, wt_state_dir: &Path) -> Result<(), 
     Ok(())
 }
 
+/// Symlink individual shared files from the main repo into the worktree.
+///
+/// Unlike shared directories (which are entire `.state/` subdirs), shared files
+/// are individual non-git-tracked files that need to be visible in worktrees.
+/// Examples: `.claude/settings.local.json`, config local overrides.
+///
+/// Skips files that don't exist in the main repo (the user may not have
+/// created a local override yet).
+fn setup_shared_file_symlinks(project_dir: &Path, wt_path: &Path) -> Result<(), WorktreeError> {
+    let config = crate::autorun::config::load_config(project_dir).unwrap_or_default();
+    for rel_path in &config.worktree.shared_files {
+        let src = project_dir.join(rel_path);
+        let dst = wt_path.join(rel_path);
+
+        // Skip if source doesn't exist (user hasn't created the local override).
+        if !src.exists() {
+            continue;
+        }
+
+        // Ensure parent directory exists in the worktree.
+        if let Some(parent) = dst.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        // If dst already exists as a correct symlink, skip.
+        if let Ok(meta) = dst.symlink_metadata() {
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            // Exists as a real file — remove it to replace with symlink.
+            let _ = fs::remove_file(&dst);
+        }
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
 /// Repair shared state symlinks in an existing worktree.
 ///
 /// For each `SHARED_STATE_DIRS` entry, checks if the worktree has a real directory
@@ -293,7 +346,10 @@ pub fn repair_symlinks(project_dir: &Path, worktree_path: &Path) -> Result<(), W
         // Real directory — replace with symlink.
         diagnostics::warn(
             "worktree",
-            &format!("repairing: replacing real dir with symlink: {}", dst.display()),
+            &format!(
+                "repairing: replacing real dir with symlink: {}",
+                dst.display()
+            ),
         );
         fs::remove_dir_all(&dst)?;
 
@@ -305,6 +361,30 @@ pub fn repair_symlinks(project_dir: &Path, worktree_path: &Path) -> Result<(), W
 
     // Also ensure local dirs exist.
     create_local_dirs(&wt_state_dir)?;
+
+    // Repair shared file symlinks.
+    let config = crate::autorun::config::load_config(project_dir).unwrap_or_default();
+    for rel_path in &config.worktree.shared_files {
+        let src = project_dir.join(rel_path);
+        let dst = worktree_path.join(rel_path);
+        if !src.exists() {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let needs_symlink = match dst.symlink_metadata() {
+            Ok(meta) => !meta.file_type().is_symlink(),
+            Err(_) => true,
+        };
+        if needs_symlink {
+            let _ = fs::remove_file(&dst);
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::symlink(&src, &dst);
+            }
+        }
+    }
 
     Ok(())
 }
@@ -896,17 +976,34 @@ mod tests {
         fs::create_dir_all(wt_state.join("ledger")).unwrap();
 
         // Verify they are real dirs.
-        assert!(!wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            !wt_state
+                .join("db")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
 
         repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
 
         // After repair, they should be symlinks.
         assert!(
-            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            wt_state
+                .join("db")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "db should be a symlink after repair"
         );
         assert!(
-            wt_state.join("ledger").symlink_metadata().unwrap().file_type().is_symlink(),
+            wt_state
+                .join("ledger")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "ledger should be a symlink after repair"
         );
     }
@@ -924,7 +1021,12 @@ mod tests {
 
         let wt_state = wt_dir.path().join(".state");
         assert!(
-            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            wt_state
+                .join("db")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "db should be created as symlink"
         );
     }
@@ -940,17 +1042,18 @@ mod tests {
 
         // Create a proper symlink first.
         #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            main_dir.path().join(".state/db"),
-            wt_state.join("db"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(main_dir.path().join(".state/db"), wt_state.join("db")).unwrap();
 
         // Repair should be a no-op for existing symlinks.
         repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
 
         assert!(
-            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            wt_state
+                .join("db")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "db should still be a symlink"
         );
     }
@@ -965,8 +1068,17 @@ mod tests {
         repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
 
         let wt_state = wt_dir.path().join(".state");
-        assert!(wt_state.join("runtime").is_dir(), "runtime should be created");
-        assert!(wt_state.join("session").is_dir(), "session should be created");
-        assert!(wt_state.join("sentinels").is_dir(), "sentinels should be created");
+        assert!(
+            wt_state.join("runtime").is_dir(),
+            "runtime should be created"
+        );
+        assert!(
+            wt_state.join("session").is_dir(),
+            "session should be created"
+        );
+        assert!(
+            wt_state.join("sentinels").is_dir(),
+            "sentinels should be created"
+        );
     }
 }

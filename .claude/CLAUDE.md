@@ -138,7 +138,7 @@ SESSION START
 SessionStart hook fires (auto)                         [auto]
 Loads cf-working-protocol
 Creates worktree via WorktreeManager (if enabled)       [auto]
-WorktreeRegistry enforces max 3 concurrent
+WorktreeRegistry enforces max 5 concurrent
     |
     v
 PF1-INIT                                               [team-lead]
@@ -240,7 +240,7 @@ SESSION END
 - Session status file  (`pathflow-session-status.json`) auto-created by SessionStart hook at `.state/session/{SID}/pathflow/pathflow-session-status.json` with `status:"created"`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
-- Worktree: SessionStart creates a detached worktree via `WorktreeManager::setup_detached()` if worktree mode is enabled. `WorktreeRegistry` enforces max 3 concurrent worktrees (`locked_register_with_limit`). `codeflow-env.sh` exports `CODEFLOW_WORKTREE_PATH` pointing to the worktree root.
+- Worktree: SessionStart creates a detached worktree via `WorktreeManager::setup_detached()` if worktree mode is enabled. `WorktreeRegistry` enforces max 5 concurrent worktrees (`locked_register_with_limit`). `codeflow-env.sh` exports `CODEFLOW_WORKTREE_PATH` pointing to the worktree root.
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF1-TSK-02 blocked by PF1-TSK-01); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
@@ -416,7 +416,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 - Rework limits are enforced (bounded execution)
 - No user prompts between phases
 - **Parallel workers:** Each autorun worker runs in its own worktree via `WorktreeProvider` trait. Workers pre-claim file_scope entries at startup via acquire_batch(). Claims are enforced via scope_policy (soft by default for autorun). Merge conflicts are detected via `check_merge_conflicts()` before PR creation. The merge queue (`coordination/merge_queue.rs`) serializes PR merges across concurrent workers.
-- **Configuration:** All parallel execution settings are in `.codeflow/config/parallel-work/parallel-work-config.json` (4 sections: worktree, sync, merge, claims). Config is optional — defaults apply when absent. See `autorun/config.rs` for loading and validation.
+- **Configuration:** All parallel execution settings are in `.codeflow/config/parallel-work/parallel-work-config.json` (5 sections: worktree, sync, merge, claims, autorun). Config is optional — defaults apply when absent. See `autorun/config.rs` for loading and validation.
 - **Coordination events:** Claim lifecycle events (acquired, conflict, released, scope expansion) are emitted to `coordination-events.jsonl` via `ledger/routing.rs`. Event types are defined in `coordination/types/events.rs`.
 
 **Lead autorun detection:** The lead detects autorun mode by checking for the `AUTORUN_SESSION_ID` environment variable. When set, the lead operates autonomously without user prompts at any phase boundary.
@@ -820,7 +820,7 @@ Parallel Batch Execution (above) covers intra-session parallelism — multiple t
 
 | Concept | Purpose |
 |---------|---------|
-| Worktree isolation | Each session gets its own working copy via `git worktree add` (max 3 concurrent, enforced by `WorktreeRegistry`) |
+| Worktree isolation | Each session gets its own working copy via `git worktree add` (max 5 concurrent, enforced by `WorktreeRegistry`) |
 | Claims | CRDT-based file claims prevent concurrent edits to the same file (enforced via scope_policy — soft/hard/permissive — using `Coordinator::acquire`) |
 | Fencing tokens | Monotonic `FencingToken` values ensure claim validity across crashes |
 | Merge queue | FIFO queue serializes PR merges to prevent conflicts (`merge_queue::enqueue/dequeue`) |
@@ -1444,7 +1444,8 @@ codeflow-cli/                         # Rust CLI workspace
 │   ├── state.loro                    #   Loro CRDT document (binary)
 │   ├── sync-state.json               #   Sync daemon state
 │   └── sync-daemon.pid               #   Sync daemon PID file
-├── worktrees.yaml                    # Worktree registry (active worktrees)
+├── worktrees/                        # Worktree registry (symlinked into worktrees)
+│   └── worktrees.yaml                #   Active worktree entries
 ├── autorun/                          # Autorun session state
 │   ├── sessions/                     # Per-session autorun state
 │   └── batches/                      # Batch execution records
@@ -1505,7 +1506,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/coordination/state.loro` | Loro CRDT document for claims, fencing tokens, merge queue (shared across worktrees) |
 | `.state/coordination/sync-state.json` | Sync daemon state (last sync time, peer list) |
 | `.state/coordination/sync-daemon.pid` | Sync daemon PID file |
-| `.state/worktrees.yaml` | Worktree registry — `WorktreeEntry` records (session_id, path, branch, status) |
+| `.state/worktrees/worktrees.yaml` | Worktree registry — `WorktreeEntry` records (session_id, path, branch, status) |
 | `.state/runtime/peer-id` | Unique peer identifier for CRDT sync |
 
 **`pathflow-session-status.json` fields:**
@@ -1554,9 +1555,9 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-session-status.json stale |  Check status field; if stuck, manually remove `.state/session/{SID}/pathflow/` directory via PF7 flow |
 | Session record missing | Check `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and query DB via cf-knowledge-layer |
-| Stale worktree | Check `.state/worktrees.yaml` for entries with status != active. Run `codeflow worktree cleanup` to remove stale entries and directories. |
+| Stale worktree | Check `.state/worktrees/worktrees.yaml` for entries with status != active. Run `codeflow worktree cleanup` to remove stale entries and directories. |
 | Orphaned worktree | If `.git-worktrees/worktree-{SID}/` exists but no registry entry, run `codeflow worktree prune` to reconcile. |
-| Max worktrees reached | `WorktreeRegistry` enforces max 3 concurrent. Clean up completed sessions' worktrees first, then retry. |
+| Max worktrees reached | `WorktreeRegistry` enforces max 5 concurrent. Clean up completed sessions' worktrees first, then retry. |
 | Claims stuck after crash | Claims have TTL. Run `claims::release_all()` for the crashed session's worktree_id, or wait for TTL expiry. |
 
 ### Teammate Recovery

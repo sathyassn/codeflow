@@ -308,11 +308,11 @@ pub fn run_compaction(state_loro_path: &Path) -> Result<(), SyncError> {
 /// Returns an empty set if the registry cannot be read.
 fn collect_active_sessions(state_loro_path: &Path) -> std::collections::HashSet<String> {
     // state.loro is at .state/coordination/state.loro
-    // worktrees.yaml is at .state/worktrees.yaml
+    // worktrees.yaml is at .state/worktrees/worktrees.yaml
     let mut sessions = std::collections::HashSet::new();
     if let Some(coord_dir) = state_loro_path.parent() {
         if let Some(state_dir) = coord_dir.parent() {
-            let registry_path = state_dir.join("worktrees.yaml");
+            let registry_path = state_dir.join("worktrees").join("worktrees.yaml");
             if let Ok(registry) = crate::worktree::read_registry(&registry_path) {
                 for entry in &registry.worktrees {
                     if entry.status == "active" {
@@ -794,15 +794,33 @@ pub fn register_signal_handler() -> Result<std::sync::Arc<std::sync::atomic::Ato
 ///
 /// Returns `SyncError` if claim release fails.
 pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
-    let pid_file = match read_pid_file(&config.pid_path) {
-        Ok(pf) => pf,
-        Err(_) => return Ok(0),
-    };
-
     let mut total_released = 0;
 
-    // Check each tracked session's liveness via its pathflow-session-status.json.
-    for session_id in &pid_file.sessions {
+    // Collect session IDs to check from multiple sources.
+    let mut session_ids_to_check: Vec<SessionId> = Vec::new();
+
+    // Source 1: PID file sessions (existing behavior).
+    if let Ok(pid_file) = read_pid_file(&config.pid_path) {
+        session_ids_to_check.extend(pid_file.sessions);
+    }
+
+    // Source 2: Worktree registry — scan active entries with session_ids.
+    let registry_path = config.project_dir.join(".state/worktrees/worktrees.yaml");
+    if let Ok(reg) = crate::worktree::read_registry(&registry_path) {
+        for entry in &reg.worktrees {
+            if entry.status == "active" {
+                if let Some(ref sid_str) = entry.session_id {
+                    let sid = SessionId::new_unchecked(sid_str);
+                    if !session_ids_to_check.contains(&sid) {
+                        session_ids_to_check.push(sid);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check each session's liveness via its pathflow-session-status.json.
+    for session_id in &session_ids_to_check {
         let status_path = config
             .project_dir
             .join(".state")
@@ -1697,5 +1715,70 @@ mod tests {
 
         let err = SyncError::SchemaError("bad version".to_string());
         assert_eq!(err.to_string(), "schema error: bad version");
+    }
+
+    #[test]
+    fn test_cleanup_dead_workers_scans_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord_dir = dir.path().join(".state").join("coordination");
+        fs::create_dir_all(&coord_dir).unwrap();
+
+        // Create a coordinator with a claim from ses-registry-dead.
+        let mut coord = LoroCoordinator::in_memory();
+        let sid = session("ses-registry-dead");
+        coord.acquire("src/lib.rs", &sid).unwrap();
+        let snapshot = coord.export_bytes().unwrap();
+        fs::write(coord_dir.join("state.loro"), &snapshot).unwrap();
+
+        // NO PID file — the session is only in the worktree registry.
+        // Write a worktree registry entry with session_id.
+        let state_dir = dir.path().join(".state");
+        let registry_dir = state_dir.join("worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        let registry_path = registry_dir.join("worktrees.yaml");
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-23T10:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "worktree-ses-registry-dead".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees/worktree-ses-registry-dead")
+                .to_string_lossy()
+                .to_string(),
+            branch: "fix/test".to_string(),
+            created_at: "2026-03-23T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-registry-dead".to_string()),
+            task_id: None,
+        });
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Write session status with a dead PID.
+        let session_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join("ses-registry-dead")
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"session_id":"ses-registry-dead","lead_pid":99999999,"status":"pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let config = SyncConfig::from_project_dir(dir.path(), 5);
+        let released = cleanup_dead_workers(&config).unwrap();
+        assert_eq!(
+            released, 1,
+            "should release claim from registry-discovered dead session"
+        );
+
+        // Verify claim was released.
+        let bytes = fs::read(coord_dir.join("state.loro")).unwrap();
+        let reloaded = LoroCoordinator::from_bytes(&bytes, &coord_dir.join("state.loro")).unwrap();
+        assert!(
+            reloaded.check("src/lib.rs").is_none(),
+            "claim should be released after registry-based cleanup"
+        );
     }
 }

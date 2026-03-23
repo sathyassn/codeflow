@@ -155,6 +155,88 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
     Ok(())
 }
 
+/// Deregister a worktree by name (defense-in-depth fallback).
+///
+/// Matches by name instead of path. Useful when the path field is empty
+/// (e.g., entries created by pre-registration before `setup_detached` runs).
+/// If the registry doesn't exist or the name is not found, this is a no-op.
+///
+/// # Errors
+///
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn deregister_by_name(registry_path: &Path, name: &str) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let mut registry = read_registry(registry_path)?;
+
+    let mut found = false;
+    for entry in &mut registry.worktrees {
+        if entry.name == name && entry.status == "active" {
+            entry.status = "removed".to_string();
+            found = true;
+            break;
+        }
+    }
+
+    if found {
+        registry.metadata.last_updated = super::now_rfc3339();
+        write_registry(registry_path, &registry)?;
+    }
+
+    Ok(())
+}
+
+/// Purge old "removed" entries from the registry, keeping at most `max_keep`.
+///
+/// Removes the oldest removed entries first. Active entries are never touched.
+/// If the registry doesn't exist, this is a no-op.
+///
+/// # Errors
+///
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn purge_removed_entries(
+    registry_path: &Path,
+    max_keep: usize,
+) -> Result<usize, WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(0);
+    }
+
+    let mut registry = read_registry(registry_path)?;
+
+    let removed_count = registry
+        .worktrees
+        .iter()
+        .filter(|e| e.status == "removed")
+        .count();
+
+    if removed_count <= max_keep {
+        return Ok(0);
+    }
+
+    let to_remove = removed_count - max_keep;
+    let mut removed = 0;
+    registry.worktrees.retain(|e| {
+        if e.status == "removed" && removed < to_remove {
+            removed += 1;
+            false
+        } else {
+            true
+        }
+    });
+
+    if removed > 0 {
+        registry.metadata.last_updated = super::now_rfc3339();
+        write_registry(registry_path, &registry)?;
+    }
+
+    Ok(removed)
+}
+
 /// Count the number of active worktrees in the registry.
 #[must_use]
 pub fn count_active(registry: &WorktreeRegistry) -> usize {
@@ -266,8 +348,12 @@ pub fn locked_register_with_limit(
                     existing.branch.clone_from(&entry_owned.branch);
                 }
                 existing.created_at.clone_from(&entry_owned.created_at);
-                existing.session_id.clone_from(&entry_owned.session_id);
-                existing.task_id.clone_from(&entry_owned.task_id);
+                if entry_owned.session_id.is_some() {
+                    existing.session_id.clone_from(&entry_owned.session_id);
+                }
+                if entry_owned.task_id.is_some() {
+                    existing.task_id.clone_from(&entry_owned.task_id);
+                }
                 reg.metadata.last_updated = super::now_rfc3339();
                 return Ok(());
             }
@@ -1069,7 +1155,199 @@ session_id: ses-123
             active[0].branch, "feat/real-branch",
             "empty branch should not overwrite non-empty"
         );
-        // session_id should be updated regardless.
+        // session_id should be updated (new value is Some).
         assert_eq!(active[0].session_id, Some("ses-002".to_string()));
+    }
+
+    #[test]
+    fn test_locked_register_dedup_preserves_session_id_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        // First registration with a session_id and task_id.
+        let entry1 = WorktreeEntry {
+            name: "guard-wt".to_string(),
+            path: "/tmp/wt/guard".to_string(),
+            branch: "feat/guard".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-original".to_string()),
+            task_id: Some("task-original".to_string()),
+        };
+        locked_register_with_limit(&path, &entry1, 3).unwrap();
+
+        // Second registration with None session_id and None task_id
+        // (simulates setup_detached re-registration).
+        let entry2 = WorktreeEntry {
+            name: "guard-wt".to_string(),
+            path: "/tmp/wt/guard".to_string(),
+            branch: "feat/guard".to_string(),
+            created_at: "2026-03-07T11:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry2, 3).unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        let active: Vec<_> = reg
+            .worktrees
+            .iter()
+            .filter(|e| e.name == "guard-wt" && e.status == "active")
+            .collect();
+        assert_eq!(active.len(), 1);
+
+        // session_id and task_id should be PRESERVED (not overwritten with None).
+        assert_eq!(
+            active[0].session_id,
+            Some("ses-original".to_string()),
+            "session_id should be preserved when re-registering with None"
+        );
+        assert_eq!(
+            active[0].task_id,
+            Some("task-original".to_string()),
+            "task_id should be preserved when re-registering with None"
+        );
+    }
+
+    #[test]
+    fn test_deregister_by_name_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "name-dereg".to_string(),
+            path: "/tmp/wt/name-dereg".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        // Deregister by name.
+        deregister_by_name(&path, "name-dereg").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].status, "removed");
+    }
+
+    #[test]
+    fn test_deregister_by_name_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "keep-me".to_string(),
+            path: "/tmp/wt/keep".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        // Deregister a different name — should be a no-op.
+        deregister_by_name(&path, "not-found").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].status, "active");
+    }
+
+    #[test]
+    fn test_deregister_by_name_no_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.yaml");
+
+        // Should succeed (no-op) when registry doesn't exist.
+        deregister_by_name(&path, "any-name").unwrap();
+    }
+
+    #[test]
+    fn test_purge_removed_entries_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        // Create 8 removed entries and 1 active.
+        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
+        for i in 0..8 {
+            reg.worktrees.push(WorktreeEntry {
+                name: format!("removed-{i}"),
+                path: format!("/tmp/wt/removed-{i}"),
+                branch: String::new(),
+                created_at: "2026-03-07T10:00:00Z".to_string(),
+                status: "removed".to_string(),
+                session_id: None,
+                task_id: None,
+            });
+        }
+        reg.worktrees.push(WorktreeEntry {
+            name: "active-wt".to_string(),
+            path: "/tmp/wt/active".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+        });
+        write_registry(&path, &reg).unwrap();
+
+        // Purge keeping max 5.
+        let purged = purge_removed_entries(&path, 5).unwrap();
+        assert_eq!(purged, 3, "should purge 3 of the 8 removed entries");
+
+        let updated = read_registry(&path).unwrap();
+        let removed_count = updated
+            .worktrees
+            .iter()
+            .filter(|e| e.status == "removed")
+            .count();
+        assert_eq!(
+            removed_count, 5,
+            "should have exactly 5 removed entries left"
+        );
+
+        // Active entry should be untouched.
+        let active_count = updated
+            .worktrees
+            .iter()
+            .filter(|e| e.status == "active")
+            .count();
+        assert_eq!(active_count, 1);
+    }
+
+    #[test]
+    fn test_purge_removed_entries_nothing_to_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
+        for i in 0..3 {
+            reg.worktrees.push(WorktreeEntry {
+                name: format!("removed-{i}"),
+                path: format!("/tmp/wt/removed-{i}"),
+                branch: String::new(),
+                created_at: "2026-03-07T10:00:00Z".to_string(),
+                status: "removed".to_string(),
+                session_id: None,
+                task_id: None,
+            });
+        }
+        write_registry(&path, &reg).unwrap();
+
+        // 3 removed, max_keep 5 — nothing to purge.
+        let purged = purge_removed_entries(&path, 5).unwrap();
+        assert_eq!(purged, 0);
+    }
+
+    #[test]
+    fn test_purge_removed_entries_no_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.yaml");
+
+        let purged = purge_removed_entries(&path, 5).unwrap();
+        assert_eq!(purged, 0);
     }
 }

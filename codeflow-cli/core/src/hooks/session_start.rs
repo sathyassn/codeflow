@@ -482,7 +482,7 @@ impl SessionStartInit {
     ///
     /// Called at startup (source=startup) only, after stale session cleanup.
     fn clean_stale_worktrees(&self, project_dir: &Path, result: &mut InitResult) {
-        let registry_path = project_dir.join(".state").join("worktrees.yaml");
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
         if !registry_path.exists() {
             return;
         }
@@ -562,6 +562,13 @@ impl SessionStartInit {
             result
                 .warnings
                 .push(format!("stale worktree prune failed: {e}"));
+        }
+
+        // Purge old "removed" entries from the registry (keep last 5 for forensics).
+        if let Err(e) = crate::worktree::purge_removed_entries(&registry_path, 5) {
+            result
+                .warnings
+                .push(format!("purge removed entries failed: {e}"));
         }
     }
 
@@ -1167,17 +1174,10 @@ impl SessionStartInit {
         let wt_path = PathBuf::from(&entry.path);
         let paths = WorktreePaths::new(&wt_path);
 
-        // Update the registry entry with session_id.
-        // NOTE: registry write is not locked; parallel sessions may race.
-        // See file_lock.rs and task 018 (parallel coordination adds locking).
-        if let Ok(mut reg) = crate::worktree::read_registry(mgr.registry_path()) {
-            for e in &mut reg.worktrees {
-                if e.name == wt_name {
-                    e.session_id = Some(session_id.to_string());
-                }
-            }
-            let _ = crate::worktree::write_registry(mgr.registry_path(), &reg);
-        }
+        // session_id is preserved during dedup in locked_register_with_limit
+        // (the guard at registry.rs only overwrites session_id/task_id when the
+        // new value is Some, so setup_detached's None does not clobber the
+        // pre-registration's session_id). No unlocked registry write needed.
 
         // Write CODEFLOW_WORKTREE_PATH to the MAIN project env file
         // so compact/resume can recover it.
@@ -3882,7 +3882,7 @@ mod tests {
         let sid = result.session_id.as_str();
 
         // Read the worktree registry and verify session_id is set.
-        let reg_path = dir.path().join(".state").join("worktrees.yaml");
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let reg = crate::worktree::read_registry(&reg_path).unwrap();
         let wt_name = format!("worktree-{sid}");
         let entry = reg.worktrees.iter().find(|e| e.name == wt_name);
@@ -3979,7 +3979,7 @@ mod tests {
 
         // Create an empty registry.
         let reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
-        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -4021,7 +4021,7 @@ mod tests {
             session_id: Some(dead_sid.to_string()),
             task_id: None,
         });
-        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -4093,7 +4093,7 @@ mod tests {
             session_id: Some(live_sid.to_string()),
             task_id: None,
         });
-        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -4158,7 +4158,7 @@ mod tests {
             session_id: None,
             task_id: None,
         });
-        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -4203,7 +4203,7 @@ mod tests {
             session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
             task_id: None,
         });
-        let registry_path = dir.path().join(".state").join("worktrees.yaml");
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -4250,7 +4250,7 @@ mod tests {
             task_id: None,
         });
 
-        let registry_path = project_dir.join(".state").join("worktrees.yaml");
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 

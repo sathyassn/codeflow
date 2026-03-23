@@ -9,7 +9,7 @@
 //! - [`WorktreeManager`]: Main entry point for all worktree operations.
 //! - [`WorktreeState`]: Typed enum for worktree health (Active, Stale, Orphaned).
 //! - [`CleanupOpts`]: Configuration for cleanup behavior (force, dry-run, prune).
-//! - Registry: YAML-based tracking file at `.state/worktrees.yaml`.
+//! - Registry: YAML-based tracking file at `.state/worktrees/worktrees.yaml`.
 
 mod cleanup;
 mod paths;
@@ -23,12 +23,13 @@ use crate::types::BranchName;
 
 pub use cleanup::CleanupOpts;
 pub use paths::WorktreePaths;
-pub use setup::repair_symlinks;
 pub use registry::{
-    WorktreeEntry, WorktreeRegistry, count_active, list_active, locked_deregister_worktree,
-    locked_read_registry, locked_register_with_limit, maybe_auto_start_daemon,
-    maybe_auto_stop_daemon, read_registry, write_registry,
+    WorktreeEntry, WorktreeRegistry, count_active, deregister_by_name, list_active,
+    locked_deregister_worktree, locked_read_registry, locked_register_with_limit,
+    maybe_auto_start_daemon, maybe_auto_stop_daemon, purge_removed_entries, read_registry,
+    write_registry,
 };
+pub use setup::repair_symlinks;
 
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
 
@@ -36,7 +37,7 @@ pub use registry::{
 const DEFAULT_BASE_DIR: &str = ".git-worktrees";
 
 /// Default registry file path (relative to project root).
-const DEFAULT_REGISTRY_PATH: &str = ".state/worktrees.yaml";
+const DEFAULT_REGISTRY_PATH: &str = ".state/worktrees/worktrees.yaml";
 
 /// Shared state directories symlinked from the main repo's `.state/`.
 const SHARED_STATE_DIRS: &[&str] = &[
@@ -46,6 +47,7 @@ const SHARED_STATE_DIRS: &[&str] = &[
     "backups",
     "coordination",
     "logs",
+    "worktrees",
 ];
 
 /// Per-worktree local directories (not symlinked).
@@ -99,6 +101,26 @@ pub(super) fn now_rfc3339() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
+/// Migrate worktrees.yaml from old location to new.
+///
+/// Called during worktree setup to handle the one-time migration from
+/// `.state/worktrees.yaml` to `.state/worktrees/worktrees.yaml`.
+pub fn migrate_registry_path(project_dir: &Path) {
+    let old_path = project_dir.join(".state/worktrees.yaml");
+    let new_dir = project_dir.join(".state/worktrees");
+    let new_path = new_dir.join("worktrees.yaml");
+
+    if old_path.exists() && !new_path.exists() {
+        let _ = std::fs::create_dir_all(&new_dir);
+        let _ = std::fs::rename(&old_path, &new_path);
+        // Also migrate lock file if present.
+        let old_lock = project_dir.join(".state/worktrees.yaml.lock");
+        if old_lock.exists() {
+            let _ = std::fs::rename(&old_lock, new_dir.join("worktrees.yaml.lock"));
+        }
+    }
+}
+
 /// Manages worktree operations for a project.
 ///
 /// All git operations use `git2` (libgit2 bindings) instead of subprocess
@@ -119,7 +141,7 @@ impl WorktreeManager {
     /// Create a new `WorktreeManager` with default paths.
     ///
     /// - Base directory: `{project_dir}/.git-worktrees/`
-    /// - Registry: `{project_dir}/.state/worktrees.yaml`
+    /// - Registry: `{project_dir}/.state/worktrees/worktrees.yaml`
     #[must_use]
     pub fn new(project_dir: impl Into<PathBuf>) -> Self {
         let project_dir = project_dir.into();
@@ -538,7 +560,7 @@ mod tests {
         assert_eq!(mgr.base_dir(), Path::new("/tmp/project/.git-worktrees"));
         assert_eq!(
             mgr.registry_path(),
-            Path::new("/tmp/project/.state/worktrees.yaml")
+            Path::new("/tmp/project/.state/worktrees/worktrees.yaml")
         );
     }
 
@@ -637,10 +659,57 @@ mod tests {
 
     #[test]
     fn test_shared_state_dirs_constant() {
-        assert_eq!(SHARED_STATE_DIRS.len(), 6);
+        assert_eq!(SHARED_STATE_DIRS.len(), 7);
         assert!(SHARED_STATE_DIRS.contains(&"db"));
         assert!(SHARED_STATE_DIRS.contains(&"ledger"));
         assert!(SHARED_STATE_DIRS.contains(&"logs"));
+        assert!(SHARED_STATE_DIRS.contains(&"worktrees"));
+    }
+
+    #[test]
+    fn test_migrate_registry_path_moves_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("worktrees.yaml"), "test content").unwrap();
+        std::fs::write(state_dir.join("worktrees.yaml.lock"), "lock").unwrap();
+
+        migrate_registry_path(dir.path());
+
+        assert!(!state_dir.join("worktrees.yaml").exists());
+        assert!(!state_dir.join("worktrees.yaml.lock").exists());
+        assert!(state_dir.join("worktrees/worktrees.yaml").exists());
+        assert!(state_dir.join("worktrees/worktrees.yaml.lock").exists());
+        let content = std::fs::read_to_string(state_dir.join("worktrees/worktrees.yaml")).unwrap();
+        assert_eq!(content, "test content");
+    }
+
+    #[test]
+    fn test_migrate_registry_path_noop_when_new_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        std::fs::create_dir_all(state_dir.join("worktrees")).unwrap();
+        std::fs::write(state_dir.join("worktrees.yaml"), "old").unwrap();
+        std::fs::write(state_dir.join("worktrees/worktrees.yaml"), "new").unwrap();
+
+        migrate_registry_path(dir.path());
+
+        // Old file should still exist (not moved).
+        assert!(state_dir.join("worktrees.yaml").exists());
+        // New file should be unchanged.
+        let content = std::fs::read_to_string(state_dir.join("worktrees/worktrees.yaml")).unwrap();
+        assert_eq!(content, "new");
+    }
+
+    #[test]
+    fn test_migrate_registry_path_noop_when_old_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        // Should be a no-op with no errors.
+        migrate_registry_path(dir.path());
+        assert!(!state_dir.join("worktrees/worktrees.yaml").exists());
     }
 
     #[test]

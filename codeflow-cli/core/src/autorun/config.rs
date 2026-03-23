@@ -13,6 +13,9 @@ use crate::error::AutorunError;
 /// Relative path to the config file from the project root.
 const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.json";
 
+/// Relative path to the local config override file (gitignored).
+const LOCAL_CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.local.json";
+
 /// Top-level parallel work configuration with 5 sections.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -79,6 +82,14 @@ impl<'de> Deserialize<'de> for WorktreeMode {
     }
 }
 
+/// Default shared files to symlink into worktrees.
+fn default_shared_files() -> Vec<String> {
+    vec![
+        ".claude/settings.local.json".to_string(),
+        ".codeflow/config/parallel-work/parallel-work-config.local.json".to_string(),
+    ]
+}
+
 /// Worktree creation and lifecycle settings.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -89,6 +100,11 @@ pub struct WorktreeConfig {
     pub max_concurrent: usize,
     /// Directory for worktree creation (relative to project root).
     pub base_dir: String,
+    /// Individual files from the main repo to symlink into worktrees.
+    /// These are non-git-tracked files (local overrides) that need to be
+    /// visible across worktrees. Paths are relative to project root.
+    #[serde(default = "default_shared_files")]
+    pub shared_files: Vec<String>,
 }
 
 impl Default for WorktreeConfig {
@@ -97,6 +113,7 @@ impl Default for WorktreeConfig {
             mode: WorktreeMode::Autorun,
             max_concurrent: 3,
             base_dir: ".git-worktrees".to_string(),
+            shared_files: default_shared_files(),
         }
     }
 }
@@ -166,29 +183,101 @@ impl Default for ClaimsConfig {
 
 /// Load parallel work config from the project directory.
 ///
-/// Returns default config if the file does not exist. Validates constraints
+/// Loading order (later overrides earlier):
+/// 1. Defaults from `ParallelWorkConfig::default()`
+/// 2. Project config from `parallel-work-config.json`
+/// 3. Local config from `parallel-work-config.local.json` (gitignored)
+/// 4. `CODEFLOW_WORKTREE_MODE` env var overrides `worktree.mode`
+///
+/// Returns default config if neither file exists. Validates constraints
 /// after loading.
 ///
 /// # Errors
 ///
-/// Returns `AutorunError::InvalidBatch` if the file exists but cannot be parsed,
+/// Returns `AutorunError::InvalidBatch` if a file exists but cannot be parsed,
 /// or if validation fails.
 pub fn load_config(project_dir: &Path) -> Result<ParallelWorkConfig, AutorunError> {
+    let env_mode = std::env::var("CODEFLOW_WORKTREE_MODE").ok();
+    load_config_inner(project_dir, env_mode.as_deref())
+}
+
+/// Inner implementation that accepts an explicit mode override for testability.
+///
+/// Separating env var reading from the merge logic avoids race conditions
+/// in parallel tests that set/unset `CODEFLOW_WORKTREE_MODE`.
+fn load_config_inner(
+    project_dir: &Path,
+    worktree_mode_override: Option<&str>,
+) -> Result<ParallelWorkConfig, AutorunError> {
     let config_path = project_dir.join(CONFIG_PATH);
 
-    let config = if config_path.exists() {
+    // Load project config as a JSON Value (or empty object).
+    let mut merged = if config_path.exists() {
         let data = std::fs::read_to_string(&config_path).map_err(|e| {
             AutorunError::InvalidBatch(format!("reading {}: {e}", config_path.display()))
         })?;
-        serde_json::from_str::<ParallelWorkConfig>(&data).map_err(|e| {
+        serde_json::from_str::<serde_json::Value>(&data).map_err(|e| {
             AutorunError::InvalidBatch(format!("parsing {}: {e}", config_path.display()))
         })?
     } else {
-        ParallelWorkConfig::default()
+        serde_json::Value::Object(serde_json::Map::new())
     };
+
+    // Deep-merge local config over project config.
+    // In worktree mode, the local config file is symlinked into the worktree
+    // by setup_shared_file_symlinks, so checking project_dir is sufficient.
+    let local_config_path = project_dir.join(LOCAL_CONFIG_PATH);
+    if local_config_path.exists() {
+        let local_data = std::fs::read_to_string(&local_config_path).map_err(|e| {
+            AutorunError::InvalidBatch(format!("reading {}: {e}", local_config_path.display()))
+        })?;
+        let local_val = serde_json::from_str::<serde_json::Value>(&local_data).map_err(|e| {
+            AutorunError::InvalidBatch(format!("parsing {}: {e}", local_config_path.display()))
+        })?;
+        merge_json_values(&mut merged, &local_val);
+    }
+
+    // Apply worktree mode override (from CODEFLOW_WORKTREE_MODE env var).
+    if let Some(mode) = worktree_mode_override {
+        if let Some(obj) = merged.as_object_mut() {
+            let wt = obj
+                .entry("worktree")
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(wt_obj) = wt.as_object_mut() {
+                wt_obj.insert(
+                    "mode".to_string(),
+                    serde_json::Value::String(mode.to_string()),
+                );
+            }
+        }
+    }
+
+    // Deserialize the merged result.
+    let config = serde_json::from_value::<ParallelWorkConfig>(merged)
+        .map_err(|e| AutorunError::InvalidBatch(format!("deserializing merged config: {e}")))?;
 
     validate_config(&config)?;
     Ok(config)
+}
+
+/// Recursively merge `overlay` JSON values into `base`.
+///
+/// Objects are merged key-by-key (overlay keys overwrite base keys).
+/// Non-object values in overlay replace the base entirely.
+fn merge_json_values(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                let base_entry = base_map
+                    .entry(key.clone())
+                    .or_insert(serde_json::Value::Null);
+                merge_json_values(base_entry, overlay_val);
+            }
+        }
+        (base, overlay) => {
+            *base = overlay.clone();
+        }
+    }
 }
 
 /// Validate config constraints.
@@ -238,7 +327,19 @@ mod tests {
         assert_eq!(cfg.worktree.mode, WorktreeMode::Autorun);
         assert_eq!(cfg.worktree.max_concurrent, 3);
         assert_eq!(cfg.worktree.base_dir, ".git-worktrees");
-        assert_eq!(cfg.sync.interval_secs, crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS);
+        assert_eq!(cfg.worktree.shared_files.len(), 2);
+        assert!(cfg
+            .worktree
+            .shared_files
+            .contains(&".claude/settings.local.json".to_string()));
+        assert!(cfg
+            .worktree
+            .shared_files
+            .contains(&".codeflow/config/parallel-work/parallel-work-config.local.json".to_string()));
+        assert_eq!(
+            cfg.sync.interval_secs,
+            crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS
+        );
         assert!(cfg.sync.auto_start);
         assert!(cfg.merge.auto_rebase);
         assert!(cfg.merge.queue_enabled);
@@ -447,7 +548,7 @@ mod tests {
     #[test]
     fn full_config_from_spec_example() {
         let json = r#"{
-            "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees" },
+            "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees", "shared_files": [".claude/settings.local.json", ".codeflow/config/parallel-work/parallel-work-config.local.json"] },
             "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
@@ -495,7 +596,10 @@ mod tests {
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
-        assert_eq!(cfg.autorun.report_dir, "project-management/tracking/autorun");
+        assert_eq!(
+            cfg.autorun.report_dir,
+            "project-management/tracking/autorun"
+        );
     }
 
     #[test]
@@ -543,5 +647,164 @@ mod tests {
         let mut cfg = ParallelWorkConfig::default();
         cfg.autorun.worker_timeout_secs = 60;
         assert!(validate_config(&cfg).is_ok());
+    }
+
+    // -- merge_json_values tests --
+
+    #[test]
+    fn merge_json_values_overwrites_scalar() {
+        let mut base = serde_json::json!({"a": 1});
+        let overlay = serde_json::json!({"a": 2});
+        merge_json_values(&mut base, &overlay);
+        assert_eq!(base["a"], 2);
+    }
+
+    #[test]
+    fn merge_json_values_deep_merge_objects() {
+        let mut base = serde_json::json!({"worktree": {"mode": "autorun", "max_concurrent": 3}});
+        let overlay = serde_json::json!({"worktree": {"max_concurrent": 5}});
+        merge_json_values(&mut base, &overlay);
+        assert_eq!(base["worktree"]["mode"], "autorun"); // preserved
+        assert_eq!(base["worktree"]["max_concurrent"], 5); // overwritten
+    }
+
+    #[test]
+    fn merge_json_values_adds_new_keys() {
+        let mut base = serde_json::json!({"a": 1});
+        let overlay = serde_json::json!({"b": 2});
+        merge_json_values(&mut base, &overlay);
+        assert_eq!(base["a"], 1);
+        assert_eq!(base["b"], 2);
+    }
+
+    // -- Local config override tests --
+
+    #[test]
+    fn load_config_local_overrides_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Project config: max_concurrent = 3
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "max_concurrent": 3 }, "claims": { "ttl_secs": 4200 } }"#,
+        )
+        .unwrap();
+
+        // Local override: max_concurrent = 7
+        std::fs::write(
+            config_dir.join("parallel-work-config.local.json"),
+            r#"{ "worktree": { "max_concurrent": 7 } }"#,
+        )
+        .unwrap();
+
+        let cfg = load_config(dir.path()).unwrap();
+        assert_eq!(cfg.worktree.max_concurrent, 7); // local override
+        assert_eq!(cfg.claims.ttl_secs, 4200); // project preserved
+    }
+
+    #[test]
+    fn load_config_local_partial_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 3 } }"#,
+        )
+        .unwrap();
+
+        // Local override only changes mode, preserves max_concurrent
+        std::fs::write(
+            config_dir.join("parallel-work-config.local.json"),
+            r#"{ "worktree": { "mode": "always" } }"#,
+        )
+        .unwrap();
+
+        let cfg = load_config(dir.path()).unwrap();
+        assert_eq!(cfg.worktree.mode, WorktreeMode::Always); // overridden
+        assert_eq!(cfg.worktree.max_concurrent, 3); // preserved from project
+    }
+
+    #[test]
+    fn load_config_env_var_overrides_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 3 } }"#,
+        )
+        .unwrap();
+
+        // Use load_config_inner to avoid env var race conditions.
+        let cfg = load_config_inner(dir.path(), Some("disabled")).unwrap();
+
+        assert_eq!(cfg.worktree.mode, WorktreeMode::Disabled);
+        assert_eq!(cfg.worktree.max_concurrent, 3); // unchanged
+    }
+
+    #[test]
+    fn load_config_env_var_precedence_over_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "mode": "autorun" } }"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            config_dir.join("parallel-work-config.local.json"),
+            r#"{ "worktree": { "mode": "always" } }"#,
+        )
+        .unwrap();
+
+        // Env override should win over local config.
+        let cfg = load_config_inner(dir.path(), Some("disabled")).unwrap();
+
+        assert_eq!(cfg.worktree.mode, WorktreeMode::Disabled);
+    }
+
+    #[test]
+    fn load_config_no_local_file_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir
+            .path()
+            .join(".codeflow")
+            .join("config")
+            .join("parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{ "worktree": { "max_concurrent": 4 } }"#,
+        )
+        .unwrap();
+
+        // No local file — should work fine.
+        let cfg = load_config(dir.path()).unwrap();
+        assert_eq!(cfg.worktree.max_concurrent, 4);
     }
 }

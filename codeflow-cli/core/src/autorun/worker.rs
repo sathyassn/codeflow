@@ -655,7 +655,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
 
         // Auto-stop the sync daemon if worktree count drops to <=1.
-        let registry_path = self.project_dir.join(".state/worktrees.yaml");
+        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
         if let Err(e) = crate::worktree::maybe_auto_stop_daemon(&registry_path, &self.project_dir) {
             eprintln!("warning: daemon auto-stop check failed: {e}");
         }

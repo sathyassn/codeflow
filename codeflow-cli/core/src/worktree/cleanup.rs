@@ -76,6 +76,9 @@ pub(crate) fn cleanup_worktree(
     let wt_path_str = wt_path.to_string_lossy();
     registry::deregister_worktree(mgr.registry_path(), &wt_path_str)?;
 
+    // Defense-in-depth: also deregister by name for empty-path entries.
+    registry::deregister_by_name(mgr.registry_path(), name)?;
+
     Ok(())
 }
 
@@ -137,7 +140,9 @@ pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(),
         .output()
         .map_err(|e| WorktreeError::Cleanup(format!("git rev-parse failed: {e}")))?;
 
-    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+    let branch = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
     if branch.is_empty() || branch == "HEAD" {
         // Detached HEAD — no branch to push. Work is only local.
         if dirty {
@@ -373,7 +378,10 @@ mod tests {
 
         let result = rescue_uncommitted_work(dir.path(), "test-session");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), WorktreeError::UnpushedWork(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            WorktreeError::UnpushedWork(_)
+        ));
     }
 
     #[test]

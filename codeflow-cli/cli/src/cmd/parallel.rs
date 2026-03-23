@@ -31,7 +31,7 @@ const MAX_RECENT_EVENTS: usize = 10;
 #[allow(clippy::unnecessary_wraps)]
 fn run_status(project_dir: &Path) -> Result<()> {
     let coord_dir = project_dir.join(".state").join("coordination");
-    let registry_path = project_dir.join(".state").join("worktrees.yaml");
+    let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
     let events_path = project_dir
         .join(".state")
         .join("ledger")
@@ -203,8 +203,9 @@ mod tests {
     fn test_status_with_registry() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        let registry_path = state_dir.join("worktrees.yaml");
+        let registry_dir = state_dir.join("worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        let registry_path = registry_dir.join("worktrees.yaml");
 
         let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
         reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
@@ -226,8 +227,9 @@ mod tests {
     fn test_status_with_empty_registry() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join(".state");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        let registry_path = state_dir.join("worktrees.yaml");
+        let registry_dir = state_dir.join("worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        let registry_path = registry_dir.join("worktrees.yaml");
 
         let reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
@@ -318,7 +320,9 @@ mod tests {
 
         // Also write a registry.
         let state_dir = dir.path().join(".state");
-        let registry_path = state_dir.join("worktrees.yaml");
+        let registry_dir = state_dir.join("worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        let registry_path = registry_dir.join("worktrees.yaml");
         let reg = codeflow_core::worktree::WorktreeRegistry::new("2026-03-21T10:00:00Z");
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
