@@ -6,7 +6,7 @@ mod exit;
 mod helpers;
 
 #[derive(Debug, Parser)]
-#[command(name = "codeflow", version, about = "CodeFlow CLI")]
+#[command(name = "codeflow", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT"), " ", env!("BUILD_TIMESTAMP"), ")"), about = "CodeFlow CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -14,8 +14,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Show version information
-    Version,
     /// Uninstall `CodeFlow`
     Uninstall,
     /// Database operations
@@ -117,7 +115,6 @@ async fn main() -> Result<()> {
 
 async fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::Version => cmd::version::run(),
         Command::Uninstall => cmd::uninstall::run(),
         Command::Db => cmd::db::run().await,
         Command::Session => cmd::session::run(),
@@ -165,7 +162,6 @@ mod tests {
         let err = Cli::try_parse_from(["codeflow", "--help"]).expect_err("help error");
         let help_text = err.to_string();
         let expected_commands = [
-            "version",
             "uninstall",
             "db",
             "session",
@@ -201,14 +197,13 @@ mod tests {
                 "help output missing subcommand: {cmd}"
             );
         }
-        assert_eq!(expected_commands.len(), 29);
+        assert_eq!(expected_commands.len(), 28);
     }
 
     #[test]
     fn test_each_subcommand_parses() {
         // Subcommands that parse with just the name (no further args required).
         let commands = [
-            "version",
             "uninstall",
             "db",
             "session",
@@ -279,12 +274,6 @@ mod tests {
             result.is_ok(),
             "should parse 3-level: hooks pre-tool-use gate-check"
         );
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_version() {
-        let result = dispatch(Command::Version).await;
-        assert!(result.is_ok());
     }
 
     #[tokio::test]

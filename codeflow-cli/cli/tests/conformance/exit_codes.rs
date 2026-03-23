@@ -183,15 +183,15 @@ fn test_exit_zero_stop_logging_with_fixture() {
     );
 }
 
-// ─── Version command exit code ───────────────────────────────────────────────
+// ─── Version flag exit code ──────────────────────────────────────────────────
 
 #[test]
-fn test_exit_zero_version_command() {
+fn test_exit_zero_version_flag() {
     let paths = resolve_binaries();
-    let out = run_binary(&paths.rust_binary, &["version"], "");
+    let out = run_binary(&paths.rust_binary, &["--version"], "");
     assert_eq!(
         out.exit_code, 0,
-        "version should exit 0, got {}",
+        "--version should exit 0, got {}",
         out.exit_code
     );
 }

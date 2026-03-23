@@ -23,7 +23,6 @@ pub mod test;
 pub mod uninstall;
 pub mod update;
 pub mod validate;
-pub mod version;
 pub mod welcome;
 pub mod workgraph;
 pub mod worktree;

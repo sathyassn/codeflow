@@ -4,31 +4,34 @@
 
 use crate::harness::{resolve_binaries, run_binary};
 
-// ─── version ─────────────────────────────────────────────────────────────────
+// ─── version (via --version flag) ────────────────────────────────────────────
 
 #[test]
-fn test_version_exit_zero() {
-    let rust = crate::harness::run_rust(&["version"], "");
-    assert_eq!(rust.exit_code, 0, "version should exit 0");
+fn test_version_flag_exit_zero() {
+    let rust = crate::harness::run_rust(&["--version"], "");
+    assert_eq!(rust.exit_code, 0, "--version should exit 0");
 }
 
 #[test]
-fn test_version_stdout_contains_codeflow() {
+fn test_version_flag_stdout_contains_codeflow() {
     let paths = resolve_binaries();
-    let rust_out = run_binary(&paths.rust_binary, &["version"], "");
+    let rust_out = run_binary(&paths.rust_binary, &["--version"], "");
     assert!(
         rust_out.stdout.contains("codeflow"),
-        "version should contain 'codeflow' in stdout: {:?}",
+        "--version should contain 'codeflow' in stdout: {:?}",
         rust_out.stdout
     );
 }
 
 #[test]
-fn test_version_stdout_nonempty() {
-    let rust = crate::harness::run_rust(&["version"], "");
+fn test_version_flag_stdout_contains_git_hash() {
+    let paths = resolve_binaries();
+    let rust_out = run_binary(&paths.rust_binary, &["--version"], "");
+    // Version format: "codeflow 0.1.0 (abcdef12 2026-03-23T05:40:47Z)"
     assert!(
-        !rust.stdout.is_empty(),
-        "version stdout should not be empty"
+        rust_out.stdout.contains('(') && rust_out.stdout.contains(')'),
+        "--version should contain git hash in parentheses: {:?}",
+        rust_out.stdout
     );
 }
 
