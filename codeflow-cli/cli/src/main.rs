@@ -66,7 +66,10 @@ enum Command {
         command: Option<cmd::coordination::CoordinationCommand>,
     },
     /// Settings management
-    Settings,
+    Settings {
+        #[command(subcommand)]
+        command: Option<cmd::settings::SettingsCommand>,
+    },
     /// Git worktree management
     Worktree {
         #[command(subcommand)]
@@ -132,7 +135,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Hooks { command } => cmd::hooks::run(command),
         Command::Sentinel => cmd::sentinel::run(),
         Command::Coordination { command } => cmd::coordination::run(command),
-        Command::Settings => cmd::settings::run(),
+        Command::Settings { command } => cmd::settings::run(command),
         Command::Worktree { command } => cmd::worktree::run(command),
         Command::Parallel { command } => cmd::parallel::run(command),
         Command::Report => cmd::report::run(),

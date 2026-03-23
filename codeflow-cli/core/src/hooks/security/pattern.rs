@@ -124,10 +124,62 @@ pub fn get_flags_portion(cmd: &str) -> &str {
     cmd
 }
 
+/// Strip heredoc bodies from a command string.
+///
+/// Replaces the content between `<<DELIM\n...\nDELIM` (or `<<'DELIM'`, `<<"DELIM"`,
+/// `<<-DELIM`) with an empty string, preserving the command portion that precedes
+/// the heredoc. This prevents heredoc content (documentation, comments) from
+/// triggering false-positive path pattern matches.
+#[must_use]
+pub fn strip_heredoc_content(cmd: &str) -> String {
+    static HEREDOC_START_RE: OnceLock<Regex> = OnceLock::new();
+    let re = HEREDOC_START_RE.get_or_init(|| {
+        Regex::new(r#"<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#).expect("valid regex")
+    });
+
+    let mut result = String::new();
+    let mut remaining = cmd;
+
+    while let Some(m) = re.find(remaining) {
+        let caps = re.captures(&remaining[m.start()..]).unwrap();
+        let delimiter = caps.get(1).unwrap().as_str();
+
+        // Add everything before the heredoc marker.
+        result.push_str(&remaining[..m.end()]);
+
+        let after_marker = &remaining[m.end()..];
+
+        // Find the delimiter on its own line.
+        let delim_pattern = format!("\n{delimiter}");
+        if let Some(end_pos) = after_marker.find(&delim_pattern) {
+            // Skip the heredoc body, keep the delimiter line.
+            remaining = &after_marker[end_pos + delim_pattern.len()..];
+            result.push('\n');
+            result.push_str(delimiter);
+        } else {
+            // No closing delimiter found — keep the rest as-is.
+            result.push_str(after_marker);
+            return result;
+        }
+    }
+
+    result.push_str(remaining);
+    result
+}
+
 /// Split a compound command into segments by `&&`, `||`, `;`, `|`
 /// while respecting quoted strings.
+///
+/// Heredoc content is stripped before segmentation to prevent false-positive
+/// matches on documentation or comments mentioning protected paths.
 #[must_use]
 pub fn split_command_segments(cmd: &str) -> Vec<String> {
+    let cleaned = strip_heredoc_content(cmd);
+    split_command_segments_inner(&cleaned)
+}
+
+/// Inner segmentation logic operating on a cleaned command string.
+fn split_command_segments_inner(cmd: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut segment = String::new();
     let bytes = cmd.as_bytes();
@@ -378,6 +430,43 @@ mod tests {
     fn test_split_command_segments_or() {
         let segments = split_command_segments("cmd1 || cmd2");
         assert_eq!(segments.len(), 2);
+    }
+
+    // -- heredoc stripping --
+
+    #[test]
+    fn test_strip_heredoc_removes_body() {
+        let cmd = "cat <<EOF\ncodeflow-cli/core/src/hooks/session_start.rs\nEOF";
+        let stripped = strip_heredoc_content(cmd);
+        assert!(!stripped.contains("session_start.rs"), "heredoc body should be stripped");
+        assert!(stripped.contains("cat <<EOF"), "command prefix should be preserved");
+    }
+
+    #[test]
+    fn test_strip_heredoc_quoted_delimiter() {
+        let cmd = "cat <<'EOF'\ncodeflow-cli/core/src/hooks/session_start.rs\nEOF";
+        let stripped = strip_heredoc_content(cmd);
+        assert!(!stripped.contains("session_start.rs"));
+    }
+
+    #[test]
+    fn test_strip_heredoc_preserves_non_heredoc() {
+        let cmd = "echo hello && ls -la";
+        let stripped = strip_heredoc_content(cmd);
+        assert_eq!(stripped, cmd);
+    }
+
+    #[test]
+    fn test_split_segments_heredoc_no_false_positive() {
+        let cmd = "cat <<'EOF'\ncodeflow-cli/core/src/hooks/session_start.rs\nEOF && echo done";
+        let segments = split_command_segments(cmd);
+        // The heredoc body should not appear in any segment.
+        for seg in &segments {
+            assert!(
+                !seg.contains("session_start.rs"),
+                "heredoc content should not appear in segments: {seg}"
+            );
+        }
     }
 
     // -- extract_variable_assignments --

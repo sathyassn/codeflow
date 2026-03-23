@@ -100,6 +100,15 @@
     ],
     "moderate": ["project/mission.md", "project/tech-stack/**"]
   },
+  "worktree_protection": {
+    "enabled": true,
+    "patterns": [
+      ".state/sentinels/**",
+      ".state/session/**",
+      ".state/runtime/**"
+    ],
+    "expansion_prefix": ".git-worktrees/*/"
+  },
   "merge_protection": {
     "description": "Blocks gh pr merge commands targeting protected branches",
     "protected_branches": ["main", "master", "release/*", "production"],

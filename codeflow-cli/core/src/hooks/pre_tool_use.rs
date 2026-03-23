@@ -80,6 +80,18 @@ pub struct EnforcementPolicy {
     pub managed_tmp: ManagedTmpConfig,
     #[serde(default)]
     pub network_operations: NetworkOperations,
+    #[serde(default)]
+    pub worktree_protection: WorktreeProtection,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct WorktreeProtection {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub expansion_prefix: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -310,6 +322,7 @@ impl EnforcementPolicy {
             network: NetworkConfig::default(),
             managed_tmp: ManagedTmpConfig::default(),
             network_operations: NetworkOperations::default(),
+            worktree_protection: WorktreeProtection::default(),
         }
     }
 }
@@ -956,6 +969,15 @@ impl EditWriteGuard {
         let abs_str = abs_path.to_string_lossy();
         let proj_str = self.project_dir.to_string_lossy();
 
+        // 4a. Allow writes to ~/.claude/ (auto-memory, project memory).
+        if let Some(home) = std::env::var_os("HOME") {
+            let claude_dir = PathBuf::from(home).join(".claude");
+            let claude_prefix = format!("{}/", claude_dir.to_string_lossy());
+            if abs_str.starts_with(&claude_prefix) {
+                return HookOutput::Allow;
+            }
+        }
+
         // 4. Check project containment.
         if abs_str.as_ref() != proj_str.as_ref() && !abs_str.starts_with(&format!("{proj_str}/")) {
             return edit_write_block(
@@ -1258,13 +1280,45 @@ impl ProtectionGuard {
         }
     }
 
-    /// Read worktree name from `CODEFLOW_WORKTREE_PATH` env var.
+    /// Read worktree name from `CODEFLOW_WORKTREE_PATH` env var,
+    /// falling back to `.state/runtime/codeflow-env.sh` if the env var is unset.
     fn read_worktree_name() -> Option<String> {
-        std::env::var("CODEFLOW_WORKTREE_PATH").ok().and_then(|p| {
-            Path::new(&p)
+        Self::read_worktree_name_with_project(None)
+    }
+
+    /// Inner implementation that accepts an optional project dir for testing.
+    fn read_worktree_name_with_project(project_dir: Option<&Path>) -> Option<String> {
+        // Try env var first.
+        if let Ok(p) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+            return Path::new(&p)
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-        })
+                .map(|n| n.to_string_lossy().to_string());
+        }
+
+        // Fallback: parse codeflow-env.sh for CODEFLOW_WORKTREE_PATH.
+        let env_file = if let Some(dir) = project_dir {
+            dir.join(".state/runtime/codeflow-env.sh")
+        } else {
+            PathBuf::from(".state/runtime/codeflow-env.sh")
+        };
+
+        let content = std::fs::read_to_string(env_file).ok()?;
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(rest) = line
+                .strip_prefix("export CODEFLOW_WORKTREE_PATH=")
+                .or_else(|| line.strip_prefix("CODEFLOW_WORKTREE_PATH="))
+            {
+                let val = rest.trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    return Path::new(val)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        None
     }
 
     /// Build the staging directory path, scoped by worktree when available.
@@ -1312,6 +1366,11 @@ impl ProtectionGuard {
             }
         }
 
+        // Worktree protection: expand patterns to cover worktree-local state.
+        if self.matches_worktree_pattern(rel_path) {
+            return self.block_verdict("high", rel_path);
+        }
+
         // Moderate tier -- warn.
         for pattern in &self.policy.protected_resources.moderate {
             if matches_glob_pattern(rel_path, pattern) {
@@ -1322,6 +1381,21 @@ impl ProtectionGuard {
         }
 
         HookOutput::Allow
+    }
+
+    /// Check if a path matches any expanded worktree protection pattern.
+    fn matches_worktree_pattern(&self, rel_path: &str) -> bool {
+        let wt = &self.policy.worktree_protection;
+        if !wt.enabled || wt.expansion_prefix.is_empty() {
+            return false;
+        }
+        for pattern in &wt.patterns {
+            let expanded = format!("{}{}", wt.expansion_prefix, pattern);
+            if matches_glob_pattern(rel_path, &expanded) {
+                return true;
+            }
+        }
+        false
     }
 
     fn block_verdict(&self, tier: &str, rel_path: &str) -> HookOutput {
@@ -1347,10 +1421,14 @@ impl ProtectionGuard {
         }
     }
 
-    /// Check Bash commands for cp/mv operations targeting protected paths.
+    /// Check Bash commands for file operations targeting protected paths.
     ///
-    /// Extracts the destination from `cp ... {dest}` or `mv ... {dest}` commands
-    /// and applies the same tier check as Edit/Write operations.
+    /// Detects:
+    /// - `cp ... {dest}` or `mv ... {dest}` commands
+    /// - `> file` / `>> file` redirect operators
+    /// - `tee file` / `tee -a file` commands
+    ///
+    /// For each detected target file, applies the same tier check as Edit/Write.
     fn check_bash_file_ops(&self, input: &HookInput) -> HookOutput {
         let command = input
             .tool_input
@@ -1363,15 +1441,32 @@ impl ProtectionGuard {
             return HookOutput::Allow;
         }
 
-        // Look for cp or mv commands.
+        // Check cp/mv commands.
+        if let Some(output) = self.check_cp_mv(command) {
+            return output;
+        }
+
+        // Check redirect operators (> file, >> file).
+        if let Some(output) = self.check_redirects(command) {
+            return output;
+        }
+
+        // Check tee commands.
+        if let Some(output) = self.check_tee(command) {
+            return output;
+        }
+
+        HookOutput::Allow
+    }
+
+    /// Check for `cp` or `mv` commands and extract destination.
+    fn check_cp_mv(&self, command: &str) -> Option<HookOutput> {
         let tokens: Vec<&str> = command.split_whitespace().collect();
         let has_cp_mv = tokens.iter().any(|t| *t == "cp" || *t == "mv");
         if !has_cp_mv {
-            return HookOutput::Allow;
+            return None;
         }
 
-        // Extract destination: last non-flag token after cp/mv.
-        // Skip flags (tokens starting with -) and the command itself.
         let mut found_cmd = false;
         let mut args: Vec<&str> = Vec::new();
         for token in &tokens {
@@ -1387,19 +1482,77 @@ impl ProtectionGuard {
             args.push(token);
         }
 
-        // Destination is the last argument (cp src dest).
         let dest = match args.last() {
             Some(d) if args.len() >= 2 => *d,
-            _ => return HookOutput::Allow,
+            _ => return None,
         };
 
-        // Skip if destination is in staging area.
-        if self.is_staging_path(dest) {
-            return HookOutput::Allow;
+        self.check_file_target(dest)
+    }
+
+    /// Check for shell redirect operators (`>` / `>>`).
+    fn check_redirects(&self, command: &str) -> Option<HookOutput> {
+        // Strip quoted strings to avoid false positives on redirects inside quotes.
+        let stripped = quoted_string_re().replace_all(command, "\"\"");
+
+        // Match > or >> followed by a file path.
+        static REDIRECT_RE: OnceLock<Regex> = OnceLock::new();
+        let re = REDIRECT_RE
+            .get_or_init(|| Regex::new(r">{1,2}\s*(\S+)").expect("valid regex"));
+
+        for caps in re.captures_iter(&stripped) {
+            if let Some(target) = caps.get(1) {
+                let path = target.as_str();
+                // Skip redirects to /dev/null, /dev/stdout, etc.
+                if path.starts_with("/dev/") {
+                    continue;
+                }
+                if let Some(output) = self.check_file_target(path) {
+                    return Some(output);
+                }
+            }
         }
 
-        let rel_dest = self.normalize_path(dest);
-        self.check_tier(&rel_dest)
+        None
+    }
+
+    /// Check for `tee` commands and extract target files.
+    fn check_tee(&self, command: &str) -> Option<HookOutput> {
+        // Strip quoted strings.
+        let stripped = quoted_string_re().replace_all(command, "\"\"");
+
+        // Match tee (with optional -a flag) followed by file path(s).
+        static TEE_RE: OnceLock<Regex> = OnceLock::new();
+        let re = TEE_RE.get_or_init(|| {
+            Regex::new(r"(?:^|\|)\s*tee\s+(?:-a\s+)?(\S+)").expect("valid regex")
+        });
+
+        for caps in re.captures_iter(&stripped) {
+            if let Some(target) = caps.get(1) {
+                let path = target.as_str();
+                if path.starts_with('-') {
+                    continue;
+                }
+                if let Some(output) = self.check_file_target(path) {
+                    return Some(output);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Check a single file target against protection tiers.
+    /// Returns `Some(HookOutput)` if the file is protected, `None` if allowed.
+    fn check_file_target(&self, path: &str) -> Option<HookOutput> {
+        if self.is_staging_path(path) {
+            return None;
+        }
+        let rel = self.normalize_path(path);
+        match self.check_tier(&rel) {
+            HookOutput::Allow => None,
+            other => Some(other),
+        }
     }
 }
 
@@ -1747,13 +1900,21 @@ pub fn matches_glob_pattern(path: &str, pattern: &str) -> bool {
     // Handle ** recursive glob -- prefix match.
     if pattern.contains("**") {
         let prefix = pattern.split("**").next().unwrap_or("");
-        if path.starts_with(prefix) {
+        if prefix.contains('*') {
+            // Prefix has single-star globs (e.g., `.git-worktrees/*/`).
+            // Convert prefix to regex: `*` matches any single directory component.
+            let regex_str = format!("^{}", regex::escape(prefix).replace(r"\*", "[^/]*"));
+            if let Ok(re) = Regex::new(&regex_str) {
+                if re.is_match(path) {
+                    return true;
+                }
+            }
+        } else if path.starts_with(prefix) {
             return true;
         }
     }
     // Handle single * glob (within one directory level).
     if pattern.contains('*') && !pattern.contains("**") {
-        // Use std::path::Path's built-in matching isn't available, so use simple conversion.
         let regex_str = format!("^{}$", regex::escape(pattern).replace(r"\*", "[^/]*"));
         if let Ok(re) = Regex::new(&regex_str) {
             return re.is_match(path);
@@ -2602,6 +2763,242 @@ mod tests {
             matches!(result, HookOutput::Allow),
             "cp TO staging area should be allowed"
         );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_redirect_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "echo x > .claude/CLAUDE.md"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "redirect overwrite to protected file should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_redirect_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[".claude/settings.json"],"high":[],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "echo x >> .claude/settings.json"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "redirect append to protected file should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_tee_to_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[],"high":[".claude/hooks/**"],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "echo x | tee .claude/hooks/foo.sh"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "tee to protected file should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_redirect_to_safe_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "echo x > /tmp/safe.txt"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "redirect to non-protected path should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_tee_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "echo x | tee -a .claude/CLAUDE.md"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "tee -a to protected file should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_read_worktree_name_fallback_to_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            "export CODEFLOW_WORKTREE_PATH=\"/path/to/.git-worktrees/worktree-ses-abc123\"\n",
+        ).unwrap();
+        let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        let result = ProtectionGuard::read_worktree_name_with_project(Some(dir.path()));
+        if let Some(val) = prev {
+            unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", val) };
+        }
+        assert_eq!(result, Some("worktree-ses-abc123".to_string()));
+    }
+
+    #[test]
+    fn test_read_worktree_name_fallback_no_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        let result = ProtectionGuard::read_worktree_name_with_project(Some(dir.path()));
+        if let Some(val) = prev {
+            unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", val) };
+        }
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_worktree_state_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[],"high":[],"moderate":[]},"worktree_protection":{"enabled":true,"patterns":[".state/session/**",".state/sentinels/**"],"expansion_prefix":".git-worktrees/*/"}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/.state/session/foo"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Block { .. }), "worktree state path should be blocked");
+    }
+
+    #[test]
+    fn test_protection_guard_allows_worktree_code_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[],"high":[],"moderate":[]},"worktree_protection":{"enabled":true,"patterns":[".state/session/**"],"expansion_prefix":".git-worktrees/*/"}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(matches!(result, HookOutput::Allow), "worktree code path should be allowed");
+    }
+
+    #[test]
+    fn test_edit_write_guard_allows_claude_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "feat/test".into());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let memory_path = format!("{home}/.claude/projects/test/memory/foo.md");
+        let input = HookInput {
+            tool_name: Some("Write".into()),
+            tool_input: Some(serde_json::json!({"file_path": memory_path})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0, "writing to ~/.claude/ should be allowed");
     }
 
         #[test]
@@ -3681,6 +4078,22 @@ mod tests {
     fn test_matches_glob_pattern_single_star() {
         assert!(matches_glob_pattern("src/main.rs", "src/*.rs"));
         assert!(!matches_glob_pattern("src/sub/main.rs", "src/*.rs"));
+    }
+
+    #[test]
+    fn test_matches_glob_pattern_mixed_star_and_doublestar() {
+        assert!(matches_glob_pattern(
+            ".git-worktrees/worktree-ses-abc/.state/session/ses-abc/pathflow/status.json",
+            ".git-worktrees/*/.state/session/**"
+        ));
+        assert!(matches_glob_pattern(
+            ".git-worktrees/worktree-ses-xyz/.state/sentinels/pathflow/ses-xyz/pf-3",
+            ".git-worktrees/*/.state/sentinels/**"
+        ));
+        assert!(!matches_glob_pattern(
+            ".state/session/ses-abc/status.json",
+            ".git-worktrees/*/.state/session/**"
+        ));
     }
 
     #[test]

@@ -485,12 +485,32 @@ impl SessionEndCleanup {
     }
 
     /// Remove the session state directory.
+    ///
+    /// Also cleans up orphaned `.lock` files in the pathflow subdirectory
+    /// (both main repo and worktree paths). Lock files may outlive sessions
+    /// if the process crashed while holding a lock.
     fn clean_session_state(
         &self,
         session_state_dir: &Path,
         _session_id: &str,
         _result: &mut CleanupResult,
     ) {
+        // Clean lock files from pathflow directory before removing.
+        let pathflow_dir = session_state_dir.join("pathflow");
+        clean_lock_files(&pathflow_dir);
+
+        // Also clean worktree-local lock files if in worktree mode.
+        if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+            if let Some(sid_name) = session_state_dir.file_name() {
+                let wt_pathflow = Path::new(&wt_path)
+                    .join(".state")
+                    .join("session")
+                    .join(sid_name)
+                    .join("pathflow");
+                clean_lock_files(&wt_pathflow);
+            }
+        }
+
         if session_state_dir.exists() {
             let _ = fs::remove_dir_all(session_state_dir);
         }
@@ -632,6 +652,24 @@ impl HookHandler for SessionEndCleanup {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Remove orphaned `.lock` files from a directory.
+///
+/// Lock files (e.g., `pathflow-session-status.json.lock`) can be left behind
+/// when a process crashes while holding a file lock.
+fn clean_lock_files(dir: &Path) {
+    if !dir.exists() {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("lock") {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
 
 /// Write a structured JSONL cleanup event to `.state/logs/sessions/cleanup-{date}.jsonl`.
 fn write_cleanup_log(project_dir: &Path, event: &serde_json::Value) {

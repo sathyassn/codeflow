@@ -216,6 +216,9 @@ pub enum WorktreeError {
     #[error("invalid worktree name: {0}")]
     InvalidName(String),
 
+    #[error("unpushed work: {0}")]
+    UnpushedWork(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

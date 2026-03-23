@@ -26,6 +26,23 @@ use crate::worktree::{WorktreeHandle, WorktreeManager, WorktreePaths};
 /// Serializes concurrent session creation across multiple agents. The returned
 /// `File` holds the lock via `flock(LOCK_EX)`. The lock is released when the
 /// file is dropped.
+/// Remove orphaned `.lock` files from a directory.
+///
+/// Lock files can be left behind when a process crashes while holding a lock.
+fn clean_lock_files_in_dir(dir: &Path) {
+    if !dir.exists() {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("lock") {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
 fn acquire_session_lock(runtime_dir: &Path) -> Result<std::fs::File, std::io::Error> {
     fs::create_dir_all(runtime_dir)?;
     let lock_path = runtime_dir.join("session.lock");
@@ -533,6 +550,9 @@ impl SessionStartInit {
             }
         }
 
+        // Detect orphaned worktrees: on disk but not in registry.
+        self.clean_orphaned_worktrees(project_dir, &registry, &mgr, result);
+
         // Prune stale git worktree references.
         let prune_opts = crate::worktree::CleanupOpts {
             prune: true,
@@ -542,6 +562,121 @@ impl SessionStartInit {
             result
                 .warnings
                 .push(format!("stale worktree prune failed: {e}"));
+        }
+    }
+
+    /// Detect and clean orphaned worktrees that exist on disk but are not in
+    /// the registry.
+    ///
+    /// Scans `.git-worktrees/` and compares against registry entries.
+    /// An orphaned worktree is cleaned only if:
+    /// - Its `pathflow-session-status.json` contains a dead `lead_pid`
+    /// - OR the status file is missing
+    /// - AND the worktree is older than 5 minutes (grace period for init)
+    fn clean_orphaned_worktrees(
+        &self,
+        _project_dir: &Path,
+        registry: &crate::worktree::WorktreeRegistry,
+        mgr: &crate::worktree::WorktreeManager,
+        result: &mut InitResult,
+    ) {
+        let base_dir = mgr.base_dir();
+        if !base_dir.exists() {
+            return;
+        }
+
+        // Collect registered worktree directory names.
+        let registered_names: std::collections::HashSet<String> = registry
+            .worktrees
+            .iter()
+            .filter(|e| e.status == "active")
+            .filter_map(|e| {
+                std::path::Path::new(&e.path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            })
+            .collect();
+
+        // Scan the .git-worktrees directory for worktree-* entries.
+        let entries = match fs::read_dir(&base_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let grace_period = std::time::Duration::from_secs(5 * 60); // 5 minutes
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("worktree-") {
+                continue;
+            }
+
+            if registered_names.contains(&name) {
+                continue; // In registry -- not orphaned.
+            }
+
+            let wt_path = entry.path();
+
+            // Grace period: skip if recently created (< 5 minutes).
+            if let Ok(metadata) = fs::metadata(&wt_path) {
+                if let Ok(created) = metadata.created().or_else(|_| metadata.modified()) {
+                    if let Ok(age) = created.elapsed() {
+                        if age < grace_period {
+                            continue; // Too young -- may be initializing.
+                        }
+                    }
+                }
+            }
+
+            // Check session status for lead_pid liveness.
+            let status_path = wt_path.join(".state").join("session");
+
+            let session_alive = if status_path.exists() {
+                if let Ok(session_dirs) = fs::read_dir(&status_path) {
+                    session_dirs.flatten().any(|sd| {
+                        let pf_status = sd
+                            .path()
+                            .join("pathflow")
+                            .join("pathflow-session-status.json");
+                        if let Ok(content) = fs::read_to_string(&pf_status) {
+                            if let Ok(status) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
+                                let lead_pid = status
+                                    .get("lead_pid")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .and_then(|v| u32::try_from(v).ok())
+                                    .unwrap_or(0);
+                                return lead_pid > 0 && is_process_alive(lead_pid);
+                            }
+                        }
+                        false
+                    })
+                } else {
+                    false
+                }
+            } else {
+                false // No session state -- dead.
+            };
+
+            if session_alive {
+                continue;
+            }
+
+            // Orphaned worktree with dead session -- clean up.
+            result.messages.push(format!(
+                "ORPHAN WORKTREE: cleaning '{name}' (on disk, not in registry, dead session)",
+            ));
+
+            let opts = crate::worktree::CleanupOpts {
+                force: true,
+                ..Default::default()
+            };
+            if let Err(e) = mgr.cleanup(&name, &opts) {
+                result.warnings.push(format!(
+                    "orphan worktree cleanup failed for '{name}': {e}",
+                ));
+            }
         }
     }
 
@@ -788,12 +923,23 @@ impl SessionStartInit {
     }
 
     /// Remove all artifacts for a stale session: session dir, sentinel dir, team config/tasks.
+    ///
+    /// Also cleans up orphaned `.lock` files in the pathflow directory before
+    /// removing the session directory.
     fn remove_stale_session_artifacts(
         &self,
         project_dir: &Path,
         sid: &str,
         team_name: Option<&str>,
     ) {
+        // Clean lock files from pathflow directory.
+        let pathflow_dir = project_dir
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        clean_lock_files_in_dir(&pathflow_dir);
+
         let _ = fs::remove_dir_all(project_dir.join(".state").join("session").join(sid));
         let _ = fs::remove_dir_all(
             project_dir
@@ -1568,7 +1714,17 @@ impl<L: LedgerWriter> SessionStartLogging<L> {
 
 impl<L: LedgerWriter> HookHandler for SessionStartLogging<L> {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
-        let session_id = input.session_id.as_deref().unwrap_or("unknown");
+        // Prefer CODEFLOW_SESSION_ID from env file over stdin UUID.
+        // SessionStartLogging fires early, before env file may be written on
+        // first startup, so fall back to input.session_id (Claude per-agent UUID).
+        let project_dir = input.project_dir.as_deref().unwrap_or(".");
+        let session_id_owned =
+            crate::hooks::logging::resolve_session_id(std::path::Path::new(project_dir));
+        let session_id = if session_id_owned == "unknown" {
+            input.session_id.as_deref().unwrap_or("unknown")
+        } else {
+            &session_id_owned
+        };
         let source = input.source.as_deref().unwrap_or("unknown");
 
         self.log_start(session_id, source, None)?;

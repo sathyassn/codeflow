@@ -45,6 +45,8 @@ pub enum GitHooksCommand {
         file: PathBuf,
         /// Commit source (message, merge, commit, squash, or empty)
         source: Option<String>,
+        /// Commit SHA (passed by git on --amend, e.g. HEAD)
+        commit_sha: Option<String>,
     },
     /// Run pure-logic pre-commit checks
     #[command(name = "pre-commit-validate")]
@@ -72,9 +74,11 @@ pub fn run(cmd: Option<GitHooksCommand>) -> Result<()> {
         GitHooksCommand::PostCommit
         | GitHooksCommand::PrePush { .. }
         | GitHooksCommand::PreCommitValidate => Ok(()),
-        GitHooksCommand::PrepareCommitMsg { file, source } => {
-            run_prepare_commit_msg(&file, source.as_deref())
-        }
+        GitHooksCommand::PrepareCommitMsg {
+            file,
+            source,
+            commit_sha: _,
+        } => run_prepare_commit_msg(&file, source.as_deref()),
     }
 }
 
@@ -643,6 +647,20 @@ mod tests {
         let result = run(Some(GitHooksCommand::PrepareCommitMsg {
             file,
             source: Some("message".to_string()),
+            commit_sha: None,
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_prepare_commit_msg_amend_three_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("msg");
+        std::fs::write(&file, "existing commit message\n").unwrap();
+        let result = run(Some(GitHooksCommand::PrepareCommitMsg {
+            file,
+            source: Some("commit".to_string()),
+            commit_sha: Some("HEAD".to_string()),
         }));
         assert!(result.is_ok());
     }

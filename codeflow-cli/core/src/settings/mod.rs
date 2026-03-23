@@ -398,6 +398,180 @@ pub fn format_results(results: &[ValidationResult]) -> String {
     s
 }
 
+/// Result of a single sync operation.
+#[derive(Debug, Clone)]
+pub struct SyncChange {
+    pub destination: String,
+    pub template: String,
+    pub action: SyncAction,
+}
+
+/// What happened during sync.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncAction {
+    Created,
+    Updated,
+    Unchanged,
+}
+
+/// Sync settings templates to their destinations.
+///
+/// Reads the active template (or the one specified by `template_name`),
+/// merges it into each destination file (preserving manual overrides),
+/// and reports what changed.
+///
+/// # Errors
+///
+/// Returns `SettingsError` on config loading or I/O failures.
+pub fn sync_settings_template(
+    project_dir: &Path,
+    template_name: Option<&str>,
+) -> Result<Vec<SyncChange>, SettingsError> {
+    let config = load_settings_templates_config(project_dir)?;
+    let template_dir = project_dir.join(&config.directory);
+
+    if !template_dir.exists() {
+        return Err(SettingsError::TemplateDiscovery(format!(
+            "template directory not found: {}",
+            template_dir.display()
+        )));
+    }
+
+    // Determine which template to use.
+    let template_file_name = match template_name {
+        Some(name) => {
+            let n = if std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                name.to_string()
+            } else {
+                format!("{name}.json")
+            };
+            if !template_dir.join(&n).exists() {
+                return Err(SettingsError::TemplateDiscovery(format!(
+                    "template not found: {n}"
+                )));
+            }
+            n
+        }
+        None => {
+            // Use the template from the first copy_mapping as the active template.
+            config
+                .copy_mappings
+                .first()
+                .map_or_else(|| "autonomous.json".to_string(), |m| m.template.clone())
+        }
+    };
+
+    let template_path = template_dir.join(&template_file_name);
+    let template_data = std::fs::read_to_string(&template_path)
+        .map_err(|e| SettingsError::TemplateDiscovery(format!("reading template: {e}")))?;
+    let template_value: serde_json::Value = serde_json::from_str(&template_data)
+        .map_err(|e| ConfigError::Parse(format!("parsing template: {e}")))?;
+
+    let mut changes = Vec::new();
+
+    // Build copy mappings: if template_name was specified, override all mappings
+    // to use that template.
+    let mappings: Vec<CopyMapping> = if template_name.is_some() {
+        config
+            .copy_mappings
+            .iter()
+            .map(|m| CopyMapping {
+                template: template_file_name.clone(),
+                destination: m.destination.clone(),
+                purpose: m.purpose.clone(),
+            })
+            .collect()
+    } else {
+        config.copy_mappings.clone()
+    };
+
+    for mapping in &mappings {
+        let dest_path = project_dir.join(&mapping.destination);
+
+        if !dest_path.exists() {
+            // Create new file from template.
+            std::fs::create_dir_all(dest_path.parent().unwrap_or(project_dir))
+                .map_err(|e| SettingsError::TemplateDiscovery(format!("creating directory: {e}")))?;
+            std::fs::write(&dest_path, &template_data)
+                .map_err(|e| SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display())))?;
+            changes.push(SyncChange {
+                destination: mapping.destination.clone(),
+                template: template_file_name.clone(),
+                action: SyncAction::Created,
+            });
+            continue;
+        }
+
+        // Read existing destination.
+        let dest_data = std::fs::read_to_string(&dest_path)
+            .map_err(|e| SettingsError::TemplateDiscovery(format!("reading {}: {e}", dest_path.display())))?;
+        let dest_value: serde_json::Value = serde_json::from_str(&dest_data)
+            .map_err(|e| ConfigError::Parse(format!("parsing {}: {e}", dest_path.display())))?;
+
+        // Merge: template is base, destination overrides are preserved.
+        let merged = merge_json(&template_value, &dest_value);
+        let merged_str = serde_json::to_string_pretty(&merged)
+            .map_err(|e| ConfigError::Parse(format!("serializing merge: {e}")))?;
+
+        // Check if anything changed.
+        let dest_normalized = serde_json::to_string_pretty(&dest_value)
+            .map_err(|e| ConfigError::Parse(format!("serializing dest: {e}")))?;
+
+        if merged_str == dest_normalized {
+            changes.push(SyncChange {
+                destination: mapping.destination.clone(),
+                template: template_file_name.clone(),
+                action: SyncAction::Unchanged,
+            });
+        } else {
+            std::fs::write(&dest_path, &merged_str)
+                .map_err(|e| SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display())))?;
+            changes.push(SyncChange {
+                destination: mapping.destination.clone(),
+                template: template_file_name.clone(),
+                action: SyncAction::Updated,
+            });
+        }
+    }
+
+    Ok(changes)
+}
+
+/// Deep merge two JSON values. Template is the base, destination provides overrides.
+/// Keys in destination that are NOT in template are preserved (manual overrides).
+/// Keys in template are the new baseline.
+fn merge_json(template: &serde_json::Value, destination: &serde_json::Value) -> serde_json::Value {
+    match (template, destination) {
+        (serde_json::Value::Object(tmpl), serde_json::Value::Object(dest)) => {
+            let mut result = serde_json::Map::new();
+
+            // Start with all template keys.
+            for (k, v) in tmpl {
+                if let Some(dest_v) = dest.get(k) {
+                    // Both have the key: recurse for objects, use template value for others.
+                    result.insert(k.clone(), merge_json(v, dest_v));
+                } else {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+
+            // Preserve destination keys not in template (manual overrides).
+            for (k, v) in dest {
+                if !tmpl.contains_key(k) {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+
+            serde_json::Value::Object(result)
+        }
+        // For non-object values, template wins (it's the new baseline).
+        _ => template.clone(),
+    }
+}
+
 /// Load the `settings_templates` section from enforcement-policy.json.
 fn load_settings_templates_config(
     project_dir: &Path,

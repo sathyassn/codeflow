@@ -3,6 +3,8 @@
 //! Supports force removal, dry-run mode, and git worktree pruning.
 
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use crate::error::WorktreeError;
 
@@ -53,6 +55,11 @@ pub(crate) fn cleanup_worktree(
         return Ok(());
     }
 
+    // Rescue uncommitted/unpushed work before deletion (force mode only).
+    if opts.force && wt_path.exists() {
+        rescue_uncommitted_work(&wt_path, name)?;
+    }
+
     // Attempt removal via git2.
     let removed_via_git = remove_via_git2(mgr, name, opts.force);
 
@@ -70,6 +77,104 @@ pub(crate) fn cleanup_worktree(
     registry::deregister_worktree(mgr.registry_path(), &wt_path_str)?;
 
     Ok(())
+}
+
+/// Rescue uncommitted and unpushed work from a worktree before deletion.
+///
+/// 1. If the worktree has dirty files: stages all and creates a WIP commit.
+/// 2. If the worktree has unpushed commits: attempts to push them.
+/// 3. If push fails (no network): returns `WorktreeError::UnpushedWork`.
+/// 4. If clean or push succeeds: returns `Ok(())` (safe to delete).
+pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(), WorktreeError> {
+    // Check if directory is a git repo at all.
+    if !wt_path.join(".git").exists() {
+        return Ok(());
+    }
+
+    // Step 1: Check for dirty files.
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(wt_path)
+        .output()
+        .map_err(|e| WorktreeError::Cleanup(format!("git status failed: {e}")))?;
+
+    let dirty = !status_output.stdout.is_empty();
+
+    if dirty {
+        // Stage and commit all dirty files.
+        let add_status = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(wt_path)
+            .status()
+            .map_err(|e| WorktreeError::Cleanup(format!("git add -A failed: {e}")))?;
+
+        if !add_status.success() {
+            crate::diagnostics::warn(
+                "worktree",
+                &format!("git add -A failed in {session_hint}, proceeding"),
+            );
+        }
+
+        let commit_msg = format!("wip: auto-save from crashed session {session_hint}");
+        let commit_status = Command::new("git")
+            .args(["commit", "-m", &commit_msg, "--no-verify"])
+            .current_dir(wt_path)
+            .status()
+            .map_err(|e| WorktreeError::Cleanup(format!("git commit failed: {e}")))?;
+
+        if !commit_status.success() {
+            crate::diagnostics::warn(
+                "worktree",
+                &format!("wip commit failed in {session_hint}, proceeding"),
+            );
+        }
+    }
+
+    // Step 2: Check for unpushed commits.
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .map_err(|e| WorktreeError::Cleanup(format!("git rev-parse failed: {e}")))?;
+
+    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        // Detached HEAD — no branch to push. Work is only local.
+        if dirty {
+            return Err(WorktreeError::UnpushedWork(format!(
+                "worktree '{session_hint}' has uncommitted work on detached HEAD"
+            )));
+        }
+        return Ok(());
+    }
+
+    // Check if there are unpushed commits.
+    let log_output = Command::new("git")
+        .args(["log", "--oneline", &format!("origin/{branch}..HEAD")])
+        .current_dir(wt_path)
+        .output();
+
+    let has_unpushed = match log_output {
+        Ok(output) => !output.stdout.is_empty(),
+        Err(_) => dirty, // If we can't check, assume unpushed if we just committed.
+    };
+
+    if !has_unpushed {
+        return Ok(()); // Nothing to push — safe to delete.
+    }
+
+    // Step 3: Attempt to push.
+    let push_status = Command::new("git")
+        .args(["push", "origin", &branch])
+        .current_dir(wt_path)
+        .status();
+
+    match push_status {
+        Ok(status) if status.success() => Ok(()), // Push succeeded — safe to delete.
+        _ => Err(WorktreeError::UnpushedWork(format!(
+            "worktree '{session_hint}' has unpushed commits on branch '{branch}'"
+        ))),
+    }
 }
 
 /// Attempt to remove a worktree using git2.
@@ -223,6 +328,52 @@ mod tests {
         let result = cleanup_worktree(&mgr, "force-wt", &opts);
         assert!(result.is_ok());
         assert!(!wt_dir.exists(), "directory should be removed");
+    }
+
+    #[test]
+    fn test_rescue_uncommitted_work_clean_worktree() {
+        // A clean worktree should return Ok(()).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        let result = rescue_uncommitted_work(dir.path(), "test-session");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rescue_uncommitted_work_non_git_dir() {
+        // A non-git directory should return Ok(()) (nothing to rescue).
+        let dir = tempfile::tempdir().unwrap();
+        let result = rescue_uncommitted_work(dir.path(), "test-session");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rescue_uncommitted_work_dirty_detached_head() {
+        // A dirty worktree on detached HEAD should return UnpushedWork error.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // Detach HEAD
+        repo.set_head_detached(oid).unwrap();
+
+        // Create a dirty file
+        fs::write(dir.path().join("dirty.txt"), "uncommitted data").unwrap();
+
+        let result = rescue_uncommitted_work(dir.path(), "test-session");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), WorktreeError::UnpushedWork(_)));
     }
 
     #[test]
