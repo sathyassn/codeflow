@@ -244,6 +244,71 @@ fn setup_shared_symlinks(project_dir: &Path, wt_state_dir: &Path) -> Result<(), 
     Ok(())
 }
 
+/// Repair shared state symlinks in an existing worktree.
+///
+/// For each `SHARED_STATE_DIRS` entry, checks if the worktree has a real directory
+/// instead of a symlink. If so, removes the real directory and creates the symlink.
+/// This fixes worktrees created by older binaries that didn't set up symlinks.
+///
+/// Called from `SessionStart` on resume/compact into an existing worktree.
+pub fn repair_symlinks(project_dir: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
+    let wt_state_dir = worktree_path.join(".state");
+    let main_state = project_dir.join(".state");
+
+    // Ensure .state dir exists in the worktree.
+    if !wt_state_dir.exists() {
+        fs::create_dir_all(&wt_state_dir)?;
+    }
+
+    for dir_name in SHARED_STATE_DIRS {
+        let src = main_state.join(dir_name);
+        let dst = wt_state_dir.join(dir_name);
+
+        // Skip if source doesn't exist in the main repo.
+        if !src.exists() {
+            continue;
+        }
+
+        // If dst doesn't exist at all, create symlink.
+        let meta = match dst.symlink_metadata() {
+            Ok(m) => m,
+            Err(_) => {
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(&src, &dst)?;
+                }
+                diagnostics::warn(
+                    "worktree",
+                    &format!("created missing symlink: {}", dst.display()),
+                );
+                continue;
+            }
+        };
+
+        // Already a symlink — nothing to repair.
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+
+        // Real directory — replace with symlink.
+        diagnostics::warn(
+            "worktree",
+            &format!("repairing: replacing real dir with symlink: {}", dst.display()),
+        );
+        fs::remove_dir_all(&dst)?;
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&src, &dst)?;
+        }
+    }
+
+    // Also ensure local dirs exist.
+    create_local_dirs(&wt_state_dir)?;
+
+    Ok(())
+}
+
 /// Create per-worktree local directories that are NOT symlinked.
 fn create_local_dirs(wt_state_dir: &Path) -> Result<(), WorktreeError> {
     for dir_name in LOCAL_STATE_DIRS {
@@ -812,5 +877,96 @@ mod tests {
             hooks_dir.join("commit-msg").exists(),
             "commit-msg hook should be installed"
         );
+    }
+
+    // -- repair_symlinks tests --
+
+    #[test]
+    fn test_repair_symlinks_converts_real_dirs() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        // Create main repo .state with shared dirs.
+        fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
+        fs::create_dir_all(main_dir.path().join(".state/ledger")).unwrap();
+
+        // Create worktree .state with real dirs (not symlinks).
+        let wt_state = wt_dir.path().join(".state");
+        fs::create_dir_all(wt_state.join("db")).unwrap();
+        fs::create_dir_all(wt_state.join("ledger")).unwrap();
+
+        // Verify they are real dirs.
+        assert!(!wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink());
+
+        repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
+
+        // After repair, they should be symlinks.
+        assert!(
+            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            "db should be a symlink after repair"
+        );
+        assert!(
+            wt_state.join("ledger").symlink_metadata().unwrap().file_type().is_symlink(),
+            "ledger should be a symlink after repair"
+        );
+    }
+
+    #[test]
+    fn test_repair_symlinks_creates_missing() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        // Create main repo .state with shared dirs.
+        fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
+
+        // No .state dir in worktree at all.
+        repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
+
+        let wt_state = wt_dir.path().join(".state");
+        assert!(
+            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            "db should be created as symlink"
+        );
+    }
+
+    #[test]
+    fn test_repair_symlinks_preserves_existing_symlinks() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
+        let wt_state = wt_dir.path().join(".state");
+        fs::create_dir_all(&wt_state).unwrap();
+
+        // Create a proper symlink first.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            main_dir.path().join(".state/db"),
+            wt_state.join("db"),
+        )
+        .unwrap();
+
+        // Repair should be a no-op for existing symlinks.
+        repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
+
+        assert!(
+            wt_state.join("db").symlink_metadata().unwrap().file_type().is_symlink(),
+            "db should still be a symlink"
+        );
+    }
+
+    #[test]
+    fn test_repair_symlinks_creates_local_dirs() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(main_dir.path().join(".state")).unwrap();
+
+        repair_symlinks(main_dir.path(), wt_dir.path()).unwrap();
+
+        let wt_state = wt_dir.path().join(".state");
+        assert!(wt_state.join("runtime").is_dir(), "runtime should be created");
+        assert!(wt_state.join("session").is_dir(), "session should be created");
+        assert!(wt_state.join("sentinels").is_dir(), "sentinels should be created");
     }
 }

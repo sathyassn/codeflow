@@ -256,8 +256,15 @@ pub fn locked_register_with_limit(
                         entry_owned.name
                     ),
                 );
-                existing.path.clone_from(&entry_owned.path);
-                existing.branch.clone_from(&entry_owned.branch);
+                // Only overwrite path/branch if the new value is non-empty.
+                // This prevents SessionStart pre-registration (with empty path)
+                // from clobbering a valid path set by create_detached_worktree().
+                if !entry_owned.path.is_empty() {
+                    existing.path.clone_from(&entry_owned.path);
+                }
+                if !entry_owned.branch.is_empty() {
+                    existing.branch.clone_from(&entry_owned.branch);
+                }
                 existing.created_at.clone_from(&entry_owned.created_at);
                 existing.session_id.clone_from(&entry_owned.session_id);
                 existing.task_id.clone_from(&entry_owned.task_id);
@@ -1012,6 +1019,57 @@ session_id: ses-123
             "should have updated path"
         );
         assert_eq!(active[0].branch, "feat/two", "should have updated branch");
+        assert_eq!(active[0].session_id, Some("ses-002".to_string()));
+    }
+
+    #[test]
+    fn test_locked_register_dedup_preserves_path_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        // First registration with a real path and branch.
+        let entry1 = WorktreeEntry {
+            name: "preserve-wt".to_string(),
+            path: "/tmp/wt/real-path".to_string(),
+            branch: "feat/real-branch".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-001".to_string()),
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry1, 3).unwrap();
+
+        // Second registration with empty path and branch
+        // (simulates SessionStart pre-registration).
+        let entry2 = WorktreeEntry {
+            name: "preserve-wt".to_string(),
+            path: String::new(),
+            branch: String::new(),
+            created_at: "2026-03-07T11:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-002".to_string()),
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry2, 3).unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        let active: Vec<_> = reg
+            .worktrees
+            .iter()
+            .filter(|e| e.name == "preserve-wt" && e.status == "active")
+            .collect();
+        assert_eq!(active.len(), 1);
+
+        // Path and branch should be preserved (not overwritten with empty).
+        assert_eq!(
+            active[0].path, "/tmp/wt/real-path",
+            "empty path should not overwrite non-empty"
+        );
+        assert_eq!(
+            active[0].branch, "feat/real-branch",
+            "empty branch should not overwrite non-empty"
+        );
+        // session_id should be updated regardless.
         assert_eq!(active[0].session_id, Some("ses-002".to_string()));
     }
 }

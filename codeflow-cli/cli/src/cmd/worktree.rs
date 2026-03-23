@@ -1,6 +1,6 @@
 //! Worktree command: git worktree lifecycle management.
 //!
-//! Supports subcommands: `list`, `cleanup`, `prune`.
+//! Supports subcommands: `list`, `cleanup`, `prune`, `repair`.
 //! Default (no subcommand) behaves like `list`.
 
 use std::path::Path;
@@ -31,6 +31,12 @@ pub enum WorktreeCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Repair shared state symlinks in a worktree
+    Repair {
+        /// Worktree path to repair (defaults to CODEFLOW_WORKTREE_PATH)
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 #[allow(clippy::needless_pass_by_value)] // clap passes enum by value
@@ -42,6 +48,7 @@ pub fn run(command: Option<WorktreeCommand>) -> Result<()> {
             run_cleanup(&project_dir, *force, *dry_run)
         }
         Some(WorktreeCommand::Prune { dry_run }) => run_prune(&project_dir, *dry_run),
+        Some(WorktreeCommand::Repair { path }) => run_repair(&project_dir, path.as_deref()),
     }
 }
 
@@ -128,6 +135,27 @@ fn run_prune(project_dir: &Path, dry_run: bool) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_repair(project_dir: &Path, path: Option<&str>) -> Result<()> {
+    let wt_path = match path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let env_path = std::env::var("CODEFLOW_WORKTREE_PATH")
+                .context("no --path provided and CODEFLOW_WORKTREE_PATH not set")?;
+            std::path::PathBuf::from(env_path)
+        }
+    };
+
+    if !wt_path.exists() {
+        anyhow::bail!("worktree path does not exist: {}", wt_path.display());
+    }
+
+    codeflow_core::worktree::repair_symlinks(project_dir, &wt_path)
+        .context("repairing symlinks")?;
+
+    println!("repaired symlinks for {}", wt_path.display());
     Ok(())
 }
 
@@ -615,6 +643,41 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(WorktreeCommand::Prune { dry_run: true })
+        ));
+    }
+
+    #[test]
+    fn test_dispatch_repair() {
+        use clap::Parser;
+
+        #[derive(Debug, Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Option<WorktreeCommand>,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "repair"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(WorktreeCommand::Repair { path: None })
+        ));
+    }
+
+    #[test]
+    fn test_dispatch_repair_with_path() {
+        use clap::Parser;
+
+        #[derive(Debug, Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Option<WorktreeCommand>,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "repair", "--path", "/tmp/worktree"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(WorktreeCommand::Repair { path: Some(_) })
         ));
     }
 }

@@ -455,6 +455,19 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_repair_parses() {
+        let result = Cli::try_parse_from(["codeflow", "worktree", "repair"]);
+        assert!(result.is_ok(), "should parse worktree repair");
+    }
+
+    #[test]
+    fn test_worktree_repair_with_path_parses() {
+        let result =
+            Cli::try_parse_from(["codeflow", "worktree", "repair", "--path", "/tmp/wt"]);
+        assert!(result.is_ok(), "should parse worktree repair --path");
+    }
+
+    #[test]
     fn test_parallel_status_parses() {
         let result = Cli::try_parse_from(["codeflow", "parallel", "status"]);
         assert!(result.is_ok(), "should parse parallel status");

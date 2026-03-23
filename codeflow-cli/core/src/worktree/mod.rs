@@ -23,6 +23,7 @@ use crate::types::BranchName;
 
 pub use cleanup::CleanupOpts;
 pub use paths::WorktreePaths;
+pub use setup::repair_symlinks;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, count_active, list_active, locked_deregister_worktree,
     locked_read_registry, locked_register_with_limit, maybe_auto_start_daemon,
