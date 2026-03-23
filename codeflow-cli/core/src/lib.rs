@@ -5,6 +5,7 @@
 pub mod autorun;
 pub mod config;
 pub mod coordination;
+pub mod diagnostics;
 pub mod doctor;
 pub mod error;
 pub mod file_lock;

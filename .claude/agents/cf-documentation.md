@@ -235,30 +235,38 @@ When a document has more than 3 sections, or when explicitly requested:
 
 When an Edit or Write call is blocked on a protected file (hook exits 2 with a protected-resource message), handle it independently using this procedure. cf-documentation regularly works with CRITICAL-tier files such as `.claude/CLAUDE.md` and agent definitions — this workflow is the expected path, not an error state.
 
-**Staging path pattern:** `/tmp/claude/codeflow/managed/protected-edits/{relative-path}`
+**Staging path pattern:** `/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}`
 
-Where `codeflow` is the repo basename (`CF_PROJECT_ROOT` defaults to the repo basename).
+Where `CF_PROJECT_ROOT` is the repo basename (e.g., `codeflow`). Source `.state/runtime/codeflow-env.sh` first to set `CF_PROJECT_ROOT`.
 
 **Procedure:**
 
 1. **Copy original to staging:**
 
    ```bash
-   mkdir -p /tmp/claude/codeflow/managed/protected-edits/{parent-dirs}
-   cp {original-path} /tmp/claude/codeflow/managed/protected-edits/{relative-path}
+   mkdir -p /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{parent-dirs}
+   cp {original-path} /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}
    ```
 
-   Example: `cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md`
+   Example: `cp .claude/CLAUDE.md /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/.claude/CLAUDE.md`
 
-2. **Edit the staged copy** — use Edit or Write tools on the path under `/tmp/claude/codeflow/managed/protected-edits/`. The hook's staging area exception allows these writes.
+2. **Edit the staged copy** — use Edit or Write tools on the path under `/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/`. The hook's staging area exception allows these writes.
 
 3. **Write a COMPLETE modified file** — not an instruction file with line-by-line steps. The staged file must be the full, ready-to-copy file content.
 
 4. **Provide the user a single reverse cp command** (copy-paste ready):
 
    ```text
-   cp /tmp/claude/codeflow/managed/protected-edits/{relative-path} {original-path}
+   cp /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path} {original-path}
    ```
+
+4b. **WORKTREE MODE** — If `CODEFLOW_WORKTREE_PATH` is set, the cp target MUST use the worktree path:
+
+   ```text
+   cp /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path} $CODEFLOW_WORKTREE_PATH/{original-relative-path}
+   ```
+
+   Do NOT target the main repo path — in worktree mode, the main repo is on a protected branch.
 
 5. **User runs the cp command** — wait for confirmation.
 
@@ -267,12 +275,12 @@ Where `codeflow` is the repo basename (`CF_PROJECT_ROOT` defaults to the repo ba
 7. **Clean up the specific staged file** (not the whole directory):
 
    ```bash
-   rm /tmp/claude/codeflow/managed/protected-edits/{relative-path}
+   rm /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}
    ```
 
 **Key rules:**
 
-- Preserve directory structure in staging (e.g., `.claude/CLAUDE.md` → `/tmp/claude/codeflow/managed/protected-edits/.claude/CLAUDE.md`)
+- Preserve directory structure in staging (e.g., `.claude/CLAUDE.md` → `/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/.claude/CLAUDE.md`)
 - Never write instruction files to staging — only write the complete modified file
 - The cp command must be a single, unambiguous line the user can run directly
 - This workflow is self-contained — do NOT delegate to cf-security or escalate to the team lead for the staging workflow itself

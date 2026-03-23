@@ -148,12 +148,15 @@ Parse the `protected_resources` object which contains three arrays:
 
    ```text
    # CF_PROJECT_ROOT is set by session-start hook (codeflow-env.sh)
+   # CF_PROJECT_ROOT contains the project root folder basename only (e.g., "codeflow"), NOT the full path.
    mkdir -p /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{parent-dirs}
    cp {original} /tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}
    ```
 
    The agent does NOT ask the user to run this copy. The hook allows `cp FROM` protected paths
    TO `/tmp/claude/` -- the agent runs it directly. Do NOT escalate to the team lead for staging.
+
+   In worktree mode, use `$CODEFLOW_WORKTREE_PATH` as the target for apply cp commands (step 4).
 
 3. **EDIT** -- The agent edits the staged copy directly using Edit/Write tools. All edits are
    allowed in the managed staging area (`/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/`).

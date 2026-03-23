@@ -1346,11 +1346,71 @@ impl ProtectionGuard {
             category: Some(BlockCategory::ProtectedResource),
         }
     }
+
+    /// Check Bash commands for cp/mv operations targeting protected paths.
+    ///
+    /// Extracts the destination from `cp ... {dest}` or `mv ... {dest}` commands
+    /// and applies the same tier check as Edit/Write operations.
+    fn check_bash_file_ops(&self, input: &HookInput) -> HookOutput {
+        let command = input
+            .tool_input
+            .as_ref()
+            .and_then(|v| v.get("command"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if command.is_empty() {
+            return HookOutput::Allow;
+        }
+
+        // Look for cp or mv commands.
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        let has_cp_mv = tokens.iter().any(|t| *t == "cp" || *t == "mv");
+        if !has_cp_mv {
+            return HookOutput::Allow;
+        }
+
+        // Extract destination: last non-flag token after cp/mv.
+        // Skip flags (tokens starting with -) and the command itself.
+        let mut found_cmd = false;
+        let mut args: Vec<&str> = Vec::new();
+        for token in &tokens {
+            if !found_cmd {
+                if *token == "cp" || *token == "mv" {
+                    found_cmd = true;
+                }
+                continue;
+            }
+            if token.starts_with('-') {
+                continue;
+            }
+            args.push(token);
+        }
+
+        // Destination is the last argument (cp src dest).
+        let dest = match args.last() {
+            Some(d) if args.len() >= 2 => *d,
+            _ => return HookOutput::Allow,
+        };
+
+        // Skip if destination is in staging area.
+        if self.is_staging_path(dest) {
+            return HookOutput::Allow;
+        }
+
+        let rel_dest = self.normalize_path(dest);
+        self.check_tier(&rel_dest)
+    }
 }
 
 impl HookHandler for ProtectionGuard {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
         let tool_name = input.tool_name.as_deref().unwrap_or("");
+
+        // Check Bash cp/mv commands targeting protected paths.
+        if tool_name == "Bash" {
+            return Ok(self.check_bash_file_ops(&input));
+        }
 
         if tool_name != "Edit" && tool_name != "Write" {
             return Ok(HookOutput::Allow);
@@ -2426,6 +2486,125 @@ mod tests {
     // -- EditWriteGuard tests --
 
     #[test]
+    fn test_protection_guard_blocks_bash_cp_to_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create enforcement policy with .claude/CLAUDE.md as critical.
+        let config_dir = dir.path().join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[".claude/CLAUDE.md",".claude/settings.json"],"high":[".claude/hooks/**"],"moderate":[]}}"#,
+        ).unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            None,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "cp /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md .claude/CLAUDE.md"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test123".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "cp to .claude/CLAUDE.md should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_bash_cp_to_normal_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            None,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "cp /tmp/source.rs codeflow-cli/core/src/some_file.rs"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test123".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "cp to normal file should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_bash_non_cp() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            None,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "ls -la .claude/"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test123".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "non-cp bash command should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_bash_cp_to_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::load(dir.path());
+        let handler = ProtectionGuard::new_with_worktree(
+            policy,
+            dir.path().to_path_buf(),
+            None,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "cp .claude/CLAUDE.md /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test123".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "cp TO staging area should be allowed"
+        );
+    }
+
+        #[test]
     fn test_edit_write_guard_allows_tmp() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();

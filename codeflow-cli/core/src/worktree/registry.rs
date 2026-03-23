@@ -9,6 +9,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics;
 use crate::error::WorktreeError;
 use crate::file_lock;
 
@@ -242,6 +243,28 @@ pub fn locked_register_with_limit(
             Ok(output.into_bytes())
         },
         |reg| {
+            // Check for existing entry with same name (dedup).
+            if let Some(existing) = reg
+                .worktrees
+                .iter_mut()
+                .find(|e| e.name == entry_owned.name && e.status == "active")
+            {
+                diagnostics::warn(
+                    "worktree",
+                    &format!(
+                        "duplicate registration for '{}', updating in place",
+                        entry_owned.name
+                    ),
+                );
+                existing.path.clone_from(&entry_owned.path);
+                existing.branch.clone_from(&entry_owned.branch);
+                existing.created_at.clone_from(&entry_owned.created_at);
+                existing.session_id.clone_from(&entry_owned.session_id);
+                existing.task_id.clone_from(&entry_owned.task_id);
+                reg.metadata.last_updated = super::now_rfc3339();
+                return Ok(());
+            }
+
             let active = count_active(reg);
             if active >= max_concurrent {
                 return Err(format!(
@@ -942,5 +965,53 @@ session_id: ses-123
 
         let reg = read_registry(&path).unwrap();
         assert_eq!(count_active(&reg), 3);
+    }
+
+    #[test]
+    fn test_locked_register_dedup_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry1 = WorktreeEntry {
+            name: "dedup-wt".to_string(),
+            path: "/tmp/wt/dedup-1".to_string(),
+            branch: "feat/one".to_string(),
+            created_at: "2026-03-07T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-001".to_string()),
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry1, 3).unwrap();
+
+        // Register again with same name but different path.
+        let entry2 = WorktreeEntry {
+            name: "dedup-wt".to_string(),
+            path: "/tmp/wt/dedup-2".to_string(),
+            branch: "feat/two".to_string(),
+            created_at: "2026-03-07T11:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-002".to_string()),
+            task_id: None,
+        };
+        locked_register_with_limit(&path, &entry2, 3).unwrap();
+
+        // Should have only one entry (dedup'd).
+        let reg = read_registry(&path).unwrap();
+        let active: Vec<_> = reg
+            .worktrees
+            .iter()
+            .filter(|e| e.status == "active")
+            .collect();
+        assert_eq!(
+            active.len(),
+            1,
+            "should have exactly one active entry after dedup"
+        );
+        assert_eq!(
+            active[0].path, "/tmp/wt/dedup-2",
+            "should have updated path"
+        );
+        assert_eq!(active[0].branch, "feat/two", "should have updated branch");
+        assert_eq!(active[0].session_id, Some("ses-002".to_string()));
     }
 }

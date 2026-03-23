@@ -329,6 +329,11 @@
             "type": "command",
             "command": "codeflow hooks pre-tool-use security",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "codeflow hooks pre-tool-use protection-guard",
+            "timeout": 5
           }
         ]
       },

@@ -12,11 +12,28 @@ use crate::exit::{EXIT_HOOK_BLOCK, EXIT_SUCCESS, ExitError};
 /// Detect the project root directory.
 ///
 /// Resolution order:
-/// 1. `CF_PROJECT_ROOT` environment variable
-/// 2. Walk up from current directory looking for `.claude/` or `.codeflow/`
+/// 1. `CODEFLOW_WORKTREE_PATH` environment variable (worktree-aware)
+/// 2. `CF_PROJECT_ROOT` environment variable
+/// 3. Walk up from current directory looking for `.claude/` or `.codeflow/`
 ///
 /// Returns the absolute path to the project root.
 pub fn detect_project_dir() -> Result<PathBuf> {
+    // 1. Check CODEFLOW_WORKTREE_PATH first (worktree mode).
+    if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+        let path = PathBuf::from(&wt_path);
+        if path.is_dir() && path.join(".state").is_dir() {
+            return Ok(path);
+        }
+        if !wt_path.is_empty() {
+            codeflow_core::diagnostics::warn_fallback(
+                "hooks",
+                &format!("CODEFLOW_WORKTREE_PATH ({wt_path})"),
+                "CF_PROJECT_ROOT",
+            );
+        }
+    }
+
+    // 2. Check CF_PROJECT_ROOT.
     if let Ok(root) = std::env::var("CF_PROJECT_ROOT") {
         let path = PathBuf::from(&root);
         if path.is_dir() {
@@ -24,6 +41,7 @@ pub fn detect_project_dir() -> Result<PathBuf> {
         }
     }
 
+    // 3. Walk up from current directory.
     let cwd = std::env::current_dir().context("getting current directory")?;
     let mut dir = cwd.as_path();
     loop {
@@ -196,6 +214,47 @@ mod tests {
     #[test]
     fn test_detect_project_dir_returns_path() {
         // Should return a valid path (either from env or cwd).
+        let result = detect_project_dir();
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_dir());
+    }
+
+    #[test]
+    fn test_detect_project_dir_worktree_path_valid() {
+        // Create a temp dir with .state/ to simulate a valid worktree.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".state")).unwrap();
+
+        // Set the env var, call detect, then unset.
+        let wt_str = dir.path().to_string_lossy().to_string();
+        // SAFETY: Test-only env var manipulation. Tests using env vars are
+        // inherently racy but acceptable for single-threaded test runs.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", &wt_str) };
+        let result = detect_project_dir();
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), dir.path());
+    }
+
+    #[test]
+    fn test_detect_project_dir_worktree_path_invalid_falls_through() {
+        // Set to a nonexistent path — should fall through to other methods.
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "/nonexistent/worktree/path") };
+        let result = detect_project_dir();
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+
+        assert!(result.is_ok());
+        // Should NOT be the nonexistent path.
+        assert_ne!(result.unwrap(), PathBuf::from("/nonexistent/worktree/path"));
+    }
+
+    #[test]
+    fn test_detect_project_dir_worktree_path_not_set() {
+        // Ensure the env var is not set.
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
         let result = detect_project_dir();
         assert!(result.is_ok());
         assert!(result.unwrap().is_dir());

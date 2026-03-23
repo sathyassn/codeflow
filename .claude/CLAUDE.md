@@ -31,7 +31,7 @@ PathFlow phases are not external constraints — they are your thinking process 
 
 | Principle | What It Means |
 |-----------|---------------|
-| Task-centric | All work tracked in WorkGraph (JSONL + SQLite) |
+| Task-centric | All work tracked in WorkGraph (JSONL + SurrealDB embedded) |
 | Memory-first | Context persists across sessions via three-tier data model |
 | Team-based | Specialized teammates handle specialized work; lead orchestrates |
 | Enforcement-backed | Hooks enforce workflow compliance at tool-call level |
@@ -560,6 +560,14 @@ When a file requires staging (see table above), teammates use this procedure:
    ```bash
    cp /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md .claude/CLAUDE.md
    ```
+
+3b. **WORKTREE MODE** — If `CODEFLOW_WORKTREE_PATH` is set, the cp target MUST use the worktree path:
+   ```bash
+   cp /tmp/claude/codeflow/managed/protected-edits/{basename} $CODEFLOW_WORKTREE_PATH/{original-relative-path}
+   ```
+   Example: `cp /tmp/claude/codeflow/managed/protected-edits/CLAUDE.md $CODEFLOW_WORKTREE_PATH/.claude/CLAUDE.md`
+
+   Do NOT target the main repo path — in worktree mode, the main repo is on a protected branch.
 
 4. **VERIFY** — Read the original file to confirm changes applied
 
@@ -1162,7 +1170,7 @@ Agents must NOT create sentinels manually -- if a sentinel appears missing, inve
 - Use TaskUpdate addBlockedBy to express phase ordering (PF2 blocked by PF1, etc.)
 - 🔒 **L1 ENFORCED:** When creating individual PF{N}-TSK-{NN} task tracker entries, the lead MUST read the `blocked_by` field from `pathflow-config.json` for each task and apply it using `TaskUpdate(addBlockedBy=[...])` IMMEDIATELY after `TaskCreate`. Tasks with `blocked_by` fields that are not mirrored to the task tracker lose ordering visibility, causing downstream stages to execute out of order. This is NOT optional -- every `blocked_by` in the config MUST be reflected in the task tracker.
 - Entries are ephemeral and disposable -- if lost to context overflow, recreate for current phase only
-- JSONL/SQLite remains authoritative. Task tracker is derived and visual only.
+- JSONL/SurrealDB remains authoritative. Task tracker is derived and visual only.
 - The task tracker step is embedded as a mandatory sub-step within each Section 4.2 phase step.
 - 🔒 **Phase ordering constraint:** Task registration for phase N MUST wait until ALL tasks in phase N-1 are completed and the `pf-{N-1}` sentinel exists. The `checkpoint-register` PostToolUse hook blocks cross-phase registration (exit 2) if the prior phase sentinel is missing. Do NOT call `TaskCreate` for `PF{N}-TSK-{NN}` entries until the previous phase is fully complete. Create all tasks for ONE phase, complete them, then move to the next phase.
 
@@ -1423,7 +1431,7 @@ codeflow-cli/                         # Rust CLI workspace
 └── docs/archived/skills/             # 9 archived skills (reference only)
 
 .state/                               # Runtime state (partially gitignored)
-├── db/codeflow.db                    # Tier 1: SQLite (query interface)
+├── db/codeflow.db                    # Tier 1: SurrealDB embedded (query interface)
 ├── ledger/                           # Tier 0: JSONL event logs (rebuild authority)
 ├── logs/
 │   └── pathflow-events.jsonl         # Phase/stage transitions
@@ -1463,7 +1471,7 @@ project-management/                   # Tier 2: Human-readable work tracking
 | Tier | Location | Purpose | Git Tracked |
 |------|----------|---------|-------------|
 | **0 (JSONL)** | `.state/ledger/*.jsonl` | Rebuild authority -- immutable, append-only event log | Yes |
-| **1 (SQLite)** | `.state/db/codeflow.db` | Query interface -- fast indexed lookups | No |
+| **1 (SurrealDB  embedded)** | `.state/db/codeflow.db` | Query interface -- fast indexed lookups | No |
 | **2 (Markdown)** | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes |
 
 **Key principle:** If Tier 1 (database) is lost, rebuild from Tier 0 (JSONL). Tier 2 (markdown) is always derived from Tier 1. JSONL is the ultimate source of truth.

@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::diagnostics;
 use crate::error::WorktreeError;
 use crate::types::BranchName;
 
@@ -104,6 +105,9 @@ pub(crate) fn create_worktree(
     // Create per-worktree local directories.
     create_local_dirs(&state_dir)?;
 
+    // Install git hooks in the worktree.
+    install_hooks(mgr.project_dir(), &wt_path)?;
+
     // Register in the YAML registry.
     let entry = WorktreeEntry {
         name: name.to_string(),
@@ -171,6 +175,9 @@ pub(crate) fn create_detached_worktree(
     // Create per-worktree local directories.
     create_local_dirs(&state_dir)?;
 
+    // Install git hooks in the worktree.
+    install_hooks(mgr.project_dir(), &wt_path)?;
+
     // Register in the YAML registry with empty branch (set later at PF3).
     // NOTE: registry write is not locked; parallel sessions may race.
     // See file_lock.rs for locked_binary_rmw pattern.
@@ -201,18 +208,36 @@ fn setup_shared_symlinks(project_dir: &Path, wt_state_dir: &Path) -> Result<(), 
         let src = main_state.join(dir_name);
         let dst = wt_state_dir.join(dir_name);
 
-        // Only create symlink if the source exists and the destination doesn't.
-        if src.exists() && !dst.exists() {
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(&src, &dst)?;
+        // Skip if source doesn't exist.
+        if !src.exists() {
+            diagnostics::warn_with_path("worktree", "shared state source missing, skipping", &src);
+            continue;
+        }
+
+        // If dst is already a correct symlink, skip (idempotent).
+        if dst.symlink_metadata().is_ok() {
+            let meta = dst.symlink_metadata().unwrap();
+            if meta.file_type().is_symlink() {
+                continue;
             }
-            #[cfg(not(unix))]
-            {
-                // On non-Unix platforms, fall back to directory junction or copy.
-                // For now, just create a directory (worktrees primarily target Unix).
-                fs::create_dir_all(&dst)?;
-            }
+            // dst exists as a real directory (e.g., from git worktree add
+            // creating dirs from tracked .gitkeep files). Remove it.
+            diagnostics::warn(
+                "worktree",
+                &format!("replacing real directory with symlink: {}", dst.display()),
+            );
+            fs::remove_dir_all(&dst)?;
+        }
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&src, &dst)?;
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-Unix platforms, fall back to directory junction or copy.
+            // For now, just create a directory (worktrees primarily target Unix).
+            fs::create_dir_all(&dst)?;
         }
     }
 
@@ -225,6 +250,108 @@ fn create_local_dirs(wt_state_dir: &Path) -> Result<(), WorktreeError> {
         let dst = wt_state_dir.join(dir_name);
         fs::create_dir_all(&dst)?;
     }
+    Ok(())
+}
+
+/// Install git hooks by symlinking from the project's hook scripts.
+///
+/// Reads the worktree's `.git` file to find the actual git directory,
+/// then symlinks each hook from `.codeflow/scripts/git-hooks/` into
+/// the worktree's hooks directory.
+fn install_hooks(project_dir: &Path, wt_path: &Path) -> Result<(), WorktreeError> {
+    let hooks_src = project_dir.join(".codeflow/scripts/git-hooks");
+    if !hooks_src.is_dir() {
+        return Ok(());
+    }
+
+    // Read the .git file to find the actual git dir.
+    // Format: "gitdir: /path/to/main/.git/worktrees/{name}"
+    let git_file = wt_path.join(".git");
+    let git_content = match fs::read_to_string(&git_file) {
+        Ok(content) => content,
+        Err(e) => {
+            diagnostics::warn(
+                "worktree",
+                &format!("cannot read .git file for hooks installation: {e}"),
+            );
+            return Ok(());
+        }
+    };
+
+    let git_dir = git_content.trim().strip_prefix("gitdir: ").map(Path::new);
+
+    let git_dir = match git_dir {
+        Some(dir) => dir,
+        None => {
+            diagnostics::warn(
+                "worktree",
+                &format!("unexpected .git file format: {}", git_content.trim()),
+            );
+            return Ok(());
+        }
+    };
+
+    let hooks_dst = git_dir.join("hooks");
+    fs::create_dir_all(&hooks_dst)?;
+
+    // List all hook files in the source directory.
+    let entries = match fs::read_dir(&hooks_src) {
+        Ok(entries) => entries,
+        Err(e) => {
+            diagnostics::warn(
+                "worktree",
+                &format!("cannot read hooks source directory: {e}"),
+            );
+            return Ok(());
+        }
+    };
+
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        if !src_path.is_file() {
+            continue;
+        }
+        let file_name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => continue,
+        };
+
+        let dst_path = hooks_dst.join(&file_name);
+
+        // Skip if already a symlink.
+        if dst_path.symlink_metadata().is_ok()
+            && dst_path
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        {
+            continue;
+        }
+
+        // Remove existing non-symlink file if present.
+        if dst_path.exists() {
+            let _ = fs::remove_file(&dst_path);
+        }
+
+        #[cfg(unix)]
+        {
+            if let Err(e) = std::os::unix::fs::symlink(&src_path, &dst_path) {
+                diagnostics::warn(
+                    "worktree",
+                    &format!("failed to symlink hook {file_name}: {e}"),
+                );
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-Unix, copy the hook file instead.
+            if let Err(e) = fs::copy(&src_path, &dst_path) {
+                diagnostics::warn("worktree", &format!("failed to copy hook {file_name}: {e}"));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -291,16 +418,41 @@ mod tests {
     }
 
     #[test]
-    fn test_setup_shared_symlinks_skip_existing_dst() {
+    fn test_setup_shared_symlinks_replaces_real_dir() {
         let main_dir = tempfile::tempdir().unwrap();
         let wt_state = tempfile::tempdir().unwrap();
 
         fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
-        // Pre-create destination.
+        // Pre-create destination as a real directory (simulates git worktree add).
         fs::create_dir_all(wt_state.path().join("db")).unwrap();
 
-        // Should not error when dst already exists.
         setup_shared_symlinks(main_dir.path(), wt_state.path()).unwrap();
+
+        // Should now be a symlink, not a real directory.
+        let db_link = wt_state.path().join("db");
+        assert!(db_link.exists(), "db should exist after replacement");
+        assert!(
+            db_link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "db should be a symlink after replacing real dir"
+        );
+    }
+
+    #[test]
+    fn test_setup_shared_symlinks_idempotent() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_state = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
+
+        // Run twice — second run should be a no-op.
+        setup_shared_symlinks(main_dir.path(), wt_state.path()).unwrap();
+        setup_shared_symlinks(main_dir.path(), wt_state.path()).unwrap();
+
+        let db_link = wt_state.path().join("db");
+        assert!(
+            db_link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "db should still be a symlink after second call"
+        );
     }
 
     #[test]
@@ -311,6 +463,87 @@ mod tests {
         assert!(state_dir.path().join("runtime").is_dir());
         assert!(state_dir.path().join("session").is_dir());
         assert!(state_dir.path().join("sentinels").is_dir());
+    }
+
+    #[test]
+    fn test_install_hooks_no_source_dir() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+        // No .codeflow/scripts/git-hooks/ — should be a no-op.
+        let result = install_hooks(main_dir.path(), wt_dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_install_hooks_with_hooks() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        // Create hook source directory with a test hook.
+        let hooks_src = main_dir.path().join(".codeflow/scripts/git-hooks");
+        fs::create_dir_all(&hooks_src).unwrap();
+        fs::write(hooks_src.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(hooks_src.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
+
+        // Create a .git file pointing to a git dir.
+        let git_dir = wt_dir.path().join(".actual-git-dir");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::write(
+            wt_dir.path().join(".git"),
+            format!("gitdir: {}", git_dir.display()),
+        )
+        .unwrap();
+
+        let result = install_hooks(main_dir.path(), wt_dir.path());
+        assert!(result.is_ok());
+
+        // Verify hooks were installed.
+        let hooks_dst = git_dir.join("hooks");
+        let pre_commit = hooks_dst.join("pre-commit");
+        assert!(pre_commit.exists(), "pre-commit hook should exist");
+        assert!(
+            pre_commit
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "pre-commit should be a symlink"
+        );
+
+        let commit_msg = hooks_dst.join("commit-msg");
+        assert!(commit_msg.exists(), "commit-msg hook should exist");
+    }
+
+    #[test]
+    fn test_install_hooks_idempotent() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        let hooks_src = main_dir.path().join(".codeflow/scripts/git-hooks");
+        fs::create_dir_all(&hooks_src).unwrap();
+        fs::write(hooks_src.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+
+        let git_dir = wt_dir.path().join(".actual-git-dir");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::write(
+            wt_dir.path().join(".git"),
+            format!("gitdir: {}", git_dir.display()),
+        )
+        .unwrap();
+
+        // Run twice — should not error.
+        install_hooks(main_dir.path(), wt_dir.path()).unwrap();
+        install_hooks(main_dir.path(), wt_dir.path()).unwrap();
+
+        let pre_commit = git_dir.join("hooks/pre-commit");
+        assert!(
+            pre_commit
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "should still be a symlink after second install"
+        );
     }
 
     #[test]
@@ -546,5 +779,38 @@ mod tests {
         assert!(wt_gitignore.exists(), ".gitignore should be copied");
         let content = fs::read_to_string(wt_gitignore).unwrap();
         assert_eq!(content, "*.tmp\n");
+    }
+
+    #[test]
+    fn test_create_detached_worktree_installs_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = init_repo_with_commit(dir.path());
+
+        // Create hook source directory with test hooks.
+        let hooks_src = dir.path().join(".codeflow/scripts/git-hooks");
+        fs::create_dir_all(&hooks_src).unwrap();
+        fs::write(hooks_src.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(hooks_src.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
+
+        let mgr = WorktreeManager::new(dir.path())
+            .with_registry_path(dir.path().join(".state/worktrees.yaml"));
+
+        let entry = create_detached_worktree(&mgr, "hooks-wt").unwrap();
+
+        // Read the .git file to find the git dir.
+        let wt_path = Path::new(&entry.path);
+        let git_content = fs::read_to_string(wt_path.join(".git")).unwrap();
+        let git_dir_str = git_content.trim().strip_prefix("gitdir: ").unwrap();
+        let hooks_dir = Path::new(git_dir_str).join("hooks");
+
+        // Verify hooks were installed.
+        assert!(
+            hooks_dir.join("pre-commit").exists(),
+            "pre-commit hook should be installed"
+        );
+        assert!(
+            hooks_dir.join("commit-msg").exists(),
+            "commit-msg hook should be installed"
+        );
     }
 }

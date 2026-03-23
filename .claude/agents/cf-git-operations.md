@@ -93,6 +93,30 @@ When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an a
 
 **No prompts:** Do not prompt for confirmation on any operation. Proceed with the operation as requested by the lead or peer teammate.
 
+### Worktree Awareness
+
+When `CODEFLOW_WORKTREE_PATH` environment variable is set, ALL git operations MUST run from within that worktree directory, not from the main repository root.
+
+**Detection pattern for every git operation:**
+```bash
+GIT_DIR="${CODEFLOW_WORKTREE_PATH:-.}"
+cd "$GIT_DIR"
+# Now run git commands
+```
+
+**Per-operation worktree behavior:**
+
+| Operation | Worktree Mode | Non-Worktree Mode |
+|-----------|--------------|-------------------|
+| Branch creation (PF3) | cd to $CODEFLOW_WORKTREE_PATH, then `git checkout -b` (switches from detached HEAD to feature branch) | Run from project root |
+| Commit | cd to $CODEFLOW_WORKTREE_PATH (staged files are there) | Run from project root |
+| Push | cd to $CODEFLOW_WORKTREE_PATH (branch exists there) | Run from project root |
+| PR creation | cd to $CODEFLOW_WORKTREE_PATH (`gh pr create` needs the branch context) | Run from project root |
+| Squash | cd to $CODEFLOW_WORKTREE_PATH (commits are there) | Run from project root |
+| Sync local (PF6-TSK-09) | cd to MAIN PROJECT ROOT (NOT worktree) -- pull main into the main repo. The worktree is deleted at PF7-END. | Run from project root |
+
+**Key principle:** Everything EXCEPT sync-local runs from the worktree. Sync-local runs from the main repo because the worktree is about to be destroyed.
+
 ## Execution Steps
 
 ### Step 1: Create Branch
@@ -317,6 +341,7 @@ When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an a
 2. If CI passes: notify team lead `"GITOPS: PR #{number} CI passed -- ready for review"`
 3. Wait for team lead to confirm merge has been completed by the user via GitHub UI
 4. After merge confirmation: `git pull origin main`
+   **Worktree mode:** For sync-local, cd to the main project root (not the worktree) before running `git pull origin main`. The worktree will be cleaned up at PF7-END.
 5. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
 6. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 7. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
@@ -331,6 +356,7 @@ When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an a
    ```
 
 3. Pull updated target: `git pull origin {target_branch}`
+   **Worktree mode:** For sync-local, cd to the main project root (not the worktree) before running `git pull`. The worktree will be cleaned up at PF7-END.
 4. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
 5. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 6. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
@@ -423,6 +449,14 @@ Read-only inspection (no sentinel required):
 | Force operation requested | Require explicit lead approval before executing |
 | Branch already exists | Report existing branch, ask lead for direction |
 | Sensitive files staged | Remove from staging, warn requester |
+
+### Worktree State Awareness
+
+In worktree mode, `.state/` directories are a mix of symlinks and local dirs:
+- **Symlinked (shared):** `db/`, `ledger/`, `coordination/`, `logs/`, `registry/`, `backups/` -- resolve to main repo
+- **Local (per-worktree):** `runtime/`, `session/`, `sentinels/`
+
+Always write relative to project root. Do NOT create new `.state/` directories -- use existing symlinked ones.
 
 ## Communication
 
