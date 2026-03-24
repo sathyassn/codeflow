@@ -19,9 +19,9 @@ updated_at: "{ISO-8601}"
 
 # {format_id}: {Title}
 
-> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the epic validation script before committing:
-> `bash .codeflow/scripts/validation/validate-epic.sh <file-path>`
-> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory. Script is at `.codeflow/scripts/validation/validate-epic.sh`.
+> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the epic validation command before committing:
+> `codeflow validate epic <path>`
+> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory.
 
 ## Summary
 
@@ -45,8 +45,8 @@ updated_at: "{ISO-8601}"
 ### PII Handling Review
 
 - [ ] Does this epic involve code that handles PII? (Y/N)
-- [ ] If Y: Direct PII check — no hardcoded PII in source/tests/comments (emails, names, tokens, IPs)
-- [ ] If Y: Code logic review — PII-handling code follows security standards:
+- [ ] If Y: Direct PII check -- no hardcoded PII in source/tests/comments (emails, names, tokens, IPs)
+- [ ] If Y: Code logic review -- PII-handling code follows security standards:
   - Encryption at rest and in transit
   - Proper hashing (bcrypt/argon2 for passwords, not MD5/SHA1)
   - Input sanitization and validation
@@ -73,6 +73,22 @@ updated_at: "{ISO-8601}"
 ## Technical Notes
 
 {Architecture decisions, constraints, or implementation guidance relevant to all tasks in this epic.}
+
+### Autorun Batching
+
+> For epics with autorun-eligible tasks, document execution
+> strategy here.
+
+**Execution Order:** (topological order respecting dependencies)
+
+**Batch Groups:** (tasks that can run in parallel -- must have
+non-overlapping file_scope)
+
+| Batch | Tasks | max_workers | Notes |
+|-------|-------|-------------|-------|
+| 1 | (task IDs) | (n) | (dependency/scope notes) |
+
+**Estimated Duration:** (based on task estimates and parallelism)
 
 ## Related
 

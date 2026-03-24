@@ -412,7 +412,7 @@ const TASK_STATUS_VALUES: &[&str] = &["todo", "blocked", "in_progress", "complet
 const ORIGIN_VALUES: &[&str] = &["planned", "informal", "auto"];
 const SCOPE_POLICY_VALUES: &[&str] = &["soft", "hard", "permissive"];
 const ESTIMATE_VALUES: &[&str] = &["XS", "S", "M", "L", "XL"];
-const STAGE_VALUES: &[&str] = &["dev", "review", "qa", "done"];
+const STAGE_VALUES: &[&str] = &["dev", "plan", "docs", "test", "review", "qa", "done"];
 const STAGE_STATUS_VALUES: &[&str] = &["pending", "in_progress", "complete", "failed"];
 
 const TASK_BOOLEAN_FIELDS: &[&str] = &["autorun_eligible", "raise_pr", "auto_merge"];
@@ -1200,6 +1200,81 @@ Related
             serde_yaml::Value::String("permissive".into()),
         );
         let errs = validate_autorun_scope_policy(&data);
+        assert!(errs.is_empty());
+    }
+
+    // -- stage validation tests --
+
+    #[test]
+    fn test_stage_valid_dev() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("dev".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_plan() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("plan".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_docs() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("docs".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_test() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("test".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_review() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("review".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_qa() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("qa".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_valid_done() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("done".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_invalid_value_rejected() {
+        let mut data = HashMap::new();
+        data.insert("stage".into(), serde_yaml::Value::String("invalid".into()));
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].field, "stage");
+        assert!(errs[0].message.contains("invalid value"));
+    }
+
+    #[test]
+    fn test_stage_empty_is_ok() {
+        let data = HashMap::new();
+        let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
         assert!(errs.is_empty());
     }
 }

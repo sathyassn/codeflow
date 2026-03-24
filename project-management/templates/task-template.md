@@ -28,28 +28,56 @@ branch: null
 pr_number: null
 external_id: null
 external_url: null
+dependencies: []
 created_at: "{ISO-8601}"
 updated_at: "{ISO-8601}"
 started_at: null
 completed_at: null
-stage: null                            # dev|work|review|qa|done
+stage: null                            # dev|plan|docs|test|review|qa|done
 stage_status: null                     # pending|in_progress|complete|failed
 stage_history: "[]"                    # JSON array of stage transition records
 ---
 
 # {format_id}: {Title}
 
-> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the task validation script before committing:
-> `bash .codeflow/scripts/validation/validate-task.sh <file-path>`
-> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory. Script is at `.codeflow/scripts/validation/validate-task.sh`.
+> **MANDATORY VALIDATION:** Files created from this template MUST be validated against the task validation command before committing:
+> `codeflow validate task <file-path>`
+> Fix all errors (exit code 1) before requesting a commit. Warnings are advisory.
 
 ## Description
 
 {Detailed description of what this task accomplishes and why it is needed.}
 
+## Pre-Work Analysis
+
+> **MANDATORY at task start.** Before implementation, review
+> recent commits and related work that may affect this task's
+> scope, approach, or acceptance criteria. Update the task
+> description and criteria if needed.
+
+- [ ] Reviewed git log for recent changes to files in scope
+- [ ] Checked if related tasks/PRs modified shared code
+- [ ] Verified acceptance criteria still accurate
+- [ ] Updated approach if implementation landscape changed
+
 ## Approach
 
 1. {Step-by-step implementation approach}
+
+## Standards & Practices
+
+Apply the relevant standards skill for each language/tool used:
+
+| Language/Tool | Standards Skill | Key Requirements |
+|--------------|----------------|-----------------|
+| Rust | cf-rust-standards | No unsafe, thiserror/anyhow, clippy clean |
+| Shell/Bash | cf-shell-standards | shellcheck clean, error handling |
+| Python | cf-python-standards | Type hints, pytest |
+| Go | cf-go-standards | gofmt, golint, go vet |
+| SurrealDB | cf-surrealdb-standards | DEFINE OVERWRITE, embedded mode |
+| Markdown | cf-markdown-standards | Lint rules, templates |
+
+Read the applicable skill BEFORE starting implementation.
 
 ## Files
 
@@ -61,6 +89,28 @@ stage_history: "[]"                    # JSON array of stage transition records
 
 - `{path/to/new-file}` -- {purpose}
 
+### To Read
+
+- (files to read for context but not modify)
+
+## Concurrency Considerations
+
+> Identify any shared-state operations in this task and document
+> the locking/safety strategy. Mark N/A if no shared state.
+
+| Shared Resource | Access Pattern | Safety Mechanism |
+|----------------|---------------|-----------------|
+| (e.g., state.loro) | (read-modify-write) | (locked_binary_rmw via file_lock.rs) |
+| (e.g., codeflow.db) | (concurrent queries) | (SurrealDB transactions) |
+| (e.g., config.json) | (read-only at runtime) | (N/A -- immutable during execution) |
+
+Mechanisms available in codebase:
+
+- `file_lock.rs` -> `locked_binary_rmw` for CRDT state (state.loro)
+- SurrealDB embedded -> transactions for DB operations
+- Atomic temp+rename for config/state file writes
+- `WorktreeRegistry` -> `locked_register_with_limit` for worktree ops
+
 ## Acceptance Criteria
 
 1. {Specific, measurable criterion with file:line if applicable}
@@ -70,8 +120,8 @@ stage_history: "[]"                    # JSON array of stage transition records
 ### PII Handling Review
 
 - [ ] Does this task involve code that handles PII? (Y/N)
-- [ ] If Y: Direct PII check — no hardcoded PII in source/tests/comments (emails, names, tokens, IPs)
-- [ ] If Y: Code logic review — PII-handling code follows security standards:
+- [ ] If Y: Direct PII check -- no hardcoded PII in source/tests/comments (emails, names, tokens, IPs)
+- [ ] If Y: Code logic review -- PII-handling code follows security standards:
   - Encryption at rest and in transit
   - Proper hashing (bcrypt/argon2 for passwords, not MD5/SHA1)
   - Input sanitization and validation
@@ -233,5 +283,40 @@ stage_history: "[]"                    # JSON array of stage transition records
 | 1 | Initial QA | {n} failures | N/A | {PASS/FAIL} |
 
 ## Notes
+
+> **Standard Requirements (all tasks):**
+>
+> **Testing:** MANDATORY 85%+ per-file code coverage via
+> `cargo llvm-cov` (Rust) or equivalent. Tests MUST be in
+> the same file as implementation (`#[cfg(test)] mod tests`
+> for Rust). Exceptions require documented technical
+> justification consulted with user.
+>
+> **No Unsafe:** Zero `unsafe` blocks in production code.
+> The only existing unsafe (libc::kill in autorun abort) is
+> grandfathered -- do NOT add more.
+>
+> **Code Quality:** Follow DRY -- extract shared utilities,
+> no copy-paste. Modular architecture with clear boundaries.
+> Consider declarative/reactive patterns where appropriate.
+> Question duplication before implementing.
+>
+> **Concurrency:** For any shared-state operations, consider
+> sequential/parallel/concurrent access scenarios. Plan for
+> race conditions. Use appropriate locking mechanisms
+> (file_lock.rs, locked_binary_rmw, SurrealDB transactions).
+> Document strategy in Concurrency Considerations section.
+>
+> **Pipeline:** Follow work type pipeline stages per CLAUDE.md
+> Section 6. Do NOT skip WS-REV or WS-QA for code tasks.
+>
+> **Status Updates:** After completion, update BOTH:
+> 1. Task markdown frontmatter (status, stage, stage_status,
+>    started_at, completed_at, updated_at)
+> 2. Epic markdown task table row (status column)
+> If this is the final task, update epic status to complete.
+>
+> **Validation:** Run `codeflow validate task <path>` on the
+> task file before committing.
 
 {Implementation hints, edge cases, known pitfalls, or references to related decisions.}
