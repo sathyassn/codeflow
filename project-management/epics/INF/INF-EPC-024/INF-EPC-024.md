@@ -84,7 +84,7 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | # | ID | Title | Status | Est | Priority |
 |---|-----|-------|--------|-----|----------|
 | 1 | INF-TSK-024-001 | Ledger audit: sessions.jsonl schema documentation and gap analysis | complete | S | normal |
-| 2 | INF-TSK-024-002 | Ledger audit: work-graph.jsonl schema documentation and gap analysis | todo | M | normal |
+| 2 | INF-TSK-024-002 | Ledger audit: work-graph.jsonl schema documentation and gap analysis | complete | M | normal |
 | 3 | INF-TSK-024-003 | Ledger audit: memory-events.jsonl schema documentation and gap analysis | todo | M | normal |
 | 4 | INF-TSK-024-004 | Ledger audit: config.jsonl schema documentation and gap analysis | todo | XS | normal |
 | 5 | INF-TSK-024-005 | Log audit: pathflow-events.jsonl and pr-events schema documentation | todo | M | normal |
