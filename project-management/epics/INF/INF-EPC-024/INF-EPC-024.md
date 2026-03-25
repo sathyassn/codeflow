@@ -113,11 +113,18 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | todo | M | high |
 | 29 | INF-TSK-024-029 | Update Claude artifacts for DB-authoritative autorun data flow | todo | S | normal |
 | 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | complete | M | normal |
-| 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | in_progress | M | normal |
+| 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | complete | M | normal |
+| 32 | INF-TSK-024-032 | INF-EPC-024 gap remediation: add 4 new tasks, expand 3 existing, update phase structure | complete | M | normal |
+| 33 | INF-TSK-024-033 | Ledger audit: coordination-events.jsonl schema documentation | todo | M | normal |
+| 34 | INF-TSK-024-034 | Ledger audit: autorun-events.jsonl schema documentation | todo | S | normal |
+| 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | todo | S | normal |
+| 36 | INF-TSK-024-036 | Execute SurrealDB schema updates from standardized JSONL | todo | L | normal |
 
 **Task 013 cancelled:** Superseded by Epic 0 restructuring. The work-graph.jsonl details migration is now handled differently -- the workgraph module at `codeflow-cli/core/src/workgraph/` already defines typed events with structured fields, making the flat-to-details migration unnecessary for work-graph events.
 
 **Tasks 001-012, 014-024, 026-029 reviewed (PR #221 refinement):** Stale file path references (flat `.state/ledger/{type}.jsonl` -> subdirectory `.state/ledger/{type}/{type}.jsonl`) and worktree assumptions (ledger was SHARED/symlinked, now LOCAL per-worktree) corrected in tasks 001-004, 008-010, 012. Remaining tasks confirmed no changes needed. See INF-TSK-024-031 PLAN Report for full details.
+
+**Gap remediation (INF-TSK-024-032):** 4 new tasks added (033-036), 3 existing tasks expanded (006, 017, 022). Task 033 (coordination-events audit) and 034 (autorun-events audit) fill Phase 1 gaps. Task 035 (pathflow-events migration) adds a Phase 3 fix. Task 036 (SurrealDB schema execution) adds Phase 6 implementation step. Task 006 expanded with 4 criteria for operational logs (git, db, cleanup, .meta files). Task 017 expanded with 3 criteria for session .meta files, stale locks, and prompt counters. Task 022 expanded with 3 criteria for CANONICAL/ALL rationale and non-canonical DB table relationships.
 
 ## Dependencies
 
@@ -153,26 +160,27 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 
 Tasks are organized into 7 execution phases for autorun batch planning:
 
-**Phase 1 -- Audit (tasks 001-006):** Batchable. 3 workers, each task reads different JSONL/log files. Non-overlapping file_scope.
+**Phase 1 -- Audit (tasks 001-006, 033, 034):** Batchable. 3 workers, each task reads different JSONL/log files. Non-overlapping file_scope. Tasks 033 and 034 run in parallel with 003-006.
 
 | Batch | Worker | Tasks | file_scope |
 |-------|--------|-------|------------|
 | 1a | W1 | 001, 004 | sessions-jsonl-audit.md, config-jsonl-audit.md |
-| 1b | W2 | 002, 005 | work-graph-jsonl-audit.md, pathflow-events-audit.md, pr-events-audit.md |
-| 1c | W3 | 003, 006 | memory-events-jsonl-audit.md, security/network/conversation-logs-audit.md |
+| 1b | W2 | 002, 005, 034 | work-graph-jsonl-audit.md, pathflow-events-audit.md, pr-events-audit.md, autorun-events-audit.md |
+| 1c | W3 | 003, 006, 033 | memory-events-jsonl-audit.md, security/network/conversation-logs-audit.md, operational-logs-audit.md, coordination-events-audit.md |
 
-**Phase 2 -- Schema Definition (task 007):** Sequential. Depends on all Phase 1 outputs.
+**Phase 2 -- Schema Definition (task 007):** Sequential. Depends on all Phase 1 outputs (including 033, 034).
 
 | Batch | Worker | Tasks | Blocked By |
 |-------|--------|-------|------------|
-| 2 | W1 | 007 | 001-006 |
+| 2 | W1 | 007 | 001-006, 033, 034 |
 
-**Phase 3 -- Fixes (tasks 008-009):** Batchable. 2 workers, non-overlapping scope.
+**Phase 3 -- Fixes (tasks 008, 009, 035):** Batchable. 3 workers, non-overlapping scope. Task 035 parallel with 008/009.
 
 | Batch | Worker | Tasks | Blocked By |
 |-------|--------|-------|------------|
 | 3a | W1 | 008 | 002, 007 |
 | 3b | W2 | 009 | 003, 007 |
+| 3c | W3 | 035 | 005 |
 
 **Phase 4 -- Enforcement (tasks 010-015, excluding cancelled 013):** Partially batchable.
 
@@ -182,7 +190,7 @@ Tasks are organized into 7 execution phases for autorun batch planning:
 | 4b | W2 | 012 | 001, 007, 010, 011 |
 | 4c | W1 | 014, 015 | 007 (parallel after 4a) |
 
-**Phase 5 -- Retention + Rebuild (tasks 016-021):** Partially batchable.
+**Phase 5 -- Retention + Rebuild (tasks 016-021):** Partially batchable. Task 017 expanded with 3 additional criteria.
 
 | Batch | Worker | Tasks | Blocked By |
 |-------|--------|-------|------------|
@@ -192,13 +200,14 @@ Tasks are organized into 7 execution phases for autorun batch planning:
 | 5d | W2 | 020 | 019 |
 | 5e | W1 | 021 | 020 |
 
-**Phase 6 -- SurrealDB + DB Switch (tasks 022, 026, 027):** Sequential chain.
+**Phase 6 -- SurrealDB + DB Switch (tasks 022, 026, 027, 036):** Sequential chain. Task 022 expanded with 3 additional criteria. Task 036 after 022 + 020.
 
 | Batch | Worker | Tasks | Blocked By |
 |-------|--------|-------|------------|
 | 6a | W1 | 022 | 007, 015 |
 | 6b | W1 | 026 | 022 |
 | 6c | W1 | 027 | 026 |
+| 6d | W2 | 036 | 022, 020 |
 
 **Phase 7 -- Docs + Session ID + Worktree Fix (tasks 023, 024, 028, 029, 030):** Batchable (non-overlapping scopes).
 
