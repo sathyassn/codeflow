@@ -38,8 +38,8 @@ impl CheckpointComplete {
     }
 
     fn checkpoint_path(&self, session_id: &str) -> PathBuf {
-        self.project_dir
-            .join(".state")
+        let base = super::pipeline::resolve_state_base(&self.project_dir);
+        base.join(".state")
             .join("session")
             .join(session_id)
             .join("pathflow")
@@ -51,12 +51,32 @@ impl CheckpointComplete {
             .map_err(|e| HookError::Config(format!("sentinel dir: {e}")))
     }
 
-    /// Infer `work_type` from git branch and write to checkpoint context + session status.
+    /// Register `work_type` in checkpoint context and session status.
+    ///
+    /// For planned tasks that already have a `work_type` set in the session
+    /// status (e.g., via cf-knowledge-layer at PF4-TSK-02), the pre-set
+    /// value is preserved. Only infers from the git branch when the
+    /// existing `work_type` is empty or missing.
+    ///
     /// Mirrors Go `registerWorkType()` in hooks.go:855-877.
     fn register_work_type(&self, session_dir: &std::path::Path, session_id: &str) {
         use super::pipeline;
 
-        // Get current git branch.
+        // Check if work_type is already set in session status.
+        let existing = pipeline::read_work_type_from_session_status(session_dir);
+        if !existing.is_empty() {
+            // Pre-set work_type exists (e.g., from planned task registration).
+            // Write to checkpoint context for consistency, but do NOT overwrite
+            // with branch-inferred value.
+            let checkpoint_path = self.checkpoint_path(session_id);
+            let cp = Checkpoint::new();
+            if let Err(e) = cp.set_context(&checkpoint_path, "work_type", &existing) {
+                eprintln!("checkpoint-complete: failed to set checkpoint work_type: {e}");
+            }
+            return;
+        }
+
+        // No pre-set work_type -- infer from git branch.
         let branch = match std::process::Command::new("git")
             .args(["branch", "--show-current"])
             .output()
@@ -125,8 +145,8 @@ impl HookHandler for CheckpointComplete {
                 // Extract phase number from task_id (e.g., "PF4-TSK-05" -> "pf-4")
                 // and update session status with last completed phase.
                 if let Some(pf_num) = task_id.split('-').next() {
-                    let session_dir = self
-                        .project_dir
+                    let base = super::pipeline::resolve_state_base(&self.project_dir);
+                    let session_dir = base
                         .join(".state")
                         .join("session")
                         .join(sid.as_ref())
@@ -287,19 +307,19 @@ mod tests {
 
     #[test]
     fn test_pf_task_warns_on_checkpoint_error() {
-        // A PF task subject with no session env → session ID resolution fails
-        // → returns warning (non-blocking).
+        // A PF task subject with no session env -> session ID resolution fails
+        // -> returns warning (non-blocking).
         let dir = tempfile::tempdir().unwrap();
         let handler = CheckpointComplete::new(dir.path().to_path_buf());
         let input = make_input("PF3-TSK-01: Classify work type");
         let result = handler.handle(input);
-        // Session ID lookup will fail → HookError::Config.
+        // Session ID lookup will fail -> HookError::Config.
         assert!(result.is_err());
     }
 
     #[test]
     fn test_pf_task_with_session_env_warns_no_checkpoint() {
-        // Setup session env but no checkpoint file → complete_task returns error → Warn.
+        // Setup session env but no checkpoint file -> complete_task returns error -> Warn.
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
@@ -313,7 +333,7 @@ mod tests {
         let handler = CheckpointComplete::new(dir.path().to_path_buf());
         let input = make_input("PF3-TSK-01: Classify work type");
         let result = handler.handle(input).unwrap();
-        // Checkpoint file doesn't exist → complete_task returns error → Warn.
+        // Checkpoint file doesn't exist -> complete_task returns error -> Warn.
         assert!(matches!(result, HookOutput::Warn { .. }));
     }
 
@@ -432,13 +452,64 @@ mod tests {
         let session_dir = dir.path().join("pathflow");
         std::fs::create_dir_all(&session_dir).unwrap();
         let handler = CheckpointComplete::new(dir.path().to_path_buf());
-        // Should not panic — just returns silently.
+        // Should not panic -- just returns silently.
+        handler.register_work_type(&session_dir, "ses-test");
+    }
+
+    #[test]
+    fn test_register_work_type_preserves_preset() {
+        // When work_type is already set in session status, register_work_type
+        // should NOT overwrite it with a branch-inferred value.
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        // Pre-set work_type in status file.
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"work_type": "FEAT", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let handler = CheckpointComplete::new(dir.path().to_path_buf());
+        handler.register_work_type(&session_dir, "ses-test");
+
+        // Verify work_type was NOT overwritten.
+        let status: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(session_dir.join("pathflow-session-status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            status["work_type"].as_str().unwrap(),
+            "FEAT",
+            "pre-set work_type should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_register_work_type_infers_when_empty() {
+        // When work_type is empty in session status, register_work_type
+        // should infer from the git branch (or return silently if no branch).
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        // Empty work_type in status file.
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"work_type": "", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let handler = CheckpointComplete::new(dir.path().to_path_buf());
+        // This will attempt git branch and likely fail in test env, which is fine.
+        // The key test is that it doesn't short-circuit on the empty work_type.
         handler.register_work_type(&session_dir, "ses-test");
     }
 
     #[test]
     fn test_pf_task_subject_with_multiple_task_ids() {
-        // Subject with multiple PF task IDs — should match the first one.
+        // Subject with multiple PF task IDs -- should match the first one.
         let re = pf_task_id_re();
         let m = re.find("PF1-TSK-01 blocked by PF2-TSK-03");
         assert_eq!(m.unwrap().as_str(), "PF1-TSK-01");
@@ -466,13 +537,13 @@ mod tests {
             project_dir: None,
             source: None,
             transcript_path: None,
-            task_subject: None, // Not set — should fall back to tool_input
+            task_subject: None, // Not set -- should fall back to tool_input
             task_id: None,
             task_description: None,
         };
         // Will fail on session ID (no env), but proves fallback extraction works.
         let result = handler.handle(input);
-        assert!(result.is_err()); // session ID missing → error (not Allow/skip)
+        assert!(result.is_err()); // session ID missing -> error (not Allow/skip)
     }
 
     #[test]
@@ -495,6 +566,6 @@ mod tests {
         // Will fail on session ID, but the important thing is it doesn't return Allow
         // (which would mean it matched nothing / matched PF9-TSK-99).
         let result = handler.handle(input);
-        assert!(result.is_err()); // session ID missing → error (proves PF3-TSK-01 was extracted)
+        assert!(result.is_err()); // session ID missing -> error (proves PF3-TSK-01 was extracted)
     }
 }

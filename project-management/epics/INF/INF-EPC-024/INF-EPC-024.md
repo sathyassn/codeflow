@@ -113,8 +113,11 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | todo | M | high |
 | 29 | INF-TSK-024-029 | Update Claude artifacts for DB-authoritative autorun data flow | todo | S | normal |
 | 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | complete | M | normal |
+| 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | in_progress | M | normal |
 
 **Task 013 cancelled:** Superseded by Epic 0 restructuring. The work-graph.jsonl details migration is now handled differently -- the workgraph module at `codeflow-cli/core/src/workgraph/` already defines typed events with structured fields, making the flat-to-details migration unnecessary for work-graph events.
+
+**Tasks 001-012, 014-024, 026-029 reviewed (PR #221 refinement):** Stale file path references (flat `.state/ledger/{type}.jsonl` -> subdirectory `.state/ledger/{type}/{type}.jsonl`) and worktree assumptions (ledger was SHARED/symlinked, now LOCAL per-worktree) corrected in tasks 001-004, 008-010, 012. Remaining tasks confirmed no changes needed. See INF-TSK-024-031 PLAN Report for full details.
 
 ## Dependencies
 

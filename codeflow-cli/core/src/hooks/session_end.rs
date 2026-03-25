@@ -950,6 +950,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };

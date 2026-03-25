@@ -5,16 +5,13 @@
 .codeflow/config/parallel-work/parallel-work-config.local.json
 
 # State files - Untracked (machine-specific, regeneratable)
-# coordination, logs, runtime are untracked (no trailing slash to match symlinks in worktrees)
+# coordination, logs, runtime, db, registry, backups are untracked (no trailing slash to match symlinks in worktrees)
 # ledger/ is tracked (Tier 0 rebuild authority data) -- subdirectory layout with session fragments
 .state/coordination
 .state/logs
 .state/runtime
-.state/db/codeflow.db
-.state/db/codeflow.db-shm
-.state/db/codeflow.db-wal
-.state/db/codeflow.db-journal
-.state/db/schema.sql
+.state/db
+.state/registry
 .state/backups
 # Sentinel and session state (session-scoped, not persistent)
 .state/sentinels/skill/*
@@ -24,19 +21,14 @@
 .state/session/*
 !.state/session/.gitkeep
 
-# Worktree registry (machine-specific runtime state)
-.state/worktrees/
+# Worktree registry (machine-specific runtime state, no trailing slash to match symlinks)
+.state/worktrees
 
 # Lock files across all .state/ directories (including compaction locks)
 .state/**/*.lock
 
 # Process ID files
 .state/**/*.pid
-
-# SurrealDB internal directories
-.state/db/surreal/
-.state/db/clog/
-.state/db/manifest/
 
 # Temporary state files
 .state/tmp/

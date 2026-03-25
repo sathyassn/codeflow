@@ -125,7 +125,7 @@ pub fn verify_cumulative_phase_sentinels(
 }
 
 /// Default work type when the branch prefix is not recognized.
-/// `FIX` uses the most thorough pipeline (WS-DEV → WS-REV → WS-QA),
+/// `FIX` uses the most thorough pipeline (WS-DEV -> WS-REV -> WS-QA),
 /// ensuring review and QA run before shipping unclassified work.
 pub const DEFAULT_WORK_TYPE: &str = "FIX";
 
@@ -133,7 +133,7 @@ pub const DEFAULT_WORK_TYPE: &str = "FIX";
 ///
 /// `feat/` -> `FEAT`, `fix/` -> `FIX`, `refactor/` -> `RFCT`, etc.
 /// Falls back to `DEFAULT_WORK_TYPE` (`FIX`) when the branch prefix
-/// is not recognized, ensuring the safest pipeline (DEV → REV → QA).
+/// is not recognized, ensuring the safest pipeline (DEV -> REV -> QA).
 #[must_use]
 pub fn infer_work_type_from_branch(branch_name: &str) -> &'static str {
     const PREFIX_MAP: &[(&str, &str)] = &[
@@ -191,19 +191,69 @@ pub fn derive_project_dir(sentinel_dir: &Path) -> std::path::PathBuf {
     sentinel_dir.join("..").join("..").join("..").join("..")
 }
 
+/// Resolve the base directory for `.state/` paths that are LOCAL
+/// (per-worktree): runtime, session, sentinels, ledger.
+///
+/// When `CODEFLOW_WORKTREE_PATH` is set and non-empty, returns the
+/// worktree root. Otherwise, returns `fallback_base` as-is.
+///
+/// This helper encapsulates the timing-safe env var check: if the var
+/// is unset or empty (early in session before worktree creation), it
+/// falls back to the provided path.
+#[must_use]
+pub fn resolve_state_base(fallback_base: &Path) -> std::path::PathBuf {
+    resolve_state_base_inner(
+        fallback_base,
+        std::env::var("CODEFLOW_WORKTREE_PATH").ok().as_deref(),
+    )
+}
+
+/// Inner implementation with explicit worktree path for testability.
+#[must_use]
+pub fn resolve_state_base_inner(
+    fallback_base: &Path,
+    worktree_path: Option<&str>,
+) -> std::path::PathBuf {
+    if let Some(wt_path) = worktree_path {
+        if !wt_path.is_empty() {
+            return std::path::PathBuf::from(wt_path);
+        }
+    }
+    fallback_base.to_path_buf()
+}
+
 /// Derive the session pathflow directory from a sentinel directory path.
 ///
 /// `sentinel_dir` is `{project_dir}/.state/sentinels/pathflow/{SID}/`,
 /// `session_dir` is `{project_dir}/.state/session/{SID}/pathflow/`.
+///
+/// In worktree mode (`CODEFLOW_WORKTREE_PATH` set and non-empty),
+/// the session dir is resolved relative to the worktree root because
+/// `.state/session/` is LOCAL (per-worktree), not symlinked.
 #[must_use]
 pub fn derive_session_dir(sentinel_dir: &Path) -> std::path::PathBuf {
     let project_dir = derive_project_dir(sentinel_dir);
+    derive_session_dir_inner(
+        sentinel_dir,
+        &project_dir,
+        std::env::var("CODEFLOW_WORKTREE_PATH").ok().as_deref(),
+    )
+}
+
+/// Inner implementation with explicit worktree path for testability.
+#[must_use]
+pub fn derive_session_dir_inner(
+    sentinel_dir: &Path,
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+) -> std::path::PathBuf {
     let session_id = sentinel_dir
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_default();
-    project_dir
-        .join(".state")
+
+    let base = resolve_state_base_inner(project_dir, worktree_path);
+    base.join(".state")
         .join("session")
         .join(session_id)
         .join("pathflow")
@@ -459,8 +509,6 @@ mod tests {
 
     #[test]
     fn test_infer_work_type_unrecognized_defaults_to_fix() {
-        // Unrecognized branch prefixes fall back to DEFAULT_WORK_TYPE ("FIX")
-        // to ensure the safest pipeline (DEV → REV → QA).
         assert_eq!(infer_work_type_from_branch("main"), DEFAULT_WORK_TYPE);
         assert_eq!(
             infer_work_type_from_branch("unknown/branch"),
@@ -522,13 +570,66 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_session_dir() {
+    fn test_derive_session_dir_no_worktree() {
         let sdir = PathBuf::from("/project/.state/sentinels/pathflow/ses-123");
-        let got = derive_session_dir(&sdir);
+        let project_dir = PathBuf::from("/project");
+        let got = derive_session_dir_inner(&sdir, &project_dir, None);
         let got_str = got.to_string_lossy();
-        assert!(got_str.contains("session"));
-        assert!(got_str.contains("ses-123"));
-        assert!(got_str.contains("pathflow"));
+        assert!(got_str.contains("session"), "got: {got_str}");
+        assert!(got_str.contains("ses-123"), "got: {got_str}");
+        assert!(got_str.contains("pathflow"), "got: {got_str}");
+        assert!(got_str.starts_with("/project"), "got: {got_str}");
+    }
+
+    #[test]
+    fn test_derive_session_dir_with_worktree() {
+        let sdir = PathBuf::from("/project/.state/sentinels/pathflow/ses-123");
+        let project_dir = PathBuf::from("/project");
+        let got = derive_session_dir_inner(
+            &sdir,
+            &project_dir,
+            Some("/project/.git-worktrees/worktree-ses-123"),
+        );
+        let got_str = got.to_string_lossy();
+        assert!(
+            got_str.starts_with("/project/.git-worktrees/worktree-ses-123"),
+            "should use worktree base, got: {got_str}"
+        );
+        assert!(got_str.contains("session"), "got: {got_str}");
+        assert!(got_str.contains("ses-123"), "got: {got_str}");
+    }
+
+    #[test]
+    fn test_derive_session_dir_empty_worktree_falls_back() {
+        let sdir = PathBuf::from("/project/.state/sentinels/pathflow/ses-123");
+        let project_dir = PathBuf::from("/project");
+        let got = derive_session_dir_inner(&sdir, &project_dir, Some(""));
+        let got_str = got.to_string_lossy();
+        assert!(
+            got_str.starts_with("/project/.state"),
+            "empty worktree should fall back to project_dir, got: {got_str}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_state_base_inner_with_worktree() {
+        let fallback = PathBuf::from("/project");
+        let got = resolve_state_base_inner(&fallback, Some("/wt/path"));
+        assert_eq!(got, PathBuf::from("/wt/path"));
+    }
+
+    #[test]
+    fn test_resolve_state_base_inner_empty_worktree() {
+        let fallback = PathBuf::from("/project");
+        let got = resolve_state_base_inner(&fallback, Some(""));
+        assert_eq!(got, PathBuf::from("/project"));
+    }
+
+    #[test]
+    fn test_resolve_state_base_inner_no_worktree() {
+        let fallback = PathBuf::from("/project");
+        let got = resolve_state_base_inner(&fallback, None);
+        assert_eq!(got, PathBuf::from("/project"));
     }
 
     #[test]

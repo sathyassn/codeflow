@@ -4159,6 +4159,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("permissive".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4206,6 +4207,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("hard".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4253,6 +4255,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("hard".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4300,6 +4303,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4347,6 +4351,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4396,6 +4401,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };
@@ -4453,6 +4459,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None, // No policy specified = default to soft.
             file_scope: Some(vec!["src/main.rs".to_string()]),
         };

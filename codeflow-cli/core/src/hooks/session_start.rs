@@ -295,11 +295,17 @@ impl SessionStartInit {
         // --- Section 2a: EARLY env file write ---
         // Write env file immediately after session ID generation so that
         // downstream handlers can resolve the session even if Init times out
-        // during worktree creation or later operations. This write contains
-        // only CODEFLOW_SESSION_ID and CF_PROJECT_ROOT (no worktree path yet).
-        // The worktree path is added in the UPDATE write after worktree creation.
+        // during worktree creation or later operations. This write includes
+        // an empty CODEFLOW_WORKTREE_PATH placeholder so that any code reading
+        // the env var gets a defined (but empty) value rather than a missing key.
+        // The worktree path is updated in the UPDATE write after worktree creation.
         if source == "startup" {
-            if let Err(e) = session::write_env_file(&runtime_dir, &session_id, &project_name) {
+            if let Err(e) = session::write_env_file_with_worktree(
+                &runtime_dir,
+                &session_id,
+                &project_name,
+                Some(""),
+            ) {
                 result
                     .warnings
                     .push(format!("early env file write error: {e}"));
@@ -1171,6 +1177,7 @@ impl SessionStartInit {
             "session_id": session_id,
             "team_name": "",
             "status": "created",
+            "work_type": "",
             "lead_pid": self.lead_pid,
             "last_completed_phase": "",
             "last_completed_stage": "",
@@ -2173,6 +2180,7 @@ mod tests {
             updated_at: None,
             current_stage: Some("WS-DEV".into()),
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -2363,6 +2371,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -2827,6 +2836,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -2860,6 +2870,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -2893,6 +2904,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -4691,6 +4703,76 @@ mod tests {
             env.worktree_path.as_deref(),
             Some(wt_dir.to_str().unwrap()),
             "env file should have worktree path"
+        );
+    }
+
+    // -- BUG #1: work_type field in initial pathflow-session-status.json --
+
+    #[test]
+    fn test_create_pathflow_flag_includes_work_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7worktype000000000000";
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked(sid),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.create_pathflow_flag(dir.path(), sid, "startup", false, &mut result);
+
+        let status_path = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pathflow-session-status.json");
+        assert!(status_path.exists(), "status file should be created");
+
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&status_path).unwrap()).unwrap();
+
+        // BUG #1 fix: work_type field must exist with empty string default.
+        assert!(
+            data.get("work_type").is_some(),
+            "pathflow-session-status.json must include work_type field"
+        );
+        assert_eq!(
+            data["work_type"], "",
+            "initial work_type should be empty string"
+        );
+    }
+
+    // -- BUG #5: early env write includes CODEFLOW_WORKTREE_PATH placeholder --
+
+    #[test]
+    fn test_early_env_write_includes_worktree_path_placeholder() {
+        // write_env_file_with_worktree(dir, sid, root, Some("")) should produce
+        // an env file containing CODEFLOW_WORKTREE_PATH with an empty value.
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7earlyenv00000000000");
+
+        session::write_env_file_with_worktree(dir.path(), &sid, "codeflow", Some("")).unwrap();
+
+        let env = session::read_env_file(dir.path()).unwrap().unwrap();
+        assert_eq!(env.session_id, sid);
+        assert_eq!(env.project_root, "codeflow");
+
+        // BUG #5 fix: CODEFLOW_WORKTREE_PATH must be present (even if empty).
+        assert!(
+            env.worktree_path.is_some(),
+            "early env write must include CODEFLOW_WORKTREE_PATH"
+        );
+        assert_eq!(
+            env.worktree_path.as_deref(),
+            Some(""),
+            "early env write should have empty CODEFLOW_WORKTREE_PATH placeholder"
         );
     }
 }

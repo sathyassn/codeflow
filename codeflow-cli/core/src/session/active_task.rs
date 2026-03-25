@@ -63,6 +63,10 @@ pub struct ActiveTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team_name: Option<String>,
 
+    /// Work type classification (e.g., "FEAT", "FIX", "PLAN").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_type: Option<String>,
+
     /// Scope enforcement policy: "soft", "hard", or "permissive".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_policy: Option<String>,
@@ -268,6 +272,7 @@ mod tests {
             updated_at: Some("2026-03-09T00:00:00Z".into()),
             current_stage: Some("WS-DEV".into()),
             team_name: Some("codeflow-team".into()),
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         }
@@ -327,6 +332,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -387,6 +393,7 @@ mod tests {
             updated_at: None,
             current_stage: None,
             team_name: None,
+            work_type: None,
             scope_policy: None,
             file_scope: None,
         };
@@ -395,9 +402,33 @@ mod tests {
         // None fields should be omitted
         assert!(!json.contains("epic_id"));
         assert!(!json.contains("title"));
+        assert!(!json.contains("work_type"));
 
         let parsed: ActiveTask = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, task);
+    }
+
+    #[test]
+    fn test_work_type_field_serialization() {
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-wt"),
+            work_type: Some("FEAT".into()),
+            ..make_test_task()
+        };
+
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"work_type\":\"FEAT\""));
+
+        let parsed: ActiveTask = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.work_type.as_deref(), Some("FEAT"));
+    }
+
+    #[test]
+    fn test_work_type_field_deserialization_missing() {
+        // JSON without work_type field should deserialize with work_type=None.
+        let json = r#"{"task_id":"task-old"}"#;
+        let task: ActiveTask = serde_json::from_str(json).unwrap();
+        assert!(task.work_type.is_none());
     }
 
     // --- Worktree-aware wrapper tests ---

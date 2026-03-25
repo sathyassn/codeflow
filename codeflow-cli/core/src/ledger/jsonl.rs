@@ -29,6 +29,9 @@ use crate::error::LedgerError;
 ///
 /// When `session_id` is `Some`, writes go to the session fragment file.
 /// When `session_id` is `None`, writes go to the base file.
+///
+/// In worktree mode, the ledger directory is resolved relative to the
+/// worktree root (ledger is LOCAL per-worktree, not symlinked).
 pub struct JsonlWriter {
     ledger_dir: PathBuf,
     session_id: Option<String>,
@@ -55,6 +58,10 @@ impl JsonlWriter {
     /// fragment files (`{type}/{type}-ses-{id}.jsonl`). When `None`, events
     /// are written to the base file (`{type}/{type}.jsonl`).
     ///
+    /// In worktree mode (`CODEFLOW_WORKTREE_PATH` set and non-empty),
+    /// the ledger directory is redirected to the worktree-local path
+    /// because ledger is LOCAL per-worktree.
+    ///
     /// # Errors
     ///
     /// Returns `LedgerError::Io` if the directory cannot be created.
@@ -62,7 +69,8 @@ impl JsonlWriter {
         ledger_dir: impl Into<PathBuf>,
         session_id: Option<String>,
     ) -> Result<Self, LedgerError> {
-        let ledger_dir = ledger_dir.into();
+        let provided_dir = ledger_dir.into();
+        let ledger_dir = resolve_ledger_dir(&provided_dir);
         fs::create_dir_all(&ledger_dir)?;
         Ok(Self {
             ledger_dir,
@@ -126,6 +134,35 @@ impl JsonlWriter {
 
         Ok(())
     }
+}
+
+/// Resolve the ledger directory, redirecting to the worktree-local path
+/// when `CODEFLOW_WORKTREE_PATH` is set and non-empty.
+///
+/// Ledger is LOCAL per-worktree (not symlinked). When hooks are invoked
+/// from the main repo context but a worktree is active, writes must go
+/// to `{worktree}/.state/ledger/` instead of `{main_repo}/.state/ledger/`.
+fn resolve_ledger_dir(provided_dir: &Path) -> PathBuf {
+    resolve_ledger_dir_inner(
+        provided_dir,
+        std::env::var("CODEFLOW_WORKTREE_PATH").ok().as_deref(),
+    )
+}
+
+/// Inner implementation with explicit worktree path for testability.
+fn resolve_ledger_dir_inner(provided_dir: &Path, worktree_path: Option<&str>) -> PathBuf {
+    if let Some(wt_path) = worktree_path {
+        if !wt_path.is_empty() {
+            // Only redirect if the provided_dir looks like it's under .state/ledger/
+            // (i.e., not already pointing to the worktree).
+            let wt = Path::new(wt_path);
+            let wt_ledger = wt.join(".state").join("ledger");
+            if !provided_dir.starts_with(wt) {
+                return wt_ledger;
+            }
+        }
+    }
+    provided_dir.to_path_buf()
 }
 
 impl LedgerWriter for JsonlWriter {
@@ -533,5 +570,43 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed["old_status"], "todo");
         assert_eq!(parsed["new_status"], "in_progress");
+    }
+
+    // -- Worktree-aware ledger path resolution tests --
+
+    #[test]
+    fn test_resolve_ledger_dir_no_worktree() {
+        let dir = PathBuf::from("/project/.state/ledger");
+        let got = resolve_ledger_dir_inner(&dir, None);
+        assert_eq!(got, dir);
+    }
+
+    #[test]
+    fn test_resolve_ledger_dir_empty_worktree() {
+        let dir = PathBuf::from("/project/.state/ledger");
+        let got = resolve_ledger_dir_inner(&dir, Some(""));
+        assert_eq!(got, dir);
+    }
+
+    #[test]
+    fn test_resolve_ledger_dir_with_worktree_redirects() {
+        let dir = PathBuf::from("/project/.state/ledger");
+        let got = resolve_ledger_dir_inner(&dir, Some("/project/.git-worktrees/wt-ses-abc"));
+        assert_eq!(
+            got,
+            PathBuf::from("/project/.git-worktrees/wt-ses-abc/.state/ledger"),
+            "should redirect to worktree ledger"
+        );
+    }
+
+    #[test]
+    fn test_resolve_ledger_dir_already_in_worktree_no_redirect() {
+        let wt = "/project/.git-worktrees/wt-ses-abc";
+        let dir = PathBuf::from(format!("{wt}/.state/ledger"));
+        let got = resolve_ledger_dir_inner(&dir, Some(wt));
+        assert_eq!(
+            got, dir,
+            "should NOT redirect when already pointing to worktree"
+        );
     }
 }
