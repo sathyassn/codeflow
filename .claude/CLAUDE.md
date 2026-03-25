@@ -832,11 +832,11 @@ Parallel Batch Execution (above) covers intra-session parallelism — multiple t
 .git-worktrees/worktree-{SID}/
 ├── .state/
 │   ├── db/ → ../../.state/db/                (symlink — shared)
-│   ├── ledger/ → ../../.state/ledger/         (symlink — shared)
 │   ├── coordination/ → ../../.state/coordination/ (symlink — shared)
 │   ├── logs/ → ../../.state/logs/             (symlink — shared)
 │   ├── registry/ → ../../.state/registry/     (symlink — shared)
 │   ├── backups/ → ../../.state/backups/       (symlink — shared)
+│   ├── ledger/                                (LOCAL per-worktree — since PR #221)
 │   ├── runtime/                               (LOCAL per-worktree)
 │   ├── session/                               (LOCAL per-worktree)
 │   └── sentinels/                             (LOCAL per-worktree)
@@ -1479,7 +1479,7 @@ project-management/                   # Tier 2: Human-readable work tracking
 
 **CRDT coordination state** (`.state/coordination/state.loro`) is shared across worktrees (symlinked). SurrealDB uses `RetryConfig` with exponential backoff for parallel access from multiple worktrees.
 
-**WorktreePaths resolution:** When running in a worktree, state file paths resolve via `WorktreePaths` (`codeflow-cli/core/src/worktree/paths.rs`). Shared state (db, ledger, coordination, logs, registry, backups) is symlinked to the main repo. Local state (runtime, session, sentinels) is per-worktree.
+**WorktreePaths resolution:** When running in a worktree, state file paths resolve via `WorktreePaths` (`codeflow-cli/core/src/worktree/paths.rs`). Shared state (db, coordination, logs, registry, backups) is symlinked to the main repo. Local state (ledger, runtime, session, sentinels) is per-worktree. The ledger is LOCAL since PR #221 — each worktree writes events to its own fragment files, preventing write conflicts during parallel sessions.
 
 ### Memory Operations
 

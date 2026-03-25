@@ -129,19 +129,29 @@ Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
 
 **Network operations:** If database synchronization or external data operations ever require network access, load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound commands.
 
+### CLI Commands
+
+All ledger appends use the CLI routing pipeline:
+
+```bash
+codeflow ledger append --event-type {type} --data '{"field":"value",...}'
+```
+
+The CLI handles routing to the correct subdirectory (`work-graph`, `sessions`, `memory-events`, etc.), session-scoped fragment files, worktree path resolution via `CODEFLOW_WORKTREE_PATH`, flock-based locking, and timestamp generation. Do NOT specify the target file or timestamp — the CLI derives them automatically from the event type and session context.
+
+All DB operations execute via: `codeflow db exec` (writes) or `codeflow db query` (reads).
+Schema defined in: `codeflow-cli/core/src/store/schema.surql`
+
+Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
+
 ### CLI Fallback
 
 When CLI (`codeflow`) is not available, use these fallbacks:
 
 - **DB writes:** `sqlite3 .state/db/codeflow.db "SQL_STATEMENT"`
 - **DB reads:** `sqlite3 -json .state/db/codeflow.db "SELECT ..."`
-- **JSONL appends:** `echo '{"event":...}' >> .state/ledger/{canonical-filename}.jsonl`
-- **PathFlow events:** `echo '{"event":...}' >> .state/logs/pathflow-events.jsonl`
-
-Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
-
-All DB operations execute via: `codeflow db exec` (writes) or `codeflow db query` (reads).
-Schema defined in: `codeflow-cli/core/src/store/schema.surql`
+- **JSONL appends:** `echo '{"event_type":"{type}","timestamp":"{ISO8601}","session_id":"{SID}",...}' >> .state/ledger/{subdir}/{canonical-filename}.jsonl`
+- **PathFlow events:** `echo '{"event_type":"{type}","timestamp":"{ISO8601}",...}' >> .state/logs/pathflow-events.jsonl`
 
 ---
 
@@ -190,8 +200,8 @@ Schema defined in: `codeflow-cli/core/src/store/schema.surql`
 3. Generate work_id: `work-{ulid}` via `codeflow internal ulid --prefix work`
 4. INSERT into active_work table: id=work_id, task_id, topic, status='in_progress', branch, scope, session_id
 5. UPDATE tasks table: `SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
-6. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"task_status_changed","task_id":"{task_id}","old_status":"todo","new_status":"in_progress","timestamp":"{ISO8601}"}`
-7. Append `begin_work` event to `.state/logs/pathflow-events.jsonl`: `{"event":"begin_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
+6. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{task_id}","old_status":"todo","new_status":"in_progress"}'`
+7. Run: `codeflow ledger append --event-type begin_work --data '{"work_id":"{id}","task_id":"{task_id}"}'`
 8. Write `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
 
 **CONDITIONAL (autorun):** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by CLI. Skip steps 3-8, load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
@@ -220,8 +230,8 @@ Event types:
 3. Build JSON payload for data field (include summary, files_affected, rationale as applicable)
 4. INSERT into memory_events table: id, event_type, domain, work_id, data, memory_type, created_at
 5. INSERT into extraction_queue table: id, event_id, status='pending'
-6. Append event to `.state/ledger/memory-events.jsonl`
-7. Append event to `.state/logs/pathflow-events.jsonl`
+6. Run: `codeflow ledger append --event-type {event_type} --data '{"id":"{entry_id}","domain":"{domain}","work_id":"{work_id}","data":{...}}'`
+7. Run: `codeflow ledger append --event-type {event_type} --data '{"id":"{entry_id}","work_id":"{work_id}","summary":"{summary}"}'` (for pathflow event, if applicable to stage_transition)
 8. **CONDITIONAL (milestone or stage_transition):** Update Tier 2 markdown task file progress section
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-progress - {event_type} logged for {work_id}"`
@@ -240,14 +250,14 @@ Event types:
 4. UPDATE tasks table: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
 5. Edit task markdown frontmatter: set `status: complete` in `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
 6. Update epic markdown task table: set task row status to `complete` in `project-management/epics/{AREA}/{epic-format_id}/{epic-format_id}.md` — NEVER skip this, even if sibling tasks remain todo
-7. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`: `{"event":"task_status_changed","task_id":"{task_id}","old_status":"in_progress","new_status":"complete","timestamp":"{ISO8601}"}`
-8. Append `complete_work` event to `.state/logs/pathflow-events.jsonl`: `{"event":"complete_work","work_id":"{id}","task_id":"{task_id}","timestamp":"{ISO8601}"}`
-9. Record completion milestone in `.state/ledger/memory-events.jsonl` (event_type='milestone', data includes deliverables summary)
+7. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{task_id}","old_status":"in_progress","new_status":"complete"}'`
+8. Run: `codeflow ledger append --event-type complete_work --data '{"work_id":"{id}","task_id":"{task_id}"}'`
+9. Run: `codeflow ledger append --event-type milestone --data '{"work_id":"{work_id}","summary":"Task {task_id} complete","deliverables":[...]}'`
 10. Delete `.state/runtime/active-task.json` if present
 11. **CONDITIONAL (all sibling tasks complete):** Epic status rollup — query `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`:
     a. UPDATE epics table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
     b. Edit epic markdown frontmatter: set `status: complete`
-    c. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`
+    c. Run: `codeflow ledger append --event-type epic_status_changed --data '{"epic_id":"{epic_id}","old_status":"in_progress","new_status":"complete"}'`
     d. Run `codeflow validate epic {epic_markdown_path}`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: complete-work - {work_id} finalized"`
@@ -264,7 +274,7 @@ Event types:
 4. Compose session summary: work completed (task IDs, titles, statuses), branch (name, commit count, PR number), pipeline results (stage verdicts), key decisions (Tier 2/3), open items (deferred/blocked)
 5. Generate entry_id: `memory-{ulid}`
 6. INSERT into memory_events table: id, event_type='session_summary', domain, work_id, data=summary, created_at
-7. Append `session_summary` event to `.state/ledger/memory-events.jsonl`
+7. Run: `codeflow ledger append --event-type session_summary --data '{"id":"{entry_id}","work_id":"{work_id}","domain":"{domain}","data":{summary_object}}'`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: record-session-summary - session summary recorded"`
 
@@ -278,7 +288,7 @@ Event types:
 
 1. Receive PR outcome from team lead — extract: event_type (merged/created), pr_number, merge_sha (if applicable)
 2. Create directory if needed: `mkdir -p .state/logs/git/`
-3. Append event to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl`: `{"event_type":"pr_outcome","task_id":"{id}","pr_number":{N},"merge_sha":"{sha}","ts":"{ISO8601}"}`
+3. Run: `codeflow ledger append --event-type pr_created --data '{"task_id":"{id}","pr_number":{N}}'` (use `pr_merged` when outcome is merged, include `merge_sha` in data)
 4. UPDATE tasks table: `SET pr_status = '{event_type}', pr_number = {N} WHERE id = '{task_id}'`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KL-UPDATE: PR outcome recorded - {event_type} for task {task_id}"`
@@ -294,7 +304,7 @@ Event types:
 3. For each stale entry: move Tier 2 markdown to archive directory
 4. DELETE stale entries from active_work table (completed entries older than 30 days)
 5. DELETE expired work_claims from work_claims table
-6. Append archive events to `.state/ledger/memory-events.jsonl` (NEVER delete JSONL entries)
+6. Run: `codeflow ledger append --event-type milestone --data '{"work_id":"{work_id}","summary":"archived","type":"archive"}'` for each archived item (NEVER delete JSONL entries)
 7. **CONDITIONAL (DB size > 50 MB):** Run `VACUUM` on `.state/db/codeflow.db`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: lifecycle - Archived {N} work items, pruned {M} claims, DB size: {size}MB"`
@@ -394,8 +404,8 @@ The CLI generates a Crockford base32 ULID with the given prefix. For multiple ID
 1. Run idempotency guard query: `SELECT t.id, t.format_id, e.id AS epic_id, e.format_id AS epic_format_id FROM tasks t JOIN epics e ON t.epic_id = e.id WHERE t.branch = '{branch}'`
 2. **CONDITIONAL (match found):** Return existing task_id and epic_id, log warning, STOP
 3. Search for existing open epic (status != 'complete') matching area_type + work_type — **NEVER add tasks to a completed epic**
-4. **CONDITIONAL (no open epic found):** Create epic: generate `epic-{ulid}`, compute format_id, INSERT into epics table, append `epic_created` to `.state/ledger/work-graph.jsonl`, create markdown at `project-management/epics/{AREA}/{format_id}/{format_id}.md`
-5. Create task: generate `task-{ulid}`, compute format_id, INSERT into tasks table, append `task_created` to `.state/ledger/work-graph.jsonl`, create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
+4. **CONDITIONAL (no open epic found):** Create epic: generate `epic-{ulid}`, compute format_id, INSERT into epics table, run `codeflow ledger append --event-type epic_created --data '{"epic_id":"{id}","format_id":"{format_id}","area_type":"{area}"}'`, create markdown at `project-management/epics/{AREA}/{format_id}/{format_id}.md`
+5. Create task: generate `task-{ulid}`, compute format_id, INSERT into tasks table, run `codeflow ledger append --event-type task_created --data '{"task_id":"{id}","format_id":"{format_id}","epic_id":"{epic_id}"}'`, create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
 6. Return task_id and epic_id (both ULID PKs) to team lead
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: ensure-work-registered - task {format_id} under epic {epic_format_id}"`
@@ -441,7 +451,7 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 3. Validate required fields: area_type, work_type, domain, title
 4. Generate id: `epic-{ulid}` and compute format_id: `{AREA}-EPC-{NNN}`
 5. INSERT into epics table
-6. Append `epic_created` event to `.state/ledger/work-graph.jsonl`
+6. Run: `codeflow ledger append --event-type epic_created --data '{"epic_id":"{id}","format_id":"{format_id}","area_type":"{area}"}'`
 7. Create markdown at `project-management/epics/{AREA}/{format_id}/{format_id}.md` using template at `project-management/templates/epic-template.md`
 
 **GATE:** Report result. Format: `"KNOWLEDGE: create-epic - {format_id} created"`
@@ -451,7 +461,7 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 1. Validate epic exists in epics table
 2. Validate status transition is valid (draft->planning->in_progress->complete/archived)
 3. Execute UPDATE on epics table
-4. Append `epic_status_changed` event to `.state/ledger/work-graph.jsonl`
+4. Run: `codeflow ledger append --event-type epic_status_changed --data '{"epic_id":"{id}","old_status":"{old}","new_status":"{new}"}'`
 5. Re-render Tier 2 markdown (epic file frontmatter + content)
 6. **CONDITIONAL (status changed to 'complete'):** Verify all child tasks are complete
 
@@ -467,7 +477,7 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 4. Generate id: `task-{ulid}` and compute format_id: `{AREA}-TSK-{NNN}-{NNN}`
 5. INSERT into tasks table (epic_id as ULID FK)
 6. **CONDITIONAL (dependencies specified):** INSERT into task_dependencies table
-7. Append `task_created` event to `.state/ledger/work-graph.jsonl`
+7. Run: `codeflow ledger append --event-type task_created --data '{"task_id":"{id}","format_id":"{format_id}","epic_id":"{epic_id}"}'`
 8. Create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` using template at `project-management/templates/task-template.md`
 
 Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, auto_merge, target_branch.
@@ -478,7 +488,7 @@ Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, a
 
 1. Validate task exists in tasks table
 2. Execute UPDATE on permitted fields (status, stage, stage_status, branch, pr_number)
-3. Append `task_status_changed` event to `.state/ledger/work-graph.jsonl`
+3. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{id}","old_status":"{old}","new_status":"{new}"}'`
 4. Check if this update unblocks dependent tasks in task_dependencies table
 5. Re-render Tier 2 markdown (task file frontmatter)
 6. **CONDITIONAL (stage transition):** Record stage_transition event in memory_events
@@ -505,14 +515,14 @@ Internal operations called by Parts 1 and 2.
 2. Generate id: `memory-{ulid}`
 3. INSERT into memory_events table: id, event_type, domain, work_id, data, memory_type, created_at
 4. INSERT into extraction_queue table: id, event_id, status='pending'
-5. Append event to `.state/ledger/memory-events.jsonl` (Tier 0)
+5. Run: `codeflow ledger append --event-type {event_type} --data '{"id":"{id}","domain":"{domain}","work_id":"{work_id}","data":{...}}'` (Tier 0)
 
 **memory-query:** Build SELECT from parameters (domain, event_type, work_id, memory_type) or FTS5 with BM25 ranking. Support time-bounded queries via created_at range. Return structured results.
 
 **session-record — CHECKLIST:**
 
 1. INSERT or UPDATE sessions table with lifecycle state (start, pause, resume, end)
-2. Append event to `.state/ledger/sessions.jsonl`
+2. Run: `codeflow ledger append --event-type session_start --data '{"session_id":"{sid}","interaction_mode":"{mode}"}'` (use `session_end` for end events)
 
 **log-append — CHECKLIST:**
 

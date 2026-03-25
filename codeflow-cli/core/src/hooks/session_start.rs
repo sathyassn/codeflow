@@ -1492,6 +1492,26 @@ impl SessionStartInit {
         for dir in &dirs {
             let _ = fs::create_dir_all(dir);
         }
+
+        // Migrate worktree ledger from flat to subdirectory layout.
+        // Worktrees inherit flat layout from git checkout; the main repo
+        // migration in create_directories() does not cover worktree-local
+        // ledger dirs. One-time, idempotent.
+        let ledger_dir = wp.state_dir().join("ledger");
+        if ledger_dir.exists() {
+            match crate::ledger::migrate::migrate_flat_to_subdirs(&ledger_dir) {
+                Ok(result) if !result.already_migrated => {
+                    eprintln!(
+                        "info: worktree ledger migration: moved {} files to subdirectory layout",
+                        result.migrated_count
+                    );
+                }
+                Err(e) => {
+                    eprintln!("warn: worktree ledger migration failed (non-fatal): {e}");
+                }
+                _ => {}
+            }
+        }
     }
 }
 
