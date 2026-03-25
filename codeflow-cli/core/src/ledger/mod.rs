@@ -1,7 +1,11 @@
+pub mod compact;
 mod jsonl;
+pub mod migrate;
+pub mod rebuild;
 mod routing;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -10,19 +14,72 @@ use crate::error::LedgerError;
 pub use jsonl::JsonlWriter;
 pub use routing::route_event_type;
 
-/// Canonical JSONL ledger file names.
+/// Canonical JSONL ledger type names (directory names in subdirectory layout).
+///
+/// Each type maps to a subdirectory under `.state/ledger/`. Within each
+/// subdirectory, the base file is `{type}.jsonl` and session fragments are
+/// `{type}-ses-{session_id}.jsonl`.
 pub mod files {
-    pub const WORK_GRAPH: &str = "work-graph.jsonl";
-    pub const MEMORY_EVENTS: &str = "memory-events.jsonl";
-    pub const SESSIONS: &str = "sessions.jsonl";
-    pub const CONFIG: &str = "config.jsonl";
-    pub const PATHFLOW_EVENTS: &str = "pathflow-events.jsonl";
-    pub const COORDINATION_EVENTS: &str = "coordination-events.jsonl";
-    pub const AUTORUN_EVENTS: &str = "autorun-events.jsonl";
+    pub const WORK_GRAPH: &str = "work-graph";
+    pub const MEMORY_EVENTS: &str = "memory-events";
+    pub const SESSIONS: &str = "sessions";
+    pub const CONFIG: &str = "config";
+    pub const PATHFLOW_EVENTS: &str = "pathflow-events";
+    pub const COORDINATION_EVENTS: &str = "coordination-events";
+    pub const AUTORUN_EVENTS: &str = "autorun-events";
 
-    /// Files synced to the database (excludes pathflow-events, coordination-events,
+    /// Types synced to the database (excludes pathflow-events, coordination-events,
     /// and autorun-events).
     pub const CANONICAL: &[&str] = &[WORK_GRAPH, MEMORY_EVENTS, SESSIONS, CONFIG];
+
+    /// All 7 canonical ledger type names.
+    pub const ALL: &[&str] = &[
+        WORK_GRAPH,
+        MEMORY_EVENTS,
+        SESSIONS,
+        CONFIG,
+        PATHFLOW_EVENTS,
+        COORDINATION_EVENTS,
+        AUTORUN_EVENTS,
+    ];
+}
+
+/// Result of a compaction operation on a single ledger type.
+#[derive(Debug, Clone)]
+pub struct CompactionResult {
+    /// The ledger type that was compacted (e.g., "work-graph").
+    pub type_name: String,
+    /// Number of fragment files merged into the base.
+    pub merged_count: usize,
+    /// Paths of fragment files that were deleted after merging.
+    pub deleted_files: Vec<PathBuf>,
+    /// Number of active sessions skipped (no session_end found).
+    pub skipped_active: usize,
+}
+
+/// Check if a filename has a `.jsonl` extension (case-insensitive).
+#[must_use]
+pub fn is_jsonl_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+}
+
+/// Check if a filename has a `.lock` extension (case-insensitive).
+#[must_use]
+pub fn is_lock_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"))
+}
+
+/// Result of migrating from flat layout to subdirectory layout.
+#[derive(Debug, Clone)]
+pub struct MigrationResult {
+    /// Number of types successfully migrated.
+    pub migrated_count: usize,
+    /// Whether the migration was already complete (no flat files found).
+    pub already_migrated: bool,
 }
 
 /// A single JSONL ledger event.
@@ -167,17 +224,18 @@ mod tests {
 
     #[test]
     fn test_ledger_files_constants() {
-        assert_eq!(files::WORK_GRAPH, "work-graph.jsonl");
-        assert_eq!(files::MEMORY_EVENTS, "memory-events.jsonl");
-        assert_eq!(files::SESSIONS, "sessions.jsonl");
-        assert_eq!(files::CONFIG, "config.jsonl");
-        assert_eq!(files::PATHFLOW_EVENTS, "pathflow-events.jsonl");
-        assert_eq!(files::COORDINATION_EVENTS, "coordination-events.jsonl");
-        assert_eq!(files::AUTORUN_EVENTS, "autorun-events.jsonl");
+        assert_eq!(files::WORK_GRAPH, "work-graph");
+        assert_eq!(files::MEMORY_EVENTS, "memory-events");
+        assert_eq!(files::SESSIONS, "sessions");
+        assert_eq!(files::CONFIG, "config");
+        assert_eq!(files::PATHFLOW_EVENTS, "pathflow-events");
+        assert_eq!(files::COORDINATION_EVENTS, "coordination-events");
+        assert_eq!(files::AUTORUN_EVENTS, "autorun-events");
         assert_eq!(files::CANONICAL.len(), 4);
         assert!(!files::CANONICAL.contains(&files::PATHFLOW_EVENTS));
         assert!(!files::CANONICAL.contains(&files::COORDINATION_EVENTS));
         assert!(!files::CANONICAL.contains(&files::AUTORUN_EVENTS));
+        assert_eq!(files::ALL.len(), 7);
     }
 
     #[test]

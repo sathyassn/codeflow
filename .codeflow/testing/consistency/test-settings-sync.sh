@@ -547,25 +547,37 @@ test_structural_validation() {
     fi
 
     # TC-SYNC-015: No duplicate hook entries within same event type + matcher combo
+    # Deduplication is per-matcher, not across all matchers for an event type.
+    # The same command (e.g., protection-guard) can legitimately appear in
+    # different matchers (Bash vs Edit|Write) since they trigger on different tools.
     local has_duplicates=false
     local event_types
     event_types=$(jq -r '.hooks | keys[]' "$STRICT_TEMPLATE" 2>/dev/null)
 
     for event_type in $event_types; do
-        # Get all commands for this event type
-        local event_commands
-        event_commands=$(jq -r --arg et "$event_type" '.hooks[$et][]? | .hooks[]?.command // empty' "$STRICT_TEMPLATE" 2>/dev/null | sort)
-        local event_duplicates
-        event_duplicates=$(echo "$event_commands" | uniq -d)
-        if [[ -n "$event_duplicates" ]]; then
-            has_duplicates=true
-        fi
+        # Get the number of matchers for this event type
+        local matcher_count
+        matcher_count=$(jq -r --arg et "$event_type" '.hooks[$et] | length' "$STRICT_TEMPLATE" 2>/dev/null)
+
+        local idx=0
+        while [[ "$idx" -lt "$matcher_count" ]]; do
+            # Get commands within this specific matcher
+            local matcher_commands
+            matcher_commands=$(jq -r --arg et "$event_type" --argjson i "$idx" \
+                '.hooks[$et][$i].hooks[]?.command // empty' "$STRICT_TEMPLATE" 2>/dev/null | sort)
+            local matcher_duplicates
+            matcher_duplicates=$(echo "$matcher_commands" | uniq -d)
+            if [[ -n "$matcher_duplicates" ]]; then
+                has_duplicates=true
+            fi
+            idx=$((idx + 1))
+        done
     done
 
     if [[ "$has_duplicates" == "false" ]]; then
-        test_pass "TC-SYNC-015: No duplicate hook entries within same event type"
+        test_pass "TC-SYNC-015: No duplicate hook entries within same event type + matcher"
     else
-        test_fail "TC-SYNC-015: No duplicate hook entries within same event type" "duplicates found"
+        test_fail "TC-SYNC-015: No duplicate hook entries within same event type + matcher" "duplicates found"
     fi
 
     # TC-SYNC-016: _template field present and matches filename

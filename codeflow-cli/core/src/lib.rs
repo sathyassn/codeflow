@@ -116,9 +116,10 @@ mod tests {
 
     #[test]
     fn test_ledger_file_constants() {
-        assert_eq!(ledger::files::WORK_GRAPH, "work-graph.jsonl");
-        assert_eq!(ledger::files::SESSIONS, "sessions.jsonl");
+        assert_eq!(ledger::files::WORK_GRAPH, "work-graph");
+        assert_eq!(ledger::files::SESSIONS, "sessions");
         assert_eq!(ledger::files::CANONICAL.len(), 4);
+        assert_eq!(ledger::files::ALL.len(), 7);
     }
 
     #[test]

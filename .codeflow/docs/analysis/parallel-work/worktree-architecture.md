@@ -90,8 +90,8 @@ The worktree manager at `worktree.go:62-79` (Manager struct) and `worktree.go:11
 
 1. **Git worktree creation:** `git worktree add {path} -b {branch}` at `worktree.go:126`
 2. **Config file copying:** `.gitignore` copied to worktree at `worktree.go:135-143`
-3. **Shared state symlinks:** `db`, `ledger`, `registry`, `backups`, `coordination`, `logs` symlinked from main `.state/` to worktree `.state/` at `worktree.go:153-164`
-4. **Local state directories:** `runtime`, `session`, `sentinels` created fresh (not symlinked) at `worktree.go:167-173`
+3. **Shared state symlinks:** `db`, `registry`, `backups`, `coordination`, `logs` symlinked from main `.state/` to worktree `.state/` at `worktree.go:153-164`
+4. **Local state directories:** `runtime`, `session`, `sentinels`, `ledger` created fresh (not symlinked) at `worktree.go:167-173`
 5. **Registry tracking:** Worktree registered in `.state/worktrees.yaml` at `worktree.go:175-187`
 
 **Base directory:** `.git-worktrees/` (to be changed from current `.claude/worktrees/` -- see Section 3)
@@ -104,17 +104,24 @@ The shared/local split at `worktree.go:153-167` is well-designed for parallel wo
 | Shared (symlinked) | Why Shared | Parallel Safety |
 |--------------------|-----------|----------------|
 | `db/` | Single SQLite database | WAL mode + busy_timeout handle concurrent access |
-| `ledger/` | Append-only JSONL files | flock for file I/O append safety (not coordination) |
 | `coordination/` | Claims state | Loro Map CRDT (sole coordination mechanism, native crate dependency in Rust CLI). `state.loro` replaces `state.json`. TTL default 4200s; sync daemon handles fast crash cleanup (5–10s). See [Data Layer Protection](data-layer-protection.md) and [CRDT Coordination](crdt-coordination.md). |
 | `logs/` | Event logs | Append-only, flock for file I/O append safety (not coordination) |
 | `registry/` | Worktree tracking | Single writer expected |
 | `backups/` | DB backups | Timestamped filenames prevent collision |
+| `worktrees/` | Worktree registry | Single source of truth for all active worktrees |
 
 | Local (per-worktree) | Why Local | Parallel Safety |
 |---------------------|----------|----------------|
 | `runtime/` | Session files (env, active-task) | Each worktree gets its own -- eliminates CRITICAL conflicts |
 | `session/` | Session-scoped state | Each worktree gets its own |
 | `sentinels/` | Phase/stage sentinels | Each worktree gets its own |
+| `ledger/` | JSONL event log (session fragments) | Each session writes to its own fragment file; no cross-worktree write conflicts; ledger files tracked in git on feature branch, merged at PR merge. See [Ledger System Design](../ledger-system-design.md). |
+
+> **Note (updated 2026-03-24):** `ledger/` was moved from SHARED to LOCAL in
+> INF-TSK-024-030 (PR #221). The previous shared symlink caused ledger writes
+> from a worktree to appear in the main repo's working tree, polluting
+> `git status`. With session-scoped fragment files, each worktree has its own
+> ledger copy and writes only to its own fragment files.
 
 ---
 
@@ -334,16 +341,16 @@ If two `source=startup` sessions start at the same time on the same project:
 2. **Worktree name collision:** Impossible. Worktree names include the session ID (`worktree-{SID}`), so unique IDs produce unique worktree paths.
 3. **`codeflow-env.sh` race:** CRITICAL. Both sessions write to the same `.state/runtime/codeflow-env.sh`. Session B overwrites Session A's ID. This is the exact CRITICAL conflict from Section 1.2. **Resolution:** With worktrees, each session writes `codeflow-env.sh` to its own worktree's `.state/runtime/`, not the shared location. This eliminates the race entirely.
 4. **SQLite contention:** Both worktrees share the same SQLite database via symlink. WAL mode with `busy_timeout=5000` (connection.go:98) handles concurrent writes. `SetMaxOpenConns(1)` (connection.go:92) serializes per-process. Cross-process contention is handled by SQLite's file-level locking. Expected behavior: one session waits up to 5 seconds for the other's write to complete.
-5. **JSONL contention:** Both worktrees share the same ledger directory via symlink. `writer.go:99` uses `flock(LOCK_EX)` for file I/O append safety (this is file-level locking, not coordination). Expected behavior: one session blocks briefly while the other holds the lock. No data loss.
+5. **JSONL contention:** Each worktree has its own LOCAL ledger directory (real dir, not symlink). Each session writes to its own session-scoped fragment file (`{type}-ses-{SID}.jsonl`). No cross-worktree write contention is possible -- sessions write to different files entirely. `flock(LOCK_EX)` still applies within a single worktree for concurrent hook processes writing to the same fragment.
 6. **Claims contention:** Both worktrees share `coordination/` via symlink. With Loro Map CRDT (Phase A), claims are coordinated atomically -- concurrent `Acquire()` calls produce deterministic merge via Loro's conflict resolution. The current state.json TOCTOU race is eliminated by the migration to `state.loro` (see [Data Layer Protection](data-layer-protection.md) Section 3).
 
 ### 9.4 Worktree Cleanup Race at SessionEnd
 
-If Session A's `EndCleanup()` runs while Session B is actively using shared state (ledger, database):
+If Session A's `EndCleanup()` runs while Session B is actively using shared state (database):
 
 **SQLite:** Safe. Removing Session A's worktree removes the symlink to `.state/db/`, but does NOT affect the actual database file or Session B's connection to it. SQLite connections hold file descriptors to the actual file, not to the symlink.
 
-**JSONL:** Safe. Same reasoning -- removing the symlink does not affect Session B's open file descriptors to the actual ledger files.
+**JSONL:** Safe. The ledger is LOCAL per-worktree (real directory, not symlink). Removing Session A's worktree removes Session A's own ledger directory and its fragment files. Session B's ledger lives in Session B's own worktree directory and is completely unaffected.
 
 **git worktree remove:** Safe. `git worktree remove` only removes the worktree directory and its entry in `.git/worktrees/`. It does not affect other worktrees or the main repository.
 

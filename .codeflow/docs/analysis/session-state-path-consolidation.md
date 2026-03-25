@@ -1,5 +1,10 @@
 # Session State Path Consolidation
 
+> **Status: COMPLETED** — The path consolidation described here was implemented
+> in the Rust CLI (INF-EPC-021, PR #133). The layout below matches the current
+> implementation. The Go CLI and its separate `.state/checkpoints/` directory
+> have been retired.
+
 ## Problem
 
 Session-scoped ephemeral state is spread across 3 directories:

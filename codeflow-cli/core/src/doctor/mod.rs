@@ -111,13 +111,8 @@ impl Options {
     }
 }
 
-/// Canonical JSONL files required by the ledger.
-const CANONICAL_JSONL_FILES: &[&str] = &[
-    "work-graph.jsonl",
-    "memory-events.jsonl",
-    "sessions.jsonl",
-    "config.jsonl",
-];
+/// Canonical ledger types (subdirectory names).
+const CANONICAL_LEDGER_TYPES: &[&str] = &["work-graph", "memory-events", "sessions", "config"];
 
 /// Required subdirectories under `.state/`.
 const REQUIRED_STATE_DIRS: &[&str] = &["db", "ledger", "logs", "runtime", "sentinels"];
@@ -154,6 +149,7 @@ const CHECK_NAMES: &[&str] = &[
     "pathflow-stuck",
     "team-health",
     "sentinel-drift",
+    "ledger-health",
 ];
 
 /// Return the ordered list of all available check names.
@@ -184,6 +180,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("pathflow-stuck", check_pathflow_stuck);
     m.insert("team-health", check_team_health);
     m.insert("sentinel-drift", check_sentinel_drift);
+    m.insert("ledger-health", check_ledger_health);
     m
 }
 
@@ -279,11 +276,25 @@ fn check_jsonl(opts: &Options) -> CheckResult {
     }
 
     let ledger_path = Path::new(&opts.ledger_dir);
-    let mut missing = Vec::new();
     let mut invalid = Vec::new();
 
-    for &filename in CANONICAL_JSONL_FILES {
-        let path = ledger_path.join(filename);
+    for &type_name in CANONICAL_LEDGER_TYPES {
+        // Subdirectory layout: {type}/{type}.jsonl
+        let subdir_path = ledger_path
+            .join(type_name)
+            .join(format!("{type_name}.jsonl"));
+        // Flat layout fallback: {type}.jsonl
+        let flat_path = ledger_path.join(format!("{type_name}.jsonl"));
+
+        let path = if subdir_path.exists() {
+            subdir_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
+            // Base file missing is acceptable for types with no events yet.
+            continue;
+        };
+
         match std::fs::read_to_string(&path) {
             Ok(content) => {
                 for (i, line) in content.lines().enumerate() {
@@ -292,32 +303,22 @@ fn check_jsonl(opts: &Options) -> CheckResult {
                         continue;
                     }
                     if serde_json::from_str::<serde_json::Value>(trimmed).is_err() {
-                        invalid.push(format!("{filename}: invalid JSON at line {}", i + 1));
+                        invalid.push(format!("{type_name}: invalid JSON at line {}", i + 1));
                         break;
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(filename.to_string());
-            }
             Err(e) => {
-                invalid.push(format!("{filename}: {e}"));
+                invalid.push(format!("{type_name}: {e}"));
             }
         }
     }
 
-    if !missing.is_empty() || !invalid.is_empty() {
-        let mut parts = Vec::new();
-        if !missing.is_empty() {
-            parts.push(format!("missing: {}", missing.join(", ")));
-        }
-        if !invalid.is_empty() {
-            parts.push(format!("invalid: {}", invalid.join("; ")));
-        }
+    if !invalid.is_empty() {
         return CheckResult {
             name: "jsonl".into(),
             status: Status::Fail,
-            message: parts.join("; "),
+            message: format!("invalid: {}", invalid.join("; ")),
             duration: start.elapsed(),
         };
     }
@@ -325,7 +326,7 @@ fn check_jsonl(opts: &Options) -> CheckResult {
     CheckResult {
         name: "jsonl".into(),
         status: Status::Pass,
-        message: "all 4 canonical JSONL files valid".into(),
+        message: "canonical JSONL files valid".into(),
         duration: start.elapsed(),
     }
 }
@@ -1073,6 +1074,87 @@ pub fn repair_config(opts: &Options) -> Result<(), DoctorError> {
     Ok(())
 }
 
+/// Check ledger health: subdirectory layout, fragment counts, base files.
+fn check_ledger_health(opts: &Options) -> CheckResult {
+    use crate::ledger::files as ledger_files;
+
+    let start = Instant::now();
+    let ledger_dir = if opts.ledger_dir.is_empty() {
+        let state = opts.effective_state_dir();
+        PathBuf::from(&state).join("ledger")
+    } else {
+        PathBuf::from(&opts.ledger_dir)
+    };
+
+    if !ledger_dir.is_dir() {
+        return CheckResult {
+            name: "ledger-health".into(),
+            status: Status::Warn,
+            message: "ledger directory not found".into(),
+            duration: start.elapsed(),
+        };
+    }
+
+    let mut warnings = Vec::new();
+    let mut total_fragments = 0usize;
+
+    for type_name in ledger_files::ALL {
+        let subdir = ledger_dir.join(type_name);
+        if !subdir.is_dir() {
+            // Check for flat layout (pre-migration).
+            let flat = ledger_dir.join(format!("{type_name}.jsonl"));
+            if flat.exists() {
+                warnings.push(format!("{type_name}: flat layout (needs migration)"));
+            }
+            continue;
+        }
+
+        let base = subdir.join(format!("{type_name}.jsonl"));
+        if !base.exists() {
+            // Base file missing is normal for types that haven't had events yet.
+        }
+
+        // Count fragments.
+        let prefix = format!("{type_name}-ses-");
+        let mut frag_count = 0usize;
+        if let Ok(entries) = std::fs::read_dir(&subdir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_str().unwrap_or("");
+                if name.starts_with(&prefix)
+                    && crate::ledger::is_jsonl_file(name)
+                    && !crate::ledger::is_lock_file(name)
+                {
+                    frag_count += 1;
+                }
+            }
+        }
+        total_fragments += frag_count;
+
+        if frag_count > 20 {
+            warnings.push(format!(
+                "{type_name}: {frag_count} fragments (consider compaction)"
+            ));
+        }
+    }
+
+    if !warnings.is_empty() {
+        return CheckResult {
+            name: "ledger-health".into(),
+            status: Status::Warn,
+            message: warnings.join("; "),
+            duration: start.elapsed(),
+        };
+    }
+
+    CheckResult {
+        name: "ledger-health".into(),
+        status: Status::Pass,
+        message: format!("{total_fragments} total fragments across all types"),
+        duration: start.elapsed(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1087,7 +1169,7 @@ mod tests {
 
     #[test]
     fn test_check_names_returns_16() {
-        assert_eq!(check_names().len(), 16);
+        assert_eq!(check_names().len(), 17);
     }
 
     #[test]
@@ -1146,8 +1228,15 @@ mod tests {
     #[test]
     fn test_check_jsonl_valid_files() {
         let dir = tempfile::tempdir().unwrap();
-        for &f in CANONICAL_JSONL_FILES {
-            std::fs::write(dir.path().join(f), "{\"test\": true}\n").unwrap();
+        // Create subdirectory layout.
+        for &type_name in CANONICAL_LEDGER_TYPES {
+            let subdir = dir.path().join(type_name);
+            std::fs::create_dir_all(&subdir).unwrap();
+            std::fs::write(
+                subdir.join(format!("{type_name}.jsonl")),
+                "{\"test\": true}\n",
+            )
+            .unwrap();
         }
 
         let mut opts = test_opts();
@@ -1157,17 +1246,14 @@ mod tests {
     }
 
     #[test]
-    fn test_check_jsonl_missing_file() {
+    fn test_check_jsonl_missing_base_files_ok() {
         let dir = tempfile::tempdir().unwrap();
-        // Only create 2 of 4
-        std::fs::write(dir.path().join("work-graph.jsonl"), "{}\n").unwrap();
-        std::fs::write(dir.path().join("sessions.jsonl"), "{}\n").unwrap();
+        // Empty ledger dir -- no base files yet. Should pass (acceptable state).
 
         let mut opts = test_opts();
         opts.ledger_dir = dir.path().to_string_lossy().to_string();
         let result = check_jsonl(&opts);
-        assert_eq!(result.status, Status::Fail);
-        assert!(result.message.contains("missing"));
+        assert_eq!(result.status, Status::Pass);
     }
 
     #[test]
@@ -1340,7 +1426,7 @@ mod tests {
     async fn test_run_all_returns_16_results() {
         let opts = test_opts();
         let results = run_all(&opts).await;
-        assert_eq!(results.len(), 16);
+        assert_eq!(results.len(), 17);
     }
 
     #[test]
@@ -1483,11 +1569,22 @@ mod tests {
     #[test]
     fn test_check_jsonl_invalid_json() {
         let dir = tempfile::tempdir().unwrap();
-        for &f in CANONICAL_JSONL_FILES {
-            if f == "work-graph.jsonl" {
-                std::fs::write(dir.path().join(f), "not valid json\n").unwrap();
+        // Create subdirectory layout with one invalid file.
+        for &type_name in CANONICAL_LEDGER_TYPES {
+            let subdir = dir.path().join(type_name);
+            std::fs::create_dir_all(&subdir).unwrap();
+            if type_name == "work-graph" {
+                std::fs::write(
+                    subdir.join(format!("{type_name}.jsonl")),
+                    "not valid json\n",
+                )
+                .unwrap();
             } else {
-                std::fs::write(dir.path().join(f), "{\"ok\": true}\n").unwrap();
+                std::fs::write(
+                    subdir.join(format!("{type_name}.jsonl")),
+                    "{\"ok\": true}\n",
+                )
+                .unwrap();
             }
         }
 

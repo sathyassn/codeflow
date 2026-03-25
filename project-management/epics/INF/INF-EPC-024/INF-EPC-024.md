@@ -107,12 +107,12 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 22 | INF-TSK-024-022 | Design SurrealDB target schemas for all event types | todo | L | normal |
 | 23 | INF-TSK-024-023 | Write schema standardization tests (Rust ledger module tests) | todo | M | normal |
 | 24 | INF-TSK-024-024 | Update cf-knowledge-layer agent definition with canonical schema reference | todo | S | normal |
-| 25 | INF-TSK-024-025 | INF-EPC-024 Template Improvements and Epic Refinement (planning task) | in_progress | M | normal |
+| 25 | INF-TSK-024-025 | INF-EPC-024 Template Improvements and Epic Refinement (planning task) | complete | M | normal |
 | 26 | INF-TSK-024-026 | Switch autorun orchestrator to read task metadata from DB | todo | M | normal |
 | 27 | INF-TSK-024-027 | Resolve batch dependencies from DB tasks table | todo | S | normal |
 | 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | todo | M | high |
 | 29 | INF-TSK-024-029 | Update Claude artifacts for DB-authoritative autorun data flow | todo | S | normal |
-| 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | todo | M | normal |
+| 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | complete | M | normal |
 
 **Task 013 cancelled:** Superseded by Epic 0 restructuring. The work-graph.jsonl details migration is now handled differently -- the workgraph module at `codeflow-cli/core/src/workgraph/` already defines typed events with structured fields, making the flat-to-details migration unnecessary for work-graph events.
 

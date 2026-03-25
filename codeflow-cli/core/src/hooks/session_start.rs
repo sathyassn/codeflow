@@ -106,6 +106,93 @@ fn is_process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// Clean orphaned worktrees before new worktree registration.
+///
+/// Three cleanup passes:
+/// 1. Purge "removed" entries from the registry.
+/// 2. Deregister entries whose directories no longer exist on disk.
+/// 3. Prune git worktree references that are not in the registry.
+///
+/// Errors are logged but never fail the session start.
+fn clean_orphaned_worktrees(project_dir: &Path, mgr: &WorktreeManager) {
+    // Pass 1: Purge "removed" entries (keep 0 — remove all).
+    if let Err(e) = crate::worktree::purge_removed_entries(mgr.registry_path(), 0) {
+        eprintln!("warn: worktree orphan cleanup: purge_removed failed: {e}");
+    }
+
+    // Pass 2: Deregister entries whose directories don't exist.
+    if let Ok(registry) = crate::worktree::read_registry(mgr.registry_path()) {
+        for entry in &registry.worktrees {
+            if entry.status == "active" && !Path::new(&entry.path).exists() {
+                eprintln!(
+                    "info: worktree orphan cleanup: deregistering missing dir: {}",
+                    entry.name
+                );
+                let _ = crate::worktree::deregister_by_name(mgr.registry_path(), &entry.name);
+            }
+        }
+    }
+
+    // Pass 3: Prune git worktree references not in the registry.
+    // Use git2 to list worktrees known to git, then remove any that
+    // aren't in the registry.
+    if let Ok(repo) = git2::Repository::open(project_dir) {
+        if let Ok(wt_names) = repo.worktrees() {
+            let registry_names: std::collections::HashSet<String> =
+                crate::worktree::read_registry(mgr.registry_path())
+                    .map(|r| r.worktrees.iter().map(|e| e.name.clone()).collect())
+                    .unwrap_or_default();
+
+            for name in wt_names.iter().flatten() {
+                if !registry_names.contains(name) {
+                    // Git knows about this worktree but the registry doesn't.
+                    // Prune it from git.
+                    if let Ok(wt) = repo.find_worktree(name) {
+                        let _ = wt.prune(Some(
+                            git2::WorktreePruneOptions::new()
+                                .valid(false)
+                                .working_tree(true),
+                        ));
+                        eprintln!(
+                            "info: worktree orphan cleanup: pruned git ref: {name}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Verify that a newly created worktree is visible in git and registry.
+///
+/// Emits warnings to `result` if verification fails, but never blocks.
+fn verify_worktree_creation(
+    project_dir: &Path,
+    wt_name: &str,
+    wt_path: &Path,
+    result: &mut InitResult,
+) {
+    // Check directory exists on disk.
+    if !wt_path.exists() {
+        result
+            .warnings
+            .push(format!("worktree dir missing after creation: {}", wt_path.display()));
+        return;
+    }
+
+    // Check git knows about the worktree.
+    if let Ok(repo) = git2::Repository::open(project_dir) {
+        if let Ok(wt_names) = repo.worktrees() {
+            let found = wt_names.iter().flatten().any(|n| n == wt_name);
+            if !found {
+                result.warnings.push(format!(
+                    "worktree '{wt_name}' not found in git worktree list after creation"
+                ));
+            }
+        }
+    }
+}
+
 #[allow(clippy::unused_self)]
 impl SessionStartInit {
     /// Run the full session-start initialization flow.
@@ -204,6 +291,20 @@ impl SessionStartInit {
         result
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
+
+        // --- Section 2a: EARLY env file write ---
+        // Write env file immediately after session ID generation so that
+        // downstream handlers can resolve the session even if Init times out
+        // during worktree creation or later operations. This write contains
+        // only CODEFLOW_SESSION_ID and CF_PROJECT_ROOT (no worktree path yet).
+        // The worktree path is added in the UPDATE write after worktree creation.
+        if source == "startup" {
+            if let Err(e) = session::write_env_file(&runtime_dir, &session_id, &project_name) {
+                result
+                    .warnings
+                    .push(format!("early env file write error: {e}"));
+            }
+        }
 
         // --- Section 2b: Worktree creation (source-gated + mode-gated) ---
         // On startup: check worktree.mode from parallel-work config, then:
@@ -341,6 +442,27 @@ impl SessionStartInit {
                     .warnings
                     .push(format!("worktree env file write error: {e}"));
             }
+
+            // Also write main repo env file with CODEFLOW_WORKTREE_PATH.
+            // This enables detect_project_dir() Priority 3b fallback: when hooks
+            // run from the main repo CWD, they can read the worktree path from
+            // the main repo's env file and redirect to the correct worktree.
+            let main_runtime = project_dir.join(".state").join("runtime");
+            if let Err(e) = session::write_env_file_with_worktree(
+                &main_runtime,
+                &session_id,
+                &project_name,
+                Some(&wt_path_str),
+            ) {
+                result
+                    .warnings
+                    .push(format!("main repo env redirect write error: {e}"));
+            }
+        }
+
+        // Surface collected warnings to stderr so they appear in hook output.
+        for warning in &result.warnings {
+            eprintln!("[codeflow session-start] warning: {warning}");
         }
 
         // Write env JSON to stdout
@@ -756,6 +878,22 @@ impl SessionStartInit {
         for dir in &dirs {
             let _ = fs::create_dir_all(dir);
         }
+
+        // Auto-migrate ledger from flat layout to subdirectory layout.
+        // One-time, idempotent. Does not fail session start on error.
+        let ledger_dir = project_dir.join(".state").join("ledger");
+        match crate::ledger::migrate::migrate_flat_to_subdirs(&ledger_dir) {
+            Ok(result) if !result.already_migrated => {
+                eprintln!(
+                    "info: ledger migration: moved {} files to subdirectory layout",
+                    result.migrated_count
+                );
+            }
+            Err(e) => {
+                eprintln!("warn: ledger migration failed (non-fatal): {e}");
+            }
+            _ => {}
+        }
     }
 
     /// Sweep ALL stale sessions using `pathflow-session-status.json`.
@@ -1145,6 +1283,10 @@ impl SessionStartInit {
         let wt_name = format!("worktree-{session_id}");
         let mgr = WorktreeManager::new(project_dir);
 
+        // Clean orphaned worktrees before registration to free slots.
+        // Orphans: in git but not registry, or in registry with missing dirs.
+        clean_orphaned_worktrees(project_dir, &mgr);
+
         // Check worktree limit before creation using locked_register_with_limit.
         // This atomically checks count + registers under a single file lock.
         let now_ts = (self.now)();
@@ -1173,6 +1315,9 @@ impl SessionStartInit {
 
         let wt_path = PathBuf::from(&entry.path);
         let paths = WorktreePaths::new(&wt_path);
+
+        // Post-creation verification: confirm worktree is in git and registry.
+        verify_worktree_creation(project_dir, &wt_name, &wt_path, result);
 
         // session_id is preserved during dedup in locked_register_with_limit
         // (the guard at registry.rs only overwrites session_id/task_id when the

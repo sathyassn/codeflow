@@ -14,12 +14,31 @@ use crate::error::LedgerError;
 /// using `flock`-based exclusive file locking via the `fs2` crate for
 /// concurrent-writer safety. Files are opened with `O_APPEND` for atomic
 /// append semantics.
+///
+/// In subdirectory layout mode, each ledger type gets its own directory:
+/// ```text
+/// .state/ledger/
+/// ├── work-graph/
+/// │   ├── work-graph.jsonl                  ← base (compacted history)
+/// │   └── work-graph-ses-{id}.jsonl         ← session fragment
+/// ├── sessions/
+/// │   ├── sessions.jsonl
+/// │   └── sessions-ses-{id}.jsonl
+/// └── ...
+/// ```
+///
+/// When `session_id` is `Some`, writes go to the session fragment file.
+/// When `session_id` is `None`, writes go to the base file.
 pub struct JsonlWriter {
     ledger_dir: PathBuf,
+    session_id: Option<String>,
 }
 
 impl JsonlWriter {
     /// Create a new `JsonlWriter` that writes to `ledger_dir`.
+    ///
+    /// Writes go to base files (`{type}/{type}.jsonl`). Use
+    /// [`new_with_session`](Self::new_with_session) for session-scoped writes.
     ///
     /// The directory is created (including parents) if it does not exist.
     ///
@@ -27,16 +46,54 @@ impl JsonlWriter {
     ///
     /// Returns `LedgerError::Io` if the directory cannot be created.
     pub fn new(ledger_dir: impl Into<PathBuf>) -> Result<Self, LedgerError> {
-        let ledger_dir = ledger_dir.into();
-        fs::create_dir_all(&ledger_dir)?;
-        Ok(Self { ledger_dir })
+        Self::new_with_session(ledger_dir, None)
     }
 
-    /// Serialize the event to a single JSON line and append it to `filename`
-    /// under `self.ledger_dir`, holding an exclusive flock for the duration
+    /// Create a new `JsonlWriter` with an optional session ID.
+    ///
+    /// When `session_id` is `Some`, events are written to session-scoped
+    /// fragment files (`{type}/{type}-ses-{id}.jsonl`). When `None`, events
+    /// are written to the base file (`{type}/{type}.jsonl`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `LedgerError::Io` if the directory cannot be created.
+    pub fn new_with_session(
+        ledger_dir: impl Into<PathBuf>,
+        session_id: Option<String>,
+    ) -> Result<Self, LedgerError> {
+        let ledger_dir = ledger_dir.into();
+        fs::create_dir_all(&ledger_dir)?;
+        Ok(Self {
+            ledger_dir,
+            session_id,
+        })
+    }
+
+    /// Resolve the file path for a given ledger type name.
+    ///
+    /// In subdirectory layout:
+    /// - Base: `{ledger_dir}/{type_name}/{type_name}.jsonl`
+    /// - Session: `{ledger_dir}/{type_name}/{type_name}-ses-{id}.jsonl`
+    fn session_scoped_path(&self, type_name: &str) -> PathBuf {
+        let subdir = self.ledger_dir.join(type_name);
+        match &self.session_id {
+            Some(sid) => subdir.join(format!("{type_name}-{sid}.jsonl")),
+            None => subdir.join(format!("{type_name}.jsonl")),
+        }
+    }
+
+    /// Serialize the event to a single JSON line and append it to the
+    /// appropriate file, holding an exclusive flock for the duration
     /// of the write.
-    fn append_to_file(&self, filename: &str, event: &Event) -> Result<(), LedgerError> {
-        let file_path = self.ledger_dir.join(filename);
+    fn append_to_file(&self, type_name: &str, event: &Event) -> Result<(), LedgerError> {
+        let file_path = self.session_scoped_path(type_name);
+
+        // Ensure the subdirectory exists.
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
         let lock_path = file_path.with_extension("jsonl.lock");
 
         // Open (or create) the lock file.
@@ -129,6 +186,16 @@ mod tests {
         }
     }
 
+    /// Helper: resolve base file path in subdirectory layout.
+    fn base_path(dir: &std::path::Path, type_name: &str) -> std::path::PathBuf {
+        dir.join(type_name).join(format!("{type_name}.jsonl"))
+    }
+
+    /// Helper: resolve session fragment path in subdirectory layout.
+    fn session_path(dir: &std::path::Path, type_name: &str, sid: &str) -> std::path::PathBuf {
+        dir.join(type_name).join(format!("{type_name}-{sid}.jsonl"))
+    }
+
     #[test]
     fn test_append_event_writes_to_correct_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -137,7 +204,7 @@ mod tests {
         let event = make_event("session_start");
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::SESSIONS)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::SESSIONS)).unwrap();
         assert!(content.contains("\"event\":\"session_start\""));
         assert!(content.contains("\"session_id\":\"ses-test-001\""));
         assert!(content.ends_with('\n'));
@@ -153,7 +220,7 @@ mod tests {
             .append_event_to_file(files::WORK_GRAPH, event)
             .unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
         assert!(content.contains("\"event\":\"task_created\""));
     }
 
@@ -162,7 +229,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let writer = JsonlWriter::new(dir.path()).unwrap();
 
-        // session_start belongs to sessions.jsonl, not work-graph.jsonl
+        // session_start belongs to sessions, not work-graph
         let event = make_event("session_start");
         let result = writer.append_event_to_file(files::WORK_GRAPH, event);
 
@@ -210,7 +277,7 @@ mod tests {
         writer.append_event(make_event("session_start")).unwrap();
         writer.append_event(make_event("session_end")).unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::SESSIONS)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::SESSIONS)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2, "both events should be appended");
         assert!(lines[0].contains("session_start"));
@@ -218,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_returns_correct_files() {
+    fn test_routing_returns_correct_types() {
         let dir = tempfile::tempdir().unwrap();
         let writer = JsonlWriter::new(dir.path()).unwrap();
 
@@ -254,7 +321,7 @@ mod tests {
         let event = make_event_with_data("task_created", data);
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 1, "should be exactly one line");
 
@@ -293,7 +360,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        let content = fs::read_to_string(dir_path.join(files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(&dir_path, files::WORK_GRAPH)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 10, "all 10 concurrent writes should succeed");
 
@@ -315,42 +382,88 @@ mod tests {
         writer.append_event(make_event("config_set")).unwrap();
         writer.append_event(make_event("phase_transition")).unwrap();
 
-        // Each file should have exactly one event.
-        assert!(
-            fs::read_to_string(dir.path().join(files::SESSIONS))
+        // Each subdirectory file should have exactly one event.
+        assert_eq!(
+            fs::read_to_string(base_path(dir.path(), files::SESSIONS))
                 .unwrap()
                 .lines()
-                .count()
-                == 1
+                .count(),
+            1
         );
-        assert!(
-            fs::read_to_string(dir.path().join(files::WORK_GRAPH))
+        assert_eq!(
+            fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH))
                 .unwrap()
                 .lines()
-                .count()
-                == 1
+                .count(),
+            1
         );
-        assert!(
-            fs::read_to_string(dir.path().join(files::MEMORY_EVENTS))
+        assert_eq!(
+            fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS))
                 .unwrap()
                 .lines()
-                .count()
-                == 1
+                .count(),
+            1
         );
-        assert!(
-            fs::read_to_string(dir.path().join(files::CONFIG))
+        assert_eq!(
+            fs::read_to_string(base_path(dir.path(), files::CONFIG))
                 .unwrap()
                 .lines()
-                .count()
-                == 1
+                .count(),
+            1
         );
-        assert!(
-            fs::read_to_string(dir.path().join(files::PATHFLOW_EVENTS))
+        assert_eq!(
+            fs::read_to_string(base_path(dir.path(), files::PATHFLOW_EVENTS))
                 .unwrap()
                 .lines()
-                .count()
-                == 1
+                .count(),
+            1
         );
+    }
+
+    #[test]
+    fn test_session_scoped_writes_to_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer =
+            JsonlWriter::new_with_session(dir.path(), Some("ses-test-session".to_string()))
+                .unwrap();
+
+        let event = make_event("session_start");
+        writer.append_event(event).unwrap();
+
+        // Should write to sessions/sessions-ses-test-session.jsonl
+        let fragment = session_path(dir.path(), files::SESSIONS, "ses-test-session");
+        assert!(fragment.exists(), "fragment file should exist");
+        let content = fs::read_to_string(&fragment).unwrap();
+        assert!(content.contains("\"event\":\"session_start\""));
+
+        // Base file should NOT exist (no writes to it).
+        let base = base_path(dir.path(), files::SESSIONS);
+        assert!(!base.exists(), "base file should not be created");
+    }
+
+    #[test]
+    fn test_session_scoped_and_base_are_separate() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write to base.
+        let base_writer = JsonlWriter::new(dir.path()).unwrap();
+        base_writer
+            .append_event(make_event("task_created"))
+            .unwrap();
+
+        // Write to session fragment.
+        let session_writer =
+            JsonlWriter::new_with_session(dir.path(), Some("ses-abc".to_string())).unwrap();
+        session_writer
+            .append_event(make_event("task_created"))
+            .unwrap();
+
+        let base_content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
+        let frag_content =
+            fs::read_to_string(session_path(dir.path(), files::WORK_GRAPH, "ses-abc")).unwrap();
+
+        assert_eq!(base_content.lines().count(), 1);
+        assert_eq!(frag_content.lines().count(), 1);
     }
 
     #[test]
@@ -385,7 +498,7 @@ mod tests {
         };
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::CONFIG)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::CONFIG)).unwrap();
         assert!(
             !content.contains("session_id"),
             "session_id should be omitted when None"
@@ -416,7 +529,7 @@ mod tests {
         };
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(dir.path().join(files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed["old_status"], "todo");
         assert_eq!(parsed["new_status"], "in_progress");

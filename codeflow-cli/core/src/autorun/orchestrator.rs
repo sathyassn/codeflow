@@ -486,12 +486,11 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                 crate::autorun::batch::read_task_scope(task_id, project_dir)
                     .unwrap_or_else(|_| (vec![], "soft".to_string()));
 
-            let file_scope =
-                if task_spec.is_some_and(|t| !t.file_scope.is_empty()) {
-                    task_spec.unwrap().file_scope.clone() // batch override
-                } else {
-                    md_file_scope // task markdown (source of truth)
-                };
+            let file_scope = if task_spec.is_some_and(|t| !t.file_scope.is_empty()) {
+                task_spec.unwrap().file_scope.clone() // batch override
+            } else {
+                md_file_scope // task markdown (source of truth)
+            };
             let scope_policy = task_spec
                 .and_then(|t| t.scope_policy.clone())
                 .unwrap_or(md_scope_policy);
@@ -1020,7 +1019,7 @@ mod tests {
         // Check that autorun-events.jsonl was written.
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
         assert!(events_path.exists(), "autorun-events.jsonl should exist");
         let content = std::fs::read_to_string(&events_path).unwrap();
         assert!(
@@ -1079,7 +1078,14 @@ mod tests {
         state.abort.store(true, Ordering::SeqCst);
 
         let launched = orch
-            .dispatch_ready_tasks("ses-abort", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
+            .dispatch_ready_tasks(
+                "ses-abort",
+                &batch,
+                std::path::Path::new("/tmp"),
+                &dep_map,
+                &state,
+                "skip_and_continue",
+            )
             .await;
 
         assert!(!launched, "dispatch should return false when abort is set");
@@ -1132,8 +1138,15 @@ mod tests {
         let orch = Orchestrator::new(SlowRunner, mock_store());
 
         // Dispatch 'a', let it complete.
-        orch.dispatch_ready_tasks("ses-partial", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
-            .await;
+        orch.dispatch_ready_tasks(
+            "ses-partial",
+            &batch,
+            std::path::Path::new("/tmp"),
+            &dep_map,
+            &state,
+            "skip_and_continue",
+        )
+        .await;
         // Wait for 'a' to complete.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -1142,7 +1155,14 @@ mod tests {
 
         // Confirm abort gate works.
         let launched = orch
-            .dispatch_ready_tasks("ses-partial", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
+            .dispatch_ready_tasks(
+                "ses-partial",
+                &batch,
+                std::path::Path::new("/tmp"),
+                &dep_map,
+                &state,
+                "skip_and_continue",
+            )
             .await;
         assert!(!launched, "no new tasks after abort");
 
@@ -1238,7 +1258,7 @@ mod tests {
         let project_dir = tempfile::tempdir().unwrap();
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
 
         // 1. Verify normal run emits batch_completed, NOT batch_aborted.
         let store = mock_store();
@@ -1510,7 +1530,7 @@ mod tests {
         let project_dir = tempfile::tempdir().unwrap();
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
 
         // Test non-aborted path: should emit batch_completed.
         Orchestrator::<OrderTracker>::emit_batch_event(
@@ -1645,7 +1665,7 @@ mod tests {
 
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
         assert!(events_path.exists());
         let content = std::fs::read_to_string(&events_path).unwrap();
         assert!(content.contains("batch_started"));
@@ -1692,7 +1712,14 @@ mod tests {
         state.running.lock().await.insert("b".into());
 
         let launched = orch
-            .dispatch_ready_tasks("ses-skip", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
+            .dispatch_ready_tasks(
+                "ses-skip",
+                &batch,
+                std::path::Path::new("/tmp"),
+                &dep_map,
+                &state,
+                "skip_and_continue",
+            )
             .await;
 
         // Only "c" should be dispatched.
@@ -1726,7 +1753,14 @@ mod tests {
         let state = ExecutionState::new(1);
 
         let launched = orch
-            .dispatch_ready_tasks("ses-sem", &batch, std::path::Path::new("/tmp"), &dep_map, &state, "skip_and_continue")
+            .dispatch_ready_tasks(
+                "ses-sem",
+                &batch,
+                std::path::Path::new("/tmp"),
+                &dep_map,
+                &state,
+                "skip_and_continue",
+            )
             .await;
         assert!(launched);
 
@@ -1848,7 +1882,7 @@ mod tests {
         // Verify BatchAborted event was emitted.
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
         let content = std::fs::read_to_string(&events_path).unwrap();
         assert!(content.contains("batch_aborted"));
         assert!(content.contains("user_abort"));

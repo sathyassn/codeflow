@@ -6,7 +6,7 @@
 
 # State files - Untracked (machine-specific, regeneratable)
 # coordination, logs, runtime are untracked (no trailing slash to match symlinks in worktrees)
-# ledger/ is tracked (Tier 0 rebuild authority data)
+# ledger/ is tracked (Tier 0 rebuild authority data) -- subdirectory layout with session fragments
 .state/coordination
 .state/logs
 .state/runtime
@@ -27,7 +27,7 @@
 # Worktree registry (machine-specific runtime state)
 .state/worktrees/
 
-# Lock files across all .state/ directories
+# Lock files across all .state/ directories (including compaction locks)
 .state/**/*.lock
 
 # Process ID files

@@ -190,6 +190,9 @@ pub(crate) fn create_detached_worktree(
     // Migrate registry from old location if needed.
     super::migrate_registry_path(mgr.project_dir());
 
+    // Clean stale session directories from the main repo.
+    clean_stale_session_dirs(mgr.project_dir());
+
     // Register in the YAML registry with empty branch (set later at PF3).
     // NOTE: registry write is not locked; parallel sessions may race.
     // See file_lock.rs for locked_binary_rmw pattern.
@@ -210,6 +213,78 @@ pub(crate) fn create_detached_worktree(
     registry::locked_register_with_limit(mgr.registry_path(), &entry, max_concurrent)?;
 
     Ok(entry)
+}
+
+/// Clean stale session directories from the main repo's `.state/session/`.
+///
+/// A session directory is stale if:
+/// - It has a `pathflow-session-status.json` with a `lead_pid` and that process is dead
+/// - It has no status file at all (orphaned)
+///
+/// Concurrent sessions (lead_pid alive) are left untouched.
+/// Errors are logged but do not fail worktree creation.
+fn clean_stale_session_dirs(project_dir: &Path) {
+    let session_base = project_dir.join(".state").join("session");
+    if !session_base.is_dir() {
+        return;
+    }
+
+    let entries = match fs::read_dir(&session_base) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // Only process session directories (ses-*).
+        if !dir_name.starts_with("ses-") {
+            continue;
+        }
+
+        let status_file = path.join("pathflow").join("pathflow-session-status.json");
+
+        if !status_file.exists() {
+            // No status file = orphaned directory. Remove it.
+            diagnostics::warn(
+                "worktree",
+                &format!("removing orphaned session dir: {dir_name}"),
+            );
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
+
+        // Read the status file and check lead_pid.
+        if let Ok(content) = fs::read_to_string(&status_file) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(pid) = parsed.get("lead_pid").and_then(serde_json::Value::as_u64) {
+                    // Check if the process is alive using kill -0.
+                    let alive = std::process::Command::new("kill")
+                        .args(["-0", &pid.to_string()])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+
+                    if !alive {
+                        diagnostics::warn(
+                            "worktree",
+                            &format!("removing stale session dir: {dir_name} (pid {pid} dead)"),
+                        );
+                        let _ = fs::remove_dir_all(&path);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Symlink shared state directories from the main repo's `.state/`.
@@ -539,7 +614,7 @@ mod tests {
 
         // Create some source directories.
         fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
-        fs::create_dir_all(main_dir.path().join(".state/ledger")).unwrap();
+        fs::create_dir_all(main_dir.path().join(".state/logs")).unwrap();
 
         setup_shared_symlinks(main_dir.path(), wt_state.path()).unwrap();
 
@@ -551,8 +626,12 @@ mod tests {
             "db should be a symlink"
         );
 
+        // ledger is now LOCAL — should NOT be symlinked.
         let ledger_link = wt_state.path().join("ledger");
-        assert!(ledger_link.exists(), "ledger symlink should exist");
+        assert!(
+            !ledger_link.exists(),
+            "ledger should not be symlinked (it is now local)"
+        );
 
         // Dirs not present in source should not be created.
         let registry_link = wt_state.path().join("registry");
@@ -608,6 +687,7 @@ mod tests {
         assert!(state_dir.path().join("runtime").is_dir());
         assert!(state_dir.path().join("session").is_dir());
         assert!(state_dir.path().join("sentinels").is_dir());
+        assert!(state_dir.path().join("ledger").is_dir());
     }
 
     #[test]
@@ -968,12 +1048,12 @@ mod tests {
 
         // Create main repo .state with shared dirs.
         fs::create_dir_all(main_dir.path().join(".state/db")).unwrap();
-        fs::create_dir_all(main_dir.path().join(".state/ledger")).unwrap();
+        fs::create_dir_all(main_dir.path().join(".state/logs")).unwrap();
 
         // Create worktree .state with real dirs (not symlinks).
         let wt_state = wt_dir.path().join(".state");
         fs::create_dir_all(wt_state.join("db")).unwrap();
-        fs::create_dir_all(wt_state.join("ledger")).unwrap();
+        fs::create_dir_all(wt_state.join("logs")).unwrap();
 
         // Verify they are real dirs.
         assert!(
@@ -999,12 +1079,12 @@ mod tests {
         );
         assert!(
             wt_state
-                .join("ledger")
+                .join("logs")
                 .symlink_metadata()
                 .unwrap()
                 .file_type()
                 .is_symlink(),
-            "ledger should be a symlink after repair"
+            "logs should be a symlink after repair"
         );
     }
 

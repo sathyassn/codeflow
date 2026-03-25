@@ -1,19 +1,21 @@
 ---
 title: "SessionStart and SessionEnd Lifecycle Interaction"
 type: analysis
-status: proposed
+status: superseded
 date: 2026-03-13
+updated_at: "2026-03-24"
 area: infrastructure
 scope:
-  - codeflow-cli/internal/hooks/session/start.go
-  - codeflow-cli/internal/hooks/session/end.go
-  - codeflow-cli/internal/hooks/sentinel/stage.go
-  - codeflow-cli/internal/hooks/team/guard.go
-  - codeflow-cli/internal/hooks/sentinel/checkpoint.go
-  - codeflow-rs/codeflow-core/src/hooks/session_start.rs
-  - codeflow-rs/codeflow-core/src/hooks/session_end.rs
-  - codeflow-rs/codeflow-core/src/hooks/post_tool_use.rs
+  - codeflow-cli/core/src/hooks/session_start.rs
+  - codeflow-cli/core/src/hooks/session_end.rs
+  - codeflow-cli/core/src/hooks/post_tool_use.rs
 ---
+
+> **SUPERSEDED by [session-lifecycle-unified.md](session-lifecycle-unified.md)**
+> — This document was written against the Go CLI implementation.
+> The Go CLI has been retired. The unified session lifecycle document covers
+> the current Rust CLI implementation. This document is retained for historical
+> context only.
 
 # SessionStart and SessionEnd lifecycle interaction
 

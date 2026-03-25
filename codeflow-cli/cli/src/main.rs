@@ -36,8 +36,11 @@ enum Command {
         #[command(subcommand)]
         command: Option<cmd::autorun::AutorunCommand>,
     },
-    /// Ledger operations
-    Ledger,
+    /// Ledger operations (status, compact, rebuild, migrate)
+    Ledger {
+        #[command(subcommand)]
+        command: Option<cmd::ledger::LedgerCommand>,
+    },
     /// Show welcome message
     Welcome,
     /// Internal operations
@@ -123,7 +126,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Config { command } => cmd::config::run(command),
         Command::Update => cmd::update::run(),
         Command::Autorun { command } => cmd::autorun::run(command).await,
-        Command::Ledger => cmd::ledger::run(),
+        Command::Ledger { command } => cmd::ledger::run(command),
         Command::Welcome => cmd::welcome::run(),
         Command::Internal => cmd::internal::run(),
         Command::Pathflow => cmd::pathflow::run(),
@@ -320,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_ledger() {
-        let result = dispatch(Command::Ledger).await;
+        let result = dispatch(Command::Ledger { command: None }).await;
         assert!(result.is_ok());
     }
 
@@ -462,8 +465,7 @@ mod tests {
 
     #[test]
     fn test_worktree_repair_with_path_parses() {
-        let result =
-            Cli::try_parse_from(["codeflow", "worktree", "repair", "--path", "/tmp/wt"]);
+        let result = Cli::try_parse_from(["codeflow", "worktree", "repair", "--path", "/tmp/wt"]);
         assert!(result.is_ok(), "should parse worktree repair --path");
     }
 

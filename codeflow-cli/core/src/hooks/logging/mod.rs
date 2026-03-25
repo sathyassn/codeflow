@@ -236,7 +236,10 @@ pub fn resolve_log_dir(project_dir: &Path, log_dir: &str) -> std::path::PathBuf 
 pub fn resolve_session_id(project_dir: &Path) -> String {
     match crate::session::current_session_id(project_dir) {
         Ok(sid) => sid.into_inner(),
-        Err(_) => "unknown".to_string(),
+        Err(e) => {
+            eprintln!("[codeflow] session ID resolution failed: {e}");
+            "unknown".to_string()
+        }
     }
 }
 

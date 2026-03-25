@@ -266,8 +266,8 @@ where
     }
 }
 
-impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::DataStore>
-    WorkerRunner for TmuxWorker<T, C, W, S>
+impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::DataStore> WorkerRunner
+    for TmuxWorker<T, C, W, S>
 {
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
         let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
@@ -319,8 +319,11 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 },
                 |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
                 |coord| {
-                    match crate::coordination::claims::acquire_batch(coord, &scope_refs, &worker_sid)
-                    {
+                    match crate::coordination::claims::acquire_batch(
+                        coord,
+                        &scope_refs,
+                        &worker_sid,
+                    ) {
                         Ok((_acquired, conflicts)) => {
                             for (path, _err) in &conflicts {
                                 claim_conflicts.push(path.clone());
@@ -793,14 +796,12 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             timestamp: completed_at.clone(),
                         }
                     }
-                    "timeout" => {
-                        crate::coordination::types::events::AutorunEvent::WorkerTimeout {
-                            session_id: cfg.session_id.clone(),
-                            worker_id: cfg.worker_id.clone(),
-                            task_id: cfg.task_id.clone(),
-                            timestamp: completed_at.clone(),
-                        }
-                    }
+                    "timeout" => crate::coordination::types::events::AutorunEvent::WorkerTimeout {
+                        session_id: cfg.session_id.clone(),
+                        worker_id: cfg.worker_id.clone(),
+                        task_id: cfg.task_id.clone(),
+                        timestamp: completed_at.clone(),
+                    },
                     "skipped" => {
                         crate::coordination::types::events::AutorunEvent::WorkerCancelled {
                             session_id: cfg.session_id.clone(),
@@ -2428,7 +2429,7 @@ Read and implement.
 
         let events_path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
         assert!(events_path.exists(), "autorun-events.jsonl should exist");
         let content = std::fs::read_to_string(&events_path).unwrap();
         assert!(
@@ -2444,20 +2445,19 @@ Read and implement.
     #[tokio::test]
     async fn test_emit_autorun_event_creates_file() {
         let project_dir = tempfile::tempdir().unwrap();
-        let event =
-            crate::coordination::types::events::AutorunEvent::BatchStarted {
-                session_id: "ses-test".into(),
-                batch_name: "test".into(),
-                total_tasks: 1,
-                timestamp: "2026-03-21T00:00:00Z".into(),
-            };
+        let event = crate::coordination::types::events::AutorunEvent::BatchStarted {
+            session_id: "ses-test".into(),
+            batch_name: "test".into(),
+            total_tasks: 1,
+            timestamp: "2026-03-21T00:00:00Z".into(),
+        };
         TmuxWorker::<MockTmux, MockClaude, MockWorktree>::emit_autorun_event(
             project_dir.path(),
             &event,
         );
         let path = project_dir
             .path()
-            .join(".state/ledger/autorun-events.jsonl");
+            .join(".state/ledger/autorun-events/autorun-events.jsonl");
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("batch_started"));

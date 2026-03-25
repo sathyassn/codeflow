@@ -26,11 +26,10 @@ pub fn emit_autorun_event(
     project_dir: &std::path::Path,
     event: &crate::coordination::types::events::AutorunEvent,
 ) {
-    let ledger_dir = project_dir.join(".state/ledger");
-    let file_path = ledger_dir.join(crate::ledger::files::AUTORUN_EVENTS);
-    if let Some(parent) = file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let type_name = crate::ledger::files::AUTORUN_EVENTS;
+    let subdir = project_dir.join(".state/ledger").join(type_name);
+    let _ = std::fs::create_dir_all(&subdir);
+    let file_path = subdir.join(format!("{type_name}.jsonl"));
     if let Ok(json) = serde_json::to_string(event) {
         use std::io::Write;
         let file = std::fs::OpenOptions::new()
@@ -48,11 +47,10 @@ pub fn emit_coordination_event(
     project_dir: &std::path::Path,
     event: &crate::coordination::types::events::CoordinationEvent,
 ) {
-    let ledger_dir = project_dir.join(".state/ledger");
-    let file_path = ledger_dir.join(crate::ledger::files::COORDINATION_EVENTS);
-    if let Some(parent) = file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let type_name = crate::ledger::files::COORDINATION_EVENTS;
+    let subdir = project_dir.join(".state/ledger").join(type_name);
+    let _ = std::fs::create_dir_all(&subdir);
+    let file_path = subdir.join(format!("{type_name}.jsonl"));
     if let Ok(json) = serde_json::to_string(event) {
         use std::io::Write;
         let file = std::fs::OpenOptions::new()
@@ -83,10 +81,12 @@ mod tests {
 
         emit_autorun_event(dir.path(), &event);
 
+        let type_name = crate::ledger::files::AUTORUN_EVENTS;
         let file_path = dir
             .path()
             .join(".state/ledger")
-            .join(crate::ledger::files::AUTORUN_EVENTS);
+            .join(type_name)
+            .join(format!("{type_name}.jsonl"));
         assert!(file_path.exists(), "autorun-events.jsonl should be created");
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert!(
@@ -111,10 +111,12 @@ mod tests {
 
         emit_coordination_event(dir.path(), &event);
 
+        let coord_type = crate::ledger::files::COORDINATION_EVENTS;
         let file_path = dir
             .path()
             .join(".state/ledger")
-            .join(crate::ledger::files::COORDINATION_EVENTS);
+            .join(coord_type)
+            .join(format!("{coord_type}.jsonl"));
         assert!(
             file_path.exists(),
             "coordination-events.jsonl should be created"

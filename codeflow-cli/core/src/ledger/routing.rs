@@ -1,7 +1,11 @@
 use super::files;
 use crate::error::LedgerError;
 
-/// Route an event type string to its canonical ledger file name.
+/// Route an event type string to its canonical ledger type name (directory name).
+///
+/// Returns the type name (e.g., `"work-graph"`) which maps to a subdirectory
+/// under `.state/ledger/`. The caller resolves the full file path based on
+/// whether a session ID is present.
 ///
 /// Covers all 32 `LedgerEvent` variants plus Go-compatibility event types
 /// (`session_progress`, `work_claimed`, `claim_created`, `claim_released`,
@@ -60,14 +64,8 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         | "merge_rebase_attempted" => Ok(files::COORDINATION_EVENTS),
 
         // autorun-events.jsonl
-        "batch_started"
-        | "batch_completed"
-        | "batch_aborted"
-        | "worker_started"
-        | "worker_completed"
-        | "worker_failed"
-        | "worker_timeout"
-        | "worker_blocked"
+        "batch_started" | "batch_completed" | "batch_aborted" | "worker_started"
+        | "worker_completed" | "worker_failed" | "worker_timeout" | "worker_blocked"
         | "worker_cancelled" => Ok(files::AUTORUN_EVENTS),
 
         _ => Err(LedgerError::UnknownEventType(event_type.to_string())),

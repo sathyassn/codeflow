@@ -42,7 +42,6 @@ const DEFAULT_REGISTRY_PATH: &str = ".state/worktrees/worktrees.yaml";
 /// Shared state directories symlinked from the main repo's `.state/`.
 const SHARED_STATE_DIRS: &[&str] = &[
     "db",
-    "ledger",
     "registry",
     "backups",
     "coordination",
@@ -51,7 +50,12 @@ const SHARED_STATE_DIRS: &[&str] = &[
 ];
 
 /// Per-worktree local directories (not symlinked).
-const LOCAL_STATE_DIRS: &[&str] = &["runtime", "session", "sentinels"];
+///
+/// `ledger` is local because each session writes to session-scoped fragment
+/// files, and these must appear in the worktree's git index (not the main
+/// repo's working tree). Cross-session ledger merging happens at compaction
+/// time, not via shared filesystem state.
+const LOCAL_STATE_DIRS: &[&str] = &["runtime", "session", "sentinels", "ledger"];
 
 /// Typed worktree health states.
 ///
@@ -659,9 +663,12 @@ mod tests {
 
     #[test]
     fn test_shared_state_dirs_constant() {
-        assert_eq!(SHARED_STATE_DIRS.len(), 7);
+        assert_eq!(SHARED_STATE_DIRS.len(), 6);
         assert!(SHARED_STATE_DIRS.contains(&"db"));
-        assert!(SHARED_STATE_DIRS.contains(&"ledger"));
+        assert!(
+            !SHARED_STATE_DIRS.contains(&"ledger"),
+            "ledger is now LOCAL"
+        );
         assert!(SHARED_STATE_DIRS.contains(&"logs"));
         assert!(SHARED_STATE_DIRS.contains(&"worktrees"));
     }
@@ -714,10 +721,11 @@ mod tests {
 
     #[test]
     fn test_local_state_dirs_constant() {
-        assert_eq!(LOCAL_STATE_DIRS.len(), 3);
+        assert_eq!(LOCAL_STATE_DIRS.len(), 4);
         assert!(LOCAL_STATE_DIRS.contains(&"runtime"));
         assert!(LOCAL_STATE_DIRS.contains(&"session"));
         assert!(LOCAL_STATE_DIRS.contains(&"sentinels"));
+        assert!(LOCAL_STATE_DIRS.contains(&"ledger"));
     }
 
     #[test]
