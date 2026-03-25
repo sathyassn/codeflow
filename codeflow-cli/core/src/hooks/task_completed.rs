@@ -79,6 +79,7 @@ impl CheckpointComplete {
         // No pre-set work_type -- infer from git branch.
         let branch = match std::process::Command::new("git")
             .args(["branch", "--show-current"])
+            .current_dir(&self.project_dir)
             .output()
         {
             Ok(output) if output.status.success() => {
@@ -505,6 +506,46 @@ mod tests {
         // This will attempt git branch and likely fail in test env, which is fine.
         // The key test is that it doesn't short-circuit on the empty work_type.
         handler.register_work_type(&session_dir, "ses-test");
+    }
+
+    #[test]
+    fn test_register_work_type_uses_project_dir_for_git() {
+        // register_work_type must run `git branch --show-current` with
+        // current_dir set to project_dir, not the process cwd. This ensures
+        // correct branch detection when running inside a worktree.
+        //
+        // We verify the fix by passing a tempdir (no git repo) as project_dir.
+        // The git command will fail (not a git repo), causing register_work_type
+        // to return silently without setting work_type -- which is correct
+        // fallback behaviour. If current_dir were NOT set, the command would
+        // instead pick up whatever git repo the test process happens to run in,
+        // producing a non-deterministic result.
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        // Empty work_type so the branch-inference path is exercised.
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"work_type": "", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        // project_dir is a tempdir with no git repo -- git command will fail.
+        let handler = CheckpointComplete::new(dir.path().to_path_buf());
+        // Should return silently (no panic, no write) because git branch fails.
+        handler.register_work_type(&session_dir, "ses-test");
+
+        // Status file must be unchanged (no work_type written).
+        let status: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(session_dir.join("pathflow-session-status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            status["work_type"].as_str().unwrap_or(""),
+            "",
+            "work_type should remain empty when git branch detection fails"
+        );
     }
 
     #[test]
