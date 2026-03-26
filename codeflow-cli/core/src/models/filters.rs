@@ -1,4 +1,6 @@
-use crate::types::{AreaType, AutorunSessionStatus, EpicStatus, SessionStatus, TaskStatus, WorkType};
+use crate::types::{
+    AreaType, AutorunSessionStatus, EpicStatus, SessionStatus, TaskStatus, WorkType,
+};
 
 #[derive(Debug, Default)]
 pub struct SessionFilter {

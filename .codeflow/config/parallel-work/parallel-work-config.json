@@ -26,6 +26,7 @@
   "autorun": {
     "worker_timeout_secs": 3600,
     "blocked_behavior": "skip_and_continue",
-    "report_dir": "project-management/tracking/autorun"
+    "report_dir": "project-management/tracking/autorun",
+    "stale_heartbeat_threshold_secs": 86400
   }
 }

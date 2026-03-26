@@ -438,8 +438,14 @@ mod tests {
     fn test_strip_heredoc_removes_body() {
         let cmd = "cat <<EOF\ncodeflow-cli/core/src/hooks/session_start.rs\nEOF";
         let stripped = strip_heredoc_content(cmd);
-        assert!(!stripped.contains("session_start.rs"), "heredoc body should be stripped");
-        assert!(stripped.contains("cat <<EOF"), "command prefix should be preserved");
+        assert!(
+            !stripped.contains("session_start.rs"),
+            "heredoc body should be stripped"
+        );
+        assert!(
+            stripped.contains("cat <<EOF"),
+            "command prefix should be preserved"
+        );
     }
 
     #[test]

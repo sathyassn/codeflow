@@ -639,16 +639,11 @@ pub fn find_stale_claims(coordinator: &LoroCoordinator) -> Vec<(String, Claim)> 
 
 /// Check if a process with the given PID is alive.
 ///
-/// Uses `/bin/kill -0 <pid>` which sends no signal but returns 0 if the
-/// process exists. This avoids `unsafe` libc calls.
+/// Delegates to `session::process::is_process_alive()` — the canonical
+/// implementation. This wrapper preserves the existing public API.
 #[must_use]
 pub fn is_pid_alive(pid: u32) -> bool {
-    std::process::Command::new("/bin/kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    crate::session::process::is_process_alive(pid)
 }
 
 // ---------------------------------------------------------------------------
@@ -805,11 +800,18 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
     }
 
     // Source 2: Worktree registry — scan active entries with session_ids.
+    // Also build a session_id -> worktree_path map for heartbeat resolution.
     let registry_path = config.project_dir.join(".state/worktrees/worktrees.yaml");
+    let mut session_worktree_paths: std::collections::HashMap<String, std::path::PathBuf> =
+        std::collections::HashMap::new();
     if let Ok(reg) = crate::worktree::read_registry(&registry_path) {
         for entry in &reg.worktrees {
-            if entry.status == "active" {
+            if entry.status == "active" || entry.status == "completing" {
                 if let Some(ref sid_str) = entry.session_id {
+                    if !entry.path.is_empty() {
+                        session_worktree_paths
+                            .insert(sid_str.clone(), std::path::PathBuf::from(&entry.path));
+                    }
                     let sid = SessionId::new_unchecked(sid_str);
                     if !session_ids_to_check.contains(&sid) {
                         session_ids_to_check.push(sid);
@@ -829,23 +831,42 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
             .join("pathflow")
             .join("pathflow-session-status.json");
 
-        if let Ok(content) = fs::read_to_string(&status_path) {
+        // Primary: heartbeat-based liveness using the session's worktree path.
+        // Each session's heartbeat is at {worktree}/.state/runtime/heartbeat.
+        let alive_by_heartbeat = session_worktree_paths
+            .get(session_id.as_str())
+            .is_some_and(|wt_path| crate::session::heartbeat::is_alive(wt_path, 86400));
+
+        if alive_by_heartbeat {
+            continue; // Session definitely alive via heartbeat.
+        }
+
+        // Secondary: PID-based liveness (defense-in-depth).
+        let alive_by_pid = if let Ok(content) = fs::read_to_string(&status_path) {
             if let Ok(status) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(lead_pid) = status.get("lead_pid").and_then(serde_json::Value::as_u64) {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let pid = lead_pid as u32;
-                    if !is_pid_alive(pid) {
-                        // Worker is dead — release its claims.
-                        let released =
-                            release_dead_session_claims(&config.state_loro_path, session_id)?;
-                        total_released += released;
-                        eprintln!(
-                            "crash cleanup: released {released} claims for dead session {} (pid {pid})",
-                            session_id.as_str()
-                        );
-                    }
-                }
+                status
+                    .get("lead_pid")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|lead_pid| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let pid = lead_pid as u32;
+                        is_pid_alive(pid)
+                    })
+            } else {
+                false
             }
+        } else {
+            false
+        };
+
+        if !alive_by_pid {
+            // Both heartbeat and PID say dead — release claims.
+            let released = release_dead_session_claims(&config.state_loro_path, session_id)?;
+            total_released += released;
+            eprintln!(
+                "crash cleanup: released {released} claims for dead session {}",
+                session_id.as_str()
+            );
         }
     }
 

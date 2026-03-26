@@ -1464,12 +1464,10 @@ tasks:
             if set_a.contains(p.as_str()) {
                 return true;
             }
-            scope_a
-                .iter()
-                .any(|a| {
-                    let pa = std::path::Path::new(a.as_str());
-                    pb.starts_with(pa) || pa.starts_with(pb)
-                })
+            scope_a.iter().any(|a| {
+                let pa = std::path::Path::new(a.as_str());
+                pb.starts_with(pa) || pa.starts_with(pb)
+            })
         });
         assert!(has_containment, "src/ should contain src/main.rs");
     }
@@ -1487,12 +1485,10 @@ tasks:
             if set_a.contains(p.as_str()) {
                 return true;
             }
-            scope_a
-                .iter()
-                .any(|a| {
-                    let pa = std::path::Path::new(a.as_str());
-                    pb.starts_with(pa) || pa.starts_with(pb)
-                })
+            scope_a.iter().any(|a| {
+                let pa = std::path::Path::new(a.as_str());
+                pb.starts_with(pa) || pa.starts_with(pb)
+            })
         });
         assert!(!has_overlap, "distinct paths should not overlap");
     }
@@ -1560,7 +1556,10 @@ tasks:
             batch_scope
         };
 
-        assert_eq!(effective, md_scope, "should use markdown scope when batch is empty");
+        assert_eq!(
+            effective, md_scope,
+            "should use markdown scope when batch is empty"
+        );
     }
 
     #[test]
@@ -1574,6 +1573,9 @@ tasks:
             batch_scope.clone()
         };
 
-        assert_eq!(effective, batch_scope, "batch override should take precedence");
+        assert_eq!(
+            effective, batch_scope,
+            "batch override should take precedence"
+        );
     }
 }

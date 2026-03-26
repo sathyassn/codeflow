@@ -25,7 +25,8 @@ related: "worktree-architecture.md"
 - [8. Lock File Cleanup](#8-lock-file-cleanup)
 - [9. Registry Dedup](#9-registry-dedup)
 - [10. Before/After Cleanup Flow](#10-beforeafter-cleanup-flow)
-- [11. Implementation Status Summary](#11-implementation-status-summary)
+- [11. Heartbeat-Based Liveness Detection](#11-heartbeat-based-liveness-detection)
+- [12. Implementation Status Summary](#12-implementation-status-summary)
 
 ---
 
@@ -486,7 +487,82 @@ Registry writes (locked_register_with_limit):
 
 ---
 
-## 11. Implementation Status Summary
+## 11. Heartbeat-Based Liveness Detection
+
+### Problem: lead_pid is Unreliable
+
+The `lead_pid` stored in `pathflow-session-status.json` is obtained via `parent_id()` in the
+hook process. The hook process hierarchy is:
+
+```text
+Claude Code (grandparent) → sh -c (parent) → codeflow hooks ... (us)
+```
+
+`parent_id()` returns the `sh -c` shell PID, which exits immediately after the hook completes.
+This means `lead_pid` is always dead by the time `clean_stale_worktrees()` checks it, causing
+every active session to appear stale.
+
+### Solution: Heartbeat File
+
+A heartbeat file at `.state/runtime/heartbeat` is updated on every hook invocation (throttled
+to once per 5 seconds). The file contains JSON with `session_id`, `timestamp`, and `source`.
+
+| Module | Path |
+|--------|------|
+| Heartbeat API | `codeflow-cli/core/src/session/heartbeat.rs` |
+| Process utilities | `codeflow-cli/core/src/session/process.rs` |
+| Hook injection | `codeflow-cli/cli/src/helpers.rs` (`touch_heartbeat()`) |
+
+**Heartbeat lifecycle:**
+
+1. **Created:** On first hook invocation after session start (SessionStart init handler)
+2. **Updated:** On every subsequent hook invocation (throttled: skip if mtime < 5s ago)
+3. **Removed:** By SessionEnd cleanup handler (`heartbeat::remove()`)
+
+**Liveness check pattern (applied at all stale sweep sites):**
+
+```rust
+// Primary: heartbeat-based liveness
+if heartbeat::is_alive(&project_dir, threshold_secs) {
+    // Session definitely alive
+} else if session::process::is_process_alive(lead_pid) {
+    // Secondary: PID still alive (defense-in-depth)
+} else {
+    // Session is stale — safe to clean
+}
+```
+
+### 3-State Worktree Registry
+
+The worktree registry now supports three status values:
+
+| Status | Meaning | Set By |
+|--------|---------|--------|
+| `active` | Session owns this worktree | `locked_register_with_limit()` at creation |
+| `completing` | PathFlow done, session may still be alive briefly | `handle_team_delete()` via `mark_completing()` |
+| `removed` | Worktree cleaned up | Cleanup operations |
+
+Stale sweep logic:
+1. If heartbeat exists AND timestamp <= threshold: ALIVE, skip
+2. If heartbeat missing: clean exit (SessionEnd deleted it), safe to clean
+3. If heartbeat exists AND timestamp > threshold: crashed/abandoned, safe to clean
+4. Secondary: also check `lead_pid` as defense-in-depth
+
+### Process Tree Walking
+
+`get_claude_code_pid()` walks the process tree to find the grandparent PID (the actual Claude
+Code process) instead of using `parent_id()` which returns the ephemeral `sh -c` shell.
+This is used in `handle_team_create()` and CLI session start/end handlers for accurate
+`lead_pid` recording.
+
+### Configuration
+
+`stale_heartbeat_threshold_secs` in `.codeflow/config/parallel-work/parallel-work-config.json`
+(autorun section) controls the heartbeat staleness threshold. Default: 86400 seconds (24 hours).
+
+---
+
+## 12. Implementation Status Summary
 
 | Gap | Fix | Status |
 |-----|-----|--------|
@@ -500,6 +576,9 @@ Registry writes (locked_register_with_limit):
 | Lock files accumulate after crashes | `clean_lock_files_in_dir()` cleans `.lock` files at startup | Implemented |
 | Registry duplicate entries under concurrent registration | Dedup check in `locked_register_with_limit()` | Implemented |
 | Protection patterns miss worktree-relative paths | `worktree_protection` section in `enforcement-policy.json` | **Pending — task #21** |
+| `lead_pid` stores ephemeral shell PID, always appears dead | Heartbeat file + `get_claude_code_pid()` process tree walk | Implemented |
+| Stale sweep uses PID-only liveness, false positives | Heartbeat primary + PID secondary liveness check | Implemented |
+| Registry has only active/removed, no transitional state | Added `completing` status via `mark_completing()` | Implemented |
 
 ---
 

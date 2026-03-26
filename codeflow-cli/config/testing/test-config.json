@@ -17,6 +17,13 @@
         "reason": "tokio::select! async macro expansion generates non-executable instrumentation regions (struct fields, doc comments, closing braces, async state machine wrappers) that llvm-cov counts as uncovered lines. Branch coverage 88% exceeds 85% threshold. 37 tests cover all production code paths. Injectable shutdown pattern (Tokio recommended) adopted to maximize testability. Remaining 1.1% gap is from llvm-cov counting non-executable constructs.",
         "granularity": "per_file",
         "remove_when": "llvm-cov async instrumentation improves in future rustc versions, or file is refactored to reduce tokio::select! usage"
+      },
+      {
+        "file": "codeflow-core/src/session/process.rs",
+        "threshold": 80,
+        "reason": "Platform-conditional code: get_parent_of_linux() is #[cfg(target_os = \"linux\")] and cannot be exercised on macOS test runs (18 uncovered lines). The get_claude_code_pid() fallback branch requires parent_id() to fail which cannot be triggered in test. 6 tests cover all reachable production paths on macOS. The Linux path is structurally equivalent to the macOS path (both parse PPID from OS).",
+        "granularity": "per_file",
+        "remove_when": "CI runs tests on both macOS and Linux, or platform-conditional code is refactored into a trait with mock support"
       }
     ]
   }

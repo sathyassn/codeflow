@@ -237,6 +237,60 @@ pub fn purge_removed_entries(
     Ok(removed)
 }
 
+/// Mark a worktree as "completing" by session ID.
+///
+/// The "completing" status indicates that the PathFlow lifecycle is done
+/// (TeamDelete has fired) but the session may still be alive for a short
+/// period. Stale sweep logic treats "completing" entries with a stale
+/// heartbeat as cleanable.
+///
+/// Matches by `session_id`. If the registry doesn't exist or the session
+/// is not found, this is a no-op.
+///
+/// # Errors
+///
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn mark_completing(registry_path: &Path, session_id: &str) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let sid = session_id.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            let mut found = false;
+            for entry in &mut reg.worktrees {
+                if entry.session_id.as_deref() == Some(&sid) && entry.status == "active" {
+                    entry.status = "completing".to_string();
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked mark_completing: {e}")))
+}
+
 /// Count the number of active worktrees in the registry.
 #[must_use]
 pub fn count_active(registry: &WorktreeRegistry) -> usize {
@@ -1349,5 +1403,96 @@ session_id: ses-123
 
         let purged = purge_removed_entries(&path, 5).unwrap();
         assert_eq!(purged, 0);
+    }
+
+    // --- mark_completing tests ---
+
+    #[test]
+    fn test_mark_completing_transitions_active_to_completing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("worktrees.yaml");
+
+        let mut reg = WorktreeRegistry::new("2026-03-25T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-ses-test".to_string(),
+            path: "/tmp/wt/test".to_string(),
+            branch: "hotfix/test".to_string(),
+            created_at: "2026-03-25T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-01jqcompletingtest00000".to_string()),
+            task_id: None,
+        });
+        write_registry(&path, &reg).unwrap();
+
+        mark_completing(&path, "ses-01jqcompletingtest00000").unwrap();
+
+        let loaded = read_registry(&path).unwrap();
+        assert_eq!(
+            loaded.worktrees[0].status, "completing",
+            "should transition from active to completing"
+        );
+    }
+
+    #[test]
+    fn test_mark_completing_no_match_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("worktrees.yaml");
+
+        let mut reg = WorktreeRegistry::new("2026-03-25T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-ses-other".to_string(),
+            path: "/tmp/wt/other".to_string(),
+            branch: "feat/other".to_string(),
+            created_at: "2026-03-25T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-01jqdifferentsession000".to_string()),
+            task_id: None,
+        });
+        write_registry(&path, &reg).unwrap();
+
+        // Mark a session that doesn't exist -- should be no-op.
+        mark_completing(&path, "ses-01jqnonexistentsession0").unwrap();
+
+        let loaded = read_registry(&path).unwrap();
+        assert_eq!(
+            loaded.worktrees[0].status, "active",
+            "should remain active when session_id doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_mark_completing_no_registry_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.yaml");
+
+        // Should not error on missing registry.
+        mark_completing(&path, "ses-01jqmissing0000000000000").unwrap();
+    }
+
+    #[test]
+    fn test_mark_completing_skips_already_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("worktrees.yaml");
+
+        let mut reg = WorktreeRegistry::new("2026-03-25T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-ses-removed".to_string(),
+            path: "/tmp/wt/removed".to_string(),
+            branch: "feat/removed".to_string(),
+            created_at: "2026-03-25T10:00:00Z".to_string(),
+            status: "removed".to_string(),
+            session_id: Some("ses-01jqremovedtest00000000".to_string()),
+            task_id: None,
+        });
+        write_registry(&path, &reg).unwrap();
+
+        // Mark completing on a "removed" entry should be no-op.
+        mark_completing(&path, "ses-01jqremovedtest00000000").unwrap();
+
+        let loaded = read_registry(&path).unwrap();
+        assert_eq!(
+            loaded.worktrees[0].status, "removed",
+            "should not change status from removed"
+        );
     }
 }

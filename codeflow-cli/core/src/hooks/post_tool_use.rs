@@ -393,7 +393,7 @@ pub fn handle_team_create(
         return Ok(HookOutput::Allow);
     }
 
-    let lead_pid = std::os::unix::process::parent_id();
+    let lead_pid = crate::session::process::get_claude_code_pid();
     let team = PathflowTeamInfo {
         team_name: team_name.to_string(),
         codeflow_session_id: session_id.to_string(),
@@ -550,6 +550,10 @@ pub fn handle_team_delete(
     let team_file_path = session_dir.join("pathflow-team.json");
     if team_file_path.exists() {
         let _ = fs::remove_file(&team_file_path);
+
+        // Mark worktree as "completing" in the registry.
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        let _ = crate::worktree::mark_completing(&registry_path, session_id);
     }
 
     // 4. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).

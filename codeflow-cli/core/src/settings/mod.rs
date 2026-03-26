@@ -493,10 +493,12 @@ pub fn sync_settings_template(
 
         if !dest_path.exists() {
             // Create new file from template.
-            std::fs::create_dir_all(dest_path.parent().unwrap_or(project_dir))
-                .map_err(|e| SettingsError::TemplateDiscovery(format!("creating directory: {e}")))?;
-            std::fs::write(&dest_path, &template_data)
-                .map_err(|e| SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display())))?;
+            std::fs::create_dir_all(dest_path.parent().unwrap_or(project_dir)).map_err(|e| {
+                SettingsError::TemplateDiscovery(format!("creating directory: {e}"))
+            })?;
+            std::fs::write(&dest_path, &template_data).map_err(|e| {
+                SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display()))
+            })?;
             changes.push(SyncChange {
                 destination: mapping.destination.clone(),
                 template: template_file_name.clone(),
@@ -506,8 +508,9 @@ pub fn sync_settings_template(
         }
 
         // Read existing destination.
-        let dest_data = std::fs::read_to_string(&dest_path)
-            .map_err(|e| SettingsError::TemplateDiscovery(format!("reading {}: {e}", dest_path.display())))?;
+        let dest_data = std::fs::read_to_string(&dest_path).map_err(|e| {
+            SettingsError::TemplateDiscovery(format!("reading {}: {e}", dest_path.display()))
+        })?;
         let dest_value: serde_json::Value = serde_json::from_str(&dest_data)
             .map_err(|e| ConfigError::Parse(format!("parsing {}: {e}", dest_path.display())))?;
 
@@ -527,8 +530,9 @@ pub fn sync_settings_template(
                 action: SyncAction::Unchanged,
             });
         } else {
-            std::fs::write(&dest_path, &merged_str)
-                .map_err(|e| SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display())))?;
+            std::fs::write(&dest_path, &merged_str).map_err(|e| {
+                SettingsError::TemplateDiscovery(format!("writing {}: {e}", dest_path.display()))
+            })?;
             changes.push(SyncChange {
                 destination: mapping.destination.clone(),
                 template: template_file_name.clone(),

@@ -328,14 +328,14 @@ mod tests {
         assert_eq!(cfg.worktree.max_concurrent, 3);
         assert_eq!(cfg.worktree.base_dir, ".git-worktrees");
         assert_eq!(cfg.worktree.shared_files.len(), 2);
-        assert!(cfg
-            .worktree
-            .shared_files
-            .contains(&".claude/settings.local.json".to_string()));
-        assert!(cfg
-            .worktree
-            .shared_files
-            .contains(&".codeflow/config/parallel-work/parallel-work-config.local.json".to_string()));
+        assert!(
+            cfg.worktree
+                .shared_files
+                .contains(&".claude/settings.local.json".to_string())
+        );
+        assert!(cfg.worktree.shared_files.contains(
+            &".codeflow/config/parallel-work/parallel-work-config.local.json".to_string()
+        ));
         assert_eq!(
             cfg.sync.interval_secs,
             crate::coordination::sync::DEFAULT_SYNC_INTERVAL_SECS

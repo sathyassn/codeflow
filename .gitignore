@@ -98,3 +98,7 @@ codeflow-cli/target/
 .codeflow/testing/coverage/
 .codeflow/testing/coverage_reports/
 coverage/
+
+# Autorun local batch files (ad-hoc, not tracked)
+.codeflow/config/autorun/local/*
+!.codeflow/config/autorun/local/.gitkeep

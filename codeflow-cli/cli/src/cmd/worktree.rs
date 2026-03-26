@@ -673,8 +673,7 @@ mod tests {
             command: Option<WorktreeCommand>,
         }
 
-        let cli =
-            TestCli::try_parse_from(["test", "repair", "--path", "/tmp/worktree"]).unwrap();
+        let cli = TestCli::try_parse_from(["test", "repair", "--path", "/tmp/worktree"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(WorktreeCommand::Repair { path: Some(_) })

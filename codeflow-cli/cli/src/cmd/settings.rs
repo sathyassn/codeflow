@@ -161,11 +161,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tmpl_dir = dir.path().join(".claude").join("settings-templates");
         std::fs::create_dir_all(&tmpl_dir).unwrap();
-        std::fs::write(
-            tmpl_dir.join("strict.json"),
-            r#"{"mode":"strict"}"#,
-        )
-        .unwrap();
+        std::fs::write(tmpl_dir.join("strict.json"), r#"{"mode":"strict"}"#).unwrap();
 
         let result = run_sync(dir.path(), Some("strict"));
         assert!(result.is_ok(), "sync with --template should succeed");

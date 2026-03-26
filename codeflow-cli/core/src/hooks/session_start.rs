@@ -97,13 +97,7 @@ pub struct SessionStartInit {
 /// Uses `kill -0 <pid>` which sends no signal but exits 0 if the process
 /// exists (equivalent to `libc::kill(pid, 0)` without requiring `unsafe`).
 fn is_process_alive(pid: u32) -> bool {
-    std::process::Command::new("/bin/kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::session::process::is_process_alive(pid)
 }
 
 /// Clean orphaned worktrees before new worktree registration.
@@ -153,9 +147,7 @@ fn clean_orphaned_worktrees(project_dir: &Path, mgr: &WorktreeManager) {
                                 .valid(false)
                                 .working_tree(true),
                         ));
-                        eprintln!(
-                            "info: worktree orphan cleanup: pruned git ref: {name}"
-                        );
+                        eprintln!("info: worktree orphan cleanup: pruned git ref: {name}");
                     }
                 }
             }
@@ -174,9 +166,10 @@ fn verify_worktree_creation(
 ) {
     // Check directory exists on disk.
     if !wt_path.exists() {
-        result
-            .warnings
-            .push(format!("worktree dir missing after creation: {}", wt_path.display()));
+        result.warnings.push(format!(
+            "worktree dir missing after creation: {}",
+            wt_path.display()
+        ));
         return;
     }
 
@@ -656,7 +649,8 @@ impl SessionStartInit {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|v| u32::try_from(v).ok())
                         .unwrap_or(0);
-                    lead_pid > 0 && is_process_alive(lead_pid)
+                    crate::session::heartbeat::is_alive(std::path::Path::new(&entry.path), 86400)
+                        || (lead_pid > 0 && is_process_alive(lead_pid))
                 } else {
                     false // No status file — session is dead.
                 };
@@ -774,15 +768,15 @@ impl SessionStartInit {
                             .join("pathflow")
                             .join("pathflow-session-status.json");
                         if let Ok(content) = fs::read_to_string(&pf_status) {
-                            if let Ok(status) =
-                                serde_json::from_str::<serde_json::Value>(&content)
+                            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&content)
                             {
                                 let lead_pid = status
                                     .get("lead_pid")
                                     .and_then(serde_json::Value::as_u64)
                                     .and_then(|v| u32::try_from(v).ok())
                                     .unwrap_or(0);
-                                return lead_pid > 0 && is_process_alive(lead_pid);
+                                return crate::session::heartbeat::is_alive(&wt_path, 86400)
+                                    || (lead_pid > 0 && is_process_alive(lead_pid));
                             }
                         }
                         false
@@ -808,9 +802,9 @@ impl SessionStartInit {
                 ..Default::default()
             };
             if let Err(e) = mgr.cleanup(&name, &opts) {
-                result.warnings.push(format!(
-                    "orphan worktree cleanup failed for '{name}': {e}",
-                ));
+                result
+                    .warnings
+                    .push(format!("orphan worktree cleanup failed for '{name}': {e}",));
             }
         }
     }
@@ -905,6 +899,23 @@ impl SessionStartInit {
     /// Sweep ALL stale sessions using `pathflow-session-status.json`.
     fn sweep_all_stale_sessions(&self, project_dir: &Path, current_sid: &str) {
         let mut swept = 0u32;
+
+        // Load worktree registry for heartbeat path resolution.
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        let wt_paths: std::collections::HashMap<String, std::path::PathBuf> =
+            crate::worktree::read_registry(&registry_path)
+                .map(|reg| {
+                    reg.worktrees
+                        .iter()
+                        .filter_map(|e| {
+                            e.session_id
+                                .as_ref()
+                                .filter(|_| !e.path.is_empty())
+                                .map(|sid| (sid.clone(), std::path::PathBuf::from(&e.path)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
         let session_base = project_dir.join(".state").join("session");
 
         if let Ok(entries) = fs::read_dir(&session_base) {
@@ -982,7 +993,12 @@ impl SessionStartInit {
                                     .and_then(serde_json::Value::as_u64)
                                     .and_then(|v| u32::try_from(v).ok())
                                     .unwrap_or(0);
-                                if lead_pid > 0 && !is_process_alive(lead_pid) {
+                                if lead_pid > 0
+                                    && !wt_paths.get(&name).is_some_and(|p| {
+                                        crate::session::heartbeat::is_alive(p, 86400)
+                                    })
+                                    && !is_process_alive(lead_pid)
+                                {
                                     // Lead process dead — check if any teammate is still alive
                                     // before sweeping (teammate may still be finishing work).
                                     let team_path = session_base

@@ -165,42 +165,129 @@ pub trait DataStore: Send + Sync {
 pub struct NoopStore;
 
 impl DataStore for NoopStore {
-    async fn apply_schema(&self) -> Result<(), DbError> { Ok(()) }
-    async fn check_integrity(&self) -> Result<(), DbError> { Ok(()) }
-    async fn create_session(&self, _: &Session) -> Result<(), DbError> { Ok(()) }
-    async fn get_session(&self, _: &str) -> Result<Option<Session>, DbError> { Ok(None) }
-    async fn update_session(&self, _: &str, _: SessionUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn list_sessions(&self, _: SessionFilter) -> Result<Vec<Session>, DbError> { Ok(vec![]) }
-    async fn create_epic(&self, _: &Epic) -> Result<(), DbError> { Ok(()) }
-    async fn get_epic(&self, _: &str) -> Result<Option<Epic>, DbError> { Ok(None) }
-    async fn get_epic_by_format_id(&self, _: &FormatId) -> Result<Option<Epic>, DbError> { Ok(None) }
-    async fn update_epic(&self, _: &str, _: EpicUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn list_epics(&self, _: EpicFilter) -> Result<Vec<Epic>, DbError> { Ok(vec![]) }
-    async fn create_task(&self, _: &Task) -> Result<(), DbError> { Ok(()) }
-    async fn get_task(&self, _: &str) -> Result<Option<Task>, DbError> { Ok(None) }
-    async fn get_task_by_format_id(&self, _: &FormatId) -> Result<Option<Task>, DbError> { Ok(None) }
-    async fn update_task(&self, _: &str, _: TaskUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn list_tasks(&self, _: TaskFilter) -> Result<Vec<Task>, DbError> { Ok(vec![]) }
-    async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError> { Ok(None) }
-    async fn set_active_work(&self, _: &ActiveWork) -> Result<(), DbError> { Ok(()) }
-    async fn clear_active_work(&self, _: &str) -> Result<(), DbError> { Ok(()) }
-    async fn create_memory_event(&self, _: &MemoryEvent) -> Result<(), DbError> { Ok(()) }
-    async fn list_memory_events(&self, _: MemoryEventFilter) -> Result<Vec<MemoryEvent>, DbError> { Ok(vec![]) }
-    async fn create_autorun_session(&self, _: &AutorunSession) -> Result<(), DbError> { Ok(()) }
-    async fn get_autorun_session(&self, _: &str) -> Result<Option<AutorunSession>, DbError> { Ok(None) }
-    async fn update_autorun_session(&self, _: &str, _: AutorunSessionUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> { Ok(()) }
-    async fn update_autorun_worker(&self, _: &str, _: AutorunWorkerUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn create_autorun_task_run(&self, _: &AutorunTaskRun) -> Result<(), DbError> { Ok(()) }
-    async fn update_autorun_task_run(&self, _: &str, _: AutorunTaskRunUpdate) -> Result<(), DbError> { Ok(()) }
-    async fn list_autorun_sessions(&self, _: AutorunSessionFilter) -> Result<Vec<AutorunSession>, DbError> { Ok(vec![]) }
-    async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> { Ok(vec![]) }
-    async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> { Ok(vec![]) }
-    async fn get_autorun_worker_by_task_id(&self, _: &str, _: &str) -> Result<Option<AutorunWorker>, DbError> { Ok(None) }
-    async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
-    async fn sync_from_events(&self, events: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> {
+    async fn apply_schema(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn check_integrity(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn create_session(&self, _: &Session) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn get_session(&self, _: &str) -> Result<Option<Session>, DbError> {
+        Ok(None)
+    }
+    async fn update_session(&self, _: &str, _: SessionUpdate) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn list_sessions(&self, _: SessionFilter) -> Result<Vec<Session>, DbError> {
+        Ok(vec![])
+    }
+    async fn create_epic(&self, _: &Epic) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn get_epic(&self, _: &str) -> Result<Option<Epic>, DbError> {
+        Ok(None)
+    }
+    async fn get_epic_by_format_id(&self, _: &FormatId) -> Result<Option<Epic>, DbError> {
+        Ok(None)
+    }
+    async fn update_epic(&self, _: &str, _: EpicUpdate) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn list_epics(&self, _: EpicFilter) -> Result<Vec<Epic>, DbError> {
+        Ok(vec![])
+    }
+    async fn create_task(&self, _: &Task) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn get_task(&self, _: &str) -> Result<Option<Task>, DbError> {
+        Ok(None)
+    }
+    async fn get_task_by_format_id(&self, _: &FormatId) -> Result<Option<Task>, DbError> {
+        Ok(None)
+    }
+    async fn update_task(&self, _: &str, _: TaskUpdate) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn list_tasks(&self, _: TaskFilter) -> Result<Vec<Task>, DbError> {
+        Ok(vec![])
+    }
+    async fn get_active_work(&self) -> Result<Option<ActiveWork>, DbError> {
+        Ok(None)
+    }
+    async fn set_active_work(&self, _: &ActiveWork) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn clear_active_work(&self, _: &str) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn create_memory_event(&self, _: &MemoryEvent) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn list_memory_events(&self, _: MemoryEventFilter) -> Result<Vec<MemoryEvent>, DbError> {
+        Ok(vec![])
+    }
+    async fn create_autorun_session(&self, _: &AutorunSession) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn get_autorun_session(&self, _: &str) -> Result<Option<AutorunSession>, DbError> {
+        Ok(None)
+    }
+    async fn update_autorun_session(
+        &self,
+        _: &str,
+        _: AutorunSessionUpdate,
+    ) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn update_autorun_worker(&self, _: &str, _: AutorunWorkerUpdate) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn create_autorun_task_run(&self, _: &AutorunTaskRun) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn update_autorun_task_run(
+        &self,
+        _: &str,
+        _: AutorunTaskRunUpdate,
+    ) -> Result<(), DbError> {
+        Ok(())
+    }
+    async fn list_autorun_sessions(
+        &self,
+        _: AutorunSessionFilter,
+    ) -> Result<Vec<AutorunSession>, DbError> {
+        Ok(vec![])
+    }
+    async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> {
+        Ok(vec![])
+    }
+    async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> {
+        Ok(vec![])
+    }
+    async fn get_autorun_worker_by_task_id(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<AutorunWorker>, DbError> {
+        Ok(None)
+    }
+    async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> {
+        Ok(serde_json::json!([]))
+    }
+    async fn sync_from_events(
+        &self,
+        events: impl Iterator<Item = crate::ledger::Event> + Send,
+    ) -> Result<SyncResult, DbError> {
         let count = events.count() as u64;
-        Ok(SyncResult { events_processed: count, ..Default::default() })
+        Ok(SyncResult {
+            events_processed: count,
+            ..Default::default()
+        })
     }
 }
 
@@ -1122,7 +1209,12 @@ pub mod mock {
 
     // -- MockStore autorun list/query tests --
 
-    fn make_autorun_session(id: &str, status: crate::types::AutorunSessionStatus, batch_name: Option<&str>, created_at: &str) -> AutorunSession {
+    fn make_autorun_session(
+        id: &str,
+        status: crate::types::AutorunSessionStatus,
+        batch_name: Option<&str>,
+        created_at: &str,
+    ) -> AutorunSession {
         AutorunSession {
             id: id.into(),
             batch_file: "b.yaml".into(),
@@ -1139,7 +1231,12 @@ pub mod mock {
         }
     }
 
-    fn make_autorun_worker(id: &str, session_id: &str, task_id: &str, worker_num: i32) -> AutorunWorker {
+    fn make_autorun_worker(
+        id: &str,
+        session_id: &str,
+        task_id: &str,
+        worker_num: i32,
+    ) -> AutorunWorker {
         AutorunWorker {
             id: id.into(),
             session_id: session_id.into(),
@@ -1157,7 +1254,12 @@ pub mod mock {
         }
     }
 
-    fn make_autorun_task_run(id: &str, session_id: &str, task_id: &str, created_at: &str) -> AutorunTaskRun {
+    fn make_autorun_task_run(
+        id: &str,
+        session_id: &str,
+        task_id: &str,
+        created_at: &str,
+    ) -> AutorunTaskRun {
         AutorunTaskRun {
             id: id.into(),
             worker_id: format!("w-{id}"),
@@ -1185,10 +1287,29 @@ pub mod mock {
     async fn test_mock_list_autorun_sessions_no_filter() {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
-        store.create_autorun_session(&make_autorun_session("s1", AutorunSessionStatus::Completed, Some("batch-a"), "2026-03-10T00:00:00Z")).await.unwrap();
-        store.create_autorun_session(&make_autorun_session("s2", AutorunSessionStatus::Running, Some("batch-b"), "2026-03-12T00:00:00Z")).await.unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s1",
+                AutorunSessionStatus::Completed,
+                Some("batch-a"),
+                "2026-03-10T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s2",
+                AutorunSessionStatus::Running,
+                Some("batch-b"),
+                "2026-03-12T00:00:00Z",
+            ))
+            .await
+            .unwrap();
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter::default()).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter::default())
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
         // Descending order by created_at.
         assert!(results[0].created_at >= results[1].created_at);
@@ -1198,29 +1319,79 @@ pub mod mock {
     async fn test_mock_list_autorun_sessions_filter_status() {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
-        store.create_autorun_session(&make_autorun_session("s1", AutorunSessionStatus::Completed, None, "2026-03-10T00:00:00Z")).await.unwrap();
-        store.create_autorun_session(&make_autorun_session("s2", AutorunSessionStatus::Running, None, "2026-03-11T00:00:00Z")).await.unwrap();
-        store.create_autorun_session(&make_autorun_session("s3", AutorunSessionStatus::Completed, None, "2026-03-12T00:00:00Z")).await.unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s1",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-03-10T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s2",
+                AutorunSessionStatus::Running,
+                None,
+                "2026-03-11T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s3",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-03-12T00:00:00Z",
+            ))
+            .await
+            .unwrap();
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter {
-            status: Some(AutorunSessionStatus::Completed),
-            ..Default::default()
-        }).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                status: Some(AutorunSessionStatus::Completed),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|s| s.status == AutorunSessionStatus::Completed));
+        assert!(
+            results
+                .iter()
+                .all(|s| s.status == AutorunSessionStatus::Completed)
+        );
     }
 
     #[tokio::test]
     async fn test_mock_list_autorun_sessions_filter_batch_name() {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
-        store.create_autorun_session(&make_autorun_session("s1", AutorunSessionStatus::Completed, Some("refactor-hooks"), "2026-03-10T00:00:00Z")).await.unwrap();
-        store.create_autorun_session(&make_autorun_session("s2", AutorunSessionStatus::Completed, Some("fix-tests"), "2026-03-11T00:00:00Z")).await.unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s1",
+                AutorunSessionStatus::Completed,
+                Some("refactor-hooks"),
+                "2026-03-10T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s2",
+                AutorunSessionStatus::Completed,
+                Some("fix-tests"),
+                "2026-03-11T00:00:00Z",
+            ))
+            .await
+            .unwrap();
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter {
-            batch_name: Some("hooks".into()),
-            ..Default::default()
-        }).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                batch_name: Some("hooks".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].batch_name.as_deref(), Some("refactor-hooks"));
     }
@@ -1229,13 +1400,32 @@ pub mod mock {
     async fn test_mock_list_autorun_sessions_filter_since() {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
-        store.create_autorun_session(&make_autorun_session("s1", AutorunSessionStatus::Completed, None, "2026-03-05T00:00:00Z")).await.unwrap();
-        store.create_autorun_session(&make_autorun_session("s2", AutorunSessionStatus::Completed, None, "2026-03-15T00:00:00Z")).await.unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s1",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-03-05T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "s2",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-03-15T00:00:00Z",
+            ))
+            .await
+            .unwrap();
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter {
-            since: Some("2026-03-10T00:00:00Z".into()),
-            ..Default::default()
-        }).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                since: Some("2026-03-10T00:00:00Z".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "s2");
     }
@@ -1245,13 +1435,24 @@ pub mod mock {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
         for i in 0..5 {
-            store.create_autorun_session(&make_autorun_session(&format!("s{i}"), AutorunSessionStatus::Completed, None, &format!("2026-03-{:02}T00:00:00Z", 10 + i))).await.unwrap();
+            store
+                .create_autorun_session(&make_autorun_session(
+                    &format!("s{i}"),
+                    AutorunSessionStatus::Completed,
+                    None,
+                    &format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                ))
+                .await
+                .unwrap();
         }
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter {
-            limit: Some(2),
-            ..Default::default()
-        }).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                limit: Some(2),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -1260,23 +1461,43 @@ pub mod mock {
         use crate::types::AutorunSessionStatus;
         let store = MockStore::new();
         for i in 0..5 {
-            store.create_autorun_session(&make_autorun_session(&format!("s{i}"), AutorunSessionStatus::Completed, None, &format!("2026-03-{:02}T00:00:00Z", 10 + i))).await.unwrap();
+            store
+                .create_autorun_session(&make_autorun_session(
+                    &format!("s{i}"),
+                    AutorunSessionStatus::Completed,
+                    None,
+                    &format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                ))
+                .await
+                .unwrap();
         }
 
-        let results = store.list_autorun_sessions(AutorunSessionFilter {
-            limit: Some(2),
-            all: true,
-            ..Default::default()
-        }).await.unwrap();
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                limit: Some(2),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(results.len(), 5);
     }
 
     #[tokio::test]
     async fn test_mock_list_autorun_workers_by_session() {
         let store = MockStore::new();
-        store.create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1)).await.unwrap();
-        store.create_autorun_worker(&make_autorun_worker("w2", "ses-a", "task-2", 2)).await.unwrap();
-        store.create_autorun_worker(&make_autorun_worker("w3", "ses-b", "task-3", 1)).await.unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1))
+            .await
+            .unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w2", "ses-a", "task-2", 2))
+            .await
+            .unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w3", "ses-b", "task-3", 1))
+            .await
+            .unwrap();
 
         let workers = store.list_autorun_workers("ses-a").await.unwrap();
         assert_eq!(workers.len(), 2);
@@ -1292,9 +1513,33 @@ pub mod mock {
     #[tokio::test]
     async fn test_mock_list_autorun_task_runs_sorted() {
         let store = MockStore::new();
-        store.create_autorun_task_run(&make_autorun_task_run("r2", "ses-a", "task-2", "2026-03-10T02:00:00Z")).await.unwrap();
-        store.create_autorun_task_run(&make_autorun_task_run("r1", "ses-a", "task-1", "2026-03-10T01:00:00Z")).await.unwrap();
-        store.create_autorun_task_run(&make_autorun_task_run("r3", "ses-b", "task-3", "2026-03-10T03:00:00Z")).await.unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run(
+                "r2",
+                "ses-a",
+                "task-2",
+                "2026-03-10T02:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run(
+                "r1",
+                "ses-a",
+                "task-1",
+                "2026-03-10T01:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run(
+                "r3",
+                "ses-b",
+                "task-3",
+                "2026-03-10T03:00:00Z",
+            ))
+            .await
+            .unwrap();
 
         let runs = store.list_autorun_task_runs("ses-a").await.unwrap();
         assert_eq!(runs.len(), 2);
@@ -1311,10 +1556,19 @@ pub mod mock {
     #[tokio::test]
     async fn test_mock_get_autorun_worker_by_task_id_found() {
         let store = MockStore::new();
-        store.create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1)).await.unwrap();
-        store.create_autorun_worker(&make_autorun_worker("w2", "ses-a", "task-2", 2)).await.unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1))
+            .await
+            .unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w2", "ses-a", "task-2", 2))
+            .await
+            .unwrap();
 
-        let found = store.get_autorun_worker_by_task_id("ses-a", "task-1").await.unwrap();
+        let found = store
+            .get_autorun_worker_by_task_id("ses-a", "task-1")
+            .await
+            .unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().task_id, "task-1");
     }
@@ -1322,18 +1576,30 @@ pub mod mock {
     #[tokio::test]
     async fn test_mock_get_autorun_worker_by_task_id_wrong_session() {
         let store = MockStore::new();
-        store.create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1)).await.unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1))
+            .await
+            .unwrap();
 
-        let not_found = store.get_autorun_worker_by_task_id("ses-b", "task-1").await.unwrap();
+        let not_found = store
+            .get_autorun_worker_by_task_id("ses-b", "task-1")
+            .await
+            .unwrap();
         assert!(not_found.is_none());
     }
 
     #[tokio::test]
     async fn test_mock_get_autorun_worker_by_task_id_wrong_task() {
         let store = MockStore::new();
-        store.create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1)).await.unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("w1", "ses-a", "task-1", 1))
+            .await
+            .unwrap();
 
-        let not_found = store.get_autorun_worker_by_task_id("ses-a", "task-nope").await.unwrap();
+        let not_found = store
+            .get_autorun_worker_by_task_id("ses-a", "task-nope")
+            .await
+            .unwrap();
         assert!(not_found.is_none());
     }
 }

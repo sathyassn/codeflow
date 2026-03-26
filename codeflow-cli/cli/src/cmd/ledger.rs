@@ -158,11 +158,10 @@ fn resolve_session_context(project_dir: &Path) -> Result<(String, PathBuf)> {
         _ => {
             let runtime_dir = project_dir.join(".state").join("runtime");
             match codeflow_core::session::read_env_file(&runtime_dir) {
-                Ok(Some(env)) => (
-                    env.session_id.as_str().to_string(),
-                    env.worktree_path,
+                Ok(Some(env)) => (env.session_id.as_str().to_string(), env.worktree_path),
+                Ok(None) => bail!(
+                    "no session ID found: set CODEFLOW_SESSION_ID or ensure .state/runtime/codeflow-env.sh exists"
                 ),
-                Ok(None) => bail!("no session ID found: set CODEFLOW_SESSION_ID or ensure .state/runtime/codeflow-env.sh exists"),
                 Err(e) => bail!("failed to read codeflow-env.sh: {e}"),
             }
         }
@@ -201,7 +200,9 @@ fn run_append(project_dir: &Path, event_type: &str, data_json: &str) -> Result<(
         event_type: event_type.to_string(),
         timestamp: Utc::now().to_rfc3339(),
         session_id: Some(session_id),
-        worktree: std::env::var("CODEFLOW_WORKTREE_PATH").ok().filter(|s| !s.is_empty()),
+        worktree: std::env::var("CODEFLOW_WORKTREE_PATH")
+            .ok()
+            .filter(|s| !s.is_empty()),
         data,
     };
 
@@ -491,18 +492,18 @@ mod tests {
         )
         .unwrap();
 
-        let result = run_append(
-            project,
-            "task_created",
-            r#"{"format_id":"TEST-001"}"#,
-        );
+        let result = run_append(project, "task_created", r#"{"format_id":"TEST-001"}"#);
         assert!(result.is_ok(), "run_append failed: {result:?}");
 
         // Should write to work-graph/work-graph-ses-test-append.jsonl
         let fragment = ledger_dir
             .join("work-graph")
             .join("work-graph-ses-test-append.jsonl");
-        assert!(fragment.exists(), "fragment file should exist at {}", fragment.display());
+        assert!(
+            fragment.exists(),
+            "fragment file should exist at {}",
+            fragment.display()
+        );
 
         let content = fs::read_to_string(&fragment).unwrap();
         assert!(content.contains("\"event\":\"task_created\""));
@@ -563,7 +564,10 @@ mod tests {
         let result = run_append(project, "task_created", r#"["not","an","object"]"#);
         assert!(result.is_err(), "JSON array should fail");
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("object"), "error should mention object: {err_msg}");
+        assert!(
+            err_msg.contains("object"),
+            "error should mention object: {err_msg}"
+        );
     }
 
     #[test]

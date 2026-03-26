@@ -547,6 +547,9 @@ impl SessionEndCleanup {
         let runtime_dir = project_dir.join(".state").join("runtime");
         self.race_safe_env_cleanup(&runtime_dir, result);
 
+        // Remove heartbeat file (signals clean exit to stale sweep).
+        crate::session::heartbeat::remove(project_dir);
+
         // Remove session lock file (always in main project).
         let lock_path = runtime_dir.join("session.lock");
         if lock_path.exists() {

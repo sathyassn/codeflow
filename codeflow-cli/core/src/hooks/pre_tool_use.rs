@@ -1497,8 +1497,7 @@ impl ProtectionGuard {
 
         // Match > or >> followed by a file path.
         static REDIRECT_RE: OnceLock<Regex> = OnceLock::new();
-        let re = REDIRECT_RE
-            .get_or_init(|| Regex::new(r">{1,2}\s*(\S+)").expect("valid regex"));
+        let re = REDIRECT_RE.get_or_init(|| Regex::new(r">{1,2}\s*(\S+)").expect("valid regex"));
 
         for caps in re.captures_iter(&stripped) {
             if let Some(target) = caps.get(1) {
@@ -1523,9 +1522,8 @@ impl ProtectionGuard {
 
         // Match tee (with optional -a flag) followed by file path(s).
         static TEE_RE: OnceLock<Regex> = OnceLock::new();
-        let re = TEE_RE.get_or_init(|| {
-            Regex::new(r"(?:^|\|)\s*tee\s+(?:-a\s+)?(\S+)").expect("valid regex")
-        });
+        let re = TEE_RE
+            .get_or_init(|| Regex::new(r"(?:^|\|)\s*tee\s+(?:-a\s+)?(\S+)").expect("valid regex"));
 
         for caps in re.captures_iter(&stripped) {
             if let Some(target) = caps.get(1) {
@@ -2657,11 +2655,7 @@ mod tests {
             r#"{"protected_resources":{"critical":[".claude/CLAUDE.md",".claude/settings.json"],"high":[".claude/hooks/**"],"moderate":[]}}"#,
         ).unwrap();
         let policy = EnforcementPolicy::load(dir.path());
-        let handler = ProtectionGuard::new_with_worktree(
-            policy,
-            dir.path().to_path_buf(),
-            None,
-        );
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({
@@ -2685,11 +2679,7 @@ mod tests {
     fn test_protection_guard_allows_bash_cp_to_normal_file() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::load(dir.path());
-        let handler = ProtectionGuard::new_with_worktree(
-            policy,
-            dir.path().to_path_buf(),
-            None,
-        );
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({
@@ -2713,11 +2703,7 @@ mod tests {
     fn test_protection_guard_allows_bash_non_cp() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::load(dir.path());
-        let handler = ProtectionGuard::new_with_worktree(
-            policy,
-            dir.path().to_path_buf(),
-            None,
-        );
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({
@@ -2741,11 +2727,7 @@ mod tests {
     fn test_protection_guard_allows_bash_cp_to_staging() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::load(dir.path());
-        let handler = ProtectionGuard::new_with_worktree(
-            policy,
-            dir.path().to_path_buf(),
-            None,
-        );
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({
@@ -2773,7 +2755,8 @@ mod tests {
         std::fs::write(
             config_dir.join("enforcement-policy.json"),
             r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let policy = EnforcementPolicy::load(dir.path());
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
@@ -2829,7 +2812,8 @@ mod tests {
         std::fs::write(
             config_dir.join("enforcement-policy.json"),
             r#"{"protected_resources":{"critical":[],"high":[".claude/hooks/**"],"moderate":[]}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let policy = EnforcementPolicy::load(dir.path());
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
@@ -2857,7 +2841,8 @@ mod tests {
         std::fs::write(
             config_dir.join("enforcement-policy.json"),
             r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let policy = EnforcementPolicy::load(dir.path());
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
@@ -2885,7 +2870,8 @@ mod tests {
         std::fs::write(
             config_dir.join("enforcement-policy.json"),
             r#"{"protected_resources":{"critical":[".claude/CLAUDE.md"],"high":[],"moderate":[]}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let policy = EnforcementPolicy::load(dir.path());
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
@@ -2913,7 +2899,8 @@ mod tests {
         std::fs::write(
             runtime_dir.join("codeflow-env.sh"),
             "export CODEFLOW_WORKTREE_PATH=\"/path/to/.git-worktrees/worktree-ses-abc123\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
@@ -2950,14 +2937,19 @@ mod tests {
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Edit".into()),
-            tool_input: Some(serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/.state/session/foo"})),
+            tool_input: Some(
+                serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/.state/session/foo"}),
+            ),
             event: HookEvent::PreToolUse,
             session_id: Some("ses-test".into()),
             project_dir: Some(dir.path().to_string_lossy().into()),
             ..Default::default()
         };
         let result = handler.handle(input).unwrap();
-        assert!(matches!(result, HookOutput::Block { .. }), "worktree state path should be blocked");
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "worktree state path should be blocked"
+        );
     }
 
     #[test]
@@ -2973,14 +2965,19 @@ mod tests {
         let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
         let input = HookInput {
             tool_name: Some("Edit".into()),
-            tool_input: Some(serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/src/main.rs"})),
+            tool_input: Some(
+                serde_json::json!({"file_path": ".git-worktrees/worktree-xxx/src/main.rs"}),
+            ),
             event: HookEvent::PreToolUse,
             session_id: Some("ses-test".into()),
             project_dir: Some(dir.path().to_string_lossy().into()),
             ..Default::default()
         };
         let result = handler.handle(input).unwrap();
-        assert!(matches!(result, HookOutput::Allow), "worktree code path should be allowed");
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "worktree code path should be allowed"
+        );
     }
 
     #[test]
@@ -2998,10 +2995,14 @@ mod tests {
             ..Default::default()
         };
         let result = handler.handle(input).unwrap();
-        assert_eq!(result.exit_code(), 0, "writing to ~/.claude/ should be allowed");
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "writing to ~/.claude/ should be allowed"
+        );
     }
 
-        #[test]
+    #[test]
     fn test_edit_write_guard_allows_tmp() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();

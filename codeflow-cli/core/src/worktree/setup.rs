@@ -262,19 +262,13 @@ fn clean_stale_session_dirs(project_dir: &Path) {
             continue;
         }
 
-        // Read the status file and check lead_pid.
+        // Read the status file and check lead_pid using consolidated process utility.
         if let Ok(content) = fs::read_to_string(&status_file) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(pid) = parsed.get("lead_pid").and_then(serde_json::Value::as_u64) {
-                    // Check if the process is alive using kill -0.
-                    let alive = std::process::Command::new("kill")
-                        .args(["-0", &pid.to_string()])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .is_ok_and(|s| s.success());
-
-                    if !alive {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let pid32 = pid as u32;
+                    if !crate::session::process::is_process_alive(pid32) {
                         diagnostics::warn(
                             "worktree",
                             &format!("removing stale session dir: {dir_name} (pid {pid} dead)"),

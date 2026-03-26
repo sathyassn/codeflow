@@ -120,6 +120,10 @@ fn run_hook_handler_inner(handler: &dyn HookHandler) -> Result<i32, ExitError> {
 /// Process hook handler from a pre-read input string, returning exit code.
 fn process_hook_input(handler: &dyn HookHandler, stdin: &str) -> Result<i32, ExitError> {
     let input = parse_hook_input(stdin)?;
+
+    // Heartbeat: update on every hook invocation (throttled internally).
+    touch_heartbeat(&input, handler.name());
+
     let output = execute_hook_handler(handler, input)?;
     Ok(map_hook_output(&output))
 }
@@ -165,6 +169,31 @@ fn map_hook_output(output: &HookOutput) -> i32 {
             EXIT_SUCCESS
         }
     }
+}
+
+/// Update the heartbeat file on every hook invocation.
+///
+/// Best-effort: failures are silently ignored (heartbeat is defense-in-depth,
+/// not a blocking prerequisite). Uses the hook event name as the `source` field.
+fn touch_heartbeat(_input: &HookInput, handler_name: &str) {
+    // Resolve project directory (same logic as detect_project_dir but without Result).
+    let project_dir = std::env::var("CODEFLOW_WORKTREE_PATH")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| detect_project_dir().ok());
+
+    let Some(dir) = project_dir else {
+        return;
+    };
+
+    // Resolve session ID from env file.
+    let Ok(sid) = codeflow_core::session::current_session_id(&dir) else {
+        return;
+    };
+
+    let source = handler_name;
+    let _ = codeflow_core::session::heartbeat::touch(&dir, sid.as_str(), source);
 }
 
 #[cfg(test)]

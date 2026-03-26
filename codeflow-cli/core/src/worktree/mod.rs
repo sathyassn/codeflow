@@ -25,7 +25,7 @@ pub use cleanup::CleanupOpts;
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, count_active, deregister_by_name, list_active,
-    locked_deregister_worktree, locked_read_registry, locked_register_with_limit,
+    locked_deregister_worktree, locked_read_registry, locked_register_with_limit, mark_completing,
     maybe_auto_start_daemon, maybe_auto_stop_daemon, purge_removed_entries, read_registry,
     write_registry,
 };

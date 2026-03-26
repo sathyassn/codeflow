@@ -13,6 +13,8 @@
 pub mod active_task;
 pub mod builder;
 pub mod env;
+pub mod heartbeat;
+pub mod process;
 mod state;
 
 use std::path::Path;

@@ -71,7 +71,7 @@ fn build_handler(
 ) -> Box<dyn codeflow_core::HookHandler> {
     match handler {
         SessionStartHandler::Init => {
-            let lead_pid = std::os::unix::process::parent_id();
+            let lead_pid = codeflow_core::session::process::get_claude_code_pid();
             let home_dir = dirs_home();
             Box::new(codeflow_core::hooks::session_start::SessionStartInit {
                 lead_pid,

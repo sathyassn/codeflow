@@ -1,0 +1,17 @@
+# INF-EPC-024: Retention Policy Tasks
+# ======================================
+# Two retention policy implementation tasks from the INF-EPC-024 epic.
+# These tasks are independent and can run in parallel.
+#
+# PRs are created targeting main for human review (auto_merge: false).
+#
+# Usage:
+#   codeflow autorun run --batch .codeflow/config/autorun/batches/inf-epc-024-retention-policies.yaml
+
+name: inf-epc-024-retention-policies
+max_workers: 2
+auto_merge: false
+target: main
+tasks:
+  - id: INF-TSK-024-016
+  - id: INF-TSK-024-017

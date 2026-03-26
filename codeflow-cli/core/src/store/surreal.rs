@@ -712,7 +712,10 @@ impl DataStore for SurrealStore {
 
         if let Some(ref status) = filter.status {
             conditions.push("status = $filter_status".to_string());
-            bindings.push(("filter_status".into(), serde_json::json!(status.to_string())));
+            bindings.push((
+                "filter_status".into(),
+                serde_json::json!(status.to_string()),
+            ));
         }
         if let Some(ref name) = filter.batch_name {
             conditions.push("batch_name CONTAINS $filter_name".to_string());
@@ -745,10 +748,7 @@ impl DataStore for SurrealStore {
         Ok(results)
     }
 
-    async fn list_autorun_workers(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<AutorunWorker>, DbError> {
+    async fn list_autorun_workers(&self, session_id: &str) -> Result<Vec<AutorunWorker>, DbError> {
         let mut response = self
             .db
             .query("SELECT * FROM autorun_worker WHERE session_id = $sid ORDER BY worker_num")
