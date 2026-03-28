@@ -305,7 +305,7 @@ mod tests {
         assert!(log_dir.exists(), "log directory should be created");
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with("tool-use-"))
             .collect();
         assert!(!entries.is_empty(), "tool-use log file should exist");

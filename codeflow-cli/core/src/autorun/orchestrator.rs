@@ -827,7 +827,7 @@ mod tests {
             "tmux name should start with codeflow-"
         );
         assert!(
-            tmux_name.ends_with("1"),
+            tmux_name.ends_with('1'),
             "tmux name should end with worker num"
         );
         // Verify format: codeflow-{8chars with hyphens}-w{N}
@@ -1866,7 +1866,7 @@ mod tests {
         let skipped: Vec<_> = results.iter().filter(|r| r.status == "skipped").collect();
         assert_eq!(completed.len(), 1, "only 'a' should complete");
         assert_eq!(completed[0].task_id, "a");
-        assert!(skipped.len() >= 1, "at least one task should be skipped");
+        assert!(!skipped.is_empty(), "at least one task should be skipped");
         for r in &skipped {
             assert_eq!(r.error, "batch_aborted");
         }

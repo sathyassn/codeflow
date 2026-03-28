@@ -1206,7 +1206,9 @@ mod tests {
             Err(SyncError::ConnectionError(format!("fail-{attempt}")))
         });
         assert!(result.is_err());
-        assert_eq!(attempt, MAX_RETRIES as i32 as usize);
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+        let expected = MAX_RETRIES as i32 as usize;
+        assert_eq!(attempt, expected);
     }
 
     // -- Compaction tests --
@@ -1690,7 +1692,7 @@ mod tests {
 
         // Verify claim was released.
         let bytes = fs::read(coord_dir.join("state.loro")).unwrap();
-        let reloaded = LoroCoordinator::from_bytes(&bytes, &coord_dir.join("state.loro")).unwrap();
+        let reloaded = LoroCoordinator::from_bytes(&bytes, coord_dir.join("state.loro")).unwrap();
         assert!(
             reloaded.check("src/main.rs").is_none(),
             "claim should be released after cleanup"
@@ -1796,7 +1798,7 @@ mod tests {
 
         // Verify claim was released.
         let bytes = fs::read(coord_dir.join("state.loro")).unwrap();
-        let reloaded = LoroCoordinator::from_bytes(&bytes, &coord_dir.join("state.loro")).unwrap();
+        let reloaded = LoroCoordinator::from_bytes(&bytes, coord_dir.join("state.loro")).unwrap();
         assert!(
             reloaded.check("src/lib.rs").is_none(),
             "claim should be released after registry-based cleanup"

@@ -250,6 +250,38 @@ impl SessionStartInit {
                     .env_vars
                     .insert("CF_PROJECT_ROOT".into(), project_name);
 
+                // Update the first pending (pid==0, non-in-process) teammate entry
+                // with our actual PID so subsequent windows are not misclassified.
+                let session_dir = project_dir
+                    .join(".state")
+                    .join("session")
+                    .join(sid.as_str())
+                    .join("pathflow");
+                let team_file = session_dir.join("pathflow-team.json");
+                if team_file.exists() {
+                    let my_pid = std::process::id();
+                    let _ = crate::pathflow::file_lock::locked_rmw(&team_file, |team| {
+                        if let Some(teammates) =
+                            team.get_mut("teammates").and_then(|v| v.as_array_mut())
+                        {
+                            for entry in teammates.iter_mut() {
+                                let pid = entry
+                                    .get("pid")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0);
+                                let bt = entry
+                                    .get("backend_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                if pid == 0 && bt != "in-process" {
+                                    entry["pid"] = serde_json::Value::Number(my_pid.into());
+                                    break; // Update only the first pending entry.
+                                }
+                            }
+                        }
+                    });
+                }
+
                 // Release session lock -- teammate detected, env file already exists.
                 drop(lock_file);
 
@@ -588,11 +620,53 @@ impl SessionStartInit {
             return (None, false); // Lead crashed -> new lead
         }
 
-        // Active session with live lead process -> TEAMMATE.
-        result.messages.push(format!(
-            "TEAMMATE MODE: Detected via status + config + lead_pid {lead_pid} alive (team: {team_name})"
-        ));
-        (Some(existing_sid), true)
+        // Lead PID alive — check pathflow-team.json for pending tmux spawns.
+        // A "pending" teammate is one with pid==0 AND backend_type != "in-process"
+        // (in-process teammates never fire SessionStart, so pid stays 0 permanently).
+        // If pending count > 0, this caller is a tmux teammate being spawned.
+        // If pending count == 0, this is an independent new lead whose PID happens
+        // to match (PID reuse) or a genuinely different window.
+        let team_file = project_dir
+            .join(".state")
+            .join("session")
+            .join(existing_sid.as_str())
+            .join("pathflow")
+            .join("pathflow-team.json");
+
+        let pending_tmux_count =
+            match crate::pathflow::file_lock::locked_read_critical(&team_file, 3) {
+                Ok(team) => {
+                    let teammates = team.get("teammates").and_then(|v| v.as_array());
+                    teammates.map_or(0, |arr| {
+                        arr.iter()
+                            .filter(|e| {
+                                let pid = e
+                                    .get("pid")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0);
+                                let bt = e
+                                    .get("backend_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                pid == 0 && bt != "in-process"
+                            })
+                            .count()
+                    })
+                }
+                Err(_) => 0, // Unreadable team file -> no pending spawns
+            };
+
+        if pending_tmux_count > 0 {
+            result.messages.push(format!(
+                "TEAMMATE MODE: {pending_tmux_count} pending tmux spawn(s) detected (lead_pid {lead_pid}, team: {team_name})"
+            ));
+            (Some(existing_sid), true)
+        } else {
+            result.messages.push(format!(
+                "NEW LEAD: lead_pid {lead_pid} alive but no pending tmux spawns (team: {team_name}) — independent session"
+            ));
+            (None, false)
+        }
     }
 
     /// Clean stale worktrees from dead sessions.
@@ -727,7 +801,7 @@ impl SessionStartInit {
             .collect();
 
         // Scan the .git-worktrees directory for worktree-* entries.
-        let entries = match fs::read_dir(&base_dir) {
+        let entries = match fs::read_dir(base_dir) {
             Ok(entries) => entries,
             Err(_) => return,
         };
@@ -1438,16 +1512,13 @@ impl SessionStartInit {
         env_worktree_path: Option<&str>,
         result: &mut InitResult,
     ) -> Option<WorktreePaths> {
-        // 1. Resolve worktree path from env var (primary) or env file (fallback).
-        let wt_path_str = if let Some(p) = env_worktree_path {
-            p.to_string()
-        } else {
-            // Fallback: read from env file (orchestrator may have written it).
-            let env_data = match session::read_env_file(runtime_dir) {
-                Ok(Some(env)) => env,
-                _ => return None,
-            };
-            env_data.worktree_path?
+        // 1. Resolve worktree path from env var ONLY — no env file fallback.
+        // The env file fallback was removed because it caused stale worktree reuse:
+        // a second Claude Code window would read the prior session's env file and
+        // inherit its worktree path instead of getting a fresh worktree.
+        let wt_path_str = match env_worktree_path {
+            Some(p) if !p.is_empty() => p.to_string(),
+            _ => return None,
         };
 
         // 2. Dual-condition validation: directory exists AND .state/runtime/ present.
@@ -2059,11 +2130,31 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
-        // Teammate detection uses 4 signals:
+        // Create pathflow-team.json with a pending tmux teammate (pid=0, backend_type=tmux).
+        // The pending-spawn check requires at least one pending entry for teammate detection.
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "team_name": "test-team",
+                "lead_pid": lead_pid,
+                "teammate_spawned": true,
+                "teammates": [{
+                    "name": "cf-security",
+                    "pid": 0,
+                    "spawned_at": "2026-03-10T00:00:00Z",
+                    "backend_type": "tmux"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Teammate detection uses 5 signals:
         // 1. env file -> existing SID
         // 2. status.json -> pf-in-progress + team_name
         // 3. config.json -> team alive
         // 4. lead_pid -> alive (current process PID)
+        // 5. pathflow-team.json -> pending tmux spawn (pid=0, backend_type != in-process)
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", dir.path().to_str().unwrap());
 
@@ -3424,9 +3515,33 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
 
-        // Phase 2: Multiple teammate agents start concurrently.
-        // Teammate detection is file-based: env file + status.json + config.json.
+        // Create pathflow-team.json with pending tmux entries for all teammates.
+        // The pending-spawn check requires pid==0 entries for teammate detection.
         let num_teammates = 4;
+        let teammates: Vec<serde_json::Value> = (0..num_teammates)
+            .map(|i| {
+                serde_json::json!({
+                    "name": format!("cf-teammate-{i}"),
+                    "pid": 0,
+                    "spawned_at": "2026-03-10T00:00:00Z",
+                    "backend_type": "tmux"
+                })
+            })
+            .collect();
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "team_name": "test-team",
+                "lead_pid": test_pid,
+                "teammate_spawned": true,
+                "teammates": teammates,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Phase 2: Multiple teammate agents start concurrently.
+        // Teammate detection requires pending tmux entries in pathflow-team.json.
         let barrier = Arc::new(Barrier::new(num_teammates));
         let results = Arc::new(Mutex::new(Vec::new()));
 
@@ -3941,7 +4056,7 @@ mod tests {
             result2
                 .env_vars
                 .get("CODEFLOW_WORKTREE_PATH")
-                .map(|s| s.as_str()),
+                .map(std::string::String::as_str),
             Some(wt_path.as_str()),
             "compact should reuse the same worktree path"
         );
@@ -3972,7 +4087,7 @@ mod tests {
             result2
                 .env_vars
                 .get("CODEFLOW_WORKTREE_PATH")
-                .map(|s| s.as_str()),
+                .map(std::string::String::as_str),
             Some(wt_path.as_str()),
             "resume should reuse the same worktree path"
         );
@@ -4230,7 +4345,7 @@ mod tests {
         let status = serde_json::json!({
             "session_id": dead_sid,
             "status": "pf-in-progress",
-            "lead_pid": 999999999_u64,
+            "lead_pid": 999_999_999_u64,
             "team_name": "dead-team",
         });
         fs::write(
@@ -4497,7 +4612,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_precreated_from_env_file() {
+    fn test_detect_precreated_env_file_fallback_removed() {
+        // After the Layer 2 fix, env file fallback was removed.
+        // Even with a worktree_path in the env file, None env var -> None result.
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let (wt_dir, _reg) = setup_precreated_worktree(dir.path(), "worktree-pre2");
@@ -4523,7 +4640,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        // No env var (None) — should fall back to env file.
+        // No env var (None) — should NOT fall back to env file (fallback removed).
         let detected = init.detect_precreated_worktree_inner(
             dir.path(),
             &runtime_dir,
@@ -4533,17 +4650,8 @@ mod tests {
         );
 
         assert!(
-            detected.is_some(),
-            "should detect pre-created worktree from env file"
-        );
-        assert_eq!(detected.unwrap().root(), wt_dir);
-        assert!(
-            result
-                .messages
-                .iter()
-                .any(|m| m.contains("Pre-created detected")),
-            "should log detection: {:?}",
-            result.messages,
+            detected.is_none(),
+            "env file fallback removed: None env var should return None"
         );
     }
 
@@ -4809,6 +4917,490 @@ mod tests {
             env.worktree_path.as_deref(),
             Some(""),
             "early env write should have empty CODEFLOW_WORKTREE_PATH placeholder"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Layer 1 tests: Backend-aware pending spawn check in handle_stale_cleanup
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up an active session with team config and pathflow-team.json.
+    /// Returns (project_dir TempDir, home TempDir, session_id).
+    fn setup_active_session_with_team(
+        teammates: &[serde_json::Value],
+    ) -> (tempfile::TempDir, tempfile::TempDir, SessionId) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7layer1test12345678ab");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        let lead_pid = std::process::id();
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+                "team_name": "test-team",
+                "lead_pid": lead_pid,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // pathflow-team.json with provided teammates.
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "team_name": "test-team",
+                "lead_pid": lead_pid,
+                "teammate_spawned": !teammates.is_empty(),
+                "teammates": teammates,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Create team config (existence check).
+        let config_dir = home.path().join(".claude").join("teams").join("test-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
+
+        (dir, home, sid)
+    }
+
+    #[test]
+    fn test_stale_cleanup_active_session_no_pending_tmux_returns_new_lead() {
+        // All teammates have started (pid != 0) -> no pending -> new lead.
+        let teammates = vec![serde_json::json!({
+            "name": "cf-security",
+            "pid": 12345,
+            "spawned_at": "2026-03-10T00:00:00Z",
+            "backend_type": "tmux"
+        })];
+        let (dir, home, sid) = setup_active_session_with_team(&teammates);
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(!result.is_teammate, "no pending tmux -> new lead");
+        assert_ne!(result.session_id, sid);
+    }
+
+    #[test]
+    fn test_stale_cleanup_active_session_pending_tmux_returns_teammate() {
+        // One teammate with pid==0 and backend_type=="tmux" -> pending -> teammate.
+        let teammates = vec![serde_json::json!({
+            "name": "cf-development",
+            "pid": 0,
+            "spawned_at": "2026-03-10T00:00:00Z",
+            "backend_type": "tmux"
+        })];
+        let (dir, home, sid) = setup_active_session_with_team(&teammates);
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(result.is_teammate, "pending tmux spawn -> teammate");
+        assert_eq!(result.session_id, sid);
+    }
+
+    #[test]
+    fn test_stale_cleanup_active_session_all_tmux_started_returns_new_lead() {
+        // Mix: one in-process (pid==0 but in-process), one tmux (pid!=0) -> no pending -> new lead.
+        let teammates = vec![
+            serde_json::json!({
+                "name": "cf-security",
+                "pid": 0,
+                "spawned_at": "2026-03-10T00:00:00Z",
+                "backend_type": "in-process"
+            }),
+            serde_json::json!({
+                "name": "cf-development",
+                "pid": 54321,
+                "spawned_at": "2026-03-10T00:00:01Z",
+                "backend_type": "tmux"
+            }),
+        ];
+        let (dir, home, sid) = setup_active_session_with_team(&teammates);
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(
+            !result.is_teammate,
+            "in-process pid==0 + tmux pid!=0 -> no pending -> new lead"
+        );
+        assert_ne!(result.session_id, sid);
+    }
+
+    #[test]
+    fn test_stale_cleanup_pf_complete_returns_new_lead() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7pfcomplete123456789");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-complete",
+                "team_name": "test-team",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(!result.is_teammate, "pf-complete -> new lead");
+        assert_ne!(result.session_id, sid);
+    }
+
+    #[test]
+    fn test_stale_cleanup_dead_lead_returns_new_lead() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7deadlead1234567890a");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // Use a PID that is very unlikely to be alive (99999999).
+        let dead_pid: u32 = 99_999_999;
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+                "team_name": "test-team",
+                "lead_pid": dead_pid,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let config_dir = home.path().join(".claude").join("teams").join("test-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members": []}"#).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(!result.is_teammate, "dead lead -> new lead");
+        assert!(result.messages.iter().any(|m| m.contains("STALE SESSION")));
+    }
+
+    #[test]
+    fn test_stale_cleanup_compact_resume_reuses_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7compacttest12345678");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // Create minimal pathflow dir for status update.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+
+        // Test compact.
+        let input = make_input("compact", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+        assert_eq!(result.session_id, sid);
+        assert!(!result.is_teammate);
+
+        // Test resume.
+        let input2 = make_input("resume", dir.path().to_str().unwrap());
+        let mut buf2 = Vec::new();
+        let result2 = init.run(&input2, dir.path(), &mut buf2).unwrap();
+        assert_eq!(result2.session_id, sid);
+        assert!(!result2.is_teammate);
+    }
+
+    #[test]
+    fn test_teammate_pid_update_clears_pending() {
+        // When teammate mode is detected, the first pending entry should get
+        // its PID updated to the current process PID.
+        let teammates = vec![
+            serde_json::json!({
+                "name": "cf-security",
+                "pid": 0,
+                "spawned_at": "2026-03-10T00:00:00Z",
+                "backend_type": "tmux"
+            }),
+            serde_json::json!({
+                "name": "cf-development",
+                "pid": 0,
+                "spawned_at": "2026-03-10T00:00:01Z",
+                "backend_type": "tmux"
+            }),
+        ];
+        let (dir, home, sid) = setup_active_session_with_team(&teammates);
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+        assert!(result.is_teammate, "should detect as teammate");
+
+        // Read pathflow-team.json and verify first entry got PID updated.
+        let team_file = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow")
+            .join("pathflow-team.json");
+        let team: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&team_file).unwrap()).unwrap();
+        let teammates = team["teammates"].as_array().unwrap();
+
+        // First entry (cf-security) should have PID set.
+        let first_pid = teammates[0]["pid"].as_u64().unwrap();
+        assert_ne!(first_pid, 0, "first pending entry should have PID set");
+        assert_eq!(first_pid, u64::from(std::process::id()));
+
+        // Second entry (cf-development) should still be pending.
+        let second_pid = teammates[1]["pid"].as_u64().unwrap();
+        assert_eq!(second_pid, 0, "second pending entry should remain at 0");
+    }
+
+    // -----------------------------------------------------------------------
+    // Layer 2 tests: detect_precreated_worktree_inner — env var only
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_detect_precreated_env_var_set_valid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Create a fake worktree directory with .state/runtime/.
+        let wt_dir = dir.path().join("worktree-test");
+        fs::create_dir_all(wt_dir.join(".state").join("runtime")).unwrap();
+        // Create a registry so update_registry doesn't fail.
+        let registry_dir = dir.path().join(".state").join("worktrees");
+        fs::create_dir_all(&registry_dir).unwrap();
+        fs::write(registry_dir.join("worktrees.yaml"), "worktrees: []\n").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let wt = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-test",
+            Some(wt_dir.to_str().unwrap()),
+            &mut result,
+        );
+
+        assert!(wt.is_some(), "valid env var path -> Some");
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("Pre-created detected"))
+        );
+    }
+
+    #[test]
+    fn test_detect_precreated_env_var_set_invalid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let wt = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-test",
+            Some("/nonexistent/worktree/path"),
+            &mut result,
+        );
+
+        assert!(wt.is_none(), "nonexistent path -> None");
+    }
+
+    #[test]
+    fn test_detect_precreated_env_var_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let wt = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-test",
+            Some(""),
+            &mut result,
+        );
+
+        assert!(wt.is_none(), "empty env var -> None");
+    }
+
+    #[test]
+    fn test_detect_precreated_env_var_not_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let wt = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-test",
+            None,
+            &mut result,
+        );
+
+        assert!(wt.is_none(), "None env var -> None");
+    }
+
+    #[test]
+    fn test_detect_precreated_no_fallback_to_env_file() {
+        // Even if env file has a worktree_path, when env var is None,
+        // detect_precreated should return None (no fallback).
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let wt_dir = dir.path().join("worktree-stale");
+        fs::create_dir_all(wt_dir.join(".state").join("runtime")).unwrap();
+
+        // Write env file WITH a worktree_path.
+        let sid = SessionId::new_unchecked("ses-stale-wt");
+        session::write_env_file_with_worktree(
+            &runtime_dir,
+            &sid,
+            "codeflow",
+            Some(wt_dir.to_str().unwrap()),
+        )
+        .unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let wt = init.detect_precreated_worktree_inner(
+            dir.path(),
+            &runtime_dir,
+            "ses-test",
+            None, // No env var
+            &mut result,
+        );
+
+        assert!(
+            wt.is_none(),
+            "env file has worktree_path but env var is None -> should NOT fallback, returns None"
         );
     }
 }

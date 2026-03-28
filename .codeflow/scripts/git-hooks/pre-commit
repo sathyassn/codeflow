@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Phase 1: Go validation (branch protection, sensitive files, JSON, Go tests, coverage)
+# Phase 1: Pure-logic validation (branch protection, sensitive files, JSON)
 codeflow git-hooks pre-commit-validate
 
 # Phase 2: Shell linting on staged files
@@ -9,5 +9,45 @@ STAGED_SH=$(git diff --cached --name-only --diff-filter=d -- '*.sh' || true)
 if [[ -n "$STAGED_SH" ]]; then
   if command -v shellcheck &>/dev/null; then
     echo "$STAGED_SH" | xargs shellcheck -S warning || true
+  fi
+fi
+
+# Phase 3: Rust checks on staged files
+STAGED_RS=$(git diff --cached --name-only --diff-filter=d -- '*.rs' || true)
+if [[ -n "$STAGED_RS" ]]; then
+  # Resolve workspace dir (codeflow-cli/).
+  WORKSPACE_DIR=""
+  if [[ -f "codeflow-cli/Cargo.toml" ]]; then
+    WORKSPACE_DIR="codeflow-cli"
+  fi
+
+  if [[ -n "$WORKSPACE_DIR" ]]; then
+    echo "[pre-commit] Rust files staged — running checks..."
+
+    # 3a: cargo fmt --check
+    if ! cargo fmt --check --all --manifest-path "$WORKSPACE_DIR/Cargo.toml" 2>/dev/null; then
+      echo ""
+      echo "ERROR: cargo fmt check failed. Run 'cargo fmt --all' to fix formatting."
+      exit 1
+    fi
+    echo "[pre-commit] cargo fmt: OK"
+
+    # 3b: cargo clippy
+    if ! cargo clippy --all-targets --all-features --manifest-path "$WORKSPACE_DIR/Cargo.toml" -- -D warnings 2>/dev/null; then
+      echo ""
+      echo "ERROR: cargo clippy found warnings. Fix all clippy warnings before committing."
+      exit 1
+    fi
+    echo "[pre-commit] cargo clippy: OK"
+
+    # 3c: cargo check (compilation)
+    if ! cargo check --workspace --manifest-path "$WORKSPACE_DIR/Cargo.toml" 2>/dev/null; then
+      echo ""
+      echo "ERROR: cargo check failed. Fix compilation errors before committing."
+      exit 1
+    fi
+    echo "[pre-commit] cargo check: OK"
+
+    echo "[pre-commit] All Rust checks passed."
   fi
 fi

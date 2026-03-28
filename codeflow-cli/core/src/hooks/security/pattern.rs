@@ -131,6 +131,7 @@ pub fn get_flags_portion(cmd: &str) -> &str {
 /// the heredoc. This prevents heredoc content (documentation, comments) from
 /// triggering false-positive path pattern matches.
 #[must_use]
+#[allow(clippy::missing_panics_doc)]
 pub fn strip_heredoc_content(cmd: &str) -> String {
     static HEREDOC_START_RE: OnceLock<Regex> = OnceLock::new();
     let re = HEREDOC_START_RE.get_or_init(|| {

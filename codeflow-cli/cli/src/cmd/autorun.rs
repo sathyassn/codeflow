@@ -2004,6 +2004,7 @@ tasks:
     }
 
     impl RecordingTmux {
+        #[allow(clippy::type_complexity)]
         fn new() -> (
             Self,
             std::sync::Arc<tokio::sync::Mutex<Vec<(String, String)>>>,
@@ -2378,9 +2379,8 @@ tasks:
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(run_tmux(&["has-session", "-t", "nonexistent-xyz"]));
         // Ok(false) if tmux available, Err if tmux not installed — both valid.
-        match result {
-            Ok(success) => assert!(!success),
-            Err(_) => {}
+        if let Ok(success) = result {
+            assert!(!success);
         }
     }
 
@@ -2403,9 +2403,8 @@ tasks:
             &tmux,
             "nonexistent-session-xyz",
         ));
-        match result {
-            Ok(has) => assert!(!has, "nonexistent session should not exist"),
-            Err(_) => {}
+        if let Ok(has) = result {
+            assert!(!has, "nonexistent session should not exist");
         }
     }
 
@@ -3104,8 +3103,8 @@ tasks:
                     status: *status,
                     max_session_workers: 1,
                     total_tasks: 1,
-                    completed_tasks: if i == 0 { 1 } else { 0 },
-                    failed_tasks: if i == 1 { 1 } else { 0 },
+                    completed_tasks: i32::from(i == 0),
+                    failed_tasks: i32::from(i == 1),
                     pid: None,
                     skipped_tasks: 0,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),

@@ -1070,13 +1070,11 @@ mod tests {
         let err: AutorunError = wt_err.into();
         assert!(
             err.to_string().contains("worktree error"),
-            "should wrap with 'worktree error': {}",
-            err
+            "should wrap with 'worktree error': {err}"
         );
         assert!(
             err.to_string().contains("git worktree add failed"),
-            "should preserve inner message: {}",
-            err
+            "should preserve inner message: {err}"
         );
     }
 

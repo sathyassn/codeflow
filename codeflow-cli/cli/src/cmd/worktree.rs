@@ -181,9 +181,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
         let result = mgr.list(None);
-        match result {
-            Ok(entries) => assert!(entries.is_empty()),
-            Err(_) => {}
+        if let Ok(entries) = result {
+            assert!(entries.is_empty());
         }
     }
 

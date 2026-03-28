@@ -59,8 +59,10 @@ mod tests {
     #[test]
     fn test_doctor_command_exists() {
         // Compile-time verification that run is async.
-        let _: fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>> =
-            || Box::pin(super::run());
+        #[allow(clippy::type_complexity)]
+        let _: fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<()>>>,
+        > = || Box::pin(super::run());
     }
 
     #[test]

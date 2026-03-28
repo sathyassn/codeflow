@@ -267,10 +267,13 @@ mod tests {
         assert!(log_dir.exists());
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("session-") && name.ends_with(".jsonl")
+                name.starts_with("session-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         assert!(!entries.is_empty());
@@ -329,7 +332,7 @@ mod tests {
     #[test]
     fn test_gather_session_metadata_basic() {
         let dir = tempfile::tempdir().unwrap();
-        let meta = gather_session_metadata(&dir.path().to_path_buf(), "default");
+        let meta = gather_session_metadata(dir.path(), "default");
         assert!(meta.contains_key("cwd"));
         assert_eq!(meta["approval_mode"], serde_json::json!("default"));
     }
@@ -337,14 +340,14 @@ mod tests {
     #[test]
     fn test_gather_session_metadata_empty_approval() {
         let dir = tempfile::tempdir().unwrap();
-        let meta = gather_session_metadata(&dir.path().to_path_buf(), "");
+        let meta = gather_session_metadata(dir.path(), "");
         assert_eq!(meta["approval_mode"], serde_json::json!("standard"));
     }
 
     #[test]
     fn test_read_active_task_id_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_active_task_id(&dir.path().to_path_buf()).is_none());
+        assert!(read_active_task_id(dir.path()).is_none());
     }
 
     #[test]
@@ -357,7 +360,7 @@ mod tests {
             r#"{"task_id": "INF-TSK-022-017", "status": "in_progress"}"#,
         )
         .unwrap();
-        let result = read_active_task_id(&dir.path().to_path_buf());
+        let result = read_active_task_id(dir.path());
         assert_eq!(result.as_deref(), Some("INF-TSK-022-017"));
     }
 
@@ -377,7 +380,7 @@ mod tests {
         std::fs::write(meta_path, format!(r#"{{"started_epoch": {started}}}"#)).unwrap();
         let duration = calculate_duration(&writer, "ses-test");
         assert!(
-            duration >= 119 && duration <= 121,
+            (119..=121).contains(&duration),
             "duration should be ~120s, got {duration}"
         );
     }

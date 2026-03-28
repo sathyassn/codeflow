@@ -213,10 +213,15 @@ mod tests {
         let _wid = WorkId::new_unchecked("work-1");
         let _bn = BranchName::new_unchecked("feat/test");
         let _fid = FormatId::new_unchecked("INF-TSK-001");
+        #[allow(clippy::no_effect_underscore_binding)]
         let _sentinel = Sentinel::PathflowPf1;
+        #[allow(clippy::no_effect_underscore_binding)]
         let _pipeline = PipelineType::DevRevQa;
+        #[allow(clippy::no_effect_underscore_binding)]
         let _tier = DecisionTier::Tier1;
+        #[allow(clippy::no_effect_underscore_binding)]
         let _domain = DomainType::Genl;
+        #[allow(clippy::no_effect_underscore_binding)]
         let _epic = EpicStatus::Draft;
     }
 

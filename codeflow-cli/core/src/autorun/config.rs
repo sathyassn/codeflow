@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn autorun_config_absent_uses_default() {
-        let json = r#"{}"#;
+        let json = r"{}";
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");

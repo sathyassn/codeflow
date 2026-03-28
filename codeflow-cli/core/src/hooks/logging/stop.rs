@@ -153,10 +153,13 @@ mod tests {
         assert!(log_dir.exists());
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("session-") && name.ends_with(".jsonl")
+                name.starts_with("session-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         assert!(!entries.is_empty());
@@ -212,10 +215,13 @@ mod tests {
         let log_dir = dir.path().join(".state/logs/sessions");
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("session-") && name.ends_with(".jsonl")
+                name.starts_with("session-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         let content = std::fs::read_to_string(entries[0].path()).unwrap();
@@ -232,7 +238,7 @@ mod tests {
             r#"{"task_id": "INF-TSK-022-017", "status": "in_progress"}"#,
         )
         .unwrap();
-        let ctx = read_task_context(&dir.path().to_path_buf());
+        let ctx = read_task_context(dir.path());
         assert!(ctx.is_some());
         let ctx = ctx.unwrap();
         assert_eq!(ctx["task_id"], "INF-TSK-022-017");
@@ -242,7 +248,7 @@ mod tests {
     #[test]
     fn test_read_task_context_missing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_task_context(&dir.path().to_path_buf()).is_none());
+        assert!(read_task_context(dir.path()).is_none());
     }
 
     #[test]
@@ -255,7 +261,7 @@ mod tests {
             r#"{"task_id": "", "status": "in_progress"}"#,
         )
         .unwrap();
-        assert!(read_task_context(&dir.path().to_path_buf()).is_none());
+        assert!(read_task_context(dir.path()).is_none());
     }
 
     #[test]
@@ -285,10 +291,13 @@ mod tests {
         let log_dir = dir.path().join(".state/logs/sessions");
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("session-") && name.ends_with(".jsonl")
+                name.starts_with("session-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         let content = std::fs::read_to_string(entries[0].path()).unwrap();

@@ -1235,6 +1235,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::type_complexity)]
         fn with_tracking(
             path: PathBuf,
         ) -> (

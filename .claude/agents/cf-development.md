@@ -187,6 +187,16 @@ Run the test suite to verify no regressions:
 
 - `codeflow test`
 
+### Step 5b: Rust Quality Gate
+
+**Before requesting commit**, run all three Rust quality checks. Fix any failures before proceeding:
+
+1. `cargo fmt --all` (auto-fix formatting in the `codeflow-cli/` workspace)
+2. `cargo clippy --all-targets --all-features -- -D warnings` (zero warnings required)
+3. `cargo test --workspace` (all tests pass)
+
+If any check fails, fix the issue and re-run. Do NOT request a commit with clippy warnings or fmt diffs.
+
 ### Step 6: Request Commit
 
 SendMessage to cf-git-operations with conventional commit message:

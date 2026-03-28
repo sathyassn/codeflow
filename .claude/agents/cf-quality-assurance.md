@@ -161,6 +161,15 @@ bash .codeflow/testing/lib/test-coverage.sh --audit
 1. Extract the list of `.sh` and `.py` files from the task's `file_scope` (or changeset)
 2. For each file, check that a corresponding entry exists in `.codeflow/testing/test-config.json`
 3. Files without test entries are reported as findings (MAJOR for newly-added files, MAJOR for pre-existing files in the changeset scope)
+
+#### Step 5d: Rust Quality Gate (BLOCKING)
+
+When the changeset includes Rust files, verify both produce zero errors:
+
+- `cargo clippy --all-targets --all-features -- -D warnings` (in `codeflow-cli/`)
+- `cargo fmt --check --all` (in `codeflow-cli/`)
+
+Failure of either check is an AUTOMATIC QA FAIL. Report the exact errors to cf-development for rework.
 4. Config files (`.json`, `.yaml`) and template files (`.md`) are excluded from this check
 
 🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, contributes to a FAIL verdict. There is no "pass with notes" or "informational only" category. If it is worth reporting, it is worth fixing. All findings block — CRITICAL, MAJOR, MINOR, and NOTE alike.

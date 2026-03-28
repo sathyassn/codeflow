@@ -38,6 +38,10 @@ impl ActivityWriter {
     }
 
     /// Create an `ActivityWriter` with a custom clock (for testing).
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` if the log directory cannot be created.
     #[cfg(test)]
     pub fn with_clock(
         dir: PathBuf,

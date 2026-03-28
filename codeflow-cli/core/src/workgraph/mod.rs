@@ -294,7 +294,7 @@ pub(crate) mod test_support {
         }
 
         fn route_event(&self, event_type: &str) -> Result<String, LedgerError> {
-            crate::ledger::route_event_type(event_type).map(|s| s.to_string())
+            crate::ledger::route_event_type(event_type).map(std::string::ToString::to_string)
         }
 
         fn dir(&self) -> &Path {

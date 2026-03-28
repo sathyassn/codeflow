@@ -279,6 +279,15 @@ Check every numbered criterion from the task specification point-by-point. A cri
 
 - All suites: `codeflow test`
 
+### Step 9b: Rust Quality Verification (CODE_REVIEW only)
+
+When reviewing Rust code changes, verify these produce zero errors/warnings:
+
+- `cargo fmt --check --all` (in `codeflow-cli/` workspace) -- if diffs found: FAIL with `changes_requested`
+- `cargo clippy --all-targets --all-features -- -D warnings` -- if warnings found: FAIL with `changes_requested`
+
+If either check fails, report as a MAJOR finding in the Standards Compliance dimension.
+
 ### Step 10: Cross-Reference Standards
 
 For each file reviewed, verify findings against the standards skill loaded in Step 4:

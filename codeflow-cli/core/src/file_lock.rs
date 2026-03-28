@@ -787,7 +787,7 @@ mod tests {
     fn test_locked_binary_rmw_sequential_consistency() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("counter.bin");
-        fs::write(&path, &0u32.to_le_bytes()).unwrap();
+        fs::write(&path, 0u32.to_le_bytes()).unwrap();
 
         for _ in 0..10 {
             let _ = locked_binary_rmw(

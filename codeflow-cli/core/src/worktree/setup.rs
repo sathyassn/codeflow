@@ -373,6 +373,7 @@ fn setup_shared_file_symlinks(project_dir: &Path, wt_path: &Path) -> Result<(), 
 /// This fixes worktrees created by older binaries that didn't set up symlinks.
 ///
 /// Called from `SessionStart` on resume/compact into an existing worktree.
+#[allow(clippy::missing_errors_doc)]
 pub fn repair_symlinks(project_dir: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
     let wt_state_dir = worktree_path.join(".state");
     let main_state = project_dir.join(".state");

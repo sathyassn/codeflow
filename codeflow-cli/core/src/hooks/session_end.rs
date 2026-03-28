@@ -1242,7 +1242,7 @@ mod tests {
         let input = make_input(dir.path().to_str().unwrap());
 
         let mut buf = Vec::new();
-        let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+        let result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
         // Verify lock file was removed.
         assert!(
@@ -1254,7 +1254,7 @@ mod tests {
         assert!(session::read_env_file(&runtime_dir).unwrap().is_none());
 
         // Verify session_id was resolved correctly (cleanup proceeded).
-        assert_eq!(_result.session_id, session_id);
+        assert_eq!(result.session_id, session_id);
     }
 
     #[test]

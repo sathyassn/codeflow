@@ -227,6 +227,11 @@ pub struct TeammateEntry {
     /// Only populated for Agent tool spawns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
+    /// Backend type from Claude Code team config (e.g., "in-process", "tmux").
+    /// Used by teammate detection to distinguish pending tmux spawns from
+    /// in-process teammates (which never fire SessionStart).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_type: Option<String>,
 }
 
 #[cfg(test)]
@@ -382,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_pathflow_team_info_defaults() {
-        let json = r#"{}"#;
+        let json = r"{}";
         let info: PathflowTeamInfo = serde_json::from_str(json).expect("deserialize");
         assert_eq!(info.team_name, "");
         assert_eq!(info.codeflow_session_id, "");
@@ -525,6 +530,7 @@ mod tests {
             spawned_at: "2026-03-10T00:00:00Z".into(),
             model: None,
             subagent_type: None,
+            backend_type: None,
         };
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(!json.contains("model"));
@@ -539,6 +545,7 @@ mod tests {
             spawned_at: "2026-03-10T00:00:00Z".into(),
             model: Some("opus".into()),
             subagent_type: Some("general-purpose".into()),
+            backend_type: None,
         };
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(json.contains("\"model\":\"opus\""));

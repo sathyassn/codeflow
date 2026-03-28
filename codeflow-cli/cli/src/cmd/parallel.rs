@@ -292,9 +292,11 @@ mod tests {
         // Write more than MAX_RECENT_EVENTS lines.
         let mut content = String::new();
         for i in 0..15 {
-            content.push_str(&format!(
+            use std::fmt::Write;
+            let _ = write!(
+                content,
                 r#"{{"type":"claim_acquired","session_id":"ses-{i:03}","path":"src/{i}.rs","timestamp":"2026-03-21T10:{i:02}:00Z"}}"#
-            ));
+            );
             content.push('\n');
         }
         std::fs::write(&path, content).unwrap();

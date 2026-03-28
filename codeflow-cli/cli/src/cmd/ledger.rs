@@ -55,6 +55,7 @@ pub fn run(command: Option<LedgerCommand>) -> Result<()> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn run_status(ledger_dir: &Path) -> Result<()> {
     if !ledger_dir.is_dir() {
         println!("no ledger directory");
@@ -84,8 +85,8 @@ fn run_status(ledger_dir: &Path) -> Result<()> {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name = name.to_str().unwrap_or("");
-                if name.starts_with(&prefix) && name.ends_with(".jsonl") && !name.ends_with(".lock")
-                {
+                let path = std::path::Path::new(name);
+                if name.starts_with(&prefix) && path.extension().is_some_and(|ext| ext == "jsonl") {
                     frag_count += 1;
                     frag_lines += count_lines(&entry.path());
                 }

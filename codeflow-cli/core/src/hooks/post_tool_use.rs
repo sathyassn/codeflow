@@ -472,6 +472,10 @@ pub fn handle_teammate_spawn(
                     "last_spawn_name".to_string(),
                     serde_json::Value::String(agent_name.clone()),
                 );
+
+                // Resolve backend_type from Claude Code team config.
+                let backend_type = resolve_backend_type(obj, &agent_name);
+
                 // Add teammate entry with pid=0 placeholder.
                 // The teammate's own SessionStart (tmux) updates pid to its Claude Code PID.
                 // In-process teammates never fire SessionStart, so pid stays 0.
@@ -486,6 +490,7 @@ pub fn handle_teammate_spawn(
                 if let Some(st) = &subagent_type {
                     entry["subagent_type"] = serde_json::Value::String(st.clone());
                 }
+                entry["backend_type"] = serde_json::Value::String(backend_type);
                 if let Some(arr) = obj
                     .entry("teammates")
                     .or_insert_with(|| serde_json::json!([]))
@@ -499,6 +504,73 @@ pub fn handle_teammate_spawn(
     .map_err(|e| HookError::Config(format!("pathflow-team.json locked_rmw failed: {e}")))?;
 
     Ok(HookOutput::Allow)
+}
+
+// ---------------------------------------------------------------------------
+// Backend type resolution
+// ---------------------------------------------------------------------------
+
+/// Look up the backend type for a teammate from the Claude Code team config.
+///
+/// Reads `~/.claude/teams/{team_name}/config.json` and matches the agent by
+/// looking for a member whose `agentId` starts with `{agent_name}@`.
+///
+/// Returns `"unknown"` if the team config is unreadable or the member is not
+/// found. Never fails -- used inside a `locked_rmw` closure.
+fn resolve_backend_type(
+    team_obj: &serde_json::Map<String, serde_json::Value>,
+    agent_name: &str,
+) -> String {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return "unknown".to_string(),
+    };
+    resolve_backend_type_with_home(team_obj, agent_name, &home)
+}
+
+/// Testable core: resolves backend type given an explicit home directory.
+fn resolve_backend_type_with_home(
+    team_obj: &serde_json::Map<String, serde_json::Value>,
+    agent_name: &str,
+    home: &Path,
+) -> String {
+    let team_name = match team_obj.get("team_name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n,
+        _ => return "unknown".to_string(),
+    };
+
+    let config_path = home
+        .join(".claude")
+        .join("teams")
+        .join(team_name)
+        .join("config.json");
+
+    let config_str = match fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return "unknown".to_string(),
+    };
+
+    let config: serde_json::Value = match serde_json::from_str(&config_str) {
+        Ok(v) => v,
+        Err(_) => return "unknown".to_string(),
+    };
+
+    let prefix = format!("{agent_name}@");
+    let members = config.get("members").and_then(|v| v.as_array());
+    if let Some(members) = members {
+        for member in members {
+            let agent_id = member.get("agentId").and_then(|v| v.as_str()).unwrap_or("");
+            if agent_id.starts_with(&prefix) {
+                return member
+                    .get("backendType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+            }
+        }
+    }
+
+    "unknown".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1614,7 +1686,7 @@ mod tests {
         assert!(
             pf1.get("registered")
                 .and_then(|v| v.as_object())
-                .is_some_and(|o| o.is_empty()),
+                .is_some_and(serde_json::Map::is_empty),
             "registered should be empty after reset"
         );
     }
@@ -1887,5 +1959,55 @@ mod tests {
         atomic_write_file(&path, b"second").unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+    }
+
+    // -- Backend type resolution tests --
+
+    #[test]
+    fn test_handle_teammate_spawn_reads_backend_type() {
+        // Test resolve_backend_type_with_home directly (avoids unsafe env var mutation).
+        let home = tempfile::tempdir().unwrap();
+        let team_name = "backend-test-team";
+
+        // Create Claude Code team config with backendType.
+        let config_dir = home.path().join(".claude").join("teams").join(team_name);
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "members": [
+                    {
+                        "agentId": format!("cf-development@{team_name}"),
+                        "backendType": "tmux"
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut team_obj = serde_json::Map::new();
+        team_obj.insert(
+            "team_name".to_string(),
+            serde_json::Value::String(team_name.to_string()),
+        );
+
+        let bt = resolve_backend_type_with_home(&team_obj, "cf-development", home.path());
+        assert_eq!(bt, "tmux");
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_default_backend_unknown() {
+        // No team config exists -> should default to "unknown".
+        let home = tempfile::tempdir().unwrap();
+
+        let mut team_obj = serde_json::Map::new();
+        team_obj.insert(
+            "team_name".to_string(),
+            serde_json::Value::String("no-config-team".to_string()),
+        );
+
+        let bt = resolve_backend_type_with_home(&team_obj, "cf-review", home.path());
+        assert_eq!(bt, "unknown");
     }
 }

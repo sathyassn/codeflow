@@ -615,14 +615,14 @@ mod tests {
 
     #[test]
     fn test_parse_simple_batch() {
-        let yaml = r#"
+        let yaml = r"
 name: test-batch
 max_workers: 2
 tasks:
   - id: task-a
   - id: task-b
     depends_on: [task-a]
-"#;
+";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert_eq!(batch.name, "test-batch");
         assert_eq!(batch.max_workers, 2);
@@ -827,8 +827,8 @@ tasks:
         let result = topological_sort(&tasks);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("a"));
-        assert!(err.contains("b"));
+        assert!(err.contains('a'));
+        assert!(err.contains('b'));
     }
 
     #[test]
@@ -1103,7 +1103,7 @@ tasks:
             branches,
             DEFAULT_PROTECTED_BRANCHES
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
         );
     }

@@ -201,8 +201,7 @@ mod tests {
         let state_path = coord_dir.join("state.loro");
 
         // Create coordinator and enqueue an entry.
-        let mut coord =
-            codeflow_core::coordination::loro::LoroCoordinator::new(&state_path).unwrap();
+        let coord = codeflow_core::coordination::loro::LoroCoordinator::new(&state_path).unwrap();
         let sid = codeflow_core::types::SessionId::new_unchecked("ses-merge-test");
         let entry = merge_queue::MergeQueueEntry {
             session_id: sid,
@@ -210,7 +209,7 @@ mod tests {
             branch: "feat/test".to_string(),
             pr_ready_at: "2026-03-21T12:00:00Z".to_string(),
         };
-        merge_queue::enqueue(&mut coord, &entry).unwrap();
+        merge_queue::enqueue(&coord, &entry).unwrap();
         coord.persist().unwrap();
 
         let result = run_status(dir.path());
@@ -243,6 +242,7 @@ mod tests {
 
     #[test]
     fn test_coordination_command_status_variant() {
+        #[allow(clippy::no_effect_underscore_binding)]
         let _cmd = CoordinationCommand::Status;
     }
 }

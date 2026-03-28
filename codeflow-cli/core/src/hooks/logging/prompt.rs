@@ -267,10 +267,13 @@ mod tests {
         assert!(log_dir.exists());
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("prompts-") && name.ends_with(".jsonl")
+                name.starts_with("prompts-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         assert!(!entries.is_empty());
@@ -308,10 +311,13 @@ mod tests {
         let log_dir = dir.path().join(".state/logs/sessions");
         let entries: Vec<_> = std::fs::read_dir(&log_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("prompts-") && name.ends_with(".jsonl")
+                name.starts_with("prompts-")
+                    && std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "jsonl")
             })
             .collect();
         let content = std::fs::read_to_string(entries[0].path()).unwrap();

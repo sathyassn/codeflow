@@ -1,6 +1,6 @@
 ---
 id: "epic-01KMKXVCQSSJD45RC24M2AH2A3"
-format_id: "INF-EPC-922"
+format_id: "INF-EPC-029"
 title: "Worktree heartbeat safety + autorun directory structure"
 summary: "Replace broken lead_pid liveness with heartbeat-based session detection. Add autorun batches/ and local/ directories."
 status: complete
@@ -17,7 +17,7 @@ created_at: "2026-03-26T01:58:54Z"
 updated_at: "2026-03-26T04:16:09Z"
 ---
 
-# INF-EPC-922: Worktree heartbeat safety + autorun directory structure
+# INF-EPC-029: Worktree heartbeat safety + autorun directory structure
 
 > **MANDATORY VALIDATION:** Files created from this template MUST be validated against the epic validation command before committing:
 > `codeflow validate epic <path>`
@@ -26,6 +26,8 @@ updated_at: "2026-03-26T04:16:09Z"
 ## Summary
 
 Hotfix addressing two infrastructure gaps: (1) worktree session detection via heartbeat files instead of unreliable lead_pid liveness checks, and (2) adding missing autorun directory structure (batches/ and local/) required by the autorun subsystem.
+
+Previously numbered INF-EPC-922 (renumbered to INF-EPC-029 for sequential consistency).
 
 ## Scope
 
@@ -54,7 +56,7 @@ Hotfix addressing two infrastructure gaps: (1) worktree session detection via he
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-922-002 | Worktree heartbeat safety + autorun directory structure | complete | high |
+| INF-TSK-029-001 | Worktree heartbeat safety + autorun directory structure | complete | high |
 
 ## Dependencies
 

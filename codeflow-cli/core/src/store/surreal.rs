@@ -2412,8 +2412,12 @@ mod tests {
         all_latencies.sort();
         let total_ops = all_latencies.len();
         let p50 = all_latencies[total_ops / 2];
-        let p95 = all_latencies[(total_ops as f64 * 0.95) as usize];
-        let p99 = all_latencies[(total_ops as f64 * 0.99) as usize];
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let p95_idx = (total_ops as f64 * 0.95) as usize;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let p99_idx = (total_ops as f64 * 0.99) as usize;
+        let p95 = all_latencies[p95_idx];
+        let p99 = all_latencies[p99_idx];
 
         // Assert p99 under 100ms for in-memory operations.
         assert!(
