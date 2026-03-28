@@ -1295,26 +1295,18 @@ impl ProtectionGuard {
                 .map(|n| n.to_string_lossy().to_string());
         }
 
-        // Fallback: parse codeflow-env.sh for CODEFLOW_WORKTREE_PATH.
-        let env_file = if let Some(dir) = project_dir {
-            dir.join(".state/runtime/codeflow-env.sh")
+        // Fallback: use session::read_env_file to parse codeflow-env.sh.
+        let runtime_dir = if let Some(dir) = project_dir {
+            dir.join(".state/runtime")
         } else {
-            PathBuf::from(".state/runtime/codeflow-env.sh")
+            PathBuf::from(".state/runtime")
         };
 
-        let content = std::fs::read_to_string(env_file).ok()?;
-        for line in content.lines() {
-            let line = line.trim();
-            if let Some(rest) = line
-                .strip_prefix("export CODEFLOW_WORKTREE_PATH=")
-                .or_else(|| line.strip_prefix("CODEFLOW_WORKTREE_PATH="))
-            {
-                let val = rest.trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Path::new(val)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string());
-                }
+        if let Ok(Some(env)) = crate::session::read_env_file(&runtime_dir) {
+            if let Some(wt_path) = env.worktree_path {
+                return Path::new(&wt_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string());
             }
         }
 
@@ -2898,7 +2890,7 @@ mod tests {
         std::fs::create_dir_all(&runtime_dir).unwrap();
         std::fs::write(
             runtime_dir.join("codeflow-env.sh"),
-            "export CODEFLOW_WORKTREE_PATH=\"/path/to/.git-worktrees/worktree-ses-abc123\"\n",
+            "export CODEFLOW_SESSION_ID='ses-01jqtestenvfileread0000'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='/path/to/.git-worktrees/worktree-ses-abc123'\n",
         )
         .unwrap();
         let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();

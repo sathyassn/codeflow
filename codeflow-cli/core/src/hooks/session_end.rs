@@ -428,6 +428,27 @@ impl SessionEndCleanup {
                 .warnings
                 .push(format!("SessionEnd: worktree prune failed: {e}"));
         }
+
+        // Remove this session from the session-worktree mapping.
+        let map_path = project_dir
+            .join(".state")
+            .join("runtime")
+            .join("session-worktree-map.json");
+        if map_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&map_path) {
+                if let Ok(mut map) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+                {
+                    if let Some(sid) = wt_name.strip_prefix("worktree-") {
+                        map.remove(sid);
+                    }
+                    let _ = std::fs::write(
+                        &map_path,
+                        serde_json::to_string_pretty(&map).unwrap_or_default(),
+                    );
+                }
+            }
+        }
     }
 
     /// Read the team name from `pathflow-team.json`.

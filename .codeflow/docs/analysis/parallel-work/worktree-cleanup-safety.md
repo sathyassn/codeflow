@@ -539,7 +539,7 @@ The worktree registry now supports three status values:
 | Status | Meaning | Set By |
 |--------|---------|--------|
 | `active` | Session owns this worktree | `locked_register_with_limit()` at creation |
-| `completing` | PathFlow done, session may still be alive briefly | `handle_team_delete()` via `mark_completing()` |
+| `pending_cleanup` | PathFlow done, session may still be alive briefly | `handle_team_delete()` via `mark_pending_cleanup()` |
 | `removed` | Worktree cleaned up | Cleanup operations |
 
 Stale sweep logic:
@@ -578,7 +578,7 @@ This is used in `handle_team_create()` and CLI session start/end handlers for ac
 | Protection patterns miss worktree-relative paths | `worktree_protection` section in `enforcement-policy.json` | **Pending — task #21** |
 | `lead_pid` stores ephemeral shell PID, always appears dead | Heartbeat file + `get_claude_code_pid()` process tree walk | Implemented |
 | Stale sweep uses PID-only liveness, false positives | Heartbeat primary + PID secondary liveness check | Implemented |
-| Registry has only active/removed, no transitional state | Added `completing` status via `mark_completing()` | Implemented |
+| Registry has only active/removed, no transitional state | Added `pending_cleanup` status via `mark_pending_cleanup()` | Implemented |
 
 ---
 

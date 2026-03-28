@@ -623,9 +623,9 @@ pub fn handle_team_delete(
     if team_file_path.exists() {
         let _ = fs::remove_file(&team_file_path);
 
-        // Mark worktree as "completing" in the registry.
+        // Mark worktree as "pending_cleanup" in the registry.
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
-        let _ = crate::worktree::mark_completing(&registry_path, session_id);
+        let _ = crate::worktree::mark_pending_cleanup(&registry_path, session_id);
     }
 
     // 4. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).

@@ -806,7 +806,7 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
         std::collections::HashMap::new();
     if let Ok(reg) = crate::worktree::read_registry(&registry_path) {
         for entry in &reg.worktrees {
-            if entry.status == "active" || entry.status == "completing" {
+            if entry.status == "active" || entry.status == "pending_cleanup" {
                 if let Some(ref sid_str) = entry.session_id {
                     if !entry.path.is_empty() {
                         session_worktree_paths

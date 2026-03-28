@@ -229,7 +229,7 @@ impl SessionStartInit {
         };
 
         // --- Section 1: Status-based stale session cleanup + teammate detection ---
-        let (existing_sid, team_mode) =
+        let (existing_sid, team_mode, env_worktree_path) =
             self.handle_stale_cleanup(project_dir, &runtime_dir, source, &mut result);
 
         if team_mode {
@@ -249,6 +249,15 @@ impl SessionStartInit {
                 result
                     .env_vars
                     .insert("CF_PROJECT_ROOT".into(), project_name);
+
+                // Propagate worktree path to teammate for correct path resolution.
+                if let Some(ref wt_path) = env_worktree_path {
+                    if !wt_path.is_empty() {
+                        result
+                            .env_vars
+                            .insert("CODEFLOW_WORKTREE_PATH".into(), wt_path.clone());
+                    }
+                }
 
                 // Update the first pending (pid==0, non-in-process) teammate entry
                 // with our actual PID so subsequent windows are not misclassified.
@@ -296,14 +305,29 @@ impl SessionStartInit {
         }
 
         // --- Section 2: Session ID generation (source-gated) ---
-        let session_id = self.resolve_or_generate_session_id(
-            project_dir,
-            &runtime_dir,
-            source,
-            claude_session_id,
-            existing_sid,
-            &mut result,
-        )?;
+        // Priority 0: Use AUTORUN_SESSION_ID if set (orchestrator-assigned).
+        // Read and immediately remove to prevent env var pollution in tests.
+        let autorun_override = std::env::var("AUTORUN_SESSION_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                // SAFETY: Single-threaded init path; removal prevents stale reads.
+                unsafe { std::env::remove_var("AUTORUN_SESSION_ID") };
+                SessionId::new(&s).ok()
+            });
+
+        let session_id = if let Some(sid) = autorun_override {
+            sid
+        } else {
+            self.resolve_or_generate_session_id(
+                project_dir,
+                &runtime_dir,
+                source,
+                claude_session_id,
+                existing_sid,
+                &mut result,
+            )?
+        };
         result.session_id = session_id.clone();
 
         let project_name = project_dir
@@ -346,9 +370,15 @@ impl SessionStartInit {
         // WorktreeHandle provides RAII cleanup on panic; defuse() at end of run().
         let (worktree_paths, mut worktree_handle) = if source == "startup" {
             // Load worktree mode from parallel-work config.
-            let wt_mode = crate::autorun::config::load_config(project_dir)
-                .map(|c| c.worktree.mode)
-                .unwrap_or(crate::autorun::config::WorktreeMode::Autorun);
+            let wt_mode = crate::autorun::config::load_config(project_dir).map_or_else(
+                |e| {
+                    result.warnings.push(format!(
+                        "parallel-work config load failed: {e}, defaulting to autorun mode"
+                    ));
+                    crate::autorun::config::WorktreeMode::Autorun
+                },
+                |c| c.worktree.mode,
+            );
 
             match wt_mode {
                 crate::autorun::config::WorktreeMode::Disabled => {
@@ -406,7 +436,22 @@ impl SessionStartInit {
             let wt_path_str = wp.root().to_string_lossy().to_string();
             result
                 .env_vars
-                .insert("CODEFLOW_WORKTREE_PATH".into(), wt_path_str);
+                .insert("CODEFLOW_WORKTREE_PATH".into(), wt_path_str.clone());
+
+            // Write session-to-worktree mapping for crash recovery.
+            let map_path = runtime_dir.join("session-worktree-map.json");
+            let mut map: serde_json::Map<String, serde_json::Value> = fs::read_to_string(&map_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            map.insert(
+                session_id.as_str().to_string(),
+                serde_json::Value::String(wt_path_str),
+            );
+            let _ = fs::write(
+                &map_path,
+                serde_json::to_string_pretty(&map).unwrap_or_default(),
+            );
         }
 
         // Release session lock -- env file written, teammates can now detect this session.
@@ -475,9 +520,9 @@ impl SessionStartInit {
             }
 
             // Also write main repo env file with CODEFLOW_WORKTREE_PATH.
-            // This enables detect_project_dir() Priority 3b fallback: when hooks
-            // run from the main repo CWD, they can read the worktree path from
-            // the main repo's env file and redirect to the correct worktree.
+            // This enables ProtectionGuard::read_worktree_name_with_project()
+            // in pre_tool_use.rs to resolve the worktree name when the
+            // CODEFLOW_WORKTREE_PATH env var is not set.
             let main_runtime = project_dir.join(".state").join("runtime");
             if let Err(e) = session::write_env_file_with_worktree(
                 &main_runtime,
@@ -522,19 +567,20 @@ impl SessionStartInit {
         runtime_dir: &Path,
         source: &str,
         result: &mut InitResult,
-    ) -> (Option<SessionId>, bool) {
+    ) -> (Option<SessionId>, bool, Option<String>) {
         // Signal 1: Read env file for existing SID.
         let env_data = match session::read_env_file(runtime_dir) {
             Ok(Some(env)) => env,
-            Ok(None) => return (None, false), // No env file -> new lead
+            Ok(None) => return (None, false, None), // No env file -> new lead
             Err(e) => {
                 result
                     .warnings
                     .push(format!("stale cleanup: env read error: {e}"));
-                return (None, false);
+                return (None, false, None);
             }
         };
 
+        let env_worktree_path = env_data.worktree_path.clone();
         let existing_sid = env_data.session_id;
 
         // Compact/resume/clear: reuse existing SID, update source tracking only.
@@ -552,12 +598,12 @@ impl SessionStartInit {
                     "latest_source_at": (self.now)(),
                 }),
             );
-            return (Some(existing_sid), false);
+            return (Some(existing_sid), false, env_worktree_path);
         }
 
         // Startup/unknown: check if an active session exists (teammate detection).
         if existing_sid.as_str().is_empty() {
-            return (None, false);
+            return (None, false, None);
         }
 
         // Signal 2: pathflow-session-status.json
@@ -571,11 +617,11 @@ impl SessionStartInit {
         let status: serde_json::Value =
             match crate::pathflow::file_lock::locked_read_critical(&status_path, 3) {
                 Ok(v) => v,
-                Err(_) => return (None, false), // Missing/unreadable/unparseable -> new lead
+                Err(_) => return (None, false, None), // Missing/unreadable/unparseable -> new lead
             };
         let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
         if session_status.is_empty() || session_status == "pf-complete" {
-            return (None, false); // No status or completed -> new lead
+            return (None, false, None); // No status or completed -> new lead
         }
 
         // Status is created/pf-started/pf-in-progress.
@@ -584,7 +630,7 @@ impl SessionStartInit {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if team_name.is_empty() {
-            return (None, false); // No team name -> new lead
+            return (None, false, None); // No team name -> new lead
         }
 
         // Signal 3: Team config existence.
@@ -595,7 +641,7 @@ impl SessionStartInit {
             .join(team_name)
             .join("config.json");
         if !config_path.exists() {
-            return (None, false); // Config missing -> session dead, new lead
+            return (None, false, None); // Config missing -> session dead, new lead
         }
 
         // Signal 4: Lead process liveness via PID.
@@ -610,14 +656,14 @@ impl SessionStartInit {
         if lead_pid == 0 {
             // No lead_pid recorded (pre-PID session) — cannot verify liveness.
             // Default to new lead (safe: avoids trapping a new lead as teammate).
-            return (None, false);
+            return (None, false, None);
         }
 
         if !is_process_alive(lead_pid) {
             result.messages.push(format!(
                 "STALE SESSION: lead_pid {lead_pid} is dead (team: {team_name}) — new lead"
             ));
-            return (None, false); // Lead crashed -> new lead
+            return (None, false, None); // Lead crashed -> new lead
         }
 
         // Lead PID alive — check pathflow-team.json for pending tmux spawns.
@@ -660,12 +706,12 @@ impl SessionStartInit {
             result.messages.push(format!(
                 "TEAMMATE MODE: {pending_tmux_count} pending tmux spawn(s) detected (lead_pid {lead_pid}, team: {team_name})"
             ));
-            (Some(existing_sid), true)
+            (Some(existing_sid), true, env_worktree_path)
         } else {
             result.messages.push(format!(
                 "NEW LEAD: lead_pid {lead_pid} alive but no pending tmux spawns (team: {team_name}) — independent session"
             ));
-            (None, false)
+            (None, false, None)
         }
     }
 
@@ -699,7 +745,8 @@ impl SessionStartInit {
         };
 
         for entry in &registry.worktrees {
-            if entry.status != "active" {
+            // Process "active" and "pending_cleanup" entries; skip "removed" and others.
+            if entry.status != "active" && entry.status != "pending_cleanup" {
                 continue;
             }
 
@@ -734,8 +781,13 @@ impl SessionStartInit {
             }
 
             // Session is dead — clean up this worktree.
+            let status_label = if entry.status == "pending_cleanup" {
+                "PENDING_CLEANUP"
+            } else {
+                "STALE"
+            };
             result.messages.push(format!(
-                "STALE WORKTREE: cleaning '{}' from dead session {sid}",
+                "{status_label} WORKTREE: cleaning '{}' from dead session {sid}",
                 entry.name,
             ));
             if let Err(e) = mgr.cleanup(&entry.name, &opts) {
@@ -1373,9 +1425,15 @@ impl SessionStartInit {
         result: &mut InitResult,
     ) -> Result<(WorktreePaths, WorktreeHandle), HookError> {
         // Read max_concurrent from parallel-work config.
-        let max_concurrent = crate::autorun::config::load_config(project_dir)
-            .map(|c| c.worktree.max_concurrent)
-            .unwrap_or(3);
+        let max_concurrent = crate::autorun::config::load_config(project_dir).map_or_else(
+            |e| {
+                result.warnings.push(format!(
+                    "parallel-work config load failed: {e}, defaulting to max_concurrent=3"
+                ));
+                3
+            },
+            |c| c.worktree.max_concurrent,
+        );
 
         let wt_name = format!("worktree-{session_id}");
         let mgr = WorktreeManager::new(project_dir);
@@ -2784,7 +2842,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let (existing, team_mode) =
+        let (existing, team_mode, _env_wt) =
             init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
 
         assert!(
@@ -2830,7 +2888,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let (existing, team_mode) =
+        let (existing, team_mode, _env_wt) =
             init.handle_stale_cleanup(dir.path(), &runtime_dir, "compact", &mut result);
 
         assert!(existing.is_some(), "compact should return existing SID");
@@ -2861,7 +2919,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let (existing, team_mode) =
+        let (existing, team_mode, _env_wt) =
             init.handle_stale_cleanup(dir.path(), &runtime_dir, "resume", &mut result);
 
         assert!(existing.is_some(), "resume should return existing SID");
@@ -2903,7 +2961,7 @@ mod tests {
         };
 
         // compact source with active flag but no team file -> reuse SID.
-        let (existing, team_mode) =
+        let (existing, team_mode, _env_wt) =
             init.handle_stale_cleanup(dir.path(), &runtime_dir, "compact", &mut result);
 
         assert!(
@@ -2934,7 +2992,7 @@ mod tests {
             messages: Vec::new(),
         };
 
-        let (existing, team_mode) =
+        let (existing, team_mode, _env_wt) =
             init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
 
         assert!(
@@ -3373,6 +3431,10 @@ mod tests {
 
     #[test]
     fn test_resolve_session_id_non_startup_with_existing_sid() {
+        // Ensure no stale AUTORUN_SESSION_ID from parallel tests.
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("AUTORUN_SESSION_ID") };
+
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
@@ -4253,6 +4315,158 @@ mod tests {
         );
     }
 
+    // --- Autorun SID tests ---
+
+    #[test]
+    fn test_resolve_session_id_uses_autorun_env_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        let autorun_sid = "ses-01jqautoruntest000000000";
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::set_var("AUTORUN_SESSION_ID", autorun_sid) };
+
+        let input = make_input("startup", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf);
+
+        // run() consumes AUTORUN_SESSION_ID (removes it after reading).
+        assert!(
+            std::env::var("AUTORUN_SESSION_ID").is_err(),
+            "AUTORUN_SESSION_ID should be consumed by run()"
+        );
+
+        let result = result.unwrap();
+        assert_eq!(
+            result.session_id.as_str(),
+            autorun_sid,
+            "should use AUTORUN_SESSION_ID when set"
+        );
+    }
+
+    // --- Teammate worktree propagation tests ---
+
+    #[test]
+    fn test_teammate_mode_propagates_worktree_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = "ses-01jqteammatewtprop00000";
+        let wt_path = "/tmp/test-worktree-teammate";
+
+        let env_content = format!(
+            "export CODEFLOW_SESSION_ID='{sid}'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path}'\n"
+        );
+        fs::create_dir_all(&runtime_dir).unwrap();
+        fs::write(runtime_dir.join("codeflow-env.sh"), &env_content).unwrap();
+
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
+            "session_id": sid,
+            "status": "pf-in-progress",
+            "lead_pid": std::process::id(),
+            "team_name": "test-team",
+        });
+        fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        let team_config_dir = home.path().join(".claude/teams/test-team");
+        fs::create_dir_all(&team_config_dir).unwrap();
+        fs::write(
+            team_config_dir.join("config.json"),
+            r#"{"name":"test-team"}"#,
+        )
+        .unwrap();
+
+        let team = serde_json::json!({
+            "team_name": "test-team",
+            "teammates": [{"name": "cf-dev", "pid": 0, "backend_type": "tmux"}],
+        });
+        fs::write(
+            status_dir.join("pathflow-team.json"),
+            serde_json::to_string_pretty(&team).unwrap(),
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(result.is_teammate, "should detect teammate mode");
+        assert_eq!(
+            result
+                .env_vars
+                .get("CODEFLOW_WORKTREE_PATH")
+                .map(String::as_str),
+            Some(wt_path),
+            "should propagate worktree path to teammate env_vars"
+        );
+    }
+
+    // --- Session-worktree mapping tests ---
+
+    #[test]
+    fn test_session_worktree_map_written_and_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let map_path = runtime_dir.join("session-worktree-map.json");
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ses-01jqmaptest0000000000000".to_string(),
+            serde_json::Value::String("/tmp/wt-test".to_string()),
+        );
+        fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
+
+        let data = fs::read_to_string(&map_path).unwrap();
+        let loaded: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&data).unwrap();
+        assert_eq!(
+            loaded
+                .get("ses-01jqmaptest0000000000000")
+                .and_then(|v| v.as_str()),
+            Some("/tmp/wt-test"),
+        );
+    }
+
+    // --- load_config warning tests ---
+
+    #[test]
+    fn test_startup_warns_on_malformed_parallel_work_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        let config_dir = dir.path().join(".codeflow/config/parallel-work");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("parallel-work-config.json"),
+            "not valid json",
+        )
+        .unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let result = init.run(&input, dir.path(), &mut buf).unwrap();
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("parallel-work config load failed")),
+            "expected warning about config load failure: {:?}",
+            result.warnings,
+        );
+    }
+
     // --- Stale worktree cleanup tests ---
 
     #[test]
@@ -4372,6 +4586,75 @@ mod tests {
                 .iter()
                 .any(|m| m.contains("STALE WORKTREE") && m.contains("stale-wt")),
             "should report stale worktree cleanup: {:?}",
+            result.messages,
+        );
+    }
+
+    #[test]
+    fn test_clean_stale_worktrees_cleans_pending_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+
+        // Create a registry with a pending_cleanup worktree from a dead session.
+        let dead_sid = "ses-01jq7pendclean0000000ab";
+        let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-27T00:00:00Z");
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "pending-wt".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees")
+                .join("pending-wt")
+                .to_string_lossy()
+                .to_string(),
+            branch: "feat/pending".to_string(),
+            created_at: "2026-03-27T00:00:00Z".to_string(),
+            status: "pending_cleanup".to_string(),
+            session_id: Some(dead_sid.to_string()),
+            task_id: None,
+        });
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Create session status with a dead PID.
+        let status_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(dead_sid)
+            .join("pathflow");
+        fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
+            "session_id": dead_sid,
+            "status": "pf-complete",
+            "lead_pid": 999_999_999_u64,
+            "team_name": "dead-team",
+        });
+        fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-test"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        init.clean_stale_worktrees(dir.path(), &mut result);
+
+        // Should detect and report the pending_cleanup worktree.
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("PENDING_CLEANUP") && m.contains("pending-wt")),
+            "should report pending_cleanup worktree cleanup: {:?}",
             result.messages,
         );
     }

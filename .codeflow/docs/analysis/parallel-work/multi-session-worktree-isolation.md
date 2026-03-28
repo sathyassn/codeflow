@@ -226,3 +226,20 @@ The ideal fix is a platform-level change in Claude Code:
 2. **`SubagentStart` for tmux teammates**: Currently, in-process teammates fire `SubagentStart` while tmux teammates fire `SessionStart`. If all teammates fired `SubagentStart` regardless of backend, the lead-vs-teammate distinction would be unambiguous.
 
 Until either change is implemented, the pending-spawn approach provides a reliable workaround with minimal race conditions.
+
+
+## 11. Known Limitations
+
+### mode=disabled does not support concurrent windows
+
+When `worktree.mode` is set to `disabled` in `parallel-work-config.json`, sessions run directly on the main repo without worktree isolation. This means:
+
+- **No file claim enforcement**: Multiple sessions can edit the same files simultaneously, risking conflicts.
+- **No sentinel isolation**: PathFlow sentinels are shared, causing cross-session interference.
+- **Single window only**: Only one Claude Code window should be active at a time when mode=disabled.
+
+If concurrent sessions are needed, use `mode=always` (interactive) or `mode=autorun` (orchestrator-managed).
+
+### Session-to-worktree mapping for crash recovery
+
+A `session-worktree-map.json` file in `.state/runtime/` tracks the mapping between session IDs and worktree paths. This enables crash recovery: when a new session starts and finds a stale env file, it can look up the crashed session's worktree path from the mapping. Entries are cleaned up by SessionEnd when the worktree is removed.

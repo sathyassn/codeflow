@@ -7,7 +7,12 @@
     "shared_files": [
       ".claude/settings.local.json",
       ".codeflow/config/parallel-work/parallel-work-config.local.json"
-    ]
+    ],
+    "_mode_notes": {
+      "disabled": "Single window only. Does not support concurrent windows safely \u2014 no worktree isolation, no file claim enforcement.",
+      "autorun": "Worktrees created by orchestrator only. Interactive sessions run without worktrees.",
+      "always": "Every session gets an isolated worktree. Recommended for concurrent work."
+    }
   },
   "sync": {
     "interval_secs": 5,

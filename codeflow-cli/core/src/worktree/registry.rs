@@ -237,11 +237,13 @@ pub fn purge_removed_entries(
     Ok(removed)
 }
 
-/// Mark a worktree as "completing" by session ID.
+/// Mark a worktree as "pending_cleanup" by session ID.
 ///
-/// The "completing" status indicates that the PathFlow lifecycle is done
+/// Status lifecycle: `active` -> `pending_cleanup` -> `removed`.
+///
+/// The `pending_cleanup` status indicates that the PathFlow lifecycle is done
 /// (TeamDelete has fired) but the session may still be alive for a short
-/// period. Stale sweep logic treats "completing" entries with a stale
+/// period. Stale sweep logic treats `pending_cleanup` entries with a stale
 /// heartbeat as cleanable.
 ///
 /// Matches by `session_id`. If the registry doesn't exist or the session
@@ -251,7 +253,7 @@ pub fn purge_removed_entries(
 ///
 /// - `WorktreeError::Io` on filesystem errors.
 /// - `WorktreeError::Yaml` on parse/serialize errors.
-pub fn mark_completing(registry_path: &Path, session_id: &str) -> Result<(), WorktreeError> {
+pub fn mark_pending_cleanup(registry_path: &Path, session_id: &str) -> Result<(), WorktreeError> {
     if !registry_path.exists() {
         return Ok(());
     }
@@ -277,7 +279,7 @@ pub fn mark_completing(registry_path: &Path, session_id: &str) -> Result<(), Wor
             let mut found = false;
             for entry in &mut reg.worktrees {
                 if entry.session_id.as_deref() == Some(&sid) && entry.status == "active" {
-                    entry.status = "completing".to_string();
+                    entry.status = "pending_cleanup".to_string();
                     found = true;
                     break;
                 }
@@ -288,7 +290,7 @@ pub fn mark_completing(registry_path: &Path, session_id: &str) -> Result<(), Wor
             Ok(())
         },
     )
-    .map_err(|e| WorktreeError::Yaml(format!("locked mark_completing: {e}")))
+    .map_err(|e| WorktreeError::Yaml(format!("locked mark_pending_cleanup: {e}")))
 }
 
 /// Count the number of active worktrees in the registry.
@@ -1405,10 +1407,10 @@ session_id: ses-123
         assert_eq!(purged, 0);
     }
 
-    // --- mark_completing tests ---
+    // --- mark_pending_cleanup tests ---
 
     #[test]
-    fn test_mark_completing_transitions_active_to_completing() {
+    fn test_mark_pending_cleanup_sets_status() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("worktrees.yaml");
 
@@ -1419,22 +1421,51 @@ session_id: ses-123
             branch: "hotfix/test".to_string(),
             created_at: "2026-03-25T10:00:00Z".to_string(),
             status: "active".to_string(),
-            session_id: Some("ses-01jqcompletingtest00000".to_string()),
+            session_id: Some("ses-01jqpendcleantest00000".to_string()),
             task_id: None,
         });
         write_registry(&path, &reg).unwrap();
 
-        mark_completing(&path, "ses-01jqcompletingtest00000").unwrap();
+        mark_pending_cleanup(&path, "ses-01jqpendcleantest00000").unwrap();
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
-            loaded.worktrees[0].status, "completing",
-            "should transition from active to completing"
+            loaded.worktrees[0].status, "pending_cleanup",
+            "should transition from active to pending_cleanup"
         );
     }
 
     #[test]
-    fn test_mark_completing_no_match_is_noop() {
+    fn test_pending_cleanup_not_counted_as_active() {
+        let mut reg = WorktreeRegistry::new("2026-03-25T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-active".to_string(),
+            path: "/tmp/wt/active".to_string(),
+            branch: "feat/active".to_string(),
+            created_at: "2026-03-25T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some("ses-01jqactive0000000000000".to_string()),
+            task_id: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-pending".to_string(),
+            path: "/tmp/wt/pending".to_string(),
+            branch: "feat/pending".to_string(),
+            created_at: "2026-03-25T10:00:00Z".to_string(),
+            status: "pending_cleanup".to_string(),
+            session_id: Some("ses-01jqpending000000000000".to_string()),
+            task_id: None,
+        });
+
+        assert_eq!(
+            count_active(&reg),
+            1,
+            "pending_cleanup entries should not count as active"
+        );
+    }
+
+    #[test]
+    fn test_mark_pending_cleanup_no_match_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("worktrees.yaml");
 
@@ -1451,7 +1482,7 @@ session_id: ses-123
         write_registry(&path, &reg).unwrap();
 
         // Mark a session that doesn't exist -- should be no-op.
-        mark_completing(&path, "ses-01jqnonexistentsession0").unwrap();
+        mark_pending_cleanup(&path, "ses-01jqnonexistentsession0").unwrap();
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
@@ -1461,16 +1492,16 @@ session_id: ses-123
     }
 
     #[test]
-    fn test_mark_completing_no_registry_is_ok() {
+    fn test_mark_pending_cleanup_no_registry_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.yaml");
 
         // Should not error on missing registry.
-        mark_completing(&path, "ses-01jqmissing0000000000000").unwrap();
+        mark_pending_cleanup(&path, "ses-01jqmissing0000000000000").unwrap();
     }
 
     #[test]
-    fn test_mark_completing_skips_already_removed() {
+    fn test_mark_pending_cleanup_skips_already_removed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("worktrees.yaml");
 
@@ -1486,8 +1517,8 @@ session_id: ses-123
         });
         write_registry(&path, &reg).unwrap();
 
-        // Mark completing on a "removed" entry should be no-op.
-        mark_completing(&path, "ses-01jqremovedtest00000000").unwrap();
+        // Mark pending_cleanup on a "removed" entry should be no-op.
+        mark_pending_cleanup(&path, "ses-01jqremovedtest00000000").unwrap();
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(

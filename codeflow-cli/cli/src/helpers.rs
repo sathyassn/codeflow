@@ -54,23 +54,6 @@ pub fn detect_project_dir() -> Result<PathBuf> {
         }
     };
 
-    // 3b. Check codeflow-env.sh for CODEFLOW_WORKTREE_PATH (written by
-    // SessionStart but not exported to process environment for hooks).
-    let runtime_dir = project_root.join(".state").join("runtime");
-    if let Ok(Some(env)) = codeflow_core::session::read_env_file(&runtime_dir) {
-        if let Some(wt_path) = env.worktree_path {
-            let path = PathBuf::from(&wt_path);
-            if path.is_dir() && path.join(".state").is_dir() {
-                return Ok(path);
-            }
-            codeflow_core::diagnostics::warn_fallback(
-                "hooks",
-                &format!("codeflow-env.sh CODEFLOW_WORKTREE_PATH ({wt_path})"),
-                "project root",
-            );
-        }
-    }
-
     Ok(project_root)
 }
 
@@ -550,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_project_dir_env_file_worktree_fallback() {
+    fn test_detect_project_dir_ignores_stale_env_file() {
         // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
@@ -561,14 +544,14 @@ mod tests {
         let wt_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
 
-        // Write env file pointing to the worktree
+        // Write env file pointing to the worktree (simulates stale env file)
         let wt_path_str = wt_dir.path().to_string_lossy().to_string();
         let env_content = format!(
             "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path_str}'\n"
         );
         std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
 
-        // Ensure CODEFLOW_WORKTREE_PATH env var is NOT set (testing file-based fallback)
+        // Ensure CODEFLOW_WORKTREE_PATH env var is NOT set
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
         unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
@@ -579,7 +562,15 @@ mod tests {
 
         let result = detect_project_dir();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), wt_dir.path());
+        // With env file fallback removed, detect_project_dir returns the
+        // CWD-based project root, NOT the stale worktree path from env file.
+        // Canonicalize both sides because macOS resolves /tmp -> /private/tmp.
+        let expected = project_dir.path().canonicalize().unwrap();
+        let actual = result.unwrap().canonicalize().unwrap();
+        assert_eq!(
+            actual, expected,
+            "should return project root, not stale worktree from env file"
+        );
 
         std::env::set_current_dir(original_dir).unwrap();
     }
