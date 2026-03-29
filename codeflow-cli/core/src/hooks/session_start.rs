@@ -457,6 +457,14 @@ impl SessionStartInit {
         // Release session lock -- env file written, teammates can now detect this session.
         drop(lock_file);
 
+        // --- Section 2c: EARLY env JSON output ---
+        // Output env vars to stdout NOW, before heavy operations (stale sweep,
+        // checkpoint init, etc.) that might cause the hook to exceed its timeout.
+        // Claude Code processes the LAST env JSON line, so the final write at
+        // the end of run() will override this if it completes. But if the hook
+        // is killed by timeout, Claude Code still has the core env vars.
+        write_env_json(writer, &result.env_vars)?;
+
         // --- Section 3: Directory creation ---
         // When a worktree is available, create directories inside the worktree.
         // Otherwise, fall back to the main project directory.
@@ -541,7 +549,8 @@ impl SessionStartInit {
             eprintln!("[codeflow session-start] warning: {warning}");
         }
 
-        // Write env JSON to stdout
+        // Final env JSON write — reinforces the early write with any additional
+        // env vars added by later sections. Claude Code uses the LAST env JSON line.
         write_env_json(writer, &result.env_vars)?;
 
         // Defuse the worktree handle -- ownership transfers to SessionEnd hook.
@@ -1453,6 +1462,7 @@ impl SessionStartInit {
             status: "active".to_string(),
             session_id: Some(session_id.to_string()),
             task_id: None,
+            source: None,
         };
         crate::worktree::locked_register_with_limit(
             mgr.registry_path(),
@@ -4542,6 +4552,7 @@ mod tests {
             status: "active".to_string(),
             session_id: Some(dead_sid.to_string()),
             task_id: None,
+            source: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4612,6 +4623,7 @@ mod tests {
             status: "pending_cleanup".to_string(),
             session_id: Some(dead_sid.to_string()),
             task_id: None,
+            source: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4683,6 +4695,7 @@ mod tests {
             status: "active".to_string(),
             session_id: Some(live_sid.to_string()),
             task_id: None,
+            source: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4748,6 +4761,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4793,6 +4807,7 @@ mod tests {
             status: "removed".to_string(),
             session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
             task_id: None,
+            source: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4839,6 +4854,7 @@ mod tests {
             status: "active".to_string(),
             session_id: Some("ses-orchestrator00000000000".to_string()),
             task_id: None,
+            source: None,
         });
 
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");

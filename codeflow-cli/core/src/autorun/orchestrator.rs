@@ -25,7 +25,8 @@ pub struct WorkerConfig {
     pub batch_name: String,
     pub auto_merge: bool,
     pub target: String,
-    pub tmux_prefix: String,
+    /// Full tmux session name for this worker.
+    pub tmux_name: String,
     /// File patterns this worker claims for exclusive access via Loro.
     pub file_scope: Vec<String>,
     /// Scope policy for this worker: "soft", "hard", or "permissive".
@@ -494,8 +495,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             let scope_policy = task_spec
                 .and_then(|t| t.scope_policy.clone())
                 .unwrap_or(md_scope_policy);
-            let tmux_prefix = format!("codeflow-{}-w", &session_id[..session_id.len().min(8)]);
-            let tmux_name = format!("{tmux_prefix}{}", idx + 1);
+            let tmux_name = format!("cf-ar-{}", task_id.to_lowercase());
             let handle = Self::spawn_worker(
                 self.runner.clone(),
                 WorkerConfig {
@@ -506,7 +506,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     batch_name: batch.name.clone(),
                     auto_merge: batch.auto_merge,
                     target: batch.target.clone(),
-                    tmux_prefix,
+                    tmux_name: tmux_name.clone(),
                     file_scope,
                     scope_policy,
                     blocked_behavior: blocked_behavior.to_string(),
@@ -787,7 +787,7 @@ mod tests {
             batch_name: "batch".into(),
             auto_merge: false,
             target: "main".into(),
-            tmux_prefix: "worker".into(),
+            tmux_name: "cf-ar-task-a".into(),
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "hard".into(),
             blocked_behavior: "skip_and_continue".into(),
@@ -816,34 +816,22 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_name_format_batch_scoped() {
-        // Verify the tmux_prefix format uses session_id first 8 chars.
-        let session_id = "ses-01km9911pmagn2xa8n9b449wdd";
-        let prefix = format!("codeflow-{}-w", &session_id[..session_id.len().min(8)]);
-        // Worker num 1 should produce: codeflow-ses-01km-w1
-        let tmux_name = format!("{prefix}{}", 1);
+    fn test_tmux_name_format_task_id_based() {
+        // Verify the tmux name format uses cf-ar-{task_id}.
+        let task_id = "INF-TSK-021-036";
+        let tmux_name = format!("cf-ar-{}", task_id.to_lowercase());
+        assert_eq!(tmux_name, "cf-ar-inf-tsk-021-036");
         assert!(
-            tmux_name.starts_with("codeflow-"),
-            "tmux name should start with codeflow-"
-        );
-        assert!(
-            tmux_name.ends_with('1'),
-            "tmux name should end with worker num"
-        );
-        // Verify format: codeflow-{8chars with hyphens}-w{N}
-        let re_pattern = r"^codeflow-[a-z0-9-]{1,8}-w[0-9]+$";
-        let re = regex::Regex::new(re_pattern).unwrap();
-        assert!(
-            re.is_match(&tmux_name),
-            "tmux name '{tmux_name}' must match pattern {re_pattern}"
+            tmux_name.starts_with("cf-ar-"),
+            "tmux name should start with cf-ar-"
         );
 
-        // Verify uniqueness: different session IDs produce different prefixes.
-        let other_id = "ses-99xx1234abcd";
-        let other_prefix = format!("codeflow-{}-w", &other_id[..other_id.len().min(8)]);
+        // Verify uniqueness: different task IDs produce different names.
+        let other_task = "INF-TSK-021-037";
+        let other_name = format!("cf-ar-{}", other_task.to_lowercase());
         assert_ne!(
-            prefix, other_prefix,
-            "different sessions must produce different prefixes"
+            tmux_name, other_name,
+            "different tasks must produce different tmux names"
         );
     }
 
@@ -1497,7 +1485,7 @@ mod tests {
                 batch_name: "batch".into(),
                 auto_merge: false,
                 target: "main".into(),
-                tmux_prefix: "test-w".into(),
+                tmux_name: "cf-ar-task-err".into(),
                 file_scope: vec![],
                 scope_policy: "soft".into(),
                 blocked_behavior: "skip_and_continue".into(),

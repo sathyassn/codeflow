@@ -33,6 +33,9 @@ pub struct WorktreeEntry {
     /// Task ID being worked on in this worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// Source that created this worktree: "interactive" or "autorun".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Registry metadata.
@@ -291,6 +294,51 @@ pub fn mark_pending_cleanup(registry_path: &Path, session_id: &str) -> Result<()
         },
     )
     .map_err(|e| WorktreeError::Yaml(format!("locked mark_pending_cleanup: {e}")))
+}
+
+/// Update the `source` field on a worktree entry identified by name.
+///
+/// Uses file-locked read-modify-write to avoid concurrent corruption.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or the file cannot be written.
+pub fn locked_update_source(
+    registry_path: &Path,
+    worktree_name: &str,
+    source: &str,
+) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let name = worktree_name.to_string();
+    let src = source.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            if let Some(entry) = reg.worktrees.iter_mut().find(|e| e.name == name) {
+                entry.source = Some(src.clone());
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked update_source: {e}")))
 }
 
 /// Count the number of active worktrees in the registry.
@@ -585,6 +633,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
 
         write_registry(&path, &reg).unwrap();
@@ -610,6 +659,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         register_worktree(&path, entry).unwrap();
@@ -633,6 +683,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         let entry2 = WorktreeEntry {
             name: "wt-2".to_string(),
@@ -642,6 +693,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         register_worktree(&path, entry1).unwrap();
@@ -666,6 +718,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -688,6 +741,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -745,6 +799,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
@@ -779,6 +834,7 @@ status: active
             status: "active".to_string(),
             session_id: Some("ses-abc123".to_string()),
             task_id: None,
+            source: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -800,6 +856,7 @@ status: active
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -820,6 +877,7 @@ status: active
             status: "active".to_string(),
             session_id: Some("ses-abc".to_string()),
             task_id: Some("INF-TSK-023-018".to_string()),
+            source: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -857,6 +915,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -878,6 +937,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "removed-1".to_string(),
@@ -887,6 +947,7 @@ session_id: ses-123
             status: "removed".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "active-2".to_string(),
@@ -896,6 +957,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
 
         assert_eq!(count_active(&reg), 2);
@@ -918,6 +980,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "removed-1".to_string(),
@@ -927,6 +990,7 @@ session_id: ses-123
             status: "removed".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
 
         let active = list_active(&reg);
@@ -950,6 +1014,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -973,6 +1038,7 @@ session_id: ses-123
                 status: "active".to_string(),
                 session_id: None,
                 task_id: None,
+                source: None,
             };
             locked_register_with_limit(&reg_path, &entry, 3).unwrap();
         }
@@ -996,6 +1062,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -1029,6 +1096,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: Some("TSK-001".to_string()),
+            source: None,
         };
 
         locked_register_with_limit(&path, &entry, 3).unwrap();
@@ -1053,6 +1121,7 @@ session_id: ses-123
                 status: "active".to_string(),
                 session_id: None,
                 task_id: None,
+                source: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1066,6 +1135,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let result = locked_register_with_limit(&path, &entry, 3);
@@ -1093,6 +1163,7 @@ session_id: ses-123
                 status: "active".to_string(),
                 session_id: None,
                 task_id: None,
+                source: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1109,6 +1180,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry, 3).unwrap();
 
@@ -1129,6 +1201,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-001".to_string()),
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1141,6 +1214,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-002".to_string()),
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1178,6 +1252,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-001".to_string()),
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1191,6 +1266,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-002".to_string()),
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1229,6 +1305,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-original".to_string()),
             task_id: Some("task-original".to_string()),
+            source: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1242,6 +1319,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1279,6 +1357,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1302,6 +1381,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1337,6 +1417,7 @@ session_id: ses-123
                 status: "removed".to_string(),
                 session_id: None,
                 task_id: None,
+                source: None,
             });
         }
         reg.worktrees.push(WorktreeEntry {
@@ -1347,6 +1428,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1389,6 +1471,7 @@ session_id: ses-123
                 status: "removed".to_string(),
                 session_id: None,
                 task_id: None,
+                source: None,
             });
         }
         write_registry(&path, &reg).unwrap();
@@ -1423,6 +1506,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-01jqpendcleantest00000".to_string()),
             task_id: None,
+            source: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1446,6 +1530,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-01jqactive0000000000000".to_string()),
             task_id: None,
+            source: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-pending".to_string(),
@@ -1455,6 +1540,7 @@ session_id: ses-123
             status: "pending_cleanup".to_string(),
             session_id: Some("ses-01jqpending000000000000".to_string()),
             task_id: None,
+            source: None,
         });
 
         assert_eq!(
@@ -1478,6 +1564,7 @@ session_id: ses-123
             status: "active".to_string(),
             session_id: Some("ses-01jqdifferentsession000".to_string()),
             task_id: None,
+            source: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1514,6 +1601,7 @@ session_id: ses-123
             status: "removed".to_string(),
             session_id: Some("ses-01jqremovedtest00000000".to_string()),
             task_id: None,
+            source: None,
         });
         write_registry(&path, &reg).unwrap();
 

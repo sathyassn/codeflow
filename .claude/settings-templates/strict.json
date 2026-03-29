@@ -279,7 +279,7 @@
           {
             "type": "command",
             "command": "codeflow hooks session-start init",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -289,12 +289,12 @@
           {
             "type": "command",
             "command": "codeflow hooks session-start instructions",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks session-start logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -306,12 +306,12 @@
           {
             "type": "command",
             "command": "codeflow hooks user-prompt-submit validate",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks user-prompt-submit logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -323,17 +323,17 @@
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use gh-pr-guard",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use security",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use protection-guard",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -343,12 +343,12 @@
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use edit-write-guard",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use protection-guard",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -358,7 +358,7 @@
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use webfetch-guard",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -368,7 +368,7 @@
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use gate-check",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -378,7 +378,7 @@
           {
             "type": "command",
             "command": "codeflow hooks pre-tool-use team-guard",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -390,7 +390,7 @@
           {
             "type": "command",
             "command": "codeflow hooks post-tool-use sentinel-write",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -400,7 +400,7 @@
           {
             "type": "command",
             "command": "codeflow hooks post-tool-use settings-validate",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -410,7 +410,7 @@
           {
             "type": "command",
             "command": "codeflow hooks post-tool-use checkpoint-register",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -420,7 +420,7 @@
           {
             "type": "command",
             "command": "codeflow hooks post-tool-use logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -431,7 +431,7 @@
           {
             "type": "command",
             "command": "codeflow hooks stop logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -442,7 +442,7 @@
           {
             "type": "command",
             "command": "codeflow hooks stop logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -453,7 +453,7 @@
           {
             "type": "command",
             "command": "codeflow hooks task-completed checkpoint-complete",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -465,12 +465,12 @@
           {
             "type": "command",
             "command": "codeflow hooks session-end cleanup",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "codeflow hooks session-end logging",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }

@@ -270,7 +270,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
     for TmuxWorker<T, C, W, S>
 {
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
-        let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
+        let tmux_name = cfg.tmux_name.clone();
 
         let timeout = if self.timeout.is_zero() {
             DEFAULT_WORKER_TIMEOUT
@@ -278,14 +278,9 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             self.timeout
         };
 
-        // Generate a unique worktree name from the session ID.
-        // Use 16 chars of the ULID (chars 4..20) to ensure uniqueness even
-        // when workers start within the same millisecond (timestamp portion
-        // is only 10 Crockford chars; remaining 16 are random).
+        // Generate a unique session ID for this worker's worktree.
         let worker_sid = crate::session::generate_session_id();
-        let sid_str = worker_sid.as_str();
-        let suffix_end = std::cmp::min(20, sid_str.len());
-        let wt_name = format!("worktree-{}", &sid_str[4..suffix_end]);
+        let wt_name = format!("worktree-{worker_sid}");
 
         // Create the worktree for filesystem isolation.
         let wt_info = self.worktree.setup(&wt_name)?;
@@ -1086,6 +1081,8 @@ impl WorktreeProvider for RealWorktreeProvider {
     fn setup(&self, name: &str) -> Result<WorktreeInfo, AutorunError> {
         let mgr = crate::worktree::WorktreeManager::new(&self.project_dir);
         let entry = mgr.setup_detached(name)?;
+        // Mark this worktree entry as created by autorun.
+        let _ = crate::worktree::locked_update_source(mgr.registry_path(), name, "autorun");
         Ok(WorktreeInfo {
             path: PathBuf::from(&entry.path),
         })
@@ -1313,7 +1310,7 @@ mod tests {
             batch_name: "test-batch".into(),
             auto_merge: false,
             target: "main".into(),
-            tmux_prefix: "codeflow-worker".into(),
+            tmux_name: "cf-ar-task-a".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
@@ -2204,9 +2201,8 @@ Read and implement.
     }
 
     #[test]
-    fn test_tmux_name_format_uses_prefix_directly() {
-        // Verify the worker produces {prefix}{worker_num} (no extra separator).
-        // The prefix from orchestrator already ends with "-w".
+    fn test_tmux_name_from_config() {
+        // Verify the worker uses cfg.tmux_name directly (set by orchestrator).
         let cfg = WorkerConfig {
             session_id: "ses-test".into(),
             worker_id: "arw-test".into(),
@@ -2215,14 +2211,12 @@ Read and implement.
             batch_name: "test-batch".into(),
             auto_merge: false,
             target: "main".into(),
-            tmux_prefix: "codeflow-ses01km9-w".into(),
+            tmux_name: "cf-ar-task-a".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
         };
-        // The format is "{prefix}{worker_num}" = "codeflow-ses01km9-w3"
-        let tmux_name = format!("{}{}", cfg.tmux_prefix, cfg.worker_num);
-        assert_eq!(tmux_name, "codeflow-ses01km9-w3");
+        assert_eq!(cfg.tmux_name, "cf-ar-task-a");
     }
 
     // -- DB write tests using MockStore --
@@ -2236,7 +2230,7 @@ Read and implement.
             batch_name: "test-batch".into(),
             auto_merge: false,
             target: String::new(),
-            tmux_prefix: "codeflow-test-w".into(),
+            tmux_name: "cf-ar-task-test".into(),
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),

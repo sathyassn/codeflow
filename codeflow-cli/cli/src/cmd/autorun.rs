@@ -602,6 +602,40 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                 String::new()
             },
         );
+
+        // Per-worker detail.
+        let task_runs = store.list_autorun_task_runs(&session.id).await?;
+        if !task_runs.is_empty() {
+            println!();
+            println!(
+                "  {:<24} {:<12} {:<28} {:>9}",
+                "TASK", "STATUS", "TMUX", "DURATION"
+            );
+            for run in &task_runs {
+                let duration = run.duration_seconds.map_or_else(
+                    || {
+                        if matches!(
+                            run.status,
+                            codeflow_core::types::AutorunTaskRunStatus::Running
+                        ) {
+                            format_elapsed(run.started_at.as_deref().unwrap_or(""))
+                        } else {
+                            "--".to_string()
+                        }
+                    },
+                    format_duration_secs,
+                );
+                let tmux = workers
+                    .iter()
+                    .find(|w| w.task_id == run.task_id)
+                    .and_then(|w| w.tmux_session.clone())
+                    .unwrap_or_else(|| "--".to_string());
+                println!(
+                    "  {:<24} {:<12} {:<28} {:>9}",
+                    run.task_id, run.status, tmux, duration
+                );
+            }
+        }
     }
 
     Ok(())
@@ -655,7 +689,17 @@ async fn run_logs(project_dir: &Path, task_id: &str, follow: bool) -> Result<()>
         .context("worker has no tmux session name")?;
 
     if !tmux_has_session(tmux_name) {
-        anyhow::bail!("tmux session '{tmux_name}' does not exist (worker may have stopped)");
+        // Tmux session gone — try reading captured output from worktree.
+        if let Some(ref wt_path) = worker.worktree_path {
+            let output_path = PathBuf::from(wt_path).join(".state/runtime/worker-output.json");
+            if output_path.exists() {
+                let content =
+                    std::fs::read_to_string(&output_path).context("reading worker output")?;
+                println!("{content}");
+                return Ok(());
+            }
+        }
+        anyhow::bail!("tmux session '{tmux_name}' does not exist and no output file found");
     }
 
     let capture = |name: &str| -> Result<String> {
@@ -1182,6 +1226,8 @@ impl codeflow_core::autorun::TmuxRunner for RealTmux {
                 "tmux new-session failed for {name}"
             )));
         }
+        // Keep the pane alive after the command exits so attach/logs can inspect.
+        let _ = run_tmux(&["set-option", "-t", name, "remain-on-exit", "on"]).await;
         Ok(())
     }
 
@@ -1234,62 +1280,6 @@ impl<T: codeflow_core::autorun::TmuxRunner> RealClaude<T> {
             .ok()
             .and_then(|s| s.trim().parse::<i32>().ok())
             .unwrap_or(1)
-    }
-
-    /// Parse PR information from the worker output JSON.
-    fn parse_worker_output(path: &Path) -> (i64, String, String) {
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => return (0, String::new(), String::new()),
-        };
-        // Claude --output-format json produces a JSON object.
-        // Try to parse and extract PR-related fields from the output text.
-        let val: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => return (0, String::new(), Self::extract_output_text(&content)),
-        };
-
-        let output_text = val
-            .get("result")
-            .or_else(|| val.get("output"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string();
-
-        let (pr_number, pr_url) = Self::extract_pr_from_text(&output_text);
-        (pr_number, pr_url, output_text)
-    }
-
-    /// Extract PR URL and number from output text using regex-like matching.
-    fn extract_pr_from_text(text: &str) -> (i64, String) {
-        // Look for GitHub PR URL pattern.
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if let Some(idx) = trimmed.find("/pull/") {
-                let after = &trimmed[idx + 6..];
-                let num_str: String = after.chars().take_while(char::is_ascii_digit).collect();
-                if let Ok(num) = num_str.parse::<i64>() {
-                    // Find the full URL.
-                    let url_start = trimmed[..idx].rfind("https://").unwrap_or(0);
-                    let url_end = trimmed[idx + 6..]
-                        .find(|c: char| c.is_whitespace() || c == ')' || c == ']')
-                        .map_or(trimmed.len(), |e| idx + 6 + e);
-                    let url = &trimmed[url_start..url_end];
-                    return (num, url.to_string());
-                }
-            }
-        }
-        (0, String::new())
-    }
-
-    /// Extract plain text output when JSON parsing fails.
-    fn extract_output_text(content: &str) -> String {
-        // Limit output to a reasonable size.
-        if content.len() > 4096 {
-            content[..4096].to_string()
-        } else {
-            content.to_string()
-        }
     }
 }
 
@@ -1347,14 +1337,10 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         // Quote work_dir with POSIX single-quote escaping to handle paths with spaces.
         let escaped_work_dir = work_dir.replace('\'', "'\\''");
         let exit_code_path = format!("{work_dir}/.state/runtime/worker-exit-code");
-        let output_path = format!("{work_dir}/.state/runtime/worker-output.json");
         let escaped_exit_code_path = exit_code_path.replace('\'', "'\\''");
-        let escaped_output_path = output_path.replace('\'', "'\\''");
         let claude_cmd = format!(
-            "cd '{escaped_work_dir}' && claude -p '{escaped_prompt}' \
-             --dangerously-skip-permissions \
-             --output-format json \
-             > '{escaped_output_path}' 2>&1; \
+            "cd '{escaped_work_dir}' && claude --dangerously-skip-permissions \
+             '{escaped_prompt}'; \
              echo $? > '{escaped_exit_code_path}'"
         );
         self.tmux.send_command(session, &claude_cmd).await?;
@@ -1404,9 +1390,10 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         // Read exit code from marker file.
         let exit_code = Self::read_exit_code(&exit_code_file);
 
-        // Parse worker output.
-        let output_file = PathBuf::from(&output_path);
-        let (mut pr_number, mut pr_url, output) = Self::parse_worker_output(&output_file);
+        // Interactive Claude doesn't write structured JSON output.
+        // Get PR info from git branch + gh pr list.
+        let mut pr_number: i64 = 0;
+        let mut pr_url = String::new();
 
         // Get current branch name from the worktree.
         let branch_name = tokio::process::Command::new("git")
@@ -1467,7 +1454,7 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
             pr_number,
             pr_url,
             branch_name,
-            output,
+            output: String::new(),
         })
     }
 }
@@ -1878,7 +1865,7 @@ tasks:
             batch_name: "test-batch".into(),
             auto_merge: false,
             target: "main".into(),
-            tmux_prefix: "worker".into(),
+            tmux_name: "cf-ar-task-test".into(),
             file_scope: vec!["src/main.rs".into()],
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
@@ -2096,57 +2083,6 @@ tasks:
     }
 
     #[test]
-    fn test_real_claude_extract_pr_from_text() {
-        let text = "PR created: https://github.com/org/repo/pull/42\nDone.";
-        let (num, url) = RealClaude::<RecordingTmux>::extract_pr_from_text(text);
-        assert_eq!(num, 42);
-        assert!(url.contains("/pull/42"));
-    }
-
-    #[test]
-    fn test_real_claude_extract_pr_no_match() {
-        let text = "No PR info here\nJust some output.";
-        let (num, url) = RealClaude::<RecordingTmux>::extract_pr_from_text(text);
-        assert_eq!(num, 0);
-        assert!(url.is_empty());
-    }
-
-    #[test]
-    fn test_real_claude_parse_worker_output_valid_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("output.json");
-        std::fs::write(
-            &path,
-            r#"{"result": "PR: https://github.com/org/repo/pull/99"}"#,
-        )
-        .unwrap();
-        let (num, url, output) = RealClaude::<RecordingTmux>::parse_worker_output(&path);
-        assert_eq!(num, 99);
-        assert!(url.contains("/pull/99"));
-        assert!(output.contains("PR:"));
-    }
-
-    #[test]
-    fn test_real_claude_parse_worker_output_invalid_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("output.json");
-        std::fs::write(&path, "not json at all").unwrap();
-        let (num, url, output) = RealClaude::<RecordingTmux>::parse_worker_output(&path);
-        assert_eq!(num, 0);
-        assert!(url.is_empty());
-        assert_eq!(output, "not json at all");
-    }
-
-    #[test]
-    fn test_real_claude_parse_worker_output_missing_file() {
-        let path = PathBuf::from("/nonexistent/output.json");
-        let (num, url, output) = RealClaude::<RecordingTmux>::parse_worker_output(&path);
-        assert_eq!(num, 0);
-        assert!(url.is_empty());
-        assert!(output.is_empty());
-    }
-
-    #[test]
     fn test_real_claude_invoke_sends_env_vars_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state/runtime");
@@ -2214,23 +2150,19 @@ tasks:
             "fourth env var should be worktree path, got: {}",
             cmds[3].1
         );
-        // Command 4: the actual claude command
+        // Command 4: the actual claude command (interactive mode, no -p flag)
         assert!(
-            cmds[4].1.contains("claude -p"),
+            cmds[4].1.contains("claude --dangerously-skip-permissions"),
             "fifth command should be claude invocation, got: {}",
             cmds[4].1
         );
         assert!(
-            cmds[4].1.contains("--dangerously-skip-permissions"),
-            "claude command should include --dangerously-skip-permissions"
+            !cmds[4].1.contains("claude -p"),
+            "claude command should NOT use -p flag (interactive mode)"
         );
         assert!(
-            cmds[4].1.contains("--output-format json"),
-            "claude command should include --output-format json"
-        );
-        assert!(
-            cmds[4].1.contains("worker-output.json"),
-            "claude output should redirect to worker-output.json"
+            !cmds[4].1.contains("--output-format json"),
+            "claude command should NOT use --output-format json (interactive mode)"
         );
         assert!(
             cmds[4].1.contains("worker-exit-code"),
@@ -2347,16 +2279,18 @@ tasks:
         let _ = rt.block_on(codeflow_core::autorun::ClaudeInvoker::invoke(&claude, cfg));
 
         let cmds = rt.block_on(commands.lock());
-        // Find the claude command (the one containing "claude -p").
+        // Find the claude command (interactive mode, no -p flag).
         let claude_cmd = cmds
             .iter()
-            .find(|(_, cmd)| cmd.contains("claude -p"))
+            .find(|(_, cmd)| cmd.contains("claude --dangerously-skip-permissions"))
             .expect("should have a claude command");
 
         // Verify it uses regular '...' quoting, not $'...'.
         assert!(
-            claude_cmd.1.contains("claude -p '"),
-            "should use regular single-quote quoting, got: {}",
+            claude_cmd
+                .1
+                .contains("claude --dangerously-skip-permissions"),
+            "should invoke claude in interactive mode, got: {}",
             claude_cmd.1
         );
         assert!(

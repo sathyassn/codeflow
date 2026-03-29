@@ -1772,6 +1772,7 @@ mod tests {
             status: "active".to_string(),
             session_id: Some("ses-registry-dead".to_string()),
             task_id: None,
+            source: None,
         });
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 

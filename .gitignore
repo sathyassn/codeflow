@@ -99,6 +99,11 @@ codeflow-cli/target/
 .codeflow/testing/coverage_reports/
 coverage/
 
+# Autorun state (operational telemetry, reports, session state — not tier-0)
+.state/ledger/autorun-events/
+.state/ledger/coordination-events/
+.state/autorun/
+
 # Autorun local batch files (ad-hoc, not tracked)
 .codeflow/config/autorun/local/*
 !.codeflow/config/autorun/local/.gitkeep

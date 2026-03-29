@@ -26,8 +26,8 @@ pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, count_active, deregister_by_name, list_active,
     locked_deregister_worktree, locked_read_registry, locked_register_with_limit,
-    mark_pending_cleanup, maybe_auto_start_daemon, maybe_auto_stop_daemon, purge_removed_entries,
-    read_registry, write_registry,
+    locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon, maybe_auto_stop_daemon,
+    purge_removed_entries, read_registry, write_registry,
 };
 pub use setup::repair_symlinks;
 
@@ -40,14 +40,7 @@ const DEFAULT_BASE_DIR: &str = ".git-worktrees";
 const DEFAULT_REGISTRY_PATH: &str = ".state/worktrees/worktrees.yaml";
 
 /// Shared state directories symlinked from the main repo's `.state/`.
-const SHARED_STATE_DIRS: &[&str] = &[
-    "db",
-    "registry",
-    "backups",
-    "coordination",
-    "logs",
-    "worktrees",
-];
+const SHARED_STATE_DIRS: &[&str] = &["db", "backups", "coordination", "logs", "worktrees"];
 
 /// Per-worktree local directories (not symlinked).
 ///
@@ -614,6 +607,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Stale);
     }
@@ -631,6 +625,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Orphaned);
     }
@@ -649,6 +644,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Active);
     }
@@ -663,11 +659,15 @@ mod tests {
 
     #[test]
     fn test_shared_state_dirs_constant() {
-        assert_eq!(SHARED_STATE_DIRS.len(), 6);
+        assert_eq!(SHARED_STATE_DIRS.len(), 5);
         assert!(SHARED_STATE_DIRS.contains(&"db"));
         assert!(
             !SHARED_STATE_DIRS.contains(&"ledger"),
             "ledger is now LOCAL"
+        );
+        assert!(
+            !SHARED_STATE_DIRS.contains(&"registry"),
+            "registry removed from shared dirs"
         );
         assert!(SHARED_STATE_DIRS.contains(&"logs"));
         assert!(SHARED_STATE_DIRS.contains(&"worktrees"));
@@ -842,6 +842,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -862,6 +863,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let mut handle = WorktreeHandle::new(&entry, &mgr);
@@ -882,6 +884,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -969,6 +972,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         // This should not panic.

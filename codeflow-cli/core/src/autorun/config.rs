@@ -49,7 +49,7 @@ impl Default for AutorunConfig {
         Self {
             worker_timeout_secs: 3600,
             blocked_behavior: "skip_and_continue".to_string(),
-            report_dir: "project-management/tracking/autorun".to_string(),
+            report_dir: ".state/autorun/reports".to_string(),
         }
     }
 }
@@ -349,10 +349,7 @@ mod tests {
         assert!(cfg.claims.capture_events);
         assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
-        assert_eq!(
-            cfg.autorun.report_dir,
-            "project-management/tracking/autorun"
-        );
+        assert_eq!(cfg.autorun.report_dir, ".state/autorun/reports");
     }
 
     // -- M5: Sync interval alignment test --
@@ -552,7 +549,7 @@ mod tests {
             "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
-            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": "project-management/tracking/autorun" }
+            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": ".state/autorun/reports" }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg, ParallelWorkConfig::default());
@@ -578,7 +575,7 @@ mod tests {
         let cfg = AutorunConfig::default();
         assert_eq!(cfg.worker_timeout_secs, 3600);
         assert_eq!(cfg.blocked_behavior, "skip_and_continue");
-        assert_eq!(cfg.report_dir, "project-management/tracking/autorun");
+        assert_eq!(cfg.report_dir, ".state/autorun/reports");
     }
 
     #[test]
@@ -596,10 +593,7 @@ mod tests {
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
-        assert_eq!(
-            cfg.autorun.report_dir,
-            "project-management/tracking/autorun"
-        );
+        assert_eq!(cfg.autorun.report_dir, ".state/autorun/reports");
     }
 
     #[test]

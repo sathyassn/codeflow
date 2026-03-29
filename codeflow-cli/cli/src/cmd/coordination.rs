@@ -128,6 +128,7 @@ mod tests {
             status: "active".to_string(),
             session_id: Some("ses-001".to_string()),
             task_id: Some("TSK-001".to_string()),
+            source: None,
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -233,6 +234,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 

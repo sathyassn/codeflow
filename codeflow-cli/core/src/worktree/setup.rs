@@ -123,6 +123,7 @@ pub(crate) fn create_worktree(
         status: "active".to_string(),
         session_id: None,
         task_id: None,
+        source: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
@@ -205,6 +206,7 @@ pub(crate) fn create_detached_worktree(
         status: "active".to_string(),
         session_id: None,
         task_id: None,
+        source: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())

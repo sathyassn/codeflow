@@ -199,6 +199,7 @@ mod tests {
             status: "removed".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let state = mgr.detect_state(&entry);
@@ -219,6 +220,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -291,6 +293,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -312,6 +315,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -341,6 +345,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -401,6 +406,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -445,6 +451,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -471,6 +478,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "s2".to_string(),
@@ -480,6 +488,7 @@ mod tests {
             status: "active".to_string(),
             session_id: None,
             task_id: None,
+            source: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 

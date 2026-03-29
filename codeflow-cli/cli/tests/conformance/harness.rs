@@ -244,13 +244,22 @@ pub fn assert_rust_json_env(args: &[&str], stdin: &str, dynamic_keys: &[&str]) {
         rust.stderr.trim()
     );
 
-    let rust_json: serde_json::Value =
-        serde_json::from_str(rust.stdout.trim()).unwrap_or_else(|e| {
-            panic!(
-                "Rust stdout is not valid JSON: {e}\n  stdout: {:?}",
-                rust.stdout
-            )
-        });
+    // Parse the LAST JSON line from stdout — Claude Code uses the last
+    // `{"env": {...}}` line, so the init hook may output env vars multiple
+    // times (early write + final write). We match that behavior here.
+    let last_json_line = rust
+        .stdout
+        .trim()
+        .lines()
+        .rev()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| panic!("Rust stdout has no JSON line\n  stdout: {:?}", rust.stdout));
+    let rust_json: serde_json::Value = serde_json::from_str(last_json_line).unwrap_or_else(|e| {
+        panic!(
+            "Rust stdout last JSON line is not valid JSON: {e}\n  stdout: {:?}",
+            rust.stdout
+        )
+    });
 
     let rust_env = rust_json
         .get("env")
@@ -302,13 +311,22 @@ pub fn assert_rust_json_env_fixture(args: &[&str], event_name: &str, dynamic_key
         rust.stderr.trim()
     );
 
-    let rust_json: serde_json::Value =
-        serde_json::from_str(rust.stdout.trim()).unwrap_or_else(|e| {
-            panic!(
-                "Rust stdout is not valid JSON: {e}\n  stdout: {:?}",
-                rust.stdout
-            )
-        });
+    // Parse the LAST JSON line from stdout — Claude Code uses the last
+    // `{"env": {...}}` line, so the init hook may output env vars multiple
+    // times (early write + final write). We match that behavior here.
+    let last_json_line = rust
+        .stdout
+        .trim()
+        .lines()
+        .rev()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| panic!("Rust stdout has no JSON line\n  stdout: {:?}", rust.stdout));
+    let rust_json: serde_json::Value = serde_json::from_str(last_json_line).unwrap_or_else(|e| {
+        panic!(
+            "Rust stdout last JSON line is not valid JSON: {e}\n  stdout: {:?}",
+            rust.stdout
+        )
+    });
 
     let rust_env = rust_json
         .get("env")
