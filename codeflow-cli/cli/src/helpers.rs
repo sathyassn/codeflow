@@ -54,7 +54,41 @@ pub fn detect_project_dir() -> Result<PathBuf> {
         }
     };
 
+    // 4. Check if the resolved project root has a codeflow-env.sh pointing to a worktree.
+    //    This handles the case where env vars were not propagated to hook subprocesses
+    //    (e.g., context overflow, new Claude Code process) but SessionStart already
+    //    wrote the worktree path to the env file.
+    if let Some(wt_path) = read_worktree_path_from_env(&project_root) {
+        let wt = PathBuf::from(&wt_path);
+        if wt.is_dir() && wt.join(".state").is_dir() {
+            return Ok(wt);
+        }
+    }
+
     Ok(project_root)
+}
+
+/// Read `CODEFLOW_WORKTREE_PATH` from the project's `codeflow-env.sh` file.
+///
+/// This is a fallback for when env vars are not propagated to hook subprocesses.
+/// Returns `None` if the file doesn't exist, can't be read, or doesn't contain
+/// the variable.
+fn read_worktree_path_from_env(project_root: &Path) -> Option<String> {
+    let env_path = project_root
+        .join(".state")
+        .join("runtime")
+        .join("codeflow-env.sh");
+    let content = std::fs::read_to_string(&env_path).ok()?;
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("export CODEFLOW_WORKTREE_PATH=") {
+            let value = rest.trim_matches('\'').trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Resolve the current session ID from environment or state files.
@@ -533,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_project_dir_ignores_stale_env_file() {
+    fn test_detect_project_dir_uses_env_file_worktree_when_valid() {
         // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
@@ -544,7 +578,7 @@ mod tests {
         let wt_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
 
-        // Write env file pointing to the worktree (simulates stale env file)
+        // Write env file pointing to the worktree
         let wt_path_str = wt_dir.path().to_string_lossy().to_string();
         let env_content = format!(
             "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path_str}'\n"
@@ -562,14 +596,81 @@ mod tests {
 
         let result = detect_project_dir();
         assert!(result.is_ok());
-        // With env file fallback removed, detect_project_dir returns the
-        // CWD-based project root, NOT the stale worktree path from env file.
+        // With env file fallback, detect_project_dir returns the worktree path
+        // from env file when the worktree exists and has .state/.
         // Canonicalize both sides because macOS resolves /tmp -> /private/tmp.
+        let expected = wt_dir.path().canonicalize().unwrap();
+        let actual = result.unwrap().canonicalize().unwrap();
+        assert_eq!(
+            actual, expected,
+            "should return worktree path from env file when valid"
+        );
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_project_dir_ignores_env_file_when_worktree_missing() {
+        // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
+        let project_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
+        let runtime_dir = project_dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+
+        // Write env file pointing to a nonexistent worktree
+        let env_content = "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='/nonexistent/worktree'\n";
+        std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
+
+        // Ensure CODEFLOW_WORKTREE_PATH env var is NOT set
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        // Change to the project dir and test
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(project_dir.path()).unwrap();
+
+        let result = detect_project_dir();
+        assert!(result.is_ok());
+        // Worktree path in env file is invalid, so falls through to project root.
         let expected = project_dir.path().canonicalize().unwrap();
         let actual = result.unwrap().canonicalize().unwrap();
         assert_eq!(
             actual, expected,
-            "should return project root, not stale worktree from env file"
+            "should return project root when env file worktree is invalid"
+        );
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_project_dir_ignores_env_file_without_worktree_var() {
+        // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
+        let project_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
+        let runtime_dir = project_dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+
+        // Write env file WITHOUT CODEFLOW_WORKTREE_PATH
+        let env_content =
+            "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\n";
+        std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
+
+        // Ensure env vars are NOT set
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(project_dir.path()).unwrap();
+
+        let result = detect_project_dir();
+        assert!(result.is_ok());
+        let expected = project_dir.path().canonicalize().unwrap();
+        let actual = result.unwrap().canonicalize().unwrap();
+        assert_eq!(
+            actual, expected,
+            "should return project root when env file has no worktree path"
         );
 
         std::env::set_current_dir(original_dir).unwrap();
@@ -587,6 +688,71 @@ mod tests {
         let result = resolve_session_id(dir.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), sid);
+    }
+
+    // ─── read_worktree_path_from_env tests ───────────────────────────────
+
+    #[test]
+    fn test_read_worktree_path_from_env_valid_single_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            "export CODEFLOW_WORKTREE_PATH='/path/to/worktree'\n",
+        )
+        .unwrap();
+        let result = read_worktree_path_from_env(dir.path());
+        assert_eq!(result, Some("/path/to/worktree".to_string()));
+    }
+
+    #[test]
+    fn test_read_worktree_path_from_env_valid_double_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            "export CODEFLOW_WORKTREE_PATH=\"/path/to/worktree\"\n",
+        )
+        .unwrap();
+        let result = read_worktree_path_from_env(dir.path());
+        assert_eq!(result, Some("/path/to/worktree".to_string()));
+    }
+
+    #[test]
+    fn test_read_worktree_path_from_env_empty_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            "export CODEFLOW_WORKTREE_PATH=''\n",
+        )
+        .unwrap();
+        let result = read_worktree_path_from_env(dir.path());
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_worktree_path_from_env_no_worktree_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("codeflow-env.sh"),
+            "export CODEFLOW_SESSION_ID='ses-123'\nexport CF_PROJECT_ROOT='/project'\n",
+        )
+        .unwrap();
+        let result = read_worktree_path_from_env(dir.path());
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_worktree_path_from_env_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_worktree_path_from_env(dir.path());
+        assert_eq!(result, None);
     }
 
     // ─── proptest: HookInput JSON roundtrip stability ───────────────────────

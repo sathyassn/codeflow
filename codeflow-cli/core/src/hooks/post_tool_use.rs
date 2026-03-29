@@ -71,17 +71,14 @@ impl SentinelWrite {
         let sid = session::current_session_id(&self.project_dir)
             .map_err(|e| HookError::Config(format!("session ID: {e}")))?;
 
-        // Use WorktreePaths for explicit worktree-aware resolution.
-        let dir = if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
-            let wt_paths = crate::worktree::WorktreePaths::new(wt_path);
-            wt_paths.pathflow_dir(sid.as_ref())
-        } else {
-            self.project_dir
-                .join(".state")
-                .join("session")
-                .join(sid.as_ref())
-                .join("pathflow")
-        };
+        // self.project_dir is already worktree-aware (resolved by detect_project_dir),
+        // so we can construct the pathflow dir directly without env var checks.
+        let dir = self
+            .project_dir
+            .join(".state")
+            .join("session")
+            .join(sid.as_ref())
+            .join("pathflow");
         Ok((dir, sid.as_str().to_string()))
     }
 

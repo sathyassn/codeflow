@@ -1419,6 +1419,8 @@ impl ProtectionGuard {
     /// - `cp ... {dest}` or `mv ... {dest}` commands
     /// - `> file` / `>> file` redirect operators
     /// - `tee file` / `tee -a file` commands
+    /// - `rm` / `rmdir` / `find -delete` destructive commands
+    /// - `git worktree remove` / `git worktree move` destructive commands
     ///
     /// For each detected target file, applies the same tier check as Edit/Write.
     fn check_bash_file_ops(&self, input: &HookInput) -> HookOutput {
@@ -1445,6 +1447,16 @@ impl ProtectionGuard {
 
         // Check tee commands.
         if let Some(output) = self.check_tee(command) {
+            return output;
+        }
+
+        // Check rm/rmdir/find-delete destructive commands.
+        if let Some(output) = self.check_rm(command) {
+            return output;
+        }
+
+        // Check git worktree destructive commands.
+        if let Some(output) = self.check_git_worktree_destructive(command) {
             return output;
         }
 
@@ -1530,6 +1542,121 @@ impl ProtectionGuard {
         }
 
         None
+    }
+
+    /// Check for `rm`, `rmdir`, or `find ... -delete` commands targeting protected paths.
+    fn check_rm(&self, command: &str) -> Option<HookOutput> {
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+
+        // Check for rm/rmdir commands.
+        let has_rm = tokens.iter().any(|t| *t == "rm" || *t == "rmdir");
+        if has_rm {
+            let mut found_cmd = false;
+            for token in &tokens {
+                if !found_cmd {
+                    if *token == "rm" || *token == "rmdir" {
+                        found_cmd = true;
+                    }
+                    continue;
+                }
+                // Skip flags (e.g., -rf, -f, -r, --force, --recursive).
+                if token.starts_with('-') {
+                    continue;
+                }
+                if let Some(output) = self.check_destructive_target(token) {
+                    return Some(output);
+                }
+            }
+        }
+
+        // Check for find ... -delete or find ... -exec rm patterns.
+        let has_find = tokens.contains(&"find");
+        if has_find {
+            let has_delete = tokens.contains(&"-delete");
+            let has_exec_rm = command.contains("-exec") && command.contains("rm");
+            if has_delete || has_exec_rm {
+                // Extract the search path (first non-flag argument after "find").
+                let mut found_find = false;
+                for token in &tokens {
+                    if !found_find {
+                        if *token == "find" {
+                            found_find = true;
+                        }
+                        continue;
+                    }
+                    if token.starts_with('-') {
+                        break;
+                    }
+                    if let Some(output) = self.check_destructive_target(token) {
+                        return Some(output);
+                    }
+                    break; // Only check the first path argument.
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Check for destructive `git worktree` commands (`remove`, `move`).
+    ///
+    /// Allows read-only commands (`list`, `add`, `prune`).
+    fn check_git_worktree_destructive(&self, command: &str) -> Option<HookOutput> {
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+
+        // Look for "git worktree remove" or "git worktree move".
+        let mut git_idx = None;
+        for (i, token) in tokens.iter().enumerate() {
+            if *token == "git" {
+                git_idx = Some(i);
+                break;
+            }
+        }
+        let git_idx = git_idx?;
+
+        // Expect "git worktree <subcommand>".
+        if tokens.get(git_idx + 1).copied() != Some("worktree") {
+            return None;
+        }
+        let subcmd = tokens.get(git_idx + 2).copied()?;
+
+        match subcmd {
+            "remove" | "move" => {
+                // Extract the worktree path argument (skip flags).
+                for token in &tokens[git_idx + 3..] {
+                    if token.starts_with('-') {
+                        continue;
+                    }
+                    if let Some(output) = self.check_destructive_target(token) {
+                        return Some(output);
+                    }
+                    // For "move", also check the second path argument.
+                    // But the first path is the one being moved FROM (destructive).
+                    break;
+                }
+                None
+            }
+            // list, add, prune are non-destructive — allow.
+            _ => None,
+        }
+    }
+
+    /// Check a destructive target against protection tiers.
+    ///
+    /// Like `check_file_target` but also handles directory paths that are
+    /// parents of protected patterns (e.g., `.git-worktrees` should match
+    /// `.git-worktrees/**`). Appends a synthetic child path to catch
+    /// `**` glob patterns.
+    fn check_destructive_target(&self, path: &str) -> Option<HookOutput> {
+        // First check the path itself (handles exact matches and child paths).
+        if let Some(output) = self.check_file_target(path) {
+            return Some(output);
+        }
+        // Also check with a synthetic child to catch parent-of-protected-dir cases
+        // (e.g., `rm -rf .git-worktrees` should match `.git-worktrees/**`).
+        let stripped = path.trim_end_matches('/');
+        let with_child = format!("{stripped}/_sentinel");
+        self.check_file_target(&with_child)
     }
 
     /// Check a single file target against protection tiers.
@@ -3790,6 +3917,274 @@ mod tests {
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 0);
+    }
+
+    // -- ProtectionGuard destructive operation tests --
+
+    /// Helper to create a ProtectionGuard with .git-worktrees/** in high tier.
+    fn make_protection_guard_with_worktrees(dir: &std::path::Path) -> ProtectionGuard {
+        let config_dir = dir.join(".codeflow/config/enforcement");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("enforcement-policy.json"),
+            r#"{"protected_resources":{"critical":[],"high":[".git-worktrees/**","codeflow-cli/core/src/hooks/**"],"moderate":[]}}"#,
+        )
+        .unwrap();
+        let policy = EnforcementPolicy::load(dir);
+        ProtectionGuard::new_with_worktree(policy, dir.to_path_buf(), None)
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_rm_rf_worktree_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "rm -rf .git-worktrees/worktree-ses-xxx"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "rm -rf .git-worktrees/worktree-ses-xxx should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_rm_rf_worktrees_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "rm -rf .git-worktrees/"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "rm -rf .git-worktrees/ should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_git_worktree_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree remove .git-worktrees/worktree-ses-xxx"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "git worktree remove should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_git_worktree_remove_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree remove --force .git-worktrees/worktree-ses-xxx"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "git worktree remove --force should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_git_worktree_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree move .git-worktrees/worktree-ses-xxx /tmp/"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "git worktree move should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_find_delete_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "find .git-worktrees -delete"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "find .git-worktrees -delete should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_git_worktree_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree list"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "git worktree list should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_git_worktree_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree add .git-worktrees/worktree-new main"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "git worktree add should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_git_worktree_prune() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "git worktree prune"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "git worktree prune should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_ls_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "ls .git-worktrees/"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "ls .git-worktrees/ should be allowed (read-only)"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_rm_on_unprotected() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "rm -rf /tmp/test-dir"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "rm on non-protected paths should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_cp_mv_tee_to_hooks_still_blocked() {
+        // Verify existing behavior is preserved.
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_protection_guard_with_worktrees(dir.path());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "cp /tmp/x codeflow-cli/core/src/hooks/pre_tool_use.rs"
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "cp to codeflow-cli/core/src/hooks/** should still be blocked"
+        );
     }
 
     // -- ProtectionGuard worktree-scoped staging path tests --
