@@ -218,6 +218,9 @@ fn touch_heartbeat(_input: &HookInput, handler_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mutex to serialize tests that manipulate process-wide env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use codeflow_core::{HookError, HookEvent};
 
     struct AllowHandler;
@@ -277,6 +280,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_returns_path() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Should return a valid path (either from env or cwd).
         let result = detect_project_dir();
         assert!(result.is_ok());
@@ -285,6 +291,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_worktree_path_valid() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Create a temp dir with .state/ to simulate a valid worktree.
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".state")).unwrap();
@@ -303,6 +312,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_worktree_path_invalid_falls_through() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Set to a nonexistent path — should fall through to other methods.
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "/nonexistent/worktree/path") };
@@ -316,6 +328,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_worktree_path_not_set() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Ensure the env var is not set.
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
@@ -570,6 +585,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_uses_env_file_worktree_when_valid() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
@@ -613,6 +631,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_ignores_env_file_when_worktree_missing() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
@@ -647,6 +668,9 @@ mod tests {
 
     #[test]
     fn test_detect_project_dir_ignores_env_file_without_worktree_var() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();

@@ -242,6 +242,51 @@ fn count_lines(path: &Path) -> usize {
 mod tests {
     use super::*;
 
+    /// Mutex to serialize tests that depend on process-wide env vars.
+    /// Env vars are global mutable state; parallel tests that read/write
+    /// CODEFLOW_SESSION_ID or CODEFLOW_WORKTREE_PATH race without this.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that saves, clears, and restores codeflow env vars.
+    struct EnvGuard {
+        prev_sid: Option<String>,
+        prev_wt: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
+            let prev_wt = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+            // SAFETY: Single-threaded under mutex; test-only env manipulation.
+            unsafe {
+                std::env::remove_var("CODEFLOW_SESSION_ID");
+                std::env::remove_var("CODEFLOW_WORKTREE_PATH");
+            }
+            Self {
+                prev_sid,
+                prev_wt,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(ref v) = self.prev_sid {
+                    std::env::set_var("CODEFLOW_SESSION_ID", v);
+                }
+                if let Some(ref v) = self.prev_wt {
+                    std::env::set_var("CODEFLOW_WORKTREE_PATH", v);
+                }
+            }
+        }
+    }
+
     // --- count_lines ---
 
     #[test]
@@ -479,6 +524,7 @@ mod tests {
 
     #[test]
     fn test_append_writes_to_correct_subdirectory() {
+        let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         let ledger_dir = project.join(".state").join("ledger");
@@ -573,6 +619,7 @@ mod tests {
 
     #[test]
     fn test_append_routes_session_events_correctly() {
+        let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         let ledger_dir = project.join(".state").join("ledger");
@@ -600,6 +647,7 @@ mod tests {
 
     #[test]
     fn test_append_no_session_id_fails() {
+        let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         // No env file, no env var — should fail.
@@ -611,6 +659,7 @@ mod tests {
 
     #[test]
     fn test_resolve_session_context_from_env_file() {
+        let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         let runtime_dir = project.join(".state").join("runtime");
@@ -628,6 +677,7 @@ mod tests {
 
     #[test]
     fn test_resolve_session_context_with_worktree_in_env_file() {
+        let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         let wt_path = dir.path().join("my-worktree");
