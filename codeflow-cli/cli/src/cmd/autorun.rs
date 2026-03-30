@@ -1842,7 +1842,7 @@ mod tests {
     fn test_config_loads_defaults_when_file_missing() {
         let dir = tempfile::tempdir().unwrap();
         let config = codeflow_core::autorun::load_config(dir.path()).unwrap();
-        assert_eq!(config.worktree.max_concurrent, 3);
+        assert_eq!(config.worktree.max_concurrent, 5);
         assert_eq!(config.claims.default_scope_policy, "soft");
         assert_eq!(config.claims.ttl_secs, 4200);
         assert!(config.sync.auto_start);

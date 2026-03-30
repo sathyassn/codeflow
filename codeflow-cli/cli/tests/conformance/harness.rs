@@ -95,8 +95,9 @@ pub fn resolve_binaries() -> BinaryPaths {
 ///
 /// **Always runs in isolation:** sets `CF_PROJECT_ROOT` to a temporary directory
 /// with `.state/` subdirectories, `GIT_CEILING_DIRECTORIES` to prevent git from
-/// walking up to the real repo, and removes `CODEFLOW_SESSION_ID` to prevent env
-/// leakage. This ensures conformance tests NEVER pollute production state files.
+/// walking up to the real repo, and removes all CodeFlow/autorun env vars
+/// (`CODEFLOW_SESSION_ID`, `CODEFLOW_WORKTREE_PATH`, `AUTORUN_*`) to prevent
+/// env leakage. This ensures conformance tests NEVER pollute production state files.
 ///
 /// Returns `BinaryOutput` with stdout, stderr, and exit code.
 pub fn run_binary(binary: &Path, args: &[&str], stdin: &str) -> BinaryOutput {
@@ -139,8 +140,8 @@ pub fn make_isolated_project_dir() -> tempfile::TempDir {
 }
 
 /// Run a single binary with isolation: sets `CF_PROJECT_ROOT` and
-/// `GIT_CEILING_DIRECTORIES` to the given project dir, and removes
-/// `CODEFLOW_SESSION_ID` to prevent env leakage.
+/// `GIT_CEILING_DIRECTORIES` to the given project dir, and removes all
+/// CodeFlow/autorun env vars to prevent env leakage into test subprocesses.
 pub fn run_binary_isolated(
     binary: &Path,
     args: &[&str],
@@ -158,6 +159,11 @@ pub fn run_binary_isolated(
             project_dir.parent().unwrap_or(project_dir),
         )
         .env_remove("CODEFLOW_SESSION_ID")
+        .env_remove("CODEFLOW_WORKTREE_PATH")
+        .env_remove("AUTORUN_SESSION_ID")
+        .env_remove("AUTORUN_BATCH_ID")
+        .env_remove("AUTORUN_TASK_ID")
+        .env_remove("AUTORUN_ACCEPTANCE")
         .spawn()
         .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", binary.display()));
 
