@@ -3,7 +3,7 @@ id: "epic-01KMZXNG1DC41FB4M1WKG3NT5R"
 format_id: "INF-EPC-035"
 title: "Fix worktree stale eviction and config-driven limit enforcement"
 summary: "Fix bugs in worktree stale cleanup safety and enforce config-driven worktree limits"
-status: in_progress
+status: completed
 area_type: INF
 work_type: FIX
 domain: GENL
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-03-30T17:46:34Z"
-updated_at: "2026-03-30T17:46:34Z"
+updated_at: "2026-03-30T00:00:00Z"
 ---
 
 # INF-EPC-035: Fix worktree stale eviction and config-driven limit enforcement
@@ -42,10 +42,10 @@ Fix two related bugs in the worktree subsystem: (1) stale worktree eviction was 
 
 ## Acceptance Criteria
 
-- [ ] Stale worktree eviction is safe and idempotent when cleanup fails mid-way
-- [ ] Max concurrent worktree limit is read from `parallel-work-config.json` (not hardcoded)
-- [ ] Existing worktree tests pass without regression
-- [ ] New tests cover the fixed code paths
+- [x] Stale worktree eviction is safe and idempotent when cleanup fails mid-way
+- [x] Max concurrent worktree limit is read from `parallel-work-config.json` (not hardcoded)
+- [x] Existing worktree tests pass without regression
+- [x] New tests cover the fixed code paths
 
 ### PII Handling Review
 
@@ -55,7 +55,7 @@ Fix two related bugs in the worktree subsystem: (1) stale worktree eviction was 
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-035-001 | fix: worktree stale eviction and config-driven limit enforcement | in_progress | normal |
+| INF-TSK-035-001 | fix: worktree stale eviction and config-driven limit enforcement | completed | normal |
 
 ## Dependencies
 
@@ -74,3 +74,4 @@ Stale cleanup and worktree limit enforcement are in `codeflow-cli/core/src/workt
 ## Related
 
 - PR #232: fix/worktree-stale-cleanup-safety (prior related fix)
+- PR #234: fix/worktree-stale-eviction (merged)

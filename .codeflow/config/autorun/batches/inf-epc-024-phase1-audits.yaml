@@ -1,6 +1,6 @@
 # INF-EPC-024 Phase 1: Audit Tasks
 # ==================================
-# Six independent audit and gap analysis tasks from the INF-EPC-024 epic.
+# Four independent audit and gap analysis tasks from the INF-EPC-024 epic.
 # These tasks have no interdependencies and can run in parallel.
 #
 # PRs are created targeting main for human review (auto_merge: false).
@@ -13,9 +13,7 @@ max_workers: 3
 auto_merge: false
 target: main
 tasks:
-  - id: INF-TSK-024-004
   - id: INF-TSK-024-034
-  - id: INF-TSK-024-003
   - id: INF-TSK-024-005
   - id: INF-TSK-024-006
   - id: INF-TSK-024-033
