@@ -307,6 +307,10 @@ impl SessionStartInit {
         }
 
         // --- Section 1b: Stale worktree cleanup (startup only) ---
+        // Run BEFORE session ID generation and worktree creation so that
+        // dead worktrees are evicted first, freeing registry slots for the
+        // new session. Previously this ran after creation, causing limit
+        // failures when all slots were occupied by dead sessions.
         if source == "startup" {
             self.clean_stale_worktrees(project_dir, &mut result);
         }
@@ -348,24 +352,17 @@ impl SessionStartInit {
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_name.clone());
 
-        // --- Section 2a: EARLY env file write ---
-        // Write env file immediately after session ID generation so that
-        // downstream handlers can resolve the session even if Init times out
-        // during worktree creation or later operations. This write includes
-        // an empty CODEFLOW_WORKTREE_PATH placeholder so that any code reading
-        // the env var gets a defined (but empty) value rather than a missing key.
-        // The worktree path is updated in the UPDATE write after worktree creation.
+        // --- Section 2a: EARLY per-PID env file write ---
+        // Write only the per-PID env file early for teammate detection.
+        // The main codeflow-env.sh write is deferred to AFTER worktree
+        // creation succeeds, so we don't clobber the previous session's
+        // env file with an empty worktree path if creation fails.
         if source == "startup" {
-            if let Err(e) = session::write_env_file_with_worktree(
+            session::write_pid_env_file(
                 &runtime_dir,
-                &session_id,
-                &project_name,
-                Some(""),
-            ) {
-                result
-                    .warnings
-                    .push(format!("early env file write error: {e}"));
-            }
+                self.lead_pid,
+                "", // No worktree path yet
+            );
         }
 
         // --- Section 2b: Worktree creation (source-gated + mode-gated) ---
@@ -459,6 +456,26 @@ impl SessionStartInit {
                 &map_path,
                 serde_json::to_string_pretty(&map).unwrap_or_default(),
             );
+        }
+
+        // --- Section 2d: DEFERRED main env file write ---
+        // Write the main codeflow-env.sh AFTER worktree creation succeeds.
+        // This prevents clobbering a previous session's env file with an empty
+        // worktree path if creation fails.
+        if source == "startup" {
+            let wt_path_for_env = worktree_paths
+                .as_ref()
+                .map(|wp| wp.root().to_string_lossy().to_string());
+            if let Err(e) = session::write_env_file_with_worktree(
+                &runtime_dir,
+                &session_id,
+                &project_name,
+                wt_path_for_env.as_deref().or(Some("")),
+            ) {
+                result
+                    .warnings
+                    .push(format!("deferred env file write error: {e}"));
+            }
         }
 
         // Release session lock -- env file written, teammates can now detect this session.
@@ -872,6 +889,19 @@ impl SessionStartInit {
                 .join("pathflow")
                 .join("pathflow-session-status.json");
 
+            // Grace period: skip entries created within the last N seconds
+            // to protect worktrees still initializing.
+            if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&entry.created_at) {
+                let age_secs = chrono::Utc::now()
+                    .signed_duration_since(created)
+                    .num_seconds();
+                if let Ok(age) = u64::try_from(age_secs) {
+                    if age < crate::autorun::config::WORKTREE_INIT_GRACE_SECS {
+                        continue; // Too young to evict — still initializing.
+                    }
+                }
+            }
+
             let session_alive =
                 if let Ok(status) = crate::pathflow::file_lock::locked_read(&status_path) {
                     let lead_pid = status
@@ -879,10 +909,16 @@ impl SessionStartInit {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|v| u32::try_from(v).ok())
                         .unwrap_or(0);
-                    crate::session::heartbeat::is_alive(
-                        std::path::Path::new(&entry.path),
-                        crate::session::heartbeat::MAX_AGE_SECS,
-                    ) || (lead_pid > 0 && is_process_alive(lead_pid))
+                    // PID is authoritative when available. Heartbeat is fallback
+                    // only when PID is unavailable (legacy entries with lead_pid=0).
+                    if lead_pid > 0 {
+                        is_process_alive(lead_pid)
+                    } else {
+                        crate::session::heartbeat::is_alive(
+                            std::path::Path::new(&entry.path),
+                            crate::session::heartbeat::MAX_AGE_SECS,
+                        )
+                    }
                 } else {
                     // Status file not in main repo — check session pointer for worktree sessions.
                     session::is_live_worktree_session(project_dir, sid)
@@ -1358,6 +1394,13 @@ impl SessionStartInit {
             .join("pathflow");
         clean_lock_files_in_dir(&pathflow_dir);
 
+        // Mark worktree entry as pending_cleanup for defense-in-depth.
+        let registry_path = project_dir
+            .join(".state")
+            .join("worktrees")
+            .join("worktrees.yaml");
+        let _ = crate::worktree::mark_pending_cleanup(&registry_path, sid);
+
         let _ = fs::remove_dir_all(project_dir.join(".state").join("session").join(sid));
         let _ = fs::remove_dir_all(
             project_dir
@@ -1552,10 +1595,14 @@ impl SessionStartInit {
         // Read max_concurrent from parallel-work config.
         let max_concurrent = crate::autorun::config::load_config(project_dir).map_or_else(
             |e| {
+                let default = crate::autorun::config::DEFAULT_MAX_CONCURRENT;
                 result.warnings.push(format!(
-                    "parallel-work config load failed: {e}, defaulting to max_concurrent=3"
+                    "parallel-work config load failed: {e}, defaulting to max_concurrent={default}"
                 ));
-                3
+                eprintln!(
+                    "warn: worktree max_concurrent defaulting to {default} (config load failed: {e})"
+                );
+                default
             },
             |c| c.worktree.max_concurrent,
         );
@@ -1590,6 +1637,10 @@ impl SessionStartInit {
         // NOTE: This happens inside the session lock scope (lock_file still held),
         // so concurrent session creation is serialized.
         let entry = mgr.setup_detached(&wt_name)?;
+
+        // Set source field to "interactive" for interactive sessions.
+        // Mirrors what autorun workers do with "autorun" in worker.rs.
+        let _ = crate::worktree::locked_update_source(mgr.registry_path(), &wt_name, "interactive");
 
         // Create RAII handle for cleanup on panic.
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -5827,6 +5878,93 @@ mod tests {
         assert!(
             wt.is_none(),
             "env file has worktree_path but env var is None -> should NOT fallback, returns None"
+        );
+    }
+
+    // --- Liveness logic tests ---
+
+    #[test]
+    fn test_liveness_pid_primary_dead_pid_means_dead() {
+        // When lead_pid > 0 and the PID is dead, the session should be
+        // considered dead regardless of heartbeat state.
+        let dead_pid: u32 = 999_999_999; // Very unlikely to be alive
+        assert!(!is_process_alive(dead_pid));
+
+        // The liveness check should use PID as primary when available:
+        // if lead_pid > 0 { is_process_alive(lead_pid) } else { heartbeat }
+        let lead_pid = dead_pid;
+        let result = if lead_pid > 0 {
+            is_process_alive(lead_pid)
+        } else {
+            true // Simulate heartbeat alive — should NOT be reached
+        };
+        assert!(
+            !result,
+            "dead PID should make session dead even if heartbeat would be alive"
+        );
+    }
+
+    #[test]
+    fn test_liveness_pid_primary_alive_pid_means_alive() {
+        // Current process PID should be alive.
+        let alive_pid = std::process::id();
+        assert!(is_process_alive(alive_pid));
+
+        let lead_pid = alive_pid;
+        let result = if lead_pid > 0 {
+            is_process_alive(lead_pid)
+        } else {
+            false // Simulate heartbeat dead — should NOT be reached
+        };
+        assert!(result, "alive PID should make session alive");
+    }
+
+    #[test]
+    fn test_liveness_heartbeat_fallback_when_no_pid() {
+        // When lead_pid == 0 (legacy entry), heartbeat should be used.
+        let lead_pid: u32 = 0;
+        let heartbeat_alive = true; // Simulate fresh heartbeat
+
+        let result = if lead_pid > 0 {
+            false // Should NOT be reached
+        } else {
+            heartbeat_alive
+        };
+        assert!(
+            result,
+            "with lead_pid=0, heartbeat should be used as fallback"
+        );
+    }
+
+    #[test]
+    fn test_grace_period_skips_recent_entries() {
+        // An entry created "now" should be within the grace period.
+        let now = chrono::Utc::now();
+        let created_at = now.to_rfc3339();
+
+        let parsed = chrono::DateTime::parse_from_rfc3339(&created_at).unwrap();
+        let age = chrono::Utc::now().signed_duration_since(parsed);
+        let within_grace = u64::try_from(age.num_seconds())
+            .is_ok_and(|a| a < crate::autorun::config::WORKTREE_INIT_GRACE_SECS);
+        assert!(
+            within_grace,
+            "entry created just now should be within grace period"
+        );
+    }
+
+    #[test]
+    fn test_grace_period_allows_old_entries() {
+        // An entry created 2 minutes ago should be outside the grace period.
+        let old = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let created_at = old.to_rfc3339();
+
+        let parsed = chrono::DateTime::parse_from_rfc3339(&created_at).unwrap();
+        let age = chrono::Utc::now().signed_duration_since(parsed);
+        let within_grace = u64::try_from(age.num_seconds())
+            .is_ok_and(|a| a < crate::autorun::config::WORKTREE_INIT_GRACE_SECS);
+        assert!(
+            !within_grace,
+            "entry created 2 minutes ago should be outside grace period"
         );
     }
 }

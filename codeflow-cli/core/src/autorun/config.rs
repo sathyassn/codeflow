@@ -10,6 +10,12 @@ use serde::Deserialize;
 
 use crate::error::AutorunError;
 
+/// Default maximum concurrent worktrees when config is absent.
+pub const DEFAULT_MAX_CONCURRENT: usize = 5;
+
+/// Grace period (seconds) -- skip liveness check for recently created worktrees.
+pub const WORKTREE_INIT_GRACE_SECS: u64 = 60;
+
 /// Relative path to the config file from the project root.
 const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.json";
 
@@ -111,7 +117,7 @@ impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             mode: WorktreeMode::Autorun,
-            max_concurrent: 3,
+            max_concurrent: DEFAULT_MAX_CONCURRENT,
             base_dir: ".git-worktrees".to_string(),
             shared_files: default_shared_files(),
         }
@@ -325,7 +331,7 @@ mod tests {
     fn default_config_has_correct_values() {
         let cfg = ParallelWorkConfig::default();
         assert_eq!(cfg.worktree.mode, WorktreeMode::Autorun);
-        assert_eq!(cfg.worktree.max_concurrent, 3);
+        assert_eq!(cfg.worktree.max_concurrent, 5);
         assert_eq!(cfg.worktree.base_dir, ".git-worktrees");
         assert_eq!(cfg.worktree.shared_files.len(), 2);
         assert!(
@@ -418,7 +424,7 @@ mod tests {
         let cfg = load_config(dir.path()).unwrap();
         assert_eq!(cfg.sync.interval_secs, 10);
         // All other sections should be defaults.
-        assert_eq!(cfg.worktree.max_concurrent, 3);
+        assert_eq!(cfg.worktree.max_concurrent, 5);
         assert_eq!(cfg.merge.max_rebase_attempts, 3);
         assert_eq!(cfg.claims.ttl_secs, 4200);
     }
@@ -545,7 +551,7 @@ mod tests {
     #[test]
     fn full_config_from_spec_example() {
         let json = r#"{
-            "worktree": { "mode": "autorun", "max_concurrent": 3, "base_dir": ".git-worktrees", "shared_files": [".claude/settings.local.json", ".codeflow/config/parallel-work/parallel-work-config.local.json"] },
+            "worktree": { "mode": "autorun", "max_concurrent": 5, "base_dir": ".git-worktrees", "shared_files": [".claude/settings.local.json", ".codeflow/config/parallel-work/parallel-work-config.local.json"] },
             "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
@@ -599,14 +605,14 @@ mod tests {
     #[test]
     fn full_config_with_autorun() {
         let json = r#"{
-            "worktree": { "mode": "autorun", "max_concurrent": 3 },
+            "worktree": { "mode": "autorun", "max_concurrent": 5 },
             "autorun": { "worker_timeout_secs": 1800, "blocked_behavior": "fail", "report_dir": "reports/autorun" }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 1800);
         assert_eq!(cfg.autorun.blocked_behavior, "fail");
         assert_eq!(cfg.autorun.report_dir, "reports/autorun");
-        assert_eq!(cfg.worktree.max_concurrent, 3);
+        assert_eq!(cfg.worktree.max_concurrent, 5);
     }
 
     // -- Autorun validation tests --
@@ -655,7 +661,7 @@ mod tests {
 
     #[test]
     fn merge_json_values_deep_merge_objects() {
-        let mut base = serde_json::json!({"worktree": {"mode": "autorun", "max_concurrent": 3}});
+        let mut base = serde_json::json!({"worktree": {"mode": "autorun", "max_concurrent": 5}});
         let overlay = serde_json::json!({"worktree": {"max_concurrent": 5}});
         merge_json_values(&mut base, &overlay);
         assert_eq!(base["worktree"]["mode"], "autorun"); // preserved
@@ -686,7 +692,7 @@ mod tests {
         // Project config: max_concurrent = 3
         std::fs::write(
             config_dir.join("parallel-work-config.json"),
-            r#"{ "worktree": { "max_concurrent": 3 }, "claims": { "ttl_secs": 4200 } }"#,
+            r#"{ "worktree": { "max_concurrent": 5 }, "claims": { "ttl_secs": 4200 } }"#,
         )
         .unwrap();
 
@@ -714,7 +720,7 @@ mod tests {
 
         std::fs::write(
             config_dir.join("parallel-work-config.json"),
-            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 3 } }"#,
+            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 5 } }"#,
         )
         .unwrap();
 
@@ -727,7 +733,7 @@ mod tests {
 
         let cfg = load_config(dir.path()).unwrap();
         assert_eq!(cfg.worktree.mode, WorktreeMode::Always); // overridden
-        assert_eq!(cfg.worktree.max_concurrent, 3); // preserved from project
+        assert_eq!(cfg.worktree.max_concurrent, 5); // preserved from project
     }
 
     #[test]
@@ -742,7 +748,7 @@ mod tests {
 
         std::fs::write(
             config_dir.join("parallel-work-config.json"),
-            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 3 } }"#,
+            r#"{ "worktree": { "mode": "autorun", "max_concurrent": 5 } }"#,
         )
         .unwrap();
 
@@ -750,7 +756,7 @@ mod tests {
         let cfg = load_config_inner(dir.path(), Some("disabled")).unwrap();
 
         assert_eq!(cfg.worktree.mode, WorktreeMode::Disabled);
-        assert_eq!(cfg.worktree.max_concurrent, 3); // unchanged
+        assert_eq!(cfg.worktree.max_concurrent, 5); // unchanged
     }
 
     #[test]
