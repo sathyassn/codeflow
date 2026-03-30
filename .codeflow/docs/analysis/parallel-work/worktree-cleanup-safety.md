@@ -239,15 +239,19 @@ local `.state/`. This creates split-brain state:
 | PostToolUse sentinel-write | Falls back to `{main_repo}/.state/sentinels/` (wrong) |
 | PostToolUse checkpoint-register | Falls back to `{main_repo}/.state/session/` (wrong) |
 
-### 5.2 Fix: `detect_project_dir()` Reads `codeflow-env.sh` as Fallback
+### 5.2 Fix: `detect_project_dir()` Per-PID Env File Resolution
 
-The fix adds a fallback in the project directory resolution path used by PostToolUse
-hooks. When `CODEFLOW_WORKTREE_PATH` is set in the process environment (which it is,
-because `result.env_vars` propagates to hook processes), the hook resolves its working
-paths relative to the worktree root rather than CWD.
+> **Updated (PR #231):** The original fix used `codeflow-env.sh` as a shared fallback.
+> This was superseded by per-PID env files (`codeflow-env-{PID}.sh`) to avoid the shared
+> file overwrite race in parallel sessions. See
+> [worktree-path-resolution.md](../worktree-path-resolution.md) for the full architecture.
+
+`detect_project_dir()` (`helpers.rs:20`) resolves the worktree path via a 4-step chain:
+(1) `CODEFLOW_WORKTREE_PATH` env var, (2) `CF_PROJECT_ROOT` env var, (3) CWD walk,
+(4) per-PID env file lookup (with shared env file as backward-compatible fallback).
 
 This ensures sentinel files and checkpoint updates land in the worktree's local `.state/`
-directories — consistent with where SessionStart created them.
+directories -- consistent with where SessionStart created them.
 
 ---
 

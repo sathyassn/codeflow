@@ -1,5 +1,9 @@
 # Autorun Subsystem Gap Analysis
 
+**Date:** 2026-03-29
+**PR:** fix/worktree-path-resolution-v2 (PR #231)
+**Status:** All gaps resolved
+
 ## 1. Session ID Mismatch (HIGH)
 
 **Problem:** Worker acquires CRDT claims using `worker_sid` (generated per-worker in `worker.rs:282`), but exports `cfg.session_id` (the batch-level session ID) as `AUTORUN_SESSION_ID`. The SessionStart hook inside Claude uses `AUTORUN_SESSION_ID` as the session identity, so all hook-side claim operations (gate-check, scope enforcement) reference the batch session ID, not the worker's claim-holding ID.

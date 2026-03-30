@@ -28,16 +28,18 @@ parent: "parallel-work/README.md"
 The autorun orchestrator in the Rust CLI (`codeflow-cli/core/src/autorun/worker.rs`) invokes Claude Code via the `WorktreeProvider` trait. Each worker receives its own worktree path. Workers share the project root only for symlinked shared state (db, ledger, coordination, logs).
 
 ```rust
-// worker.rs — Rust CLI (current implementation)
-let result = self.provider.invoke(InvokeConfig {
-    worktree_path: worktree.path.clone(),   // Per-worker isolation
-    prompt: format!("Execute autorun task {}", cfg.task_id),
-    session_id: cfg.session_id.clone(),
+// worker.rs — Rust CLI (current implementation, post-PR #231)
+self.claude.invoke(InvokeConfig {
+    work_dir: wt_info.path.to_string_lossy().into_owned(),
+    prompt,
+    session_id: cfg.session_id.clone(),        // Batch-level session ID
     task_id: cfg.task_id.clone(),
     auto_merge: cfg.auto_merge,
     target: cfg.target.clone(),
-    tmux_session: tmux_name,
-}).await?;
+    tmux_session: tmux_name.clone(),
+    acceptance_criteria,
+    worker_session_id: worker_sid.as_str().to_owned(),  // Per-worker ID for claim isolation
+}).await
 ```
 
 ---
@@ -105,18 +107,25 @@ Worker spawned by orchestrator (autorun/orchestrator.rs)
     v
 5. Write codeflow-env.sh in worktree
     -> Contains CODEFLOW_SESSION_ID, CF_PROJECT_ROOT, CODEFLOW_WORKTREE_PATH
+    -> SessionStart also writes per-PID file (codeflow-env-{PID}.sh) for parallel safety
     |
     v
-6. provider.invoke(InvokeConfig { worktree_path, ... })
+6. Export env vars via tmux send-keys:
+    -> AUTORUN_SESSION_ID = worker_sid (not batch session_id -- matches CRDT claim identity)
+    -> AUTORUN_BATCH_ID = batch session_id (for batch-level correlation)
+    -> CODEFLOW_WORKTREE_PATH = worktree path
+    |
+    v
+7. provider.invoke(InvokeConfig { worktree_path, worker_session_id, ... })
     -> Claude session starts inside worktree
     -> SessionStart hook detects existing worktree (skip creation)
     -> PathFlow runs PF1-PF7 inside worktree
     |
     v
-7. Worker completes (success/failure/timeout)
+8. Worker completes (success/failure/timeout)
     |
     v
-8. claims::release_all(session_id)
+9. claims::release_all(worker_sid)
     -> ClaimReleased event logged
     |
     v

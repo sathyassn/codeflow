@@ -765,11 +765,12 @@ All fields have defaults via `#[serde(default)]`. The config file is optional --
 
 | Variable | Purpose | Set By | Used By |
 |----------|---------|--------|---------|
-| `AUTORUN_SESSION_ID` | Autorun batch session identifier; presence indicates autorun mode | CLI orchestrator (`autorun.rs`) | Lead (autorun detection), workers |
+| `AUTORUN_SESSION_ID` | Worker-specific session ID; matches CRDT claim identity; presence indicates autorun mode | Worker invocation (`autorun.rs:1312`) | Lead (autorun detection), hooks (claim operations) |
+| `AUTORUN_BATCH_ID` | Batch-level session ID for correlation across workers | Worker invocation (`autorun.rs:1317`) | Observability, batch tracking |
 | `AUTORUN_TASK_ID` | Pre-assigned task ID from the batch file | CLI orchestrator | Workers (skip PF2 active work check) |
 | `AUTORUN_ACCEPTANCE` | Base64-encoded acceptance criteria from task markdown | CLI orchestrator | Workers (verification) |
 | `CODEFLOW_WORKTREE_PATH` | Absolute path to worker's isolated git worktree | Worker setup (`worker.rs`) | Hooks, state file resolution |
-| `CODEFLOW_SESSION_ID` | Session identifier (written to `codeflow-env.sh`) | SessionStart hook | All hooks, state lookups |
+| `CODEFLOW_SESSION_ID` | Session identifier (written to `codeflow-env.sh` and per-PID `codeflow-env-{PID}.sh`) | SessionStart hook | All hooks, state lookups |
 | `CODEFLOW_CLAIM_TTL_SECS` | Override claim TTL (optional) | Config | Coordination layer |
 
 ## 7. Chain Completeness Matrix

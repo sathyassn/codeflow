@@ -1,12 +1,19 @@
 ---
 title: "Multi-Session Worktree Isolation"
 type: analysis
-status: active
+status: superseded
 author: cf-development
 created_at: "2026-03-28"
-updated_at: "2026-03-28"
+updated_at: "2026-03-29"
 parent: null
+superseded_by: "../worktree-path-resolution.md"
 ---
+
+> **SUPERSEDED:** The shared `codeflow-env.sh` race condition described in this document
+> has been resolved by the per-PID env file solution implemented in PR #231.
+> Each Claude Code process now writes `codeflow-env-{PID}.sh`, eliminating the shared
+> file overwrite. See [worktree-path-resolution.md](../worktree-path-resolution.md) for
+> the current architecture, including scenario workflows and CRDT claims comparison.
 
 # Multi-Session Worktree Isolation
 

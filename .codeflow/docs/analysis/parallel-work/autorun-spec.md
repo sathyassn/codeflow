@@ -366,10 +366,12 @@ Each worker invokes Claude Code via tmux and monitors for completion using a fil
 1. Create tmux session: tmux new-session -d -s codeflow-{sid_short}-w{N}
 
 2. Set environment variables via tmux:
-   tmux send-keys -t {session} 'export AUTORUN_SESSION_ID={batch_sid}' Enter
+   tmux send-keys -t {session} 'export AUTORUN_SESSION_ID={worker_sid}' Enter
+   tmux send-keys -t {session} 'export AUTORUN_BATCH_ID={batch_sid}' Enter
    tmux send-keys -t {session} 'export AUTORUN_TASK_ID={task_id}' Enter
    tmux send-keys -t {session} 'export AUTORUN_ACCEPTANCE={base64_criteria}' Enter
    tmux send-keys -t {session} 'export CODEFLOW_WORKTREE_PATH={worktree}' Enter
+   NOTE: AUTORUN_SESSION_ID uses worker_sid (not batch_sid) so CRDT claims match hook identity.
 
 3. Send Claude command:
    tmux send-keys -t {session} \
