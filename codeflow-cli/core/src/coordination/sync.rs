@@ -833,9 +833,15 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
 
         // Primary: heartbeat-based liveness using the session's worktree path.
         // Each session's heartbeat is at {worktree}/.state/runtime/heartbeat.
-        let alive_by_heartbeat = session_worktree_paths
-            .get(session_id.as_str())
-            .is_some_and(|wt_path| crate::session::heartbeat::is_alive(wt_path, 86400));
+        let alive_by_heartbeat =
+            session_worktree_paths
+                .get(session_id.as_str())
+                .is_some_and(|wt_path| {
+                    crate::session::heartbeat::is_alive(
+                        wt_path,
+                        crate::session::heartbeat::MAX_AGE_SECS,
+                    )
+                });
 
         if alive_by_heartbeat {
             continue; // Session definitely alive via heartbeat.

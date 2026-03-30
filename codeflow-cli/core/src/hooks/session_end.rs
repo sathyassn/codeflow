@@ -268,7 +268,14 @@ impl SessionEndCleanup {
         session_id: &str,
         result: &mut CleanupResult,
     ) -> bool {
-        let sentinel_dir = project_dir
+        // Sentinels are LOCAL state (not symlinked). In worktree mode,
+        // check the worktree path first.
+        let sentinel_base = std::env::var("CODEFLOW_WORKTREE_PATH")
+            .ok()
+            .filter(|p| !p.is_empty() && Path::new(p).exists())
+            .map_or_else(|| project_dir.to_path_buf(), PathBuf::from);
+
+        let sentinel_dir = sentinel_base
             .join(".state")
             .join("sentinels")
             .join("pathflow")
@@ -306,7 +313,14 @@ impl SessionEndCleanup {
         session_id: &str,
         result: &mut CleanupResult,
     ) {
-        let sentinel_dir = project_dir
+        // Sentinels are LOCAL state (not symlinked). In worktree mode,
+        // check the worktree path first.
+        let sentinel_base = std::env::var("CODEFLOW_WORKTREE_PATH")
+            .ok()
+            .filter(|p| !p.is_empty() && Path::new(p).exists())
+            .map_or_else(|| project_dir.to_path_buf(), PathBuf::from);
+
+        let sentinel_dir = sentinel_base
             .join(".state")
             .join("sentinels")
             .join("pathflow")

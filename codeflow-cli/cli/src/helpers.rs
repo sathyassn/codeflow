@@ -115,18 +115,6 @@ pub fn resolve_session_id(project_dir: &Path) -> Result<String> {
     Ok(sid.as_str().to_string())
 }
 
-/// Read all of stdin into a string.
-///
-/// Returns an empty string if stdin is not available or empty.
-#[allow(dead_code)]
-pub fn read_stdin() -> Result<String> {
-    let mut buf = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buf)
-        .context("reading stdin")?;
-    Ok(buf)
-}
-
 /// Run a hook handler: parse stdin JSON, call handler, map output to exit code.
 ///
 /// This implements the graceful degradation contract: parse/read errors

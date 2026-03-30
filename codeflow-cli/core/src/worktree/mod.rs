@@ -153,6 +153,7 @@ impl WorktreeManager {
     }
 
     /// Set a custom base directory for worktrees.
+    #[cfg(test)]
     #[must_use]
     pub fn with_base_dir(mut self, base_dir: impl Into<PathBuf>) -> Self {
         self.base_dir = base_dir.into();
@@ -171,6 +172,7 @@ impl WorktreeManager {
     /// The callback should return `true` when a `PathFlow` session is active.
     /// During cleanup, if the guard returns `true` and `force` is not set,
     /// cleanup will be blocked with `WorktreeError::PathFlowActive`.
+    #[cfg(test)]
     #[must_use]
     pub fn with_pathflow_guard(mut self, guard: impl Fn() -> bool + Send + Sync + 'static) -> Self {
         self.pathflow_guard = Some(Box::new(guard));
@@ -427,12 +429,14 @@ impl WorktreeHandle {
     }
 
     /// Return the worktree name.
+    #[cfg(test)]
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Return the worktree path.
+    #[cfg(test)]
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
@@ -447,6 +451,7 @@ impl WorktreeHandle {
     }
 
     /// Return whether this handle has been defused.
+    #[cfg(test)]
     #[must_use]
     pub fn is_defused(&self) -> bool {
         self.defused

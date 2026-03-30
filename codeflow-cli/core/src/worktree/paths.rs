@@ -43,6 +43,7 @@ impl WorktreePaths {
     }
 
     /// Path to `codeflow-env.sh` within the worktree.
+    #[cfg(test)]
     #[must_use]
     pub fn env_file(&self) -> PathBuf {
         self.runtime_dir().join("codeflow-env.sh")
@@ -86,6 +87,7 @@ impl WorktreePaths {
     /// bridge files are written. The actual team config lives in
     /// `~/.claude/teams/{team_name}/`, but this path is used for worktree-local
     /// team state references.
+    #[cfg(test)]
     #[must_use]
     pub fn team_config(&self) -> PathBuf {
         self.runtime_dir()

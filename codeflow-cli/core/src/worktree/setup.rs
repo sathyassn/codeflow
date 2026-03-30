@@ -254,8 +254,26 @@ fn clean_stale_session_dirs(project_dir: &Path) {
 
         let status_file = path.join("pathflow").join("pathflow-session-status.json");
 
+        // Check if this is a worktree session (has session-pointer.json).
+        // Worktree sessions store their status file in the worktree, not the main repo.
+        // The main repo dir only contains the pointer file.
+        let pointer_file = path.join("session-pointer.json");
+        if pointer_file.exists() {
+            if crate::session::is_live_worktree_session(project_dir, &dir_name) {
+                // Live worktree session -- do not delete.
+                continue;
+            }
+            // Dead worktree session (PID dead or worktree gone) -- remove.
+            diagnostics::warn(
+                "worktree",
+                &format!("removing dead worktree session dir: {dir_name}"),
+            );
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
+
         if !status_file.exists() {
-            // No status file = orphaned directory. Remove it.
+            // No status file and no pointer = orphaned directory. Remove it.
             diagnostics::warn(
                 "worktree",
                 &format!("removing orphaned session dir: {dir_name}"),

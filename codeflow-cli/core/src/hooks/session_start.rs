@@ -670,6 +670,21 @@ impl SessionStartInit {
                 }
             }
 
+            // Update session pointer lead_pid on resume (new Claude Code process = new PID).
+            if source == "resume" {
+                if let Some(ref wt_path) = env_worktree_path {
+                    if !wt_path.is_empty() {
+                        session::write_session_pointer(
+                            project_dir,
+                            existing_sid.as_str(),
+                            self.lead_pid,
+                            wt_path,
+                            &(self.now)(),
+                        );
+                    }
+                }
+            }
+
             return (Some(existing_sid), false, env_worktree_path);
         }
 
@@ -864,10 +879,13 @@ impl SessionStartInit {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|v| u32::try_from(v).ok())
                         .unwrap_or(0);
-                    crate::session::heartbeat::is_alive(std::path::Path::new(&entry.path), 86400)
-                        || (lead_pid > 0 && is_process_alive(lead_pid))
+                    crate::session::heartbeat::is_alive(
+                        std::path::Path::new(&entry.path),
+                        crate::session::heartbeat::MAX_AGE_SECS,
+                    ) || (lead_pid > 0 && is_process_alive(lead_pid))
                 } else {
-                    false // No status file — session is dead.
+                    // Status file not in main repo — check session pointer for worktree sessions.
+                    session::is_live_worktree_session(project_dir, sid)
                 };
 
             if session_alive {
@@ -995,8 +1013,10 @@ impl SessionStartInit {
                                     .and_then(serde_json::Value::as_u64)
                                     .and_then(|v| u32::try_from(v).ok())
                                     .unwrap_or(0);
-                                return crate::session::heartbeat::is_alive(&wt_path, 86400)
-                                    || (lead_pid > 0 && is_process_alive(lead_pid));
+                                return crate::session::heartbeat::is_alive(
+                                    &wt_path,
+                                    crate::session::heartbeat::MAX_AGE_SECS,
+                                ) || (lead_pid > 0 && is_process_alive(lead_pid));
                             }
                         }
                         false
@@ -1161,6 +1181,10 @@ impl SessionStartInit {
                     if let Ok(v) = crate::pathflow::file_lock::locked_read(&status_path) {
                         v
                     } else {
+                        // Check for worktree session pointer before declaring dead.
+                        if session::is_live_worktree_session(project_dir, &name) {
+                            continue; // Live worktree session — skip.
+                        }
                         self.remove_stale_session_artifacts(project_dir, &name, None);
                         continue;
                     };
@@ -1219,7 +1243,10 @@ impl SessionStartInit {
                                     .unwrap_or(0);
                                 if lead_pid > 0
                                     && !wt_paths.get(&name).is_some_and(|p| {
-                                        crate::session::heartbeat::is_alive(p, 86400)
+                                        crate::session::heartbeat::is_alive(
+                                            p,
+                                            crate::session::heartbeat::MAX_AGE_SECS,
+                                        )
                                     })
                                     && !is_process_alive(lead_pid)
                                 {

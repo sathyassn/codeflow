@@ -11,7 +11,6 @@
 //! - Current session resolution (worktree-aware, env file only)
 
 pub mod active_task;
-pub mod builder;
 pub mod env;
 pub mod heartbeat;
 pub mod process;
@@ -28,7 +27,6 @@ pub use active_task::{
     get_active_task, get_active_task_worktree_aware, set_active_task,
     set_active_task_worktree_aware,
 };
-pub use builder::SessionBuilder;
 pub use env::{
     EnvFile, SessionPointer, clean_stale_pid_env_files, read_env_file, read_pid_env_file,
     read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,
@@ -194,6 +192,25 @@ fn current_env_file_inner(
     // Fallback: main project runtime dir.
     let runtime_dir = project_dir.join(".state").join("runtime");
     read_env_file(&runtime_dir)
+}
+
+/// Check if a session is a live worktree session by reading its session pointer.
+///
+/// Returns `true` if a session pointer exists, the worktree directory is present,
+/// AND either the lead PID is alive or the heartbeat is fresh.
+/// Returns `false` if no pointer, pointer unreadable, worktree gone, or session dead.
+pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
+    let Some(pointer) = read_session_pointer(project_dir, sid) else {
+        return false;
+    };
+    let wt_path = std::path::Path::new(&pointer.worktree_path);
+    if !wt_path.exists() {
+        return false;
+    }
+    if pointer.lead_pid > 0 && process::is_process_alive(pointer.lead_pid) {
+        return true;
+    }
+    heartbeat::is_alive(wt_path, heartbeat::MAX_AGE_SECS)
 }
 
 #[cfg(test)]

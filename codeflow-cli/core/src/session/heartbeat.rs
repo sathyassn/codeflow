@@ -21,6 +21,10 @@ pub struct HeartbeatData {
     pub source: String,
 }
 
+/// Maximum age (seconds) for a heartbeat to be considered "alive".
+/// 24 hours provides a generous window covering overnight idle sessions.
+pub const MAX_AGE_SECS: u64 = 86400;
+
 /// Default throttle interval: skip writes if the file was written less than
 /// this many seconds ago. `SessionStart` and `SessionEnd` bypass throttling.
 const DEFAULT_THROTTLE_SECS: u64 = 5;

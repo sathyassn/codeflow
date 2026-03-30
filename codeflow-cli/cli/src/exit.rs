@@ -4,8 +4,6 @@
 //! All constants are public API; some are used only as more commands
 //! are implemented, so `dead_code` is expected during incremental build-out.
 
-use std::process;
-
 /// Successful execution (hook: allow).
 pub const EXIT_SUCCESS: i32 = 0;
 
@@ -47,15 +45,6 @@ impl ExitError {
             code,
             message: message.into(),
         }
-    }
-
-    /// Exit the process with this error's code, printing the message to stderr.
-    #[allow(dead_code)]
-    pub fn exit(&self) -> ! {
-        if !self.message.is_empty() {
-            eprintln!("{}", self.message);
-        }
-        process::exit(self.code)
     }
 }
 

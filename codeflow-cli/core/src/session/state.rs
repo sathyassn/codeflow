@@ -7,8 +7,10 @@
 //! - `Active -> Crashed` (abnormal termination)
 //! - `Crashed -> Active` (session recovery)
 
+#[cfg(test)]
 use crate::types::SessionStatus;
 
+#[cfg(test)]
 impl SessionStatus {
     /// Returns `true` if transitioning from `self` to `target` is a valid
     /// session lifecycle transition.
