@@ -93,6 +93,10 @@ pub struct InvokeConfig {
     /// Acceptance criteria extracted from task markdown for base64-encoded env var.
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+    /// Worker-specific session ID for claim isolation.
+    /// This is the ID used for CRDT claims and must match what hooks use.
+    #[serde(default)]
+    pub worker_session_id: String,
 }
 
 /// Result of a Claude Code invocation.
@@ -300,6 +304,13 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             Some(&wt_info.path.to_string_lossy()),
         );
 
+        // Auto-start sync daemon if worktree count > 1.
+        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
+        if let Err(e) = crate::worktree::maybe_auto_start_daemon(&registry_path, &self.project_dir)
+        {
+            eprintln!("warning: daemon auto-start check failed: {e}");
+        }
+
         // Pre-acquire claims for file_scope at startup via acquire_batch().
         let state_path = self.project_dir.join(".state/coordination/state.loro");
         if !cfg.file_scope.is_empty() {
@@ -380,7 +391,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
         let active_task = serde_json::json!({
             "task_id": cfg.task_id,
-            "session_id": cfg.session_id,
+            "session_id": worker_sid.as_str(),
             "scope_policy": cfg.scope_policy,
             "file_scope": cfg.file_scope,
             "worktree_path": wt_info.path.to_string_lossy(),
@@ -483,6 +494,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     target: cfg.target.clone(),
                     tmux_session: tmux_name.clone(),
                     acceptance_criteria,
+                    worker_session_id: worker_sid.as_str().to_owned(),
                 })
                 .await
         })
@@ -592,6 +604,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
 
         // Enqueue in merge queue before PR merge.
+        // NOTE: The merge queue is currently advisory/record-keeping only.
+        // Enqueue/dequeue happens AFTER Claude finishes work and creates the PR.
+        // No queue-position checking occurs before PR merge.
+        // GitHub's own conflict detection provides the actual safety net.
         if let Ok(Ok(ref invoke_result)) = result {
             if invoke_result.exit_code == 0 {
                 let entry = crate::coordination::merge_queue::MergeQueueEntry {
@@ -1399,10 +1415,12 @@ mod tests {
             target: "develop".into(),
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["criterion 1".into()],
+            worker_session_id: "ses-worker-1".into(),
         };
         assert_eq!(cfg.task_id, "t-1");
         assert!(cfg.auto_merge);
         assert_eq!(cfg.acceptance_criteria.len(), 1);
+        assert_eq!(cfg.worker_session_id, "ses-worker-1");
     }
 
     #[test]
@@ -1864,6 +1882,7 @@ Read and implement.
             target: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
+            worker_session_id: "ses-worker-1".into(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: InvokeConfig = serde_json::from_str(&json).unwrap();

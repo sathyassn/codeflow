@@ -568,6 +568,14 @@ impl SessionEndCleanup {
         let runtime_dir = project_dir.join(".state").join("runtime");
         self.race_safe_env_cleanup(&runtime_dir, result);
 
+        // Remove per-PID env file for this Claude Code process.
+        session::remove_pid_env_file(&runtime_dir, self.lead_pid);
+
+        // Remove session pointer from main repo.
+        if !result.session_id.is_empty() {
+            session::remove_session_pointer(project_dir, &result.session_id);
+        }
+
         // Remove heartbeat file (signals clean exit to stale sweep).
         crate::session::heartbeat::remove(project_dir);
 

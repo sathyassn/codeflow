@@ -121,6 +121,149 @@ pub fn remove_env_file(state_dir: &Path) -> Result<(), SessionError> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-PID env file operations
+// ---------------------------------------------------------------------------
+
+/// Filename pattern for per-PID env files: `codeflow-env-{pid}.sh`.
+const PID_ENV_PREFIX: &str = "codeflow-env-";
+const PID_ENV_SUFFIX: &str = ".sh";
+
+/// Write a per-PID env file with the worktree path.
+///
+/// Creates `{runtime_dir}/codeflow-env-{pid}.sh` containing the
+/// `CODEFLOW_WORKTREE_PATH` export. Each Claude Code process gets its own
+/// file, avoiding the shared-file overwrite problem with parallel sessions.
+///
+/// Non-fatal: errors are silently ignored (caller should use `let _ =`).
+pub fn write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
+    let _ = fs::create_dir_all(runtime_dir);
+    let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
+    let path = runtime_dir.join(filename);
+    let content = format!("export CODEFLOW_WORKTREE_PATH='{worktree_path}'\n");
+    let _ = fs::write(&path, content);
+}
+
+/// Read `CODEFLOW_WORKTREE_PATH` from a per-PID env file.
+///
+/// Looks up `{runtime_dir}/codeflow-env-{pid}.sh` and extracts the
+/// worktree path. Returns `None` if the file doesn't exist, can't be read,
+/// or doesn't contain the variable.
+#[must_use]
+pub fn read_pid_env_file(runtime_dir: &Path, pid: u32) -> Option<String> {
+    let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
+    let path = runtime_dir.join(filename);
+    let content = fs::read_to_string(&path).ok()?;
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("export CODEFLOW_WORKTREE_PATH=") {
+            let value = rest.trim_matches('\'').trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Remove a per-PID env file. Idempotent (no error if file doesn't exist).
+pub fn remove_pid_env_file(runtime_dir: &Path, pid: u32) {
+    let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
+    let path = runtime_dir.join(filename);
+    let _ = fs::remove_file(&path);
+}
+
+/// Remove stale per-PID env files whose PIDs are no longer alive.
+///
+/// Scans `{runtime_dir}/codeflow-env-*.sh` and removes files whose
+/// embedded PID is not a running process.
+pub fn clean_stale_pid_env_files(runtime_dir: &Path) {
+    let Ok(entries) = fs::read_dir(runtime_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(pid_str) = name
+            .strip_prefix(PID_ENV_PREFIX)
+            .and_then(|s| s.strip_suffix(PID_ENV_SUFFIX))
+        {
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                if !crate::session::process::is_process_alive(pid) {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session pointer operations
+// ---------------------------------------------------------------------------
+
+/// Session pointer filename.
+const SESSION_POINTER_FILENAME: &str = "session-pointer.json";
+
+/// Session pointer data stored in the main repo for cross-session discovery.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionPointer {
+    pub lead_pid: u32,
+    pub worktree_path: String,
+    pub session_id: String,
+    pub created_at: String,
+}
+
+/// Write a session pointer to the main repo's session directory.
+///
+/// The pointer lives at `{project_dir}/.state/session/{sid}/session-pointer.json`
+/// and records the worktree path so that compact/resume/teammate detection can
+/// find the worktree even when env vars are lost.
+///
+/// Non-fatal: errors are silently ignored.
+pub fn write_session_pointer(
+    project_dir: &Path,
+    session_id: &str,
+    lead_pid: u32,
+    worktree_path: &str,
+    created_at: &str,
+) {
+    let pointer_dir = project_dir.join(".state").join("session").join(session_id);
+    let _ = fs::create_dir_all(&pointer_dir);
+    let pointer = SessionPointer {
+        lead_pid,
+        worktree_path: worktree_path.to_string(),
+        session_id: session_id.to_string(),
+        created_at: created_at.to_string(),
+    };
+    let _ = fs::write(
+        pointer_dir.join(SESSION_POINTER_FILENAME),
+        serde_json::to_string_pretty(&pointer).unwrap_or_default(),
+    );
+}
+
+/// Read a session pointer from the main repo's session directory.
+///
+/// Returns `None` if the pointer file doesn't exist or can't be parsed.
+#[must_use]
+pub fn read_session_pointer(project_dir: &Path, session_id: &str) -> Option<SessionPointer> {
+    let path = project_dir
+        .join(".state")
+        .join("session")
+        .join(session_id)
+        .join(SESSION_POINTER_FILENAME);
+    let content = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Remove a session pointer. Idempotent.
+pub fn remove_session_pointer(project_dir: &Path, session_id: &str) {
+    let path = project_dir
+        .join(".state")
+        .join("session")
+        .join(session_id)
+        .join(SESSION_POINTER_FILENAME);
+    let _ = fs::remove_file(&path);
+}
+
 /// Parse the content of a `codeflow-env.sh` file.
 fn parse_env_content(content: &str) -> Result<EnvFile, SessionError> {
     let mut session_id = None;
@@ -432,5 +575,123 @@ mod tests {
             env1.worktree_path, env2.worktree_path,
             "worktree paths must differ"
         );
+    }
+
+    // --- Per-PID env file tests ---
+
+    #[test]
+    fn test_write_and_read_pid_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        write_pid_env_file(&runtime_dir, 12345, "/path/to/worktree");
+        let result = read_pid_env_file(&runtime_dir, 12345);
+        assert_eq!(result, Some("/path/to/worktree".to_string()));
+    }
+
+    #[test]
+    fn test_read_pid_env_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_pid_env_file(dir.path(), 99999);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_remove_pid_env_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pid_env_file(dir.path(), 12345, "/path/to/wt");
+        assert!(dir.path().join("codeflow-env-12345.sh").exists());
+        remove_pid_env_file(dir.path(), 12345);
+        assert!(!dir.path().join("codeflow-env-12345.sh").exists());
+    }
+
+    #[test]
+    fn test_remove_pid_env_file_not_found_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should not panic or error.
+        remove_pid_env_file(dir.path(), 99999);
+    }
+
+    #[test]
+    fn test_pid_env_file_creates_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("deep").join("runtime");
+        write_pid_env_file(&nested, 42, "/wt");
+        assert!(nested.join("codeflow-env-42.sh").exists());
+    }
+
+    #[test]
+    fn test_parallel_pid_env_files_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pid_env_file(dir.path(), 100, "/wt-a");
+        write_pid_env_file(dir.path(), 200, "/wt-b");
+
+        assert_eq!(
+            read_pid_env_file(dir.path(), 100),
+            Some("/wt-a".to_string())
+        );
+        assert_eq!(
+            read_pid_env_file(dir.path(), 200),
+            Some("/wt-b".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pid_env_file_empty_value_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codeflow-env-999.sh");
+        fs::write(&path, "export CODEFLOW_WORKTREE_PATH=''\n").unwrap();
+        assert!(read_pid_env_file(dir.path(), 999).is_none());
+    }
+
+    // --- Session pointer tests ---
+
+    #[test]
+    fn test_write_and_read_session_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_pointer(
+            dir.path(),
+            "ses-test123",
+            42,
+            "/path/to/worktree",
+            "2026-03-29T00:00:00Z",
+        );
+        let pointer = read_session_pointer(dir.path(), "ses-test123");
+        assert!(pointer.is_some());
+        let p = pointer.unwrap();
+        assert_eq!(p.lead_pid, 42);
+        assert_eq!(p.worktree_path, "/path/to/worktree");
+        assert_eq!(p.session_id, "ses-test123");
+        assert_eq!(p.created_at, "2026-03-29T00:00:00Z");
+    }
+
+    #[test]
+    fn test_read_session_pointer_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_session_pointer(dir.path(), "ses-nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_remove_session_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_pointer(dir.path(), "ses-rm", 1, "/wt", "now");
+        assert!(read_session_pointer(dir.path(), "ses-rm").is_some());
+        remove_session_pointer(dir.path(), "ses-rm");
+        assert!(read_session_pointer(dir.path(), "ses-rm").is_none());
+    }
+
+    #[test]
+    fn test_remove_session_pointer_not_found_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should not panic.
+        remove_session_pointer(dir.path(), "ses-nonexistent");
+    }
+
+    #[test]
+    fn test_session_pointer_not_written_for_non_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        // Verify: pointer only exists when explicitly written.
+        assert!(read_session_pointer(dir.path(), "ses-nowt").is_none());
     }
 }

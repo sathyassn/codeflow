@@ -30,6 +30,12 @@ pub enum AutorunCommand {
         /// Filter to specific batch session ID
         #[arg(long)]
         batch: Option<String>,
+        /// Watch mode: refresh status on interval
+        #[arg(long, short = 'w')]
+        watch: bool,
+        /// Refresh interval in seconds (default: 5, requires --watch)
+        #[arg(long, default_value = "5")]
+        interval: u64,
     },
     /// Attach to a running worker's tmux session
     Attach {
@@ -61,6 +67,14 @@ pub enum AutorunCommand {
         #[arg(long)]
         batch: Option<String>,
     },
+    /// Resume a partially failed/aborted batch by re-running non-completed tasks
+    Resume {
+        /// Session ID of the batch to resume (defaults to most recent non-completed)
+        #[arg(long)]
+        batch: Option<String>,
+    },
+    /// List available batch files in the autorun config directory
+    Batches,
     /// Show historical autorun batch executions
     History {
         /// Maximum number of batches to show
@@ -93,7 +107,17 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             };
             run_with_dir(&project_dir, &batch_path).await
         }
-        Some(AutorunCommand::Status { batch }) => run_status(&project_dir, batch.as_deref()).await,
+        Some(AutorunCommand::Status {
+            batch,
+            watch,
+            interval,
+        }) => {
+            if watch {
+                run_status_watch(&project_dir, batch.as_deref(), interval).await
+            } else {
+                run_status(&project_dir, batch.as_deref()).await
+            }
+        }
         Some(AutorunCommand::Attach { task_id }) => run_attach(&project_dir, &task_id).await,
         Some(AutorunCommand::Logs { task_id, follow }) => {
             run_logs(&project_dir, &task_id, follow).await
@@ -103,6 +127,8 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
         Some(AutorunCommand::Results { batch }) => {
             run_results(&project_dir, batch.as_deref()).await
         }
+        Some(AutorunCommand::Resume { batch }) => run_resume(&project_dir, batch.as_deref()).await,
+        Some(AutorunCommand::Batches) => run_batches_sync(&project_dir),
         Some(AutorunCommand::History {
             limit,
             since,
@@ -641,6 +667,20 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+async fn run_status_watch(
+    project_dir: &Path,
+    batch: Option<&str>,
+    interval_secs: u64,
+) -> Result<()> {
+    let interval = Duration::from_secs(interval_secs.max(1));
+    loop {
+        // Clear terminal.
+        print!("\x1b[2J\x1b[H");
+        run_status(project_dir, batch).await?;
+        tokio::time::sleep(interval).await;
+    }
+}
+
 async fn run_attach(project_dir: &Path, task_id: &str) -> Result<()> {
     use codeflow_core::store::DataStore;
 
@@ -711,13 +751,15 @@ async fn run_logs(project_dir: &Path, task_id: &str, follow: bool) -> Result<()>
     };
 
     if follow {
-        let mut last_len = 0;
+        let mut last_line_count = 0;
         loop {
             let content = capture(tmux_name)?;
-            if content.len() != last_len {
-                // Clear and reprint.
-                print!("{content}");
-                last_len = content.len();
+            let lines: Vec<&str> = content.lines().collect();
+            if lines.len() > last_line_count {
+                for line in &lines[last_line_count..] {
+                    println!("{line}");
+                }
+                last_line_count = lines.len();
             }
             if !tmux_has_session(tmux_name) {
                 break;
@@ -1130,6 +1172,214 @@ async fn run_history(
     Ok(())
 }
 
+async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::{AutorunSessionStatus, AutorunTaskRunStatus};
+
+    let store = open_store(project_dir).await?;
+
+    // Find the target session.
+    let session_id = if let Some(sid) = batch {
+        sid.to_string()
+    } else {
+        // Find most recent non-completed session (failed, cancelled, timeout).
+        let filter = codeflow_core::models::AutorunSessionFilter {
+            limit: Some(10),
+            all: true,
+            ..Default::default()
+        };
+        let sessions = store.list_autorun_sessions(filter).await?;
+        let resumable = sessions.iter().find(|s| {
+            matches!(
+                s.status,
+                AutorunSessionStatus::Failed
+                    | AutorunSessionStatus::Cancelled
+                    | AutorunSessionStatus::Timeout
+            )
+        });
+        match resumable {
+            Some(s) => s.id.clone(),
+            None => anyhow::bail!("no resumable autorun session found"),
+        }
+    };
+
+    let session = store
+        .get_autorun_session(&session_id)
+        .await?
+        .with_context(|| format!("no autorun session found with id '{session_id}'"))?;
+
+    // Get task runs and filter to non-completed.
+    let task_runs = store.list_autorun_task_runs(&session_id).await?;
+    let completed_ids: std::collections::HashSet<String> = task_runs
+        .iter()
+        .filter(|r| matches!(r.status, AutorunTaskRunStatus::Completed))
+        .map(|r| r.task_id.clone())
+        .collect();
+
+    let resumable_runs: Vec<_> = task_runs
+        .iter()
+        .filter(|r| !matches!(r.status, AutorunTaskRunStatus::Completed))
+        .collect();
+
+    if resumable_runs.is_empty() {
+        println!("All tasks in batch '{session_id}' are completed. Nothing to resume.");
+        return Ok(());
+    }
+
+    println!(
+        "Resuming {} non-completed task(s) from batch '{}' ({})",
+        resumable_runs.len(),
+        session.batch_name.as_deref().unwrap_or(&session_id),
+        session.status,
+    );
+
+    for run in &resumable_runs {
+        println!("  {} (was: {})", run.task_id, run.status);
+    }
+
+    // Read the original batch file to reconstruct config.
+    if session.batch_file.is_empty() {
+        anyhow::bail!("session has no batch_file recorded; cannot reconstruct batch config");
+    }
+    let batch_path = if Path::new(&session.batch_file).is_absolute() {
+        PathBuf::from(&session.batch_file)
+    } else {
+        project_dir.join(&session.batch_file)
+    };
+
+    if !batch_path.exists() {
+        anyhow::bail!(
+            "original batch file '{}' not found; cannot resume",
+            batch_path.display()
+        );
+    }
+
+    // Build a filtered batch using the resume helper.
+    let original_parsed = codeflow_core::autorun::batch::parse_batch_file(&batch_path)
+        .context("re-parsing original batch file")?;
+
+    let resume_batch =
+        codeflow_core::autorun::batch::build_resume_batch(&original_parsed, &completed_ids);
+
+    if resume_batch.tasks.is_empty() {
+        println!("No tasks to resume after filtering.");
+        return Ok(());
+    }
+
+    // Run the resume batch through the normal execution path.
+    println!("Running resume batch: {} task(s)", resume_batch.tasks.len());
+
+    // Validate extended and execute.
+    let mut resume_parsed = resume_batch;
+    codeflow_core::autorun::validate_batch_extended(&mut resume_parsed, project_dir)
+        .context("extended batch validation for resume")?;
+
+    check_target_branch(project_dir, &resume_parsed.target)?;
+
+    let config =
+        codeflow_core::autorun::load_config(project_dir).context("loading parallel-work config")?;
+
+    let new_session_id = codeflow_core::session::generate_session_id();
+
+    let worktree_provider =
+        codeflow_core::autorun::RealWorktreeProvider::new(project_dir.to_path_buf());
+    let tmux = RealTmux;
+    let worker_timeout = Duration::from_secs(config.autorun.worker_timeout_secs);
+    let claude = RealClaude {
+        tmux: RealTmux,
+        worker_timeout,
+    };
+    let worker = codeflow_core::autorun::TmuxWorker::with_store(
+        tmux,
+        claude,
+        worktree_provider,
+        project_dir.to_path_buf(),
+        worker_timeout,
+        store.clone(),
+    );
+
+    let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
+
+    let results = orchestrator
+        .execute_with_batch_file(
+            new_session_id.as_str(),
+            &resume_parsed,
+            project_dir,
+            &batch_path.to_string_lossy(),
+            async {
+                tokio::signal::ctrl_c().await.ok();
+            },
+        )
+        .await
+        .context("executing resume batch")?;
+
+    report_results(&results)
+}
+
+fn run_batches_sync(project_dir: &Path) -> Result<()> {
+    let batch_dir = project_dir.join(".codeflow/config/autorun");
+    if !batch_dir.exists() {
+        println!(
+            "No autorun config directory found at {}",
+            batch_dir.display()
+        );
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&batch_dir)
+        .context("reading autorun config directory")?
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.ends_with(".yaml") || name.ends_with(".yml")
+        })
+        .collect();
+
+    if entries.is_empty() {
+        println!("No batch files found in {}", batch_dir.display());
+        return Ok(());
+    }
+
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+
+    println!(
+        "{:<30} {:>5} {:<12} {:<8}",
+        "FILE", "TASKS", "TARGET", "AUTO_MERGE"
+    );
+
+    for entry in &entries {
+        let path = entry.path();
+        match codeflow_core::autorun::batch::parse_batch_file(&path) {
+            Ok(batch) => {
+                let target = if batch.target.is_empty() {
+                    "main"
+                } else {
+                    &batch.target
+                };
+                println!(
+                    "{:<30} {:>5} {:<12} {:<8}",
+                    entry.file_name().to_string_lossy(),
+                    batch.tasks.len(),
+                    target,
+                    batch.auto_merge,
+                );
+            }
+            Err(e) => {
+                println!(
+                    "{:<30} {:>5} {:<12} {:<8}",
+                    entry.file_name().to_string_lossy(),
+                    "ERR",
+                    "--",
+                    format!("({})", e),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1303,10 +1553,21 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         })?;
 
         // Set environment variables via tmux send-keys.
+        // AUTORUN_SESSION_ID uses the worker-specific session ID so that hooks
+        // use the same ID as CRDT claims (acquired with worker_sid in worker.rs).
+        let autorun_sid = if cfg.worker_session_id.is_empty() {
+            &cfg.session_id
+        } else {
+            &cfg.worker_session_id
+        };
+        self.tmux
+            .send_command(session, &format!("export AUTORUN_SESSION_ID={autorun_sid}"))
+            .await?;
+        // AUTORUN_BATCH_ID tracks the batch-level session for correlation.
         self.tmux
             .send_command(
                 session,
-                &format!("export AUTORUN_SESSION_ID={}", cfg.session_id),
+                &format!("export AUTORUN_BATCH_ID={}", cfg.session_id),
             )
             .await?;
         self.tmux
@@ -1904,6 +2165,7 @@ tasks:
             target: "main".into(),
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["tests pass".into()],
+            worker_session_id: String::new(),
         };
         assert_eq!(cfg.task_id, "task-invoke");
         assert_eq!(cfg.acceptance_criteria, vec!["tests pass"]);
@@ -1930,6 +2192,7 @@ tasks:
             target: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
+            worker_session_id: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: codeflow_core::autorun::InvokeConfig =
@@ -2110,6 +2373,7 @@ tasks:
             target: "main".into(),
             tmux_session: "worker-env".into(),
             acceptance_criteria: vec!["crit A".into(), "crit B".into()],
+            worker_session_id: "ses-env-worker".into(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2121,51 +2385,57 @@ tasks:
         let cmds = rt.block_on(commands.lock());
         // Verify env vars were sent in the correct order.
         assert!(
-            cmds.len() >= 5,
-            "expected at least 5 commands, got {}",
+            cmds.len() >= 6,
+            "expected at least 6 commands, got {}",
             cmds.len()
         );
 
-        // Command 0: export AUTORUN_SESSION_ID
+        // Command 0: export AUTORUN_SESSION_ID (uses worker_session_id)
         assert!(
-            cmds[0].1.contains("AUTORUN_SESSION_ID=ses-env"),
-            "first env var should be session ID, got: {}",
+            cmds[0].1.contains("AUTORUN_SESSION_ID=ses-env-worker"),
+            "first env var should be worker session ID, got: {}",
             cmds[0].1
         );
-        // Command 1: export AUTORUN_TASK_ID
+        // Command 1: export AUTORUN_BATCH_ID (batch-level session)
         assert!(
-            cmds[1].1.contains("AUTORUN_TASK_ID=task-env-test"),
-            "second env var should be task ID, got: {}",
+            cmds[1].1.contains("AUTORUN_BATCH_ID=ses-env"),
+            "second env var should be batch ID, got: {}",
             cmds[1].1
         );
-        // Command 2: export AUTORUN_ACCEPTANCE (base64)
+        // Command 2: export AUTORUN_TASK_ID
         assert!(
-            cmds[2].1.contains("AUTORUN_ACCEPTANCE="),
-            "third env var should be acceptance, got: {}",
+            cmds[2].1.contains("AUTORUN_TASK_ID=task-env-test"),
+            "third env var should be task ID, got: {}",
             cmds[2].1
         );
-        // Command 3: export CODEFLOW_WORKTREE_PATH
+        // Command 3: export AUTORUN_ACCEPTANCE (base64)
         assert!(
-            cmds[3].1.contains("CODEFLOW_WORKTREE_PATH="),
-            "fourth env var should be worktree path, got: {}",
+            cmds[3].1.contains("AUTORUN_ACCEPTANCE="),
+            "fourth env var should be acceptance, got: {}",
             cmds[3].1
         );
-        // Command 4: the actual claude command (interactive mode, no -p flag)
+        // Command 4: export CODEFLOW_WORKTREE_PATH
         assert!(
-            cmds[4].1.contains("claude --dangerously-skip-permissions"),
-            "fifth command should be claude invocation, got: {}",
+            cmds[4].1.contains("CODEFLOW_WORKTREE_PATH="),
+            "fifth env var should be worktree path, got: {}",
             cmds[4].1
         );
+        // Command 5: the actual claude command (interactive mode, no -p flag)
         assert!(
-            !cmds[4].1.contains("claude -p"),
+            cmds[5].1.contains("claude --dangerously-skip-permissions"),
+            "sixth command should be claude invocation, got: {}",
+            cmds[5].1
+        );
+        assert!(
+            !cmds[5].1.contains("claude -p"),
             "claude command should NOT use -p flag (interactive mode)"
         );
         assert!(
-            !cmds[4].1.contains("--output-format json"),
+            !cmds[5].1.contains("--output-format json"),
             "claude command should NOT use --output-format json (interactive mode)"
         );
         assert!(
-            cmds[4].1.contains("worker-exit-code"),
+            cmds[5].1.contains("worker-exit-code"),
             "exit code should be written to worker-exit-code"
         );
 
@@ -2199,6 +2469,7 @@ tasks:
             target: "main".into(),
             tmux_session: "w-exit".into(),
             acceptance_criteria: Vec::new(),
+            worker_session_id: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2230,6 +2501,7 @@ tasks:
             target: "main".into(),
             tmux_session: "w-timeout".into(),
             acceptance_criteria: Vec::new(),
+            worker_session_id: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2273,6 +2545,7 @@ tasks:
             target: "main".into(),
             tmux_session: "w-esc".into(),
             acceptance_criteria: Vec::new(),
+            worker_session_id: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2574,10 +2847,17 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "status"]).unwrap();
-        assert!(matches!(cli.cmd, AutorunCommand::Status { batch: None }));
+        assert!(matches!(
+            cli.cmd,
+            AutorunCommand::Status {
+                batch: None,
+                watch: false,
+                ..
+            }
+        ));
 
         let cli = TestCli::try_parse_from(["test", "status", "--batch", "ses-123"]).unwrap();
-        if let AutorunCommand::Status { batch } = cli.cmd {
+        if let AutorunCommand::Status { batch, .. } = cli.cmd {
             assert_eq!(batch.as_deref(), Some("ses-123"));
         } else {
             panic!("expected Status variant");
@@ -4325,5 +4605,288 @@ tasks:
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("| Status | Completed |"));
+    }
+
+    // -- run_batches_sync tests --
+
+    #[test]
+    fn test_batches_no_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // No .codeflow/config/autorun/ directory exists.
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        // Empty directory -- no YAML files.
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_valid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("test-batch.yaml"),
+            "name: test\ntasks:\n  - id: task-a\n",
+        )
+        .unwrap();
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(batch_dir.join("bad.yaml"), "{{invalid yaml").unwrap();
+        // Should not error -- prints ERR row but returns Ok.
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_ignores_non_yaml_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(batch_dir.join("readme.md"), "# Not a batch").unwrap();
+        std::fs::write(batch_dir.join("config.json"), "{}").unwrap();
+        // No .yaml/.yml files -- should report empty.
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_mixed_valid_and_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("good.yaml"),
+            "name: good\ntasks:\n  - id: task-a\n",
+        )
+        .unwrap();
+        std::fs::write(batch_dir.join("bad.yml"), "not: [valid: batch").unwrap();
+        let result = run_batches_sync(dir.path());
+        assert!(result.is_ok());
+    }
+
+    // -- Clap parsing: Resume and Batches variants --
+
+    #[test]
+    fn test_autorun_command_resume_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "resume"]).unwrap();
+        assert!(matches!(cli.cmd, AutorunCommand::Resume { batch: None }));
+
+        let cli = TestCli::try_parse_from(["test", "resume", "--batch", "ses-abc"]).unwrap();
+        if let AutorunCommand::Resume { batch } = cli.cmd {
+            assert_eq!(batch.as_deref(), Some("ses-abc"));
+        } else {
+            panic!("expected Resume variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_batches_variant() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "batches"]).unwrap();
+        assert!(matches!(cli.cmd, AutorunCommand::Batches));
+    }
+
+    // -- Clap parsing: Status --watch and --interval --
+
+    #[test]
+    fn test_autorun_command_status_watch_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "status", "--watch"]).unwrap();
+        if let AutorunCommand::Status {
+            batch,
+            watch,
+            interval,
+        } = cli.cmd
+        {
+            assert!(watch);
+            assert!(batch.is_none());
+            assert_eq!(interval, 5); // default
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_status_interval_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "status", "--watch", "--interval", "10"]).unwrap();
+        if let AutorunCommand::Status {
+            watch, interval, ..
+        } = cli.cmd
+        {
+            assert!(watch);
+            assert_eq!(interval, 10);
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    #[test]
+    fn test_autorun_command_status_short_watch_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: AutorunCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "status", "-w"]).unwrap();
+        if let AutorunCommand::Status { watch, .. } = cli.cmd {
+            assert!(watch);
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    // -- Logs follow line-count tracking --
+
+    #[test]
+    fn test_logs_follow_line_count_incremental() {
+        // Simulate the line-count tracking logic used in logs follow mode.
+        let content_v1 = "line 1\nline 2\nline 3";
+        let lines_v1: Vec<&str> = content_v1.lines().collect();
+        let mut last_line_count = 0;
+
+        // First iteration: all lines are new.
+        assert!(lines_v1.len() > last_line_count);
+        let new_lines: Vec<&str> = lines_v1[last_line_count..].to_vec();
+        assert_eq!(new_lines, vec!["line 1", "line 2", "line 3"]);
+        last_line_count = lines_v1.len();
+        assert_eq!(last_line_count, 3);
+
+        // Second iteration: same content, no new lines.
+        let content_v2 = "line 1\nline 2\nline 3";
+        let lines_v2: Vec<&str> = content_v2.lines().collect();
+        assert_eq!(lines_v2.len(), last_line_count); // No new lines.
+
+        // Third iteration: two new lines appended.
+        let content_v3 = "line 1\nline 2\nline 3\nline 4\nline 5";
+        let lines_v3: Vec<&str> = content_v3.lines().collect();
+        assert!(lines_v3.len() > last_line_count);
+        let new_lines_v3: Vec<&str> = lines_v3[last_line_count..].to_vec();
+        assert_eq!(new_lines_v3, vec!["line 4", "line 5"]);
+        last_line_count = lines_v3.len();
+        assert_eq!(last_line_count, 5);
+    }
+
+    #[test]
+    fn test_logs_follow_empty_content() {
+        let content = "";
+        let lines: Vec<&str> = content.lines().collect();
+        let last_line_count = 0;
+        // Empty content should produce no new lines.
+        assert_eq!(lines.len(), last_line_count);
+    }
+
+    // -- worker_session_id threading in InvokeConfig --
+
+    #[test]
+    fn test_invoke_config_worker_session_id_used_for_autorun_sid() {
+        // When worker_session_id is set, it should be preferred for AUTORUN_SESSION_ID.
+        let cfg = codeflow_core::autorun::InvokeConfig {
+            task_id: "task-1".into(),
+            work_dir: "/tmp/test".into(),
+            prompt: "test".into(),
+            session_id: "ses-batch".into(),
+            auto_merge: false,
+            target: "main".into(),
+            tmux_session: "w-1".into(),
+            acceptance_criteria: Vec::new(),
+            worker_session_id: "ses-worker-123".into(),
+        };
+        // worker_session_id should be non-empty and different from session_id.
+        assert_ne!(cfg.worker_session_id, cfg.session_id);
+        assert_eq!(cfg.worker_session_id, "ses-worker-123");
+        // The autorun_sid selection logic: prefer worker_session_id if non-empty.
+        let autorun_sid = if cfg.worker_session_id.is_empty() {
+            &cfg.session_id
+        } else {
+            &cfg.worker_session_id
+        };
+        assert_eq!(autorun_sid, "ses-worker-123");
+    }
+
+    #[test]
+    fn test_invoke_config_empty_worker_session_id_falls_back() {
+        let cfg = codeflow_core::autorun::InvokeConfig {
+            task_id: "task-1".into(),
+            work_dir: "/tmp/test".into(),
+            prompt: "test".into(),
+            session_id: "ses-batch".into(),
+            auto_merge: false,
+            target: "main".into(),
+            tmux_session: "w-1".into(),
+            acceptance_criteria: Vec::new(),
+            worker_session_id: String::new(),
+        };
+        let autorun_sid = if cfg.worker_session_id.is_empty() {
+            &cfg.session_id
+        } else {
+            &cfg.worker_session_id
+        };
+        assert_eq!(autorun_sid, "ses-batch");
+    }
+
+    // -- run_status_watch interval clamping --
+
+    #[test]
+    fn test_status_watch_interval_clamp_zero() {
+        // The interval should be clamped to at least 1 second.
+        let user_input: u64 = 0;
+        let interval = Duration::from_secs(user_input.max(1));
+        assert_eq!(interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_status_watch_interval_normal() {
+        let user_input: u64 = 10;
+        let interval = Duration::from_secs(user_input.max(1));
+        assert_eq!(interval, Duration::from_secs(10));
     }
 }

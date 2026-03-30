@@ -425,7 +425,8 @@ In autorun mode (no human present), phase transitions happen automatically:
 
 | Variable | Purpose | Set By |
 |----------|---------|--------|
-| `AUTORUN_SESSION_ID` | Autorun session identifier; presence indicates autorun mode | CLI orchestrator (`autorun.rs`) |
+| `AUTORUN_SESSION_ID` | Worker-specific session ID; matches CRDT claim identity; presence indicates autorun mode | Worker invocation (`autorun.rs`) |
+| `AUTORUN_BATCH_ID` | Batch-level session ID for correlation across workers | Worker invocation (`autorun.rs`) |
 | `AUTORUN_TASK_ID` | Pre-assigned task ID from the batch file | CLI orchestrator |
 | `AUTORUN_ACCEPTANCE` | Base64-encoded acceptance criteria extracted from task markdown | CLI orchestrator |
 | `CODEFLOW_WORKTREE_PATH` | Path to the worker's isolated git worktree | Worker setup (`worker.rs`) |
@@ -823,7 +824,7 @@ Parallel Batch Execution (above) covers intra-session parallelism — multiple t
 | Worktree isolation | Each session gets its own working copy via `git worktree add` (max 5 concurrent, enforced by `WorktreeRegistry`) |
 | Claims | CRDT-based file claims prevent concurrent edits to the same file (enforced via scope_policy — soft/hard/permissive — using `Coordinator::acquire`) |
 | Fencing tokens | Monotonic `FencingToken` values ensure claim validity across crashes |
-| Merge queue | FIFO queue serializes PR merges to prevent conflicts (`merge_queue::enqueue/dequeue`) |
+| Merge queue | Advisory FIFO queue for PR merge ordering (`merge_queue::enqueue/dequeue`). Records ordering but does not enforce it -- GitHub's conflict detection provides the actual safety net. |
 | Sync daemon | Propagates CRDT state between worktrees via git ref transport (5s interval, `sync::run_sync_cycle`). Auto-starts when worktree count > 1, auto-stops when <= 1. Crash cleanup detects dead workers and releases claims. |
 
 **Worktree layout (shared vs local state):**
@@ -1374,6 +1375,9 @@ codeflow doctor                        # Diagnose infrastructure
 codeflow worktree list                 # List active worktrees
 codeflow worktree cleanup              # Clean up stale worktrees
 codeflow worktree prune                # Remove orphaned worktree entries
+codeflow autorun resume                # Re-run non-completed tasks from a batch
+codeflow autorun batches               # List available batch files
+codeflow autorun status --watch        # Continuously monitor autorun status
 ```
 
 The unified `codeflow test` command routes to all test suites (shell/Python, Go, Rust). Use `--mode full --coverage` for WS-QA and pre-commit verification. Coverage enforces 85% per-file threshold on business packages across Go and Rust suites.

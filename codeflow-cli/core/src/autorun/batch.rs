@@ -609,6 +609,42 @@ fn topological_sort(tasks: &[TaskSpec]) -> Result<Vec<String>, AutorunError> {
     Ok(order)
 }
 
+/// Build a resume batch from an original batch by filtering out completed tasks.
+///
+/// Tasks whose IDs are in `completed_task_ids` are removed. Dependencies on
+/// completed tasks are also removed (they are already satisfied).
+/// All other batch settings (auto_merge, target, max_workers) are preserved.
+#[must_use]
+pub fn build_resume_batch<S: ::std::hash::BuildHasher>(
+    original: &ParsedBatch,
+    completed_task_ids: &HashSet<String, S>,
+) -> ParsedBatch {
+    let remaining_tasks: Vec<TaskSpec> = original
+        .tasks
+        .iter()
+        .filter(|t| !completed_task_ids.contains(&t.id))
+        .map(|t| {
+            let mut task = t.clone();
+            task.depends_on
+                .retain(|dep| !completed_task_ids.contains(dep));
+            task
+        })
+        .collect();
+
+    let order = topological_sort(&remaining_tasks)
+        .unwrap_or_else(|_| remaining_tasks.iter().map(|t| t.id.clone()).collect());
+
+    ParsedBatch {
+        name: format!("{}-resume", original.name),
+        file_path: original.file_path.clone(),
+        max_workers: original.max_workers,
+        auto_merge: original.auto_merge,
+        target: original.target.clone(),
+        tasks: remaining_tasks,
+        order,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1577,5 +1613,98 @@ tasks:
             effective, batch_scope,
             "batch override should take precedence"
         );
+    }
+
+    // -- build_resume_batch tests --
+
+    #[test]
+    fn test_resume_batch_all_completed() {
+        let batch = ParsedBatch {
+            name: "test".into(),
+            file_path: "batch.yaml".into(),
+            max_workers: 2,
+            auto_merge: false,
+            target: "main".into(),
+            tasks: vec![
+                TaskSpec {
+                    id: "task-a".into(),
+                    depends_on: vec![],
+                    file_scope: vec![],
+                    scope_policy: None,
+                },
+                TaskSpec {
+                    id: "task-b".into(),
+                    depends_on: vec!["task-a".into()],
+                    file_scope: vec![],
+                    scope_policy: None,
+                },
+            ],
+            order: vec!["task-a".into(), "task-b".into()],
+        };
+
+        let completed: HashSet<String> = ["task-a".to_string(), "task-b".to_string()].into();
+        let resume = build_resume_batch(&batch, &completed);
+        assert!(resume.tasks.is_empty());
+        assert!(resume.order.is_empty());
+        assert_eq!(resume.name, "test-resume");
+    }
+
+    #[test]
+    fn test_resume_batch_one_failed() {
+        let batch = ParsedBatch {
+            name: "test".into(),
+            file_path: "batch.yaml".into(),
+            max_workers: 2,
+            auto_merge: false,
+            target: "main".into(),
+            tasks: vec![
+                TaskSpec {
+                    id: "task-a".into(),
+                    depends_on: vec![],
+                    file_scope: vec![],
+                    scope_policy: None,
+                },
+                TaskSpec {
+                    id: "task-b".into(),
+                    depends_on: vec!["task-a".into()],
+                    file_scope: vec![],
+                    scope_policy: None,
+                },
+            ],
+            order: vec!["task-a".into(), "task-b".into()],
+        };
+
+        let completed: HashSet<String> = ["task-a".to_string()].into();
+        let resume = build_resume_batch(&batch, &completed);
+        assert_eq!(resume.tasks.len(), 1);
+        assert_eq!(resume.tasks[0].id, "task-b");
+        // Dependency on task-a should be removed (already completed).
+        assert!(resume.tasks[0].depends_on.is_empty());
+        assert_eq!(resume.order, vec!["task-b"]);
+    }
+
+    #[test]
+    fn test_resume_batch_preserves_settings() {
+        let batch = ParsedBatch {
+            name: "my-batch".into(),
+            file_path: "path/to/batch.yaml".into(),
+            max_workers: 5,
+            auto_merge: true,
+            target: "develop".into(),
+            tasks: vec![TaskSpec {
+                id: "task-a".into(),
+                depends_on: vec![],
+                file_scope: vec![],
+                scope_policy: None,
+            }],
+            order: vec!["task-a".into()],
+        };
+
+        let completed: HashSet<String> = HashSet::new();
+        let resume = build_resume_batch(&batch, &completed);
+        assert_eq!(resume.max_workers, 5);
+        assert!(resume.auto_merge);
+        assert_eq!(resume.target, "develop");
+        assert_eq!(resume.file_path, "path/to/batch.yaml");
     }
 }

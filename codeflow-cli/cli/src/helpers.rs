@@ -54,11 +54,11 @@ pub fn detect_project_dir() -> Result<PathBuf> {
         }
     };
 
-    // 4. Check if the resolved project root has a codeflow-env.sh pointing to a worktree.
-    //    This handles the case where env vars were not propagated to hook subprocesses
-    //    (e.g., context overflow, new Claude Code process) but SessionStart already
-    //    wrote the worktree path to the env file.
-    if let Some(wt_path) = read_worktree_path_from_env(&project_root) {
+    // 4. Per-PID env file lookup.
+    //    Each Claude Code process writes its worktree path to a per-PID file
+    //    at `{project_root}/.state/runtime/codeflow-env-{pid}.sh`. This avoids
+    //    the shared env file overwrite problem with parallel sessions.
+    if let Some(wt_path) = read_worktree_path_from_pid_file(&project_root) {
         let wt = PathBuf::from(&wt_path);
         if wt.is_dir() && wt.join(".state").is_dir() {
             return Ok(wt);
@@ -68,12 +68,26 @@ pub fn detect_project_dir() -> Result<PathBuf> {
     Ok(project_root)
 }
 
-/// Read `CODEFLOW_WORKTREE_PATH` from the project's `codeflow-env.sh` file.
+/// Read `CODEFLOW_WORKTREE_PATH` from a per-PID env file.
 ///
-/// This is a fallback for when env vars are not propagated to hook subprocesses.
-/// Returns `None` if the file doesn't exist, can't be read, or doesn't contain
-/// the variable.
-fn read_worktree_path_from_env(project_root: &Path) -> Option<String> {
+/// File at: `{project_root}/.state/runtime/codeflow-env-{claude_code_pid}.sh`
+/// Avoids shared-file overwrite: each Claude Code process has its own file.
+/// Falls back to the shared env file for backward compatibility.
+fn read_worktree_path_from_pid_file(project_root: &Path) -> Option<String> {
+    let runtime_dir = project_root.join(".state").join("runtime");
+    let pid = codeflow_core::session::process::get_claude_code_pid();
+    // Try per-PID file first.
+    if let Some(value) = codeflow_core::session::read_pid_env_file(&runtime_dir, pid) {
+        return Some(value);
+    }
+    // Fallback: read from shared env file for backward compatibility.
+    read_worktree_path_from_shared_env(project_root)
+}
+
+/// Read `CODEFLOW_WORKTREE_PATH` from the shared `codeflow-env.sh` file.
+///
+/// Backward-compatible fallback for sessions that pre-date per-PID files.
+fn read_worktree_path_from_shared_env(project_root: &Path) -> Option<String> {
     let env_path = project_root
         .join(".state")
         .join("runtime")
@@ -702,7 +716,7 @@ mod tests {
             "export CODEFLOW_WORKTREE_PATH='/path/to/worktree'\n",
         )
         .unwrap();
-        let result = read_worktree_path_from_env(dir.path());
+        let result = read_worktree_path_from_shared_env(dir.path());
         assert_eq!(result, Some("/path/to/worktree".to_string()));
     }
 
@@ -716,7 +730,7 @@ mod tests {
             "export CODEFLOW_WORKTREE_PATH=\"/path/to/worktree\"\n",
         )
         .unwrap();
-        let result = read_worktree_path_from_env(dir.path());
+        let result = read_worktree_path_from_shared_env(dir.path());
         assert_eq!(result, Some("/path/to/worktree".to_string()));
     }
 
@@ -730,7 +744,7 @@ mod tests {
             "export CODEFLOW_WORKTREE_PATH=''\n",
         )
         .unwrap();
-        let result = read_worktree_path_from_env(dir.path());
+        let result = read_worktree_path_from_shared_env(dir.path());
         assert_eq!(result, None);
     }
 
@@ -744,14 +758,14 @@ mod tests {
             "export CODEFLOW_SESSION_ID='ses-123'\nexport CF_PROJECT_ROOT='/project'\n",
         )
         .unwrap();
-        let result = read_worktree_path_from_env(dir.path());
+        let result = read_worktree_path_from_shared_env(dir.path());
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_read_worktree_path_from_env_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let result = read_worktree_path_from_env(dir.path());
+        let result = read_worktree_path_from_shared_env(dir.path());
         assert_eq!(result, None);
     }
 

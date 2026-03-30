@@ -291,6 +291,13 @@ impl SessionStartInit {
                     });
                 }
 
+                // Write per-PID env file for this teammate's Claude Code process.
+                if let Some(ref wt_path) = env_worktree_path {
+                    if !wt_path.is_empty() {
+                        session::write_pid_env_file(&runtime_dir, self.lead_pid, wt_path);
+                    }
+                }
+
                 // Release session lock -- teammate detected, env file already exists.
                 drop(lock_file);
 
@@ -542,6 +549,34 @@ impl SessionStartInit {
                     .warnings
                     .push(format!("main repo env redirect write error: {e}"));
             }
+
+            // Write per-PID env file to main repo runtime dir.
+            session::write_pid_env_file(&main_runtime, self.lead_pid, &wt_path_str);
+
+            // Write session pointer to main repo for cross-session discovery.
+            session::write_session_pointer(
+                project_dir,
+                session_id.as_str(),
+                self.lead_pid,
+                &wt_path_str,
+                &(self.now)(),
+            );
+        }
+
+        // Write to CLAUDE_ENV_FILE for Bash tool env propagation.
+        if let Ok(claude_env_file) = std::env::var("CLAUDE_ENV_FILE") {
+            if !claude_env_file.is_empty() {
+                use std::fmt::Write as _;
+                let mut exports = String::new();
+                for (key, value) in &result.env_vars {
+                    let _ = writeln!(exports, "export {key}='{value}'");
+                }
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&claude_env_file)
+                    .and_then(|mut f| std::io::Write::write_all(&mut f, exports.as_bytes()));
+            }
         }
 
         // Surface collected warnings to stderr so they appear in hook output.
@@ -594,12 +629,32 @@ impl SessionStartInit {
 
         // Compact/resume/clear: reuse existing SID, update source tracking only.
         if source == "compact" || source == "resume" || source == "clear" {
-            // Update latest_source in status file for recovery context.
-            let session_dir = project_dir
-                .join(".state")
-                .join("session")
-                .join(existing_sid.as_str())
-                .join("pathflow");
+            // Determine the correct session dir for status update.
+            // If a session pointer exists, the actual status file is in the worktree.
+            let session_dir = if let Some(pointer) =
+                session::read_session_pointer(project_dir, existing_sid.as_str())
+            {
+                let wt_path = PathBuf::from(&pointer.worktree_path);
+                if wt_path.exists() {
+                    wt_path
+                        .join(".state")
+                        .join("session")
+                        .join(existing_sid.as_str())
+                        .join("pathflow")
+                } else {
+                    project_dir
+                        .join(".state")
+                        .join("session")
+                        .join(existing_sid.as_str())
+                        .join("pathflow")
+                }
+            } else {
+                project_dir
+                    .join(".state")
+                    .join("session")
+                    .join(existing_sid.as_str())
+                    .join("pathflow")
+            };
             crate::hooks::post_tool_use::update_session_status(
                 &session_dir,
                 &serde_json::json!({
@@ -607,6 +662,14 @@ impl SessionStartInit {
                     "latest_source_at": (self.now)(),
                 }),
             );
+
+            // Write per-PID env file for the new process (compact/resume creates new PID).
+            if let Some(ref wt_path) = env_worktree_path {
+                if !wt_path.is_empty() {
+                    session::write_pid_env_file(runtime_dir, self.lead_pid, wt_path);
+                }
+            }
+
             return (Some(existing_sid), false, env_worktree_path);
         }
 
@@ -616,12 +679,34 @@ impl SessionStartInit {
         }
 
         // Signal 2: pathflow-session-status.json
-        let status_path = project_dir
-            .join(".state")
-            .join("session")
-            .join(existing_sid.as_str())
-            .join("pathflow")
-            .join("pathflow-session-status.json");
+        // If a session pointer exists, read status from the worktree.
+        let status_path = if let Some(pointer) =
+            session::read_session_pointer(project_dir, existing_sid.as_str())
+        {
+            let wt_path = PathBuf::from(&pointer.worktree_path);
+            if wt_path.exists() {
+                wt_path
+                    .join(".state")
+                    .join("session")
+                    .join(existing_sid.as_str())
+                    .join("pathflow")
+                    .join("pathflow-session-status.json")
+            } else {
+                project_dir
+                    .join(".state")
+                    .join("session")
+                    .join(existing_sid.as_str())
+                    .join("pathflow")
+                    .join("pathflow-session-status.json")
+            }
+        } else {
+            project_dir
+                .join(".state")
+                .join("session")
+                .join(existing_sid.as_str())
+                .join("pathflow")
+                .join("pathflow-session-status.json")
+        };
 
         let status: serde_json::Value =
             match crate::pathflow::file_lock::locked_read_critical(&status_path, 3) {
@@ -1034,6 +1119,10 @@ impl SessionStartInit {
     /// Sweep ALL stale sessions using `pathflow-session-status.json`.
     fn sweep_all_stale_sessions(&self, project_dir: &Path, current_sid: &str) {
         let mut swept = 0u32;
+
+        // Clean stale per-PID env files whose PIDs are no longer alive.
+        let main_runtime = project_dir.join(".state").join("runtime");
+        session::clean_stale_pid_env_files(&main_runtime);
 
         // Load worktree registry for heartbeat path resolution.
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
@@ -1508,6 +1597,9 @@ impl SessionStartInit {
                 .push(format!("main env file update error: {e}"));
         }
 
+        // Write per-PID env file for this session's Claude Code process.
+        session::write_pid_env_file(&main_runtime, self.lead_pid, &wt_path_str);
+
         result.messages.push(format!(
             "WORKTREE: Created {} at {}",
             wt_name,
@@ -1630,6 +1722,9 @@ impl SessionStartInit {
                 .push(format!("main env file update error: {e}"));
         }
 
+        // Write per-PID env file for this session's Claude Code process.
+        session::write_pid_env_file(runtime_dir, self.lead_pid, &wt_path_str);
+
         result
             .messages
             .push(format!("WORKTREE: Pre-created detected at {wt_path_str}"));
@@ -1648,11 +1743,16 @@ impl SessionStartInit {
             let _ = fs::create_dir_all(dir);
         }
 
+        // Ensure ledger directory exists in worktree (LOCAL, not symlinked).
+        let ledger_dir = wp.state_dir().join("ledger");
+        if !ledger_dir.exists() {
+            let _ = fs::create_dir_all(&ledger_dir);
+        }
+
         // Migrate worktree ledger from flat to subdirectory layout.
         // Worktrees inherit flat layout from git checkout; the main repo
         // migration in create_directories() does not cover worktree-local
         // ledger dirs. One-time, idempotent.
-        let ledger_dir = wp.state_dir().join("ledger");
         if ledger_dir.exists() {
             match crate::ledger::migrate::migrate_flat_to_subdirs(&ledger_dir) {
                 Ok(result) if !result.already_migrated => {

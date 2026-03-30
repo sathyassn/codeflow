@@ -30,7 +30,9 @@ pub use active_task::{
 };
 pub use builder::SessionBuilder;
 pub use env::{
-    EnvFile, read_env_file, remove_env_file, write_env_file, write_env_file_with_worktree,
+    EnvFile, SessionPointer, clean_stale_pid_env_files, read_env_file, read_pid_env_file,
+    read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,
+    write_env_file, write_env_file_with_worktree, write_pid_env_file, write_session_pointer,
 };
 
 /// Generate a new session ID using ULID format: `ses-{26-char-lowercase-ULID}`.
