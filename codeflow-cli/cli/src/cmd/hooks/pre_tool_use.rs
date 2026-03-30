@@ -160,6 +160,9 @@ fn build_handler(
 mod tests {
     use super::*;
 
+    /// Mutex to serialize tests that depend on process-wide env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_resolve_sentinel_dir_with_unknown_session() {
         let dir = tempfile::tempdir().unwrap();
@@ -362,6 +365,9 @@ mod tests {
 
     #[test]
     fn test_resolve_sentinel_dir_falls_back_to_unknown_subpath() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let sentinel_dir = resolve_sentinel_dir(dir.path());
         assert!(
@@ -373,6 +379,9 @@ mod tests {
 
     #[test]
     fn test_resolve_session_dir_falls_back_to_unknown_subpath() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let session_dir = resolve_session_dir(dir.path());
         let s = session_dir.to_string_lossy();
@@ -388,6 +397,9 @@ mod tests {
 
     #[test]
     fn test_resolve_sentinel_dir_with_session_env_file() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
@@ -407,6 +419,9 @@ mod tests {
 
     #[test]
     fn test_resolve_session_dir_with_session_env_file() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
