@@ -104,6 +104,7 @@ pub(crate) fn create_worktree(
 
     // Create per-worktree local directories.
     create_local_dirs(&state_dir)?;
+    setup_runtime_subdirs(mgr.project_dir(), &state_dir)?;
 
     // Install git hooks in the worktree.
     install_hooks(mgr.project_dir(), &wt_path)?;
@@ -181,6 +182,7 @@ pub(crate) fn create_detached_worktree(
 
     // Create per-worktree local directories.
     create_local_dirs(&state_dir)?;
+    setup_runtime_subdirs(mgr.project_dir(), &state_dir)?;
 
     // Install git hooks in the worktree.
     install_hooks(mgr.project_dir(), &wt_path)?;
@@ -485,6 +487,45 @@ fn create_local_dirs(wt_state_dir: &Path) -> Result<(), WorktreeError> {
         let dst = wt_state_dir.join(dir_name);
         fs::create_dir_all(&dst)?;
     }
+    Ok(())
+}
+
+/// Set up the runtime/shared and runtime/local subdirectory structure.
+///
+/// In worktree mode:
+/// - `runtime/shared/` is symlinked to the main repo's `runtime/shared/`
+///   (cross-worktree visible, for per-PID env files and session locks)
+/// - `runtime/local/` is a real directory (per-worktree, for session env
+///   and active-task)
+///
+/// Idempotent: skips if the shared symlink already exists.
+fn setup_runtime_subdirs(project_dir: &Path, wt_state_dir: &Path) -> Result<(), WorktreeError> {
+    let wt_runtime = wt_state_dir.join("runtime");
+    let main_shared = project_dir.join(".state").join("runtime").join("shared");
+    let wt_shared = wt_runtime.join("shared");
+    let wt_local = wt_runtime.join("local");
+
+    // Ensure main repo's shared directory exists.
+    let _ = fs::create_dir_all(&main_shared);
+
+    // Create local/ as a real directory.
+    let _ = fs::create_dir_all(&wt_local);
+
+    // Symlink shared/ to main repo's shared/ (skip if already a symlink).
+    if wt_shared.symlink_metadata().is_ok() {
+        if wt_shared
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+        {
+            return Ok(()); // Already a symlink — nothing to do.
+        }
+        // Real directory — remove and replace with symlink.
+        let _ = fs::remove_dir_all(&wt_shared);
+    }
+    std::os::unix::fs::symlink(&main_shared, &wt_shared)?;
+
     Ok(())
 }
 

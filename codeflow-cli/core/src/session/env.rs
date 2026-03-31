@@ -137,9 +137,10 @@ const PID_ENV_SUFFIX: &str = ".sh";
 ///
 /// Non-fatal: errors are silently ignored (caller should use `let _ =`).
 pub fn write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
-    let _ = fs::create_dir_all(runtime_dir);
+    let shared = runtime_dir.join("shared");
+    let _ = fs::create_dir_all(&shared);
     let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
-    let path = runtime_dir.join(filename);
+    let path = shared.join(filename);
     let content = format!("export CODEFLOW_WORKTREE_PATH='{worktree_path}'\n");
     let _ = fs::write(&path, content);
 }
@@ -152,8 +153,19 @@ pub fn write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
 #[must_use]
 pub fn read_pid_env_file(runtime_dir: &Path, pid: u32) -> Option<String> {
     let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
-    let path = runtime_dir.join(filename);
-    let content = fs::read_to_string(&path).ok()?;
+    // New layout: check shared/ subdirectory first.
+    let shared_path = runtime_dir.join("shared").join(&filename);
+    if let Some(value) = extract_worktree_path_from_file(&shared_path) {
+        return Some(value);
+    }
+    // Backward compat: check old flat layout.
+    let flat_path = runtime_dir.join(&filename);
+    extract_worktree_path_from_file(&flat_path)
+}
+
+/// Extract CODEFLOW_WORKTREE_PATH from a file.
+fn extract_worktree_path_from_file(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
     for line in content.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("export CODEFLOW_WORKTREE_PATH=") {
@@ -169,8 +181,8 @@ pub fn read_pid_env_file(runtime_dir: &Path, pid: u32) -> Option<String> {
 /// Remove a per-PID env file. Idempotent (no error if file doesn't exist).
 pub fn remove_pid_env_file(runtime_dir: &Path, pid: u32) {
     let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
-    let path = runtime_dir.join(filename);
-    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(runtime_dir.join("shared").join(&filename));
+    let _ = fs::remove_file(runtime_dir.join(&filename));
 }
 
 /// Remove stale per-PID env files whose PIDs are no longer alive.
@@ -192,6 +204,53 @@ pub fn clean_stale_pid_env_files(runtime_dir: &Path) {
                     let _ = fs::remove_file(entry.path());
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime layout migration (flat -> shared/local)
+// ---------------------------------------------------------------------------
+
+/// Migrate runtime directory from flat layout to shared/local layout.
+///
+/// Idempotent: creates subdirectories if missing, moves files from old flat
+/// layout to the correct subdirectory. Safe to call on every SessionStart.
+pub fn migrate_runtime_layout(runtime_dir: &Path) {
+    let shared = runtime_dir.join("shared");
+    let local = runtime_dir.join("local");
+    let _ = fs::create_dir_all(&shared);
+    let _ = fs::create_dir_all(&local);
+
+    // Move per-PID files to shared/.
+    if let Ok(entries) = fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(PID_ENV_PREFIX) && name.ends_with(PID_ENV_SUFFIX) {
+                let _ = fs::rename(entry.path(), shared.join(&name));
+            }
+        }
+    }
+
+    // Move session-scoped files to local/.
+    for name in [
+        "codeflow-env.sh",
+        "active-task.json",
+        "peer-id",
+        "heartbeat",
+        "worker-exit-code",
+    ] {
+        let old = runtime_dir.join(name);
+        if old.exists() && !old.is_symlink() {
+            let _ = fs::rename(&old, local.join(name));
+        }
+    }
+
+    // Move cross-session files to shared/.
+    for name in ["session-worktree-map.json", "session.lock"] {
+        let old = runtime_dir.join(name);
+        if old.exists() && !old.is_symlink() {
+            let _ = fs::rename(&old, shared.join(name));
         }
     }
 }
@@ -601,9 +660,19 @@ mod tests {
     fn test_remove_pid_env_file_exists() {
         let dir = tempfile::tempdir().unwrap();
         write_pid_env_file(dir.path(), 12345, "/path/to/wt");
-        assert!(dir.path().join("codeflow-env-12345.sh").exists());
+        assert!(
+            dir.path()
+                .join("shared")
+                .join("codeflow-env-12345.sh")
+                .exists()
+        );
         remove_pid_env_file(dir.path(), 12345);
-        assert!(!dir.path().join("codeflow-env-12345.sh").exists());
+        assert!(
+            !dir.path()
+                .join("shared")
+                .join("codeflow-env-12345.sh")
+                .exists()
+        );
     }
 
     #[test]
@@ -618,7 +687,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("deep").join("runtime");
         write_pid_env_file(&nested, 42, "/wt");
-        assert!(nested.join("codeflow-env-42.sh").exists());
+        assert!(nested.join("shared").join("codeflow-env-42.sh").exists());
     }
 
     #[test]
@@ -693,5 +762,90 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Verify: pointer only exists when explicitly written.
         assert!(read_session_pointer(dir.path(), "ses-nowt").is_none());
+    }
+
+    // --- Runtime layout migration tests ---
+
+    #[test]
+    fn test_migrate_runtime_layout_creates_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        migrate_runtime_layout(&runtime);
+        assert!(runtime.join("shared").is_dir());
+        assert!(runtime.join("local").is_dir());
+    }
+
+    #[test]
+    fn test_migrate_runtime_layout_moves_pid_files_to_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join("codeflow-env-12345.sh"), "x").unwrap();
+        migrate_runtime_layout(&runtime);
+        assert!(
+            runtime
+                .join("shared")
+                .join("codeflow-env-12345.sh")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn test_migrate_runtime_layout_moves_session_files_to_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join("active-task.json"), "{}").unwrap();
+        migrate_runtime_layout(&runtime);
+        assert!(runtime.join("local").join("active-task.json").exists());
+    }
+
+    #[test]
+    fn test_migrate_runtime_layout_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        migrate_runtime_layout(&runtime);
+        migrate_runtime_layout(&runtime);
+        assert!(runtime.join("shared").is_dir());
+    }
+
+    #[test]
+    fn test_write_pid_env_file_uses_shared_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        write_pid_env_file(&runtime, 42, "/path/to/wt");
+        assert!(runtime.join("shared").join("codeflow-env-42.sh").exists());
+    }
+
+    #[test]
+    fn test_read_pid_env_file_finds_shared_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        let shared = runtime.join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(
+            shared.join("codeflow-env-99.sh"),
+            "export CODEFLOW_WORKTREE_PATH='/wt'\n",
+        )
+        .unwrap();
+        let result = read_pid_env_file(&runtime, 99);
+        assert_eq!(result, Some("/wt".to_string()));
+    }
+
+    #[test]
+    fn test_read_pid_env_file_backward_compat_flat() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(
+            runtime.join("codeflow-env-88.sh"),
+            "export CODEFLOW_WORKTREE_PATH='/wt'\n",
+        )
+        .unwrap();
+        let result = read_pid_env_file(&runtime, 88);
+        assert_eq!(result, Some("/wt".to_string()));
     }
 }

@@ -42,6 +42,24 @@ impl WorktreePaths {
         self.root.join(".state").join("runtime")
     }
 
+    /// Return the `.state/runtime/shared/` directory (cross-worktree visible).
+    ///
+    /// In worktree mode this directory is symlinked to the main repo,
+    /// making per-PID env files and session locks visible to all worktrees.
+    #[must_use]
+    pub fn runtime_shared_dir(&self) -> PathBuf {
+        self.runtime_dir().join("shared")
+    }
+
+    /// Return the `.state/runtime/local/` directory (per-worktree).
+    ///
+    /// Contains session-scoped files that must NOT be shared across worktrees:
+    /// `codeflow-env.sh`, `active-task.json`, `peer-id`, `heartbeat`.
+    #[must_use]
+    pub fn runtime_local_dir(&self) -> PathBuf {
+        self.runtime_dir().join("local")
+    }
+
     /// Path to `codeflow-env.sh` within the worktree.
     #[cfg(test)]
     #[must_use]
@@ -148,6 +166,24 @@ mod tests {
         assert_eq!(
             wp.runtime_dir(),
             PathBuf::from("/project/.git-worktrees/worktree-ses-abc123/.state/runtime")
+        );
+    }
+
+    #[test]
+    fn test_worktree_paths_runtime_shared_dir() {
+        let wp = make_paths();
+        assert_eq!(
+            wp.runtime_shared_dir(),
+            PathBuf::from("/project/.git-worktrees/worktree-ses-abc123/.state/runtime/shared")
+        );
+    }
+
+    #[test]
+    fn test_worktree_paths_runtime_local_dir() {
+        let wp = make_paths();
+        assert_eq!(
+            wp.runtime_local_dir(),
+            PathBuf::from("/project/.git-worktrees/worktree-ses-abc123/.state/runtime/local")
         );
     }
 

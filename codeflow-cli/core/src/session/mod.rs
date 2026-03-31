@@ -28,9 +28,10 @@ pub use active_task::{
     set_active_task_worktree_aware,
 };
 pub use env::{
-    EnvFile, SessionPointer, clean_stale_pid_env_files, read_env_file, read_pid_env_file,
-    read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,
-    write_env_file, write_env_file_with_worktree, write_pid_env_file, write_session_pointer,
+    EnvFile, SessionPointer, clean_stale_pid_env_files, migrate_runtime_layout, read_env_file,
+    read_pid_env_file, read_session_pointer, remove_env_file, remove_pid_env_file,
+    remove_session_pointer, write_env_file, write_env_file_with_worktree, write_pid_env_file,
+    write_session_pointer,
 };
 
 /// Generate a new session ID using ULID format: `ses-{26-char-lowercase-ULID}`.
@@ -155,26 +156,7 @@ fn resolve_worktree_path_inner(
     if let Some(wt_path) = read_pid_env_file(&runtime_dir, pid) {
         return Some(wt_path);
     }
-    // 3. Fallback: if project_dir is a worktree, the per-PID file lives in the
-    // MAIN repo's .state/runtime/ (runtime is LOCAL, not symlinked). Detect the
-    // main repo root via the .git file pointer and search there.
-    let git_path = project_dir.join(".git");
-    if git_path.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&git_path) {
-            let gitdir = content.strip_prefix("gitdir: ").unwrap_or(&content).trim();
-            // gitdir is like: /repo/.git/worktrees/name -> walk up to repo root
-            if let Some(repo_root) = std::path::Path::new(gitdir)
-                .parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-            {
-                let main_runtime = repo_root.join(".state").join("runtime");
-                if main_runtime != runtime_dir {
-                    return read_pid_env_file(&main_runtime, pid);
-                }
-            }
-        }
-    }
+    // read_pid_env_file now checks shared/ internally (via symlink in worktree).
     None
 }
 
@@ -232,9 +214,13 @@ fn current_session_id_inner(
     project_dir: &Path,
     worktree_path: Option<&str>,
 ) -> Result<SessionId, SessionError> {
-    // Check worktree-local env file first.
+    // Check worktree-local env file first (new layout: runtime/local/).
     if let Some(wt_path) = worktree_path {
         let wp = WorktreePaths::new(wt_path);
+        if let Ok(Some(env_file)) = read_env_file(&wp.runtime_local_dir()) {
+            return Ok(env_file.session_id);
+        }
+        // Backward compat: check old flat layout (runtime/).
         if let Ok(Some(env_file)) = read_env_file(&wp.runtime_dir()) {
             return Ok(env_file.session_id);
         }
@@ -247,7 +233,12 @@ fn current_session_id_inner(
         ));
     }
     // Safe: 0 or 1 active worktree -- main file is the only writer.
+    // Check new layout (runtime/local/) first, then old flat layout.
     let runtime_dir = project_dir.join(".state").join("runtime");
+    let local_dir = runtime_dir.join("local");
+    if let Ok(Some(env_file)) = read_env_file(&local_dir) {
+        return Ok(env_file.session_id);
+    }
     match read_env_file(&runtime_dir)? {
         Some(env_file) => Ok(env_file.session_id),
         None => Err(SessionError::NoActiveSession),
@@ -275,9 +266,13 @@ fn current_env_file_inner(
     project_dir: &Path,
     worktree_path: Option<&str>,
 ) -> Result<Option<EnvFile>, SessionError> {
-    // Check worktree-local env file first.
+    // Check worktree-local env file first (new layout: runtime/local/).
     if let Some(wt_path) = worktree_path {
         let wp = WorktreePaths::new(wt_path);
+        if let Ok(Some(env_file)) = read_env_file(&wp.runtime_local_dir()) {
+            return Ok(Some(env_file));
+        }
+        // Backward compat: check old flat layout (runtime/).
         if let Ok(Some(env_file)) = read_env_file(&wp.runtime_dir()) {
             return Ok(Some(env_file));
         }
@@ -290,6 +285,10 @@ fn current_env_file_inner(
     }
     // Safe: 0 or 1 active worktree -- main file is the only writer.
     let runtime_dir = project_dir.join(".state").join("runtime");
+    let local_dir = runtime_dir.join("local");
+    if let Ok(Some(env_file)) = read_env_file(&local_dir) {
+        return Ok(Some(env_file));
+    }
     read_env_file(&runtime_dir)
 }
 

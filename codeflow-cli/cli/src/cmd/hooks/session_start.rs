@@ -60,6 +60,11 @@ pub(super) fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
 
 pub fn run(handler: SessionStartHandler) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
+    // Migrate runtime layout before any handler runs (idempotent).
+    if matches!(handler, SessionStartHandler::Init) {
+        let runtime_dir = project_dir.join(".state").join("runtime");
+        codeflow_core::session::migrate_runtime_layout(&runtime_dir);
+    }
     let h = build_handler(handler, project_dir);
     helpers::run_hook_handler(h.as_ref());
 }
