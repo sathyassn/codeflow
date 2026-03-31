@@ -28,6 +28,7 @@ libc = "0.2"
 proptest = "1"
 insta = { version = "1", features = ["json"] }
 tempfile = "3"
+ctor = "0.2"
 
 # Note: cargo-nextest and cargo-llvm-cov are installed tools, NOT Cargo deps.
 

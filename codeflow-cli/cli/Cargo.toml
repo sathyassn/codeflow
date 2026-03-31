@@ -25,6 +25,7 @@ libc = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
+ctor = { workspace = true }
 
 [lints]
 workspace = true

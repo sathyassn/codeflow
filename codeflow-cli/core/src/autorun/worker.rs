@@ -11,6 +11,22 @@ use crate::error::AutorunError;
 
 use super::orchestrator::{WorkerConfig, WorkerResult};
 
+/// Append a timestamped log entry to a worker log file.
+fn worker_log(log_path: &std::path::Path, message: &str) {
+    use std::io::Write;
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = writeln!(f, "[{timestamp}] {message}");
+    }
+}
+
 /// Default timeout for a single worker (60 minutes).
 pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
@@ -289,6 +305,20 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         // Create the worktree for filesystem isolation.
         let wt_info = self.worktree.setup(&wt_name)?;
 
+        let log_path = self.project_dir.join(format!(
+            ".state/autorun/logs/{}/worker-{}.log",
+            cfg.session_id, cfg.task_id,
+        ));
+        worker_log(
+            &log_path,
+            &format!(
+                "WORKER_START task={} worktree={} session={}",
+                cfg.task_id,
+                wt_info.path.display(),
+                cfg.session_id,
+            ),
+        );
+
         // Write codeflow-env.sh into the worktree's runtime directory so
         // the SessionStart hook inside the worker detects the pre-created
         // worktree (task 015).
@@ -303,13 +333,6 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             &project_name,
             Some(&wt_info.path.to_string_lossy()),
         );
-
-        // Auto-start sync daemon if worktree count > 1.
-        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
-        if let Err(e) = crate::worktree::maybe_auto_start_daemon(&registry_path, &self.project_dir)
-        {
-            eprintln!("warning: daemon auto-start check failed: {e}");
-        }
 
         // Pre-acquire claims for file_scope at startup via acquire_batch().
         let state_path = self.project_dir.join(".state/coordination/state.loro");
@@ -400,6 +423,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
 
         // Create the tmux session.
         self.tmux.create_session(&tmux_name).await?;
+        worker_log(&log_path, &format!("TMUX_CREATED session={tmux_name}"));
 
         // Capture start time for duration tracking.
         let start_time = chrono::Utc::now();
@@ -427,7 +451,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
 
         // Create autorun_task_run record at task start.
-        let task_run_id = format!("atr-{}", cfg.task_id);
+        let task_run_id = format!("atr-{}-{}", cfg.session_id, cfg.task_id);
         let task_run_record = crate::models::AutorunTaskRun {
             id: task_run_id.clone(),
             worker_id: cfg.worker_id.clone(),
@@ -500,6 +524,12 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         })
         .await;
 
+        // Log Claude exit status.
+        match &result {
+            Ok(Ok(r)) => worker_log(&log_path, &format!("CLAUDE_EXIT code={}", r.exit_code)),
+            Ok(Err(e)) => worker_log(&log_path, &format!("CLAUDE_ERROR {e}")),
+            Err(_) => worker_log(&log_path, "CLAUDE_TIMEOUT"),
+        }
         // Merge conflict detection and remediation.
         if let Ok(Ok(ref invoke_result)) = result {
             if invoke_result.exit_code == 0 && !cfg.target.is_empty() {
@@ -667,12 +697,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         if let Err(e) = self.worktree.cleanup(&wt_name) {
             eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
         }
-
-        // Auto-stop the sync daemon if worktree count drops to <=1.
-        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
-        if let Err(e) = crate::worktree::maybe_auto_stop_daemon(&registry_path, &self.project_dir) {
-            eprintln!("warning: daemon auto-stop check failed: {e}");
-        }
+        worker_log(&log_path, "CLEANUP claims_released worktree_removed");
 
         let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
         let worker_result = match result {
@@ -1911,12 +1936,11 @@ Read and implement.
     }
 
     #[tokio::test]
-    async fn test_daemon_auto_stop_called_after_cleanup() {
-        // Verify that maybe_auto_stop_daemon is called after worktree cleanup.
-        // We test this indirectly: after a successful run, the registry_path
-        // would be checked. Since MockWorktree doesn't create a real registry,
-        // maybe_auto_stop_daemon will fail gracefully (eprintln warning),
-        // but the important thing is the worker completes without error.
+    async fn test_worker_cleanup_called_on_success() {
+        // Verify worktree cleanup is called on successful worker run.
+        // Daemon lifecycle was moved to orchestrator (not per-worker).
+        // This test confirms the worker completes and cleans up its worktree.
+
         let project_dir = make_project_dir();
         // Create the .state directory so the registry path is attempted.
         std::fs::create_dir_all(project_dir.path().join(".state")).unwrap();
@@ -1931,10 +1955,8 @@ Read and implement.
         assert_eq!(result.status, "completed");
         assert!(
             wt_cleanup.load(Ordering::SeqCst),
-            "worktree cleanup must be called before daemon auto-stop"
+            "worktree cleanup must be called on success"
         );
-        // The daemon auto-stop is called but fails gracefully (no real registry).
-        // This test confirms the code path executes without blocking the worker.
     }
 
     #[test]
@@ -2243,7 +2265,7 @@ Read and implement.
     fn make_worker_cfg(session_id: &str, task_id: &str) -> WorkerConfig {
         WorkerConfig {
             session_id: session_id.into(),
-            worker_id: format!("arw-{task_id}"),
+            worker_id: format!("arw-{session_id}-{task_id}"),
             worker_num: 1,
             task_id: task_id.into(),
             batch_name: "test-batch".into(),
@@ -2281,7 +2303,7 @@ Read and implement.
 
         // Verify autorun_worker was created and updated.
         let workers = store.autorun_workers.lock().unwrap();
-        let aw = workers.get("arw-task-a").unwrap();
+        let aw = workers.get("arw-ses-wr-test-task-a").unwrap();
         assert_eq!(aw.task_id, "task-a");
         assert_eq!(aw.file_scope, vec!["src/**/*.rs"]);
         assert_eq!(aw.scope_policy, "soft");
@@ -2314,7 +2336,7 @@ Read and implement.
 
         // Verify autorun_task_run was created and updated.
         let runs = store.autorun_task_runs.lock().unwrap();
-        let atr = runs.get("atr-task-b").unwrap();
+        let atr = runs.get("atr-ses-tr-test-task-b").unwrap();
         assert_eq!(atr.task_id, "task-b");
         assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Completed);
         assert_eq!(atr.exit_code, Some(0));
@@ -2346,11 +2368,11 @@ Read and implement.
         assert_eq!(result.status, "failed");
 
         let workers = store.autorun_workers.lock().unwrap();
-        let aw = workers.get("arw-task-fail").unwrap();
+        let aw = workers.get("arw-ses-fail-task-fail").unwrap();
         assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Failed);
 
         let runs = store.autorun_task_runs.lock().unwrap();
-        let atr = runs.get("atr-task-fail").unwrap();
+        let atr = runs.get("atr-ses-fail-task-fail").unwrap();
         assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
         assert_eq!(atr.exit_code, Some(1));
     }
@@ -2378,12 +2400,12 @@ Read and implement.
         assert!(result.is_err());
 
         let workers = store.autorun_workers.lock().unwrap();
-        let aw = workers.get("arw-task-err").unwrap();
+        let aw = workers.get("arw-ses-err-task-err").unwrap();
         assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Failed);
         assert!(aw.completed_at.is_some());
 
         let runs = store.autorun_task_runs.lock().unwrap();
-        let atr = runs.get("atr-task-err").unwrap();
+        let atr = runs.get("atr-ses-err-task-err").unwrap();
         assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
         assert!(atr.error_message.is_some());
     }
@@ -2411,11 +2433,11 @@ Read and implement.
         assert_eq!(result.status, "timeout");
 
         let workers = store.autorun_workers.lock().unwrap();
-        let aw = workers.get("arw-task-to").unwrap();
+        let aw = workers.get("arw-ses-to-task-to").unwrap();
         assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Timeout);
 
         let runs = store.autorun_task_runs.lock().unwrap();
-        let atr = runs.get("atr-task-to").unwrap();
+        let atr = runs.get("atr-ses-to-task-to").unwrap();
         assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Timeout);
     }
 

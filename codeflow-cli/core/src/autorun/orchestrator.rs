@@ -500,7 +500,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                 self.runner.clone(),
                 WorkerConfig {
                     session_id: session_id.to_string(),
-                    worker_id: format!("arw-{task_id}"),
+                    worker_id: format!("arw-{session_id}-{task_id}"),
                     worker_num: idx + 1,
                     task_id: task_id.clone(),
                     batch_name: batch.name.clone(),

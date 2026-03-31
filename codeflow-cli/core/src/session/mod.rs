@@ -146,10 +146,36 @@ fn resolve_worktree_path_inner(
             return Some(wt_path.to_string());
         }
     }
-    // 2. Per-PID env file: avoids race when env var is missing or stale.
-    let pid = pid_override.unwrap_or_else(std::process::id);
+    // 2. Per-PID env file: use Claude Code's PID (grandparent), not our own PID.
+    // Hook subprocesses are ephemeral (sh -c -> codeflow), so std::process::id()
+    // won't match any per-PID file. Per-PID files are keyed by the Claude Code
+    // process PID, which is our grandparent in the hook process tree.
+    let pid = pid_override.unwrap_or_else(process::get_claude_code_pid);
     let runtime_dir = project_dir.join(".state").join("runtime");
-    read_pid_env_file(&runtime_dir, pid)
+    if let Some(wt_path) = read_pid_env_file(&runtime_dir, pid) {
+        return Some(wt_path);
+    }
+    // 3. Fallback: if project_dir is a worktree, the per-PID file lives in the
+    // MAIN repo's .state/runtime/ (runtime is LOCAL, not symlinked). Detect the
+    // main repo root via the .git file pointer and search there.
+    let git_path = project_dir.join(".git");
+    if git_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&git_path) {
+            let gitdir = content.strip_prefix("gitdir: ").unwrap_or(&content).trim();
+            // gitdir is like: /repo/.git/worktrees/name -> walk up to repo root
+            if let Some(repo_root) = std::path::Path::new(gitdir)
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+            {
+                let main_runtime = repo_root.join(".state").join("runtime");
+                if main_runtime != runtime_dir {
+                    return read_pid_env_file(&main_runtime, pid);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Check if the worktree registry has more than one active worktree.

@@ -24,6 +24,9 @@ pub enum AutorunCommand {
             default_value = ".codeflow/config/autorun/batch.yaml"
         )]
         batch: PathBuf,
+        /// Run in foreground (default: detach to tmux session)
+        #[arg(long, visible_alias = "fg")]
+        foreground: bool,
     },
     /// Show status of active autorun batches
     Status {
@@ -98,14 +101,14 @@ pub enum AutorunCommand {
 pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
     match command {
-        Some(AutorunCommand::Run { batch }) => {
+        Some(AutorunCommand::Run { batch, foreground }) => {
             let batch_path = if batch.as_path() == Path::new(".codeflow/config/autorun/batch.yaml")
             {
                 project_dir.join(".codeflow/config/autorun/batch.yaml")
             } else {
                 batch
             };
-            run_with_dir(&project_dir, &batch_path).await
+            run_with_dir(&project_dir, &batch_path, foreground).await
         }
         Some(AutorunCommand::Status {
             batch,
@@ -138,9 +141,37 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
         }) => run_history(&project_dir, limit, since, status, batch_name, all).await,
         None => {
             let batch_path = project_dir.join(".codeflow/config/autorun/batch.yaml");
-            run_with_dir(&project_dir, &batch_path).await
+            run_with_dir(&project_dir, &batch_path, false).await
         }
     }
+}
+
+/// Resolve a path to the real git repository root.
+///
+/// Worktrees have a `.git` file (containing `gitdir: ...`) instead of a
+/// `.git` directory. This function detects worktree paths and resolves
+/// them to the actual repository root, ensuring autorun always creates
+/// worker worktrees in the correct location.
+fn resolve_repo_root(dir: &Path) -> Result<PathBuf> {
+    let git_path = dir.join(".git");
+    if git_path.is_file() {
+        // This is a worktree — .git is a file pointing to the real repo.
+        let content =
+            std::fs::read_to_string(&git_path).context("reading .git file in worktree")?;
+        let gitdir = content.strip_prefix("gitdir: ").unwrap_or(&content).trim();
+        // gitdir is like: /repo/.git/worktrees/name
+        // Walk up: worktrees/ -> .git/ -> repo root
+        let gitdir_path = PathBuf::from(gitdir);
+        if let Some(repo_root) = gitdir_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+        {
+            return Ok(repo_root.to_path_buf());
+        }
+    }
+    // .git is a directory (or doesn't exist) — already at repo root.
+    Ok(dir.to_path_buf())
 }
 
 /// Check that tmux is available and the working tree is clean.
@@ -215,11 +246,19 @@ fn check_target_branch(project_dir: &Path, target: &str) -> Result<()> {
     anyhow::bail!("target branch '{target}' does not exist locally or at origin/{target}");
 }
 
-async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
+async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -> Result<()> {
     use codeflow_core::store::DataStore;
+
+    // Autorun MUST work from the real repo root, not a worktree.
+    let project_dir = &resolve_repo_root(project_dir)?;
 
     // Phase 1: Pre-flight checks (before batch parse).
     preflight_checks(project_dir)?;
+
+    // Detach to tmux if not foreground and stdout is a TTY.
+    if !foreground && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return run_detached(project_dir, batch_path);
+    }
 
     // Phase 2: Parse batch.
     if !batch_path.exists() {
@@ -250,8 +289,7 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
     let session_id = codeflow_core::session::generate_session_id();
 
     // Create the worker runner with real implementations.
-    let worktree_provider =
-        codeflow_core::autorun::RealWorktreeProvider::new(project_dir.to_path_buf());
+    let worktree_provider = codeflow_core::autorun::RealWorktreeProvider::new(project_dir.clone());
     let tmux = RealTmux;
     let worker_timeout = Duration::from_secs(config.autorun.worker_timeout_secs);
     let claude = RealClaude {
@@ -273,12 +311,18 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
         tmux,
         claude,
         worktree_provider,
-        project_dir.to_path_buf(),
+        project_dir.clone(),
         worker_timeout,
         store.clone(),
     );
 
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
+
+    // Start sync daemon once (not per-worker) before orchestrator execution.
+    let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+    if let Err(e) = codeflow_core::worktree::maybe_auto_start_daemon(&registry_path, project_dir) {
+        eprintln!("warning: daemon auto-start failed: {e}");
+    }
 
     let start_time = chrono::Utc::now();
 
@@ -314,7 +358,60 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path) -> Result<()> {
         Err(e) => eprintln!("warning: failed to generate batch report: {e}"),
     }
 
+    // Stop sync daemon after orchestrator completes.
+    if let Err(e) = codeflow_core::worktree::maybe_auto_stop_daemon(&registry_path, project_dir) {
+        eprintln!("warning: daemon auto-stop failed: {e}");
+    }
+
     report_results(&results)
+}
+
+/// Launch the orchestrator in a dedicated tmux session and return immediately.
+fn run_detached(project_dir: &Path, batch_path: &Path) -> Result<()> {
+    let orch_session = "cf-autorun-orchestrator";
+
+    // Kill any existing orchestrator session.
+    let _ = std::process::Command::new("tmux")
+        .args(["kill-session", "-t", orch_session])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    // Create a new tmux session for the orchestrator.
+    let status = std::process::Command::new("tmux")
+        .args(["new-session", "-d", "-s", orch_session])
+        .status()
+        .context("failed to create tmux session for orchestrator")?;
+    if !status.success() {
+        anyhow::bail!("failed to create tmux session '{orch_session}'");
+    }
+
+    // Build the foreground command to run inside the tmux session.
+    let exe = std::env::current_exe().context("getting current executable path")?;
+    let batch_str = batch_path.to_string_lossy();
+    let cmd = format!(
+        "cd '{}' && '{}' autorun run --batch '{}' --foreground",
+        project_dir.to_string_lossy().replace('\'', "'\\''"),
+        exe.to_string_lossy().replace('\'', "'\\''"),
+        batch_str.replace('\'', "'\\''"),
+    );
+
+    let send_status = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", orch_session, &cmd, "Enter"])
+        .status()
+        .context("failed to send command to orchestrator tmux session")?;
+    if !send_status.success() {
+        anyhow::bail!("failed to send orchestrator command to tmux");
+    }
+
+    println!("autorun orchestrator launched in tmux session: {orch_session}");
+    println!();
+    println!("  Monitor:  codeflow autorun status --watch");
+    println!("  Attach:   tmux attach -t {orch_session}");
+    println!("  Worker:   codeflow autorun attach <task-id>");
+    println!("  Abort:    codeflow autorun abort");
+
+    Ok(())
 }
 
 /// Metadata for a batch report.
@@ -1176,6 +1273,9 @@ async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     use codeflow_core::store::DataStore;
     use codeflow_core::types::{AutorunSessionStatus, AutorunTaskRunStatus};
 
+    // Autorun MUST work from the real repo root, not a worktree.
+    let project_dir = &resolve_repo_root(project_dir)?;
+
     let store = open_store(project_dir).await?;
 
     // Find the target session.
@@ -1281,8 +1381,7 @@ async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
 
     let new_session_id = codeflow_core::session::generate_session_id();
 
-    let worktree_provider =
-        codeflow_core::autorun::RealWorktreeProvider::new(project_dir.to_path_buf());
+    let worktree_provider = codeflow_core::autorun::RealWorktreeProvider::new(project_dir.clone());
     let tmux = RealTmux;
     let worker_timeout = Duration::from_secs(config.autorun.worker_timeout_secs);
     let claude = RealClaude {
@@ -1293,12 +1392,18 @@ async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
         tmux,
         claude,
         worktree_provider,
-        project_dir.to_path_buf(),
+        project_dir.clone(),
         worker_timeout,
         store.clone(),
     );
 
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
+
+    // Start sync daemon once before orchestrator execution.
+    let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+    if let Err(e) = codeflow_core::worktree::maybe_auto_start_daemon(&registry_path, project_dir) {
+        eprintln!("warning: daemon auto-start failed: {e}");
+    }
 
     let results = orchestrator
         .execute_with_batch_file(
@@ -1312,6 +1417,11 @@ async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
         )
         .await
         .context("executing resume batch")?;
+
+    // Stop sync daemon after orchestrator completes.
+    if let Err(e) = codeflow_core::worktree::maybe_auto_stop_daemon(&registry_path, project_dir) {
+        eprintln!("warning: daemon auto-stop failed: {e}");
+    }
 
     report_results(&results)
 }
@@ -1760,7 +1870,7 @@ mod tests {
         init_git_repo(dir.path());
         let batch_path = dir.path().join(".codeflow/config/autorun/batch.yaml");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -1782,7 +1892,7 @@ mod tests {
         commit_all(dir.path());
         let rt = tokio::runtime::Runtime::new().unwrap();
         // Will fail at target branch check or tmux level, but should get past parsing.
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         let _ = result;
     }
 
@@ -1798,7 +1908,7 @@ mod tests {
         std::fs::write(&batch_path, "{{invalid yaml").unwrap();
         commit_all(dir.path());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         assert!(result.is_err());
         let msg = format!("{:#}", result.unwrap_err());
         assert!(
@@ -2667,7 +2777,7 @@ tasks:
         commit_all(dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         // Will fail at target branch or orchestrator/tmux level, but exercises
         // config + batch + session ID paths.
         let _ = result;
@@ -2688,7 +2798,7 @@ tasks:
         commit_all(dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         let _ = result;
     }
 
@@ -2821,7 +2931,7 @@ tasks:
         std::fs::write(&batch_path, "name: test\ntasks:\n  - id: t1\n").unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(run_with_dir(dir.path(), &batch_path));
+        let result = rt.block_on(run_with_dir(dir.path(), &batch_path, true));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         // Should fail on git-dirty, not on batch parse or tmux.

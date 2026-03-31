@@ -41,6 +41,29 @@ pub use types::{
     SessionStatus, TaskId, TaskStatus, WorkId, WorkStage, WorkType,
 };
 
+/// Test environment isolation: strips CodeFlow env vars before any test runs.
+/// Prevents worktree env pollution from corrupting test state.
+#[cfg(test)]
+#[ctor::ctor]
+fn strip_codeflow_env() {
+    for var in [
+        "CODEFLOW_WORKTREE_PATH",
+        "CODEFLOW_SESSION_ID",
+        "CF_PROJECT_ROOT",
+        "AUTORUN_SESSION_ID",
+        "AUTORUN_BATCH_ID",
+        "AUTORUN_TASK_ID",
+        "AUTORUN_ACCEPTANCE",
+        "CODEFLOW_WORKTREE_MODE",
+    ] {
+        // SAFETY: This runs before any test thread spawns (ctor guarantees
+        // single-threaded execution). No other thread reads these vars.
+        unsafe {
+            std::env::remove_var(var);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
