@@ -1281,35 +1281,27 @@ impl ProtectionGuard {
     }
 
     /// Read worktree name from `CODEFLOW_WORKTREE_PATH` env var,
-    /// falling back to per-PID env file, then `.state/runtime/codeflow-env.sh`.
+    /// falling back to `.state/runtime/codeflow-env.sh` if the env var is unset.
     fn read_worktree_name() -> Option<String> {
         Self::read_worktree_name_with_project(None)
     }
 
     /// Inner implementation that accepts an optional project dir for testing.
     fn read_worktree_name_with_project(project_dir: Option<&Path>) -> Option<String> {
-        // 1. Try env var first.
+        // Try env var first.
         if let Ok(p) = std::env::var("CODEFLOW_WORKTREE_PATH") {
             return Path::new(&p)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string());
         }
 
+        // Fallback: use session::read_env_file to parse codeflow-env.sh.
         let runtime_dir = if let Some(dir) = project_dir {
             dir.join(".state/runtime")
         } else {
             PathBuf::from(".state/runtime")
         };
 
-        // 2. Try per-PID env file (avoids shared-file race in parallel sessions).
-        let pid = std::process::id();
-        if let Some(wt_path) = crate::session::read_pid_env_file(&runtime_dir, pid) {
-            return Path::new(&wt_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string());
-        }
-
-        // 3. Fallback: use session::read_env_file to parse shared codeflow-env.sh.
         if let Ok(Some(env)) = crate::session::read_env_file(&runtime_dir) {
             if let Some(wt_path) = env.worktree_path {
                 return Path::new(&wt_path)
@@ -3049,30 +3041,6 @@ mod tests {
             unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", val) };
         }
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_read_worktree_name_fallback_to_pid_env_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
-        // Write a per-PID env file for the current process.
-        let pid = std::process::id();
-        crate::session::write_pid_env_file(
-            &runtime_dir,
-            pid,
-            "/project/.git-worktrees/worktree-ses-pid123",
-        );
-        let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
-        // SAFETY: Test-only env var manipulation.
-        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
-        let result = ProtectionGuard::read_worktree_name_with_project(Some(dir.path()));
-        if let Some(val) = prev {
-            unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", val) };
-        }
-        // Clean up per-PID file so it doesn't affect other tests.
-        crate::session::remove_pid_env_file(&runtime_dir, pid);
-        assert_eq!(result, Some("worktree-ses-pid123".to_string()));
     }
 
     #[test]

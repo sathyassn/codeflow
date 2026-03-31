@@ -120,49 +120,15 @@ pub fn is_valid_session_id(value: &str) -> bool {
     }
 }
 
-/// Resolve the worktree path for this process.
-///
-/// Checks `CODEFLOW_WORKTREE_PATH` env var first, then falls back to the
-/// per-PID env file (`codeflow-env-{pid}.sh`). Returns `None` if neither
-/// source provides a worktree path.
-///
-/// The per-PID file is written during worktree setup and is scoped to the
-/// process, avoiding the shared-file overwrite race in parallel sessions.
-fn resolve_worktree_path(project_dir: &Path) -> Option<String> {
-    let env_val = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
-    resolve_worktree_path_inner(project_dir, env_val.as_deref(), None)
-}
-
-/// Inner implementation with explicit env var value and optional PID override
-/// for testability (avoids reading real env vars in tests).
-fn resolve_worktree_path_inner(
-    project_dir: &Path,
-    env_var_value: Option<&str>,
-    pid_override: Option<u32>,
-) -> Option<String> {
-    // 1. Env var takes priority (always correct when set by the same process).
-    if let Some(wt_path) = env_var_value {
-        if !wt_path.is_empty() {
-            return Some(wt_path.to_string());
-        }
-    }
-    // 2. Per-PID env file: avoids race when env var is missing or stale.
-    let pid = pid_override.unwrap_or_else(std::process::id);
-    let runtime_dir = project_dir.join(".state").join("runtime");
-    read_pid_env_file(&runtime_dir, pid)
-}
-
 /// Resolve the current session ID from the env file (worktree-aware).
 ///
-/// Resolution order:
-/// 1. `CODEFLOW_WORKTREE_PATH` env var -> worktree's env file
-/// 2. Per-PID env file (`codeflow-env-{pid}.sh`) -> worktree path -> worktree's env file
-/// 3. Main project env file (`{project_dir}/.state/runtime/codeflow-env.sh`)
+/// Checks `CODEFLOW_WORKTREE_PATH` env var first. If set and a valid env file
+/// exists at `{worktree}/.state/runtime/codeflow-env.sh`, reads from there.
+/// Otherwise falls back to `{project_dir}/.state/runtime/codeflow-env.sh`.
 ///
-/// The per-PID file bridges a race condition in parallel worktree sessions:
-/// both sessions write to the shared main env file, so the second overwrites
-/// the first. The per-PID file is scoped to the process and points to the
-/// correct worktree.
+/// Takes `project_dir` (the repository root) and internally constructs the
+/// canonical path to the env file. This eliminates ambiguity -- callers no
+/// longer need to know the internal `.state/runtime` layout.
 ///
 /// # Errors
 ///
@@ -170,7 +136,7 @@ fn resolve_worktree_path_inner(
 /// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file read
 /// or parse errors.
 pub fn current_session_id(project_dir: &Path) -> Result<SessionId, SessionError> {
-    let worktree_path = resolve_worktree_path(project_dir);
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
     current_session_id_inner(project_dir, worktree_path.as_deref())
 }
 
@@ -206,7 +172,7 @@ fn current_session_id_inner(
 /// Returns `SessionError::Io` or `SessionError::InvalidSessionId` on file
 /// read or parse errors.
 pub fn current_env_file(project_dir: &Path) -> Result<Option<EnvFile>, SessionError> {
-    let worktree_path = resolve_worktree_path(project_dir);
+    let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
     current_env_file_inner(project_dir, worktree_path.as_deref())
 }
 
@@ -676,224 +642,5 @@ mod tests {
     fn test_is_valid_session_id_legacy_valid_boundary() {
         // Exactly 25-char suffix: 13 digits + 12 lowercase hex.
         assert!(is_valid_session_id("ses-1234567890123abcdef012345"));
-    }
-
-    // --- resolve_worktree_path tests ---
-
-    #[test]
-    fn test_resolve_worktree_path_from_pid_file() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let runtime_dir = project_dir.path().join(".state").join("runtime");
-        let fake_pid = 99990;
-
-        // Write a per-PID env file pointing to a worktree.
-        write_pid_env_file(&runtime_dir, fake_pid, "/path/to/worktree-a");
-
-        // No env var, should read from PID file.
-        let result =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(fake_pid));
-        assert_eq!(result, Some("/path/to/worktree-a".to_string()));
-    }
-
-    #[test]
-    fn test_resolve_worktree_path_no_pid_file_returns_none() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let fake_pid = 99991;
-
-        // No PID file exists and no env var.
-        let result =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(fake_pid));
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_resolve_worktree_path_env_var_takes_priority() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let runtime_dir = project_dir.path().join(".state").join("runtime");
-        let fake_pid = 99997;
-
-        // Write a per-PID file pointing to worktree-b.
-        write_pid_env_file(&runtime_dir, fake_pid, "/path/to/worktree-b");
-
-        // Env var points to worktree-a -- should take priority.
-        let result = resolve_worktree_path_inner(
-            project_dir.path(),
-            Some("/path/to/worktree-a"),
-            Some(fake_pid),
-        );
-        assert_eq!(result, Some("/path/to/worktree-a".to_string()));
-    }
-
-    #[test]
-    fn test_resolve_worktree_path_empty_env_var_uses_pid_file() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let runtime_dir = project_dir.path().join(".state").join("runtime");
-        let fake_pid = 99998;
-
-        write_pid_env_file(&runtime_dir, fake_pid, "/path/to/worktree-c");
-
-        // Empty env var should be treated as unset, falling through to PID file.
-        let result =
-            resolve_worktree_path_inner(project_dir.path(), Some(""), Some(fake_pid));
-        assert_eq!(result, Some("/path/to/worktree-c".to_string()));
-    }
-
-    #[test]
-    fn test_current_session_id_via_pid_file_resolution() {
-        // Simulate: env var not set, but per-PID file points to worktree
-        // that has a valid codeflow-env.sh with session ID.
-        let project_dir = tempfile::tempdir().unwrap();
-        let worktree_dir = tempfile::tempdir().unwrap();
-        let fake_pid = 99992;
-
-        let worktree_sid = SessionId::new_unchecked("ses-01jq7pidrestest123456789");
-        let project_sid = SessionId::new_unchecked("ses-01jq7projectoverwritten9");
-
-        // Write env file in main project (would be overwritten by session B).
-        let project_runtime = project_dir.path().join(".state").join("runtime");
-        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
-
-        // Write env file in worktree (correct for session A).
-        let wt_paths = WorktreePaths::new(worktree_dir.path());
-        write_env_file_with_worktree(
-            &wt_paths.runtime_dir(),
-            &worktree_sid,
-            "codeflow",
-            Some(worktree_dir.path().to_str().unwrap()),
-        )
-        .unwrap();
-
-        // Write per-PID file pointing to the worktree.
-        write_pid_env_file(
-            &project_runtime,
-            fake_pid,
-            worktree_dir.path().to_str().unwrap(),
-        );
-
-        // Resolve using per-PID file (no env var).
-        let wt_path =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(fake_pid));
-        let result =
-            current_session_id_inner(project_dir.path(), wt_path.as_deref()).unwrap();
-
-        assert_eq!(
-            result, worktree_sid,
-            "should resolve session ID via per-PID file -> worktree env file"
-        );
-    }
-
-    #[test]
-    fn test_parallel_sessions_different_pid_files() {
-        // Two parallel sessions with different PIDs should resolve to
-        // their own worktrees via per-PID files.
-        let project_dir = tempfile::tempdir().unwrap();
-        let wt_a = tempfile::tempdir().unwrap();
-        let wt_b = tempfile::tempdir().unwrap();
-
-        let sid_a = SessionId::new_unchecked("ses-01jq7parallela1234567890");
-        let sid_b = SessionId::new_unchecked("ses-01jq7parallelb1234567890");
-        let pid_a: u32 = 99993;
-        let pid_b: u32 = 99994;
-
-        let project_runtime = project_dir.path().join(".state").join("runtime");
-
-        // Write per-PID files.
-        write_pid_env_file(&project_runtime, pid_a, wt_a.path().to_str().unwrap());
-        write_pid_env_file(&project_runtime, pid_b, wt_b.path().to_str().unwrap());
-
-        // Write worktree env files.
-        let wt_a_paths = WorktreePaths::new(wt_a.path());
-        write_env_file_with_worktree(
-            &wt_a_paths.runtime_dir(),
-            &sid_a,
-            "codeflow",
-            Some(wt_a.path().to_str().unwrap()),
-        )
-        .unwrap();
-
-        let wt_b_paths = WorktreePaths::new(wt_b.path());
-        write_env_file_with_worktree(
-            &wt_b_paths.runtime_dir(),
-            &sid_b,
-            "codeflow",
-            Some(wt_b.path().to_str().unwrap()),
-        )
-        .unwrap();
-
-        // Each PID resolves to its own worktree (no env var).
-        let wt_path_a =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(pid_a));
-        let result_a =
-            current_session_id_inner(project_dir.path(), wt_path_a.as_deref()).unwrap();
-
-        let wt_path_b =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(pid_b));
-        let result_b =
-            current_session_id_inner(project_dir.path(), wt_path_b.as_deref()).unwrap();
-
-        assert_eq!(result_a, sid_a, "PID A should resolve to session A");
-        assert_eq!(result_b, sid_b, "PID B should resolve to session B");
-        assert_ne!(result_a, result_b, "parallel sessions should differ");
-    }
-
-    #[test]
-    fn test_resolve_worktree_path_pid_file_fallback_to_main() {
-        // When no PID file and no env var, current_session_id should
-        // fall back to the main project env file.
-        let project_dir = tempfile::tempdir().unwrap();
-        let project_sid = SessionId::new_unchecked("ses-01jq7nopidmain1234567890");
-        let fake_pid = 99995;
-
-        let project_runtime = project_dir.path().join(".state").join("runtime");
-        write_env_file(&project_runtime, &project_sid, "codeflow").unwrap();
-
-        // No PID file exists.
-        let wt_path =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(fake_pid));
-        assert!(wt_path.is_none(), "no PID file should yield None");
-
-        let result =
-            current_session_id_inner(project_dir.path(), wt_path.as_deref()).unwrap();
-        assert_eq!(
-            result, project_sid,
-            "should fall back to main env file when no PID file"
-        );
-    }
-
-    #[test]
-    fn test_current_env_file_via_pid_file_resolution() {
-        // current_env_file should also benefit from per-PID resolution.
-        let project_dir = tempfile::tempdir().unwrap();
-        let worktree_dir = tempfile::tempdir().unwrap();
-        let fake_pid = 99996;
-
-        let worktree_sid = SessionId::new_unchecked("ses-01jq7envpidtest123456789");
-        let wt_path_str = worktree_dir.path().to_str().unwrap();
-
-        let wt_paths = WorktreePaths::new(worktree_dir.path());
-        write_env_file_with_worktree(
-            &wt_paths.runtime_dir(),
-            &worktree_sid,
-            "codeflow",
-            Some(wt_path_str),
-        )
-        .unwrap();
-
-        let project_runtime = project_dir.path().join(".state").join("runtime");
-        write_pid_env_file(&project_runtime, fake_pid, wt_path_str);
-
-        // Resolve via PID file (no env var).
-        let wt_path =
-            resolve_worktree_path_inner(project_dir.path(), None, Some(fake_pid));
-        let env = current_env_file_inner(project_dir.path(), wt_path.as_deref())
-            .unwrap()
-            .expect("should return Some(EnvFile)");
-
-        assert_eq!(env.session_id, worktree_sid);
-        assert_eq!(
-            env.worktree_path.as_deref(),
-            Some(wt_path_str),
-            "worktree_path should be populated via PID file resolution"
-        );
     }
 }
