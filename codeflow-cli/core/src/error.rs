@@ -113,6 +113,9 @@ pub enum SessionError {
     #[error("no active session")]
     NoActiveSession,
 
+    #[error("ambiguous session: {0}")]
+    AmbiguousSession(String),
+
     #[error("session already ended: {0}")]
     AlreadyEnded(String),
 

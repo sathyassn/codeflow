@@ -316,6 +316,99 @@ New session proceeds with clean state
 
 ---
 
+## Session ID Resolution (`current_session_id()`)
+
+> Added by fix/worktree-stale-eviction (commits f26c3faa, pending)
+
+The `detect_project_dir()` chain (documented above) resolves the **project directory**. A separate chain in `current_session_id()` at `session/mod.rs` resolves the **session ID**. Before this fix, the session ID chain was simpler and vulnerable to a race condition in parallel worktree sessions.
+
+### The Race Condition
+
+When two parallel interactive sessions start, both write to the shared main `codeflow-env.sh`. The second session overwrites the first. When hooks in session A call `current_session_id()` and `CODEFLOW_WORKTREE_PATH` is not set (common after context overflow, teammate spawn, or tmux env propagation failure), they fall back to reading the shared main file and get session B's ID -- causing session A to operate in session B's worktree.
+
+### Three-Tier Resolution Order
+
+`current_session_id()` now uses `resolve_worktree_path()` to find the correct worktree before reading the session ID:
+
+```text
+Tier 1: CODEFLOW_WORKTREE_PATH env var        (session/mod.rs resolve_worktree_path)
+    |-- Set and non-empty? --> use as worktree path
+    |-- Not set or empty --> fall through
+    v
+Tier 2: Per-PID env file                      (session/mod.rs resolve_worktree_path)
+    |-- Read codeflow-env-{PID}.sh from main runtime dir
+    |-- Contains CODEFLOW_WORKTREE_PATH? --> use as worktree path
+    |-- Missing or empty --> fall through
+    v
+Tier 3: Registry guard + main env file        (session/mod.rs current_session_id_inner)
+    |-- Read worktrees.yaml, count active entries
+    |-- active_count > 1?
+    |   --> REFUSE: return SessionError::AmbiguousSession
+    |   (main file is unreliable -- could belong to any session)
+    |-- active_count <= 1?
+    |   --> SAFE: read main codeflow-env.sh (single writer, no conflict)
+    |-- Registry missing?
+    |   --> SAFE: assume non-worktree mode, read main file
+```
+
+### Why the Main File Is Still Needed
+
+The main `codeflow-env.sh` fallback is preserved for:
+
+1. **Non-worktree sessions** -- Single interactive sessions without worktree isolation. No per-PID file exists, no worktree env var. The main file is the only source.
+2. **CLI commands** -- `codeflow test`, `codeflow doctor`, etc. run outside Claude Code. No PID file, no env var. CWD walk finds the project root, main file provides the session ID.
+3. **Single-session worktree mode** -- When only one worktree is active, the main file is safe (single writer). The registry guard allows the fallback.
+4. **Backward compatibility** -- Older sessions or manual invocations that predate per-PID files.
+
+### Registry Guard
+
+The `has_multiple_active_worktrees()` function reads `worktrees.yaml` and counts entries with `status: active`. This is a simple line-scan (not YAML parsing) for performance:
+
+```rust
+let active_count = content.lines()
+    .filter(|line| line.contains("status: active"))
+    .count();
+```
+
+| Active count | Behavior | Rationale |
+|-------------|----------|-----------|
+| 0 | Allow main file fallback | No worktrees = non-worktree session |
+| 1 | Allow main file fallback | Single writer, no conflict possible |
+| > 1 | Return `AmbiguousSession` error | Main file could belong to any active session |
+| Registry missing | Allow main file fallback | Non-worktree mode or first-run |
+
+The guard is applied in both `current_session_id_inner()` and `current_env_file_inner()` (same logic, different return types).
+
+The same guard is applied in `ProtectionGuard::read_worktree_name_with_project()` (`pre_tool_use.rs`), which resolves the worktree name for staging directory scoping. When multiple worktrees are active and neither the env var nor per-PID file provides the path, it returns `None` rather than reading the potentially-wrong shared file.
+
+### `SessionError::AmbiguousSession`
+
+New error variant added to the `SessionError` enum (`error.rs`):
+
+```rust
+#[error("ambiguous session: {0}")]
+AmbiguousSession(String),
+```
+
+Callers that match on `SessionError` (primarily `session_start.rs` and `session_end.rs`) handle this as a non-fatal warning -- the session can still proceed using other resolution paths, or the caller can retry after the per-PID file is written.
+
+### Interaction with `detect_project_dir()`
+
+These are two independent resolution chains that serve different purposes:
+
+| Chain | Resolves | Used By | Source |
+|-------|----------|---------|--------|
+| `detect_project_dir()` | Project directory path | All hooks (via `helpers.rs`) | `cli/src/helpers.rs:20` |
+| `current_session_id()` | Session ID | Session-aware operations | `core/src/session/mod.rs` |
+
+Both chains now use per-PID files as a secondary source, but they read different data:
+- `detect_project_dir()` reads `CODEFLOW_WORKTREE_PATH` from the per-PID file to find the project root
+- `current_session_id()` reads `CODEFLOW_WORKTREE_PATH` from the per-PID file, then reads the worktree's `codeflow-env.sh` to get `CODEFLOW_SESSION_ID`
+
+The registry guard is only in the session ID chain (Tier 3), not in `detect_project_dir()`. Project directory resolution does not need the guard because it resolves to a directory path (which is always valid), not a session ID (which can be wrong).
+
+---
+
 ## CRDT Claims Comparison
 
 | Mode | Claim acquisition | Scope enforcement | When |
