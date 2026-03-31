@@ -345,7 +345,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 
 1. Complete task in WorkGraph (PF6-TSK-01, cf-knowledge-layer — `complete-work`, syncs Tier 2 markdown)
 2. Update project memory (PF6-TSK-02, cf-knowledge-layer — `record-session-summary`)
-3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown)
+3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown, per-worktree ledger JSONL fragments)
 4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
 5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event). In parallel sessions, merge conflict detection via `check_merge_conflicts()` runs before PR creation. PRs are serialized through the merge queue (`coordination/merge_queue.rs`).
 6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)

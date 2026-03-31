@@ -389,7 +389,7 @@
           "blocked_by": [
             "PF6-TSK-02"
           ],
-          "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state) via cf-git-operations",
+          "description": "Check for and commit any uncommitted changes (workgraph, state files, markdown task status files, session state, per-worktree ledger JSONL fragments in .state/ledger/) via cf-git-operations",
           "assigned_to": "cf-git-operations",
           "operation": "commit-outstanding-changes",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF6-TSK-02] when creating this task in the tracker.",
@@ -401,7 +401,7 @@
           "blocked_by": [
             "PF6-TSK-03"
           ],
-          "description": "Squash all branch commits into a single commit with a synthesized conventional-commit message before PR creation",
+          "description": "Squash all branch commits into a single commit with a synthesized conventional-commit message before PR creation. Pre-squash: verify no untracked ledger fragments remain (git status --short .state/ledger/)",
           "assigned_to": "cf-git-operations",
           "operation": "squash-branch",
           "blocked_by_enforcement": "Enforce addBlockedBy: [PF6-TSK-03] when creating this task in the tracker.",

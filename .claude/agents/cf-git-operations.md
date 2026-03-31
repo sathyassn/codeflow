@@ -220,6 +220,22 @@ cd "$GIT_DIR"
 
 ⚠️ This step MUST run AFTER cf-knowledge-layer's complete-work and record-session-summary, which write final JSONL events. Running commit-outstanding-changes before those operations guarantees ledger data is left uncommitted.
 
+### Step 3b: Pre-Squash Ledger Check
+
+**When:** MANDATORY step between PF6-TSK-03 (commit-outstanding-changes) and PF6-TSK-04 (squash-branch).
+
+**Pre-squash ledger check (MANDATORY):** Before squashing branch commits, run `git status --short .state/ledger/` to check for untracked or modified JSONL fragment files. Per-worktree ledger fragments (e.g., `work-graph-ses-*.jsonl`, `memory-events-ses-*.jsonl`) are Tier 0 source of truth and MUST be committed before squashing. These fragments are created per-session in subdirectories under `.state/ledger/` and will be untracked (`??`) — they need `git add` explicitly.
+
+**Procedure:**
+
+1. Run `git status --short .state/ledger/` to detect untracked (`??`) or modified fragment files
+2. If none found: proceed to Step 4 (squash)
+3. If untracked/modified ledger fragments found:
+   a. Stage them: `git add .state/ledger/`
+   b. Commit: `git commit -m "$(printf 'chore: commit ledger fragments before squash')"`
+   c. Report: `"GITOPS: Committed ledger fragments: {files}"`
+4. Proceed to Step 4 (squash)
+
 ### Step 4: Squash Branch Commits
 
 **When:** Team lead requests squash-branch at PF6-TSK-04, AFTER all work stages are complete, reviewed, and outstanding changes are committed (PF6-TSK-03).
