@@ -220,6 +220,20 @@ cd "$GIT_DIR"
 
 ⚠️ This step MUST run AFTER cf-knowledge-layer's complete-work and record-session-summary, which write final JSONL events. Running commit-outstanding-changes before those operations guarantees ledger data is left uncommitted.
 
+**Session Scope Constraint (MANDATORY):** The `commit-outstanding-changes` operation MUST only commit files that were modified by the CURRENT session. Do NOT sweep all uncommitted worktree changes into the commit. In worktree mode, other sessions' uncommitted work may exist in the worktree.
+
+Before committing, filter files to session scope:
+- Files in the task's `file_scope` — always include
+- `.state/ledger/*-{session_id}.jsonl` — per-session ledger fragments
+- Task markdown for the current task — always include
+- Epic markdown (current task's epic only, current task's row changes only)
+- `.state/runtime/` files — session state
+
+Do NOT include:
+- Other tasks' markdown files (even if modified)
+- Other sessions' audit/deliverable documents
+- Files that were uncommitted BEFORE this session started
+
 ### Step 3b: Pre-Squash Ledger Check
 
 **When:** MANDATORY step between PF6-TSK-03 (commit-outstanding-changes) and PF6-TSK-04 (squash-branch).

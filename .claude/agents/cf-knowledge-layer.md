@@ -262,6 +262,12 @@ Event types:
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: complete-work - {work_id} finalized"`
 
+**Session Scope Constraint (MANDATORY):** The `complete-work` operation MUST only modify the task being completed. Specifically:
+- Update ONLY the current task's row in the epic task table (not other tasks' rows)
+- Update ONLY the current task's markdown frontmatter (not sibling tasks)
+- Do NOT sync or reconcile other tasks' statuses during complete-work — other tasks belong to their own sessions
+- The epic rollup check (does the epic status change?) is read-only and acceptable, but do NOT write status changes for other tasks discovered during the check
+
 #### Step 6: Record Session Summary
 
 **Trigger:** Lead sends `record-session-summary` message (PF6-TSK-02, after complete-work).
