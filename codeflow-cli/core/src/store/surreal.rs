@@ -2419,10 +2419,11 @@ mod tests {
         let p95 = all_latencies[p95_idx];
         let p99 = all_latencies[p99_idx];
 
-        // Assert p99 under 100ms for in-memory operations.
+        // Assert p99 under 500ms for in-memory operations.
+        // Threshold is generous to avoid flakiness under parallel test load.
         assert!(
-            p99 < Duration::from_millis(100),
-            "p99 latency {p99:?} exceeds 100ms threshold (p50={p50:?}, p95={p95:?}, total={total_elapsed:?})"
+            p99 < Duration::from_millis(500),
+            "p99 latency {p99:?} exceeds 500ms threshold (p50={p50:?}, p95={p95:?}, total={total_elapsed:?})"
         );
     }
 

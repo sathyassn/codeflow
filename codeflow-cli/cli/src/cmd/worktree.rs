@@ -1,35 +1,35 @@
 //! Worktree command: git worktree lifecycle management.
 //!
-//! Supports subcommands: `list`, `cleanup`, `prune`, `repair`.
+//! Supports subcommands: `list`, `cleanup`, `repair`.
 //! Default (no subcommand) behaves like `list`.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use codeflow_core::worktree::{CleanupOpts, WorktreeManager};
+use codeflow_core::worktree::{CleanupOpts, WorktreeManager, WorktreeState};
 
 use crate::helpers;
 
 /// Worktree subcommands.
 #[derive(Debug, Subcommand)]
 pub enum WorktreeCommand {
-    /// List worktrees and their state
+    /// List worktrees and their state (includes liveness status)
     List,
-    /// Remove stale or inactive worktrees
+    /// Remove stale or inactive worktrees with liveness and branch safety checks
     Cleanup {
-        /// Force removal of orphaned worktrees (not just stale)
+        /// Force removal even of orphaned/unpushed worktrees
         #[arg(long)]
         force: bool,
         /// Report what would be removed without acting
         #[arg(long)]
         dry_run: bool,
-    },
-    /// Reconcile registry with filesystem
-    Prune {
-        /// Report inconsistencies without fixing
+        /// Show interactive prompts with branch/PR status before removal
+        #[arg(short, long)]
+        interactive: bool,
+        /// Maximum number of old removed entries to keep (default: 5)
         #[arg(long)]
-        dry_run: bool,
+        keep: Option<usize>,
     },
     /// Repair shared state symlinks in a worktree
     Repair {
@@ -44,10 +44,12 @@ pub fn run(command: Option<WorktreeCommand>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
     match command.as_ref() {
         Some(WorktreeCommand::List) | None => run_list(&project_dir),
-        Some(WorktreeCommand::Cleanup { force, dry_run }) => {
-            run_cleanup(&project_dir, *force, *dry_run)
-        }
-        Some(WorktreeCommand::Prune { dry_run }) => run_prune(&project_dir, *dry_run),
+        Some(WorktreeCommand::Cleanup {
+            force,
+            dry_run,
+            interactive,
+            keep,
+        }) => run_cleanup(&project_dir, *force, *dry_run, *interactive, *keep),
         Some(WorktreeCommand::Repair { path }) => run_repair(&project_dir, path.as_deref()),
     }
 }
@@ -64,26 +66,73 @@ fn run_list(project_dir: &Path) -> Result<()> {
 
     for entry in &entries {
         let state = mgr.detect_state(entry);
-        println!("{} ({}) [{}]", entry.name, entry.branch, state);
+        let liveness = mgr.liveness_status(entry);
+        println!("{} ({}) [{}] {}", entry.name, entry.branch, state, liveness);
     }
 
     Ok(())
 }
 
-fn run_cleanup(project_dir: &Path, force: bool, dry_run: bool) -> Result<()> {
+fn run_cleanup(
+    project_dir: &Path,
+    force: bool,
+    dry_run: bool,
+    interactive: bool,
+    keep: Option<usize>,
+) -> Result<()> {
     let mgr = WorktreeManager::new(project_dir);
     let opts = CleanupOpts {
         force,
         dry_run,
         prune: false,
+        interactive,
+        keep,
     };
+
+    if interactive && !dry_run {
+        // In interactive mode, show status of each candidate before removing.
+        let entries = mgr.list(None).context("listing worktrees")?;
+        let mut candidates = Vec::new();
+        for entry in &entries {
+            if entry.status == "removed" {
+                continue;
+            }
+            let state = mgr.detect_state(entry);
+            let liveness = mgr.liveness_status(entry);
+            if liveness == "ACTIVE" {
+                continue;
+            }
+            if state == WorktreeState::Active && !force {
+                continue;
+            }
+            let wt_path = std::path::Path::new(&entry.path);
+            let safety_msg = if wt_path.exists() {
+                let safety = codeflow_core::worktree::check_branch_safety(wt_path);
+                format!("risk={} {}", safety.risk, safety.message)
+            } else {
+                "directory missing".to_string()
+            };
+            println!(
+                "  {} ({}) [{}] {} -- {}",
+                entry.name, entry.branch, state, liveness, safety_msg
+            );
+            candidates.push(entry.name.clone());
+        }
+        if candidates.is_empty() {
+            println!("no worktrees to clean up");
+            return Ok(());
+        }
+        println!("\n{} candidate(s) for removal", candidates.len());
+    }
 
     let removed = mgr
         .cleanup_stale(&opts)
         .context("cleaning up stale worktrees")?;
 
     if removed.is_empty() {
-        println!("no worktrees to clean up");
+        if !interactive {
+            println!("no worktrees to clean up");
+        }
     } else if dry_run {
         println!("would remove {} worktree(s):", removed.len());
         for name in &removed {
@@ -93,45 +142,6 @@ fn run_cleanup(project_dir: &Path, force: bool, dry_run: bool) -> Result<()> {
         println!("removed {} worktree(s):", removed.len());
         for name in &removed {
             println!("  {name}");
-        }
-    }
-
-    Ok(())
-}
-
-fn run_prune(project_dir: &Path, dry_run: bool) -> Result<()> {
-    let mgr = WorktreeManager::new(project_dir);
-
-    let (stale, orphaned) = mgr
-        .reconcile_registry(dry_run)
-        .context("reconciling registry")?;
-
-    let prefix = if dry_run { "would fix" } else { "fixed" };
-
-    if stale.is_empty() && orphaned.is_empty() {
-        println!("registry is consistent");
-        return Ok(());
-    }
-
-    if !stale.is_empty() {
-        println!(
-            "{prefix}: {} stale registry entr{}:",
-            stale.len(),
-            if stale.len() == 1 { "y" } else { "ies" }
-        );
-        for name in &stale {
-            println!("  {name} (in registry, directory missing)");
-        }
-    }
-
-    if !orphaned.is_empty() {
-        println!(
-            "found {} orphaned director{}:",
-            orphaned.len(),
-            if orphaned.len() == 1 { "y" } else { "ies" }
-        );
-        for path in &orphaned {
-            println!("  {path} (on disk, not in registry)");
         }
     }
 
@@ -261,7 +271,7 @@ mod tests {
     #[test]
     fn test_cleanup_no_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_cleanup(dir.path(), false, false);
+        let result = run_cleanup(dir.path(), false, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -272,7 +282,7 @@ mod tests {
         let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, false);
+        let result = run_cleanup(dir.path(), false, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -298,7 +308,7 @@ mod tests {
         write_registry(&reg_path, &reg).unwrap();
 
         // Directory does not exist, so state is Stale -- cleanup should handle it.
-        let result = run_cleanup(dir.path(), false, false);
+        let result = run_cleanup(dir.path(), false, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -319,7 +329,7 @@ mod tests {
         });
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, true);
+        let result = run_cleanup(dir.path(), false, true, false, None);
         assert!(result.is_ok());
 
         // Registry should not have changed (dry run).
@@ -354,7 +364,7 @@ mod tests {
         let opts_no_force = CleanupOpts {
             force: false,
             dry_run: true,
-            prune: false,
+            ..CleanupOpts::default()
         };
         let removed_no_force = mgr.cleanup_stale(&opts_no_force).unwrap();
         assert!(
@@ -366,187 +376,11 @@ mod tests {
         let opts_force = CleanupOpts {
             force: true,
             dry_run: true,
-            prune: false,
+            ..CleanupOpts::default()
         };
         let removed_force = mgr.cleanup_stale(&opts_force).unwrap();
         assert_eq!(removed_force.len(), 1);
         assert_eq!(removed_force[0], "orphan-wt");
-    }
-
-    // -- prune subcommand tests --
-
-    #[test]
-    fn test_prune_no_registry() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = run_prune(dir.path(), false);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_prune_consistent_registry() {
-        let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
-        let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        write_registry(&reg_path, &reg).unwrap();
-
-        let result = run_prune(dir.path(), false);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_prune_detects_stale_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
-        let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        reg.worktrees.push(WorktreeEntry {
-            name: "ghost-wt".to_string(),
-            path: "/nonexistent/ghost-wt".to_string(),
-            branch: "feat/ghost".to_string(),
-            created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
-            session_id: None,
-            task_id: None,
-            source: None,
-        });
-        write_registry(&reg_path, &reg).unwrap();
-
-        let mgr = WorktreeManager::new(dir.path());
-        let (stale, _orphaned) = mgr.reconcile_registry(false).unwrap();
-        assert_eq!(stale.len(), 1);
-        assert_eq!(stale[0], "ghost-wt");
-
-        // Verify registry was updated.
-        let reg_after = codeflow_core::worktree::read_registry(&reg_path).unwrap();
-        assert_eq!(reg_after.worktrees[0].status, "removed");
-    }
-
-    #[test]
-    fn test_prune_detects_orphaned_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
-        let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        write_registry(&reg_path, &reg).unwrap();
-
-        // Create a directory that is not in the registry.
-        let orphan_dir = dir.path().join(".git-worktrees/orphan-dir");
-        std::fs::create_dir_all(&orphan_dir).unwrap();
-
-        let mgr = WorktreeManager::new(dir.path());
-        let (stale, orphaned) = mgr.reconcile_registry(false).unwrap();
-        assert!(stale.is_empty());
-        assert_eq!(orphaned.len(), 1);
-        assert!(orphaned[0].contains("orphan-dir"));
-    }
-
-    #[test]
-    fn test_prune_dry_run_does_not_modify() {
-        let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
-        let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        reg.worktrees.push(WorktreeEntry {
-            name: "ghost-wt".to_string(),
-            path: "/nonexistent/ghost-wt".to_string(),
-            branch: "feat/ghost".to_string(),
-            created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
-            session_id: None,
-            task_id: None,
-            source: None,
-        });
-        write_registry(&reg_path, &reg).unwrap();
-
-        let mgr = WorktreeManager::new(dir.path());
-        let (stale, _) = mgr.reconcile_registry(true).unwrap();
-        assert_eq!(stale.len(), 1);
-
-        // Registry should NOT be modified (dry run).
-        let reg_after = codeflow_core::worktree::read_registry(&reg_path).unwrap();
-        assert_eq!(reg_after.worktrees[0].status, "active");
-    }
-
-    #[test]
-    fn test_prune_concurrent_access() {
-        // Verify locked access by running prune in sequence.
-        let dir = tempfile::tempdir().unwrap();
-        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
-        let mut reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
-        reg.worktrees.push(WorktreeEntry {
-            name: "s1".to_string(),
-            path: "/nonexistent/s1".to_string(),
-            branch: "feat/s1".to_string(),
-            created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
-            session_id: None,
-            task_id: None,
-            source: None,
-        });
-        reg.worktrees.push(WorktreeEntry {
-            name: "s2".to_string(),
-            path: "/nonexistent/s2".to_string(),
-            branch: "feat/s2".to_string(),
-            created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
-            session_id: None,
-            task_id: None,
-            source: None,
-        });
-        write_registry(&reg_path, &reg).unwrap();
-
-        let mgr = WorktreeManager::new(dir.path());
-        let (stale, _) = mgr.reconcile_registry(false).unwrap();
-        assert_eq!(stale.len(), 2);
-    }
-
-    // -- integration test: create -> delete dir -> prune -> verify --
-
-    #[test]
-    fn test_integration_create_delete_prune() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // Initialize a git repo with an initial commit.
-        let repo = git2::Repository::init(dir.path()).unwrap();
-        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
-        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
-            .unwrap();
-
-        let mgr = WorktreeManager::new(dir.path())
-            .with_registry_path(dir.path().join(".state/worktrees/worktrees.yaml"));
-
-        // Create a worktree.
-        let branch = codeflow_core::types::BranchName::new_unchecked("feat/prune-test");
-        let entry = mgr.setup("prune-test", &branch).unwrap();
-        assert_eq!(entry.status, "active");
-
-        let wt_path = std::path::PathBuf::from(&entry.path);
-        assert!(wt_path.exists());
-
-        // Manually delete the worktree directory to simulate stale state.
-        std::fs::remove_dir_all(&wt_path).unwrap();
-        assert!(!wt_path.exists());
-
-        // Verify detect_state now returns Stale.
-        let entries = mgr.list(None).unwrap();
-        let our_entry = entries.iter().find(|e| e.name == "prune-test").unwrap();
-        assert_eq!(
-            mgr.detect_state(our_entry),
-            codeflow_core::worktree::WorktreeState::Stale
-        );
-
-        // Run prune (reconcile).
-        let (stale, _) = mgr.reconcile_registry(false).unwrap();
-        assert_eq!(stale.len(), 1);
-        assert_eq!(stale[0], "prune-test");
-
-        // Verify registry was updated: entry is now "removed".
-        let reg = codeflow_core::worktree::read_registry(mgr.registry_path()).unwrap();
-        let pruned = reg
-            .worktrees
-            .iter()
-            .find(|e| e.name == "prune-test")
-            .unwrap();
-        assert_eq!(pruned.status, "removed");
     }
 
     // -- CLI subcommand dispatch tests --
@@ -595,7 +429,9 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: false,
-                dry_run: false
+                dry_run: false,
+                interactive: false,
+                keep: None,
             })
         ));
     }
@@ -615,13 +451,15 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: true,
-                dry_run: true
+                dry_run: true,
+                interactive: false,
+                keep: None,
             })
         ));
     }
 
     #[test]
-    fn test_dispatch_prune() {
+    fn test_dispatch_cleanup_interactive() {
         use clap::Parser;
 
         #[derive(Debug, Parser)]
@@ -630,15 +468,20 @@ mod tests {
             command: Option<WorktreeCommand>,
         }
 
-        let cli = TestCli::try_parse_from(["test", "prune"]).unwrap();
+        let cli = TestCli::try_parse_from(["test", "cleanup", "-i"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(WorktreeCommand::Prune { dry_run: false })
+            Some(WorktreeCommand::Cleanup {
+                force: false,
+                dry_run: false,
+                interactive: true,
+                keep: None,
+            })
         ));
     }
 
     #[test]
-    fn test_dispatch_prune_dry_run() {
+    fn test_dispatch_cleanup_keep_param() {
         use clap::Parser;
 
         #[derive(Debug, Parser)]
@@ -647,10 +490,15 @@ mod tests {
             command: Option<WorktreeCommand>,
         }
 
-        let cli = TestCli::try_parse_from(["test", "prune", "--dry-run"]).unwrap();
+        let cli = TestCli::try_parse_from(["test", "cleanup", "--keep", "3"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(WorktreeCommand::Prune { dry_run: true })
+            Some(WorktreeCommand::Cleanup {
+                force: false,
+                dry_run: false,
+                interactive: false,
+                keep: Some(3),
+            })
         ));
     }
 

@@ -413,6 +413,18 @@ impl SessionEndCleanup {
             return;
         }
 
+        // Branch safety check before cleanup — warn but proceed (SessionEnd always uses force).
+        let wt_dir = Path::new(wt_path);
+        if wt_dir.exists() {
+            let safety = crate::worktree::check_branch_safety(wt_dir);
+            if safety.risk >= crate::worktree::BranchRisk::High {
+                result.warnings.push(format!(
+                    "SessionEnd: branch safety warning for '{wt_name}': {} (proceeding with force cleanup)",
+                    safety.message
+                ));
+            }
+        }
+
         let mgr = crate::worktree::WorktreeManager::new(project_dir);
         let opts = crate::worktree::CleanupOpts {
             force: true,

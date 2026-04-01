@@ -1,6 +1,7 @@
 //! Worktree removal and deregistration.
 //!
-//! Supports force removal, dry-run mode, and git worktree pruning.
+//! Supports force removal, dry-run mode, git worktree pruning,
+//! branch safety checks, and liveness verification.
 
 use std::fs;
 use std::path::Path;
@@ -13,6 +14,7 @@ use super::registry;
 
 /// Options for worktree cleanup behavior.
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CleanupOpts {
     /// Force removal even if the worktree has uncommitted changes
     /// or a `PathFlow` session is active.
@@ -22,6 +24,156 @@ pub struct CleanupOpts {
     /// Run `git worktree prune` to clean stale references.
     /// When true, the `name` parameter is ignored.
     pub prune: bool,
+    /// Show interactive prompts with branch/PR/commit status before removal.
+    pub interactive: bool,
+    /// Maximum number of "removed" entries to keep in registry during purge.
+    /// Defaults to 5 if `None`.
+    pub keep: Option<usize>,
+}
+
+/// Risk level for removing a worktree based on its branch state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BranchRisk {
+    /// Branch merged into main or PR merged — safe to remove.
+    None,
+    /// Branch pushed with an open PR — safe to remove with note.
+    Low,
+    /// Branch pushed but no PR exists — warn but proceed.
+    Medium,
+    /// Branch NOT pushed but no uncommitted changes — block unless forced.
+    High,
+    /// Branch NOT pushed AND has uncommitted changes — refuse unless forced.
+    Critical,
+}
+
+impl BranchRisk {
+    /// Human-readable label for this risk level.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+}
+
+impl std::fmt::Display for BranchRisk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Result of checking branch safety before worktree removal.
+#[derive(Debug, Clone)]
+pub struct BranchSafetyResult {
+    /// Assessed risk level.
+    pub risk: BranchRisk,
+    /// Branch name (empty for detached HEAD).
+    pub branch: String,
+    /// Whether the branch has been pushed to remote.
+    pub pushed: bool,
+    /// PR number if one exists for this branch (0 if none or unknown).
+    pub pr_number: u64,
+    /// PR state (e.g., "open", "merged", "closed", or empty).
+    pub pr_state: String,
+    /// Count of unpushed commits.
+    pub unpushed_commits: usize,
+    /// Whether the worktree has uncommitted (dirty) files.
+    pub has_uncommitted: bool,
+    /// Human-readable summary message.
+    pub message: String,
+}
+
+/// Check branch safety before removing a worktree.
+///
+/// Assesses the risk of data loss from removing the worktree by examining:
+/// - Whether the branch has been pushed to remote
+/// - Whether there are unpushed commits
+/// - Whether there are uncommitted changes
+/// - Whether a PR exists for the branch
+///
+/// This does NOT check PR state via `gh` to avoid network requirements.
+/// The caller can enhance with PR information if `gh` is available.
+#[must_use]
+pub fn check_branch_safety(wt_path: &Path) -> BranchSafetyResult {
+    // If not a git directory, it's safe to remove (orphaned).
+    if !wt_path.join(".git").exists() {
+        return BranchSafetyResult {
+            risk: BranchRisk::None,
+            branch: String::new(),
+            pushed: false,
+            pr_number: 0,
+            pr_state: String::new(),
+            unpushed_commits: 0,
+            has_uncommitted: false,
+            message: "not a git worktree — safe to remove".into(),
+        };
+    }
+
+    // Get current branch name.
+    let branch = get_branch_name(wt_path);
+
+    // Detached HEAD or main/master — safe to remove.
+    if branch.is_empty() || branch == "HEAD" || branch == "main" || branch == "master" {
+        return BranchSafetyResult {
+            risk: BranchRisk::None,
+            branch,
+            pushed: false,
+            pr_number: 0,
+            pr_state: String::new(),
+            unpushed_commits: 0,
+            has_uncommitted: false,
+            message: "detached HEAD or default branch — safe to remove".into(),
+        };
+    }
+
+    // Check for dirty/uncommitted files.
+    let has_uncommitted = has_dirty_files(wt_path);
+
+    // Check if branch is pushed to remote.
+    let (pushed, unpushed_commits) = check_push_status(wt_path, &branch);
+
+    // Determine risk level.
+    let (risk, message) = if !pushed && has_uncommitted {
+        (
+            BranchRisk::Critical,
+            format!("branch '{branch}' has unpushed commits AND uncommitted changes — BLOCKED"),
+        )
+    } else if !pushed {
+        (
+            BranchRisk::High,
+            format!(
+                "branch '{branch}' has {unpushed_commits} unpushed commit(s) — BLOCKED (push first or use --force)"
+            ),
+        )
+    } else {
+        // Branch is pushed — check if it's merged into main.
+        if is_branch_merged(wt_path, &branch) {
+            (
+                BranchRisk::None,
+                format!("branch '{branch}' is merged into main — safe to remove"),
+            )
+        } else {
+            (
+                BranchRisk::Medium,
+                format!("branch '{branch}' is pushed but no PR found — removing with warning"),
+            )
+        }
+    };
+
+    BranchSafetyResult {
+        risk,
+        branch,
+        pushed,
+        pr_number: 0,
+        pr_state: String::new(),
+        unpushed_commits,
+        has_uncommitted,
+        message,
+    }
 }
 
 /// Remove a worktree and deregister it from the registry.
@@ -214,6 +366,101 @@ fn remove_via_git2(mgr: &WorktreeManager, name: &str, force: bool) -> bool {
     wt.prune(Some(&mut prune_opts)).is_ok()
 }
 
+/// Get the current branch name from a worktree, or empty string for detached HEAD.
+fn get_branch_name(wt_path: &Path) -> String {
+    Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Check if a worktree has dirty (uncommitted) files.
+fn has_dirty_files(wt_path: &Path) -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(wt_path)
+        .output()
+        .ok()
+        .is_some_and(|o| !o.stdout.is_empty())
+}
+
+/// Check if a branch has been pushed to remote and count unpushed commits.
+///
+/// Returns `(is_pushed, unpushed_count)`.
+fn check_push_status(wt_path: &Path, branch: &str) -> (bool, usize) {
+    // Check if remote tracking branch exists.
+    let remote_ref = format!("origin/{branch}");
+    let remote_exists = Command::new("git")
+        .args(["rev-parse", "--verify", &remote_ref])
+        .current_dir(wt_path)
+        .output()
+        .ok()
+        .is_some_and(|o| o.status.success());
+
+    if !remote_exists {
+        // No remote tracking branch — check if any commits exist at all.
+        let commit_count = Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .current_dir(wt_path)
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+            })
+            .unwrap_or(0);
+
+        // No remote tracking: report at least 1 unpushed if commits exist.
+        return (false, usize::from(commit_count > 0));
+    }
+
+    // Count commits ahead of remote.
+    let log_range = format!("{remote_ref}..HEAD");
+    let unpushed = Command::new("git")
+        .args(["rev-list", "--count", &log_range])
+        .current_dir(wt_path)
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .unwrap_or(0);
+
+    (true, unpushed)
+}
+
+/// Check if a branch has been merged into main/master.
+fn is_branch_merged(wt_path: &Path, branch: &str) -> bool {
+    // Check if origin/main or origin/master contains the branch tip.
+    for main_ref in &["origin/main", "origin/master", "main", "master"] {
+        let output = Command::new("git")
+            .args(["branch", "--merged", main_ref])
+            .current_dir(wt_path)
+            .output();
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                let branches = String::from_utf8_lossy(&o.stdout);
+                for line in branches.lines() {
+                    let trimmed = line.trim().trim_start_matches("* ");
+                    if trimmed == branch {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Prune stale worktree references using git2.
 fn prune_worktrees(mgr: &WorktreeManager, dry_run: bool) -> Result<(), WorktreeError> {
     let repo = git2::Repository::open(mgr.project_dir())?;
@@ -244,6 +491,172 @@ mod tests {
         assert!(!opts.force);
         assert!(!opts.dry_run);
         assert!(!opts.prune);
+        assert!(!opts.interactive);
+        assert!(opts.keep.is_none());
+    }
+
+    #[test]
+    fn test_branch_risk_ordering() {
+        assert!(BranchRisk::None < BranchRisk::Low);
+        assert!(BranchRisk::Low < BranchRisk::Medium);
+        assert!(BranchRisk::Medium < BranchRisk::High);
+        assert!(BranchRisk::High < BranchRisk::Critical);
+    }
+
+    #[test]
+    fn test_branch_risk_display() {
+        assert_eq!(BranchRisk::None.as_str(), "none");
+        assert_eq!(BranchRisk::Low.as_str(), "low");
+        assert_eq!(BranchRisk::Medium.as_str(), "medium");
+        assert_eq!(BranchRisk::High.as_str(), "high");
+        assert_eq!(BranchRisk::Critical.as_str(), "critical");
+        assert_eq!(BranchRisk::Critical.to_string(), "critical");
+    }
+
+    #[test]
+    fn test_check_branch_safety_non_git_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = check_branch_safety(dir.path());
+        assert_eq!(result.risk, BranchRisk::None);
+        assert!(result.message.contains("not a git worktree"));
+    }
+
+    #[test]
+    fn test_check_branch_safety_detached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        repo.set_head_detached(oid).unwrap();
+
+        let result = check_branch_safety(dir.path());
+        assert_eq!(result.risk, BranchRisk::None);
+        assert!(result.message.contains("detached HEAD"));
+    }
+
+    #[test]
+    fn test_check_branch_safety_main_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = git2::Repository::init(dir.path()).unwrap();
+        // Set up git with initial commit on main
+        Command::new("git")
+            .args(["checkout", "-b", "main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let result = check_branch_safety(dir.path());
+        assert_eq!(result.risk, BranchRisk::None);
+    }
+
+    #[test]
+    fn test_check_branch_safety_unpushed_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat/unpushed-test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "feature work"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let result = check_branch_safety(dir.path());
+        assert_eq!(result.risk, BranchRisk::High);
+        assert!(!result.pushed);
+        assert!(result.message.contains("BLOCKED"));
+    }
+
+    #[test]
+    fn test_check_branch_safety_unpushed_with_dirty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat/dirty-test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create a dirty file
+        fs::write(dir.path().join("dirty.txt"), "uncommitted data").unwrap();
+
+        let result = check_branch_safety(dir.path());
+        assert_eq!(result.risk, BranchRisk::Critical);
+        assert!(result.has_uncommitted);
+        assert!(result.message.contains("BLOCKED"));
+    }
+
+    #[test]
+    fn test_check_branch_safety_result_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = check_branch_safety(dir.path());
+        // Verify all fields are populated
+        assert_eq!(result.pr_number, 0);
+        assert!(result.pr_state.is_empty());
+        assert!(!result.message.is_empty());
+    }
+
+    #[test]
+    fn test_has_dirty_files_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(!has_dirty_files(dir.path()));
+    }
+
+    #[test]
+    fn test_has_dirty_files_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("new.txt"), "data").unwrap();
+        assert!(has_dirty_files(dir.path()));
     }
 
     #[test]

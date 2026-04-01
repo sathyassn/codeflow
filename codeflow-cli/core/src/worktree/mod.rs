@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::error::WorktreeError;
 use crate::types::BranchName;
 
-pub use cleanup::CleanupOpts;
+pub use cleanup::{BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safety};
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, count_active, deregister_by_name, list_active,
@@ -275,6 +275,31 @@ impl WorktreeManager {
         }
     }
 
+    /// Check if a worktree's owning session is alive (public API for CLI).
+    ///
+    /// Returns `"ACTIVE"` if the session PID is alive, `"DEAD"` if the PID
+    /// is confirmed dead, or `"UNKNOWN"` if no session ID is available.
+    #[must_use]
+    pub fn liveness_status(&self, entry: &WorktreeEntry) -> &'static str {
+        match &entry.session_id {
+            Some(sid) if !sid.is_empty() => {
+                if let Some(pid) = self.read_lead_pid(sid) {
+                    if crate::session::process::is_process_alive(pid) {
+                        return "ACTIVE";
+                    }
+                    return "DEAD";
+                }
+                // No PID file — check pathflow-active as fallback.
+                if self.has_pathflow_active(entry) {
+                    "ACTIVE"
+                } else {
+                    "UNKNOWN"
+                }
+            }
+            _ => "UNKNOWN",
+        }
+    }
+
     /// List all worktrees from the registry, optionally filtered by status.
     ///
     /// # Errors
@@ -300,8 +325,12 @@ impl WorktreeManager {
 
     /// Remove all stale (and optionally orphaned) worktrees from the registry.
     ///
-    /// Iterates over registry entries, detects their state, and removes those
-    /// matching the cleanup criteria. Active worktrees are never removed.
+    /// Iterates over registry entries, detects their state, checks session
+    /// liveness (PID check + pathflow-active flag), and verifies branch safety
+    /// before removal. Active sessions are skipped. Unpushed branches are
+    /// blocked unless `force` is set.
+    ///
+    /// Also purges old "removed" entries beyond the `keep` threshold (default 5).
     ///
     /// Returns the names of worktrees that were removed (or would be removed
     /// in dry-run mode).
@@ -318,19 +347,110 @@ impl WorktreeManager {
                 continue;
             }
             let state = self.detect_state(entry);
+
+            // Skip active worktrees with a live session.
+            if state == WorktreeState::Active {
+                if self.is_session_alive(entry) {
+                    continue;
+                }
+                // Session is dead but directory exists — treat as candidate
+                // only with force (it's technically still "active" on disk).
+                if !opts.force {
+                    continue;
+                }
+            }
+
             let should_remove = matches!(
                 (opts.force, state),
-                (_, WorktreeState::Stale) | (true, WorktreeState::Orphaned)
+                (_, WorktreeState::Stale) | (true, WorktreeState::Orphaned | WorktreeState::Active)
             );
-            if should_remove {
-                removed.push(entry.name.clone());
-                if !opts.dry_run {
-                    self.cleanup(&entry.name, opts)?;
+
+            if !should_remove {
+                continue;
+            }
+
+            // Branch safety check for entries with existing directories.
+            let wt_path = Path::new(&entry.path);
+            if wt_path.exists() {
+                let safety = cleanup::check_branch_safety(wt_path);
+                if safety.risk >= BranchRisk::High && !opts.force {
+                    crate::diagnostics::warn(
+                        "worktree",
+                        &format!(
+                            "skipping '{}': {} (use --force to override)",
+                            entry.name, safety.message
+                        ),
+                    );
+                    continue;
                 }
+                if safety.risk == BranchRisk::Medium {
+                    crate::diagnostics::warn(
+                        "worktree",
+                        &format!("{}: {}", entry.name, safety.message),
+                    );
+                }
+            }
+
+            removed.push(entry.name.clone());
+            if !opts.dry_run {
+                self.cleanup(&entry.name, opts)?;
             }
         }
 
+        // Purge old "removed" entries from registry.
+        let max_keep = opts.keep.unwrap_or(5);
+        if !opts.dry_run {
+            let _ = registry::purge_removed_entries(&self.registry_path, max_keep);
+        }
+
         Ok(removed)
+    }
+
+    /// Check if a worktree entry's owning session is still alive.
+    ///
+    /// Reads the session's `pathflow-session-status.json` to find the
+    /// `lead_pid`, then checks process liveness with `kill -0`.
+    /// Also checks the `pathflow-active` flag as a secondary signal.
+    ///
+    /// Returns `true` if the session appears to be alive.
+    fn is_session_alive(&self, entry: &WorktreeEntry) -> bool {
+        let sid = match &entry.session_id {
+            Some(sid) if !sid.is_empty() => sid,
+            _ => return false, // No session ID — cannot verify liveness.
+        };
+
+        // Try reading lead_pid from the session status file.
+        if let Some(pid) = self.read_lead_pid(sid) {
+            if crate::session::process::is_process_alive(pid) {
+                return true;
+            }
+        }
+
+        // Fallback: check pathflow-active flag in the worktree.
+        self.has_pathflow_active(entry)
+    }
+
+    /// Read the `lead_pid` from a session's `pathflow-session-status.json`.
+    fn read_lead_pid(&self, session_id: &str) -> Option<u32> {
+        let status_path = self
+            .project_dir
+            .join(".state/session")
+            .join(session_id)
+            .join("pathflow/pathflow-session-status.json");
+
+        let content = std::fs::read_to_string(&status_path).ok()?;
+        let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let pid = parsed.get("lead_pid")?.as_u64()?;
+        #[allow(clippy::cast_possible_truncation)]
+        Some(pid as u32)
+    }
+
+    /// Check if a worktree has a `pathflow-active` flag in its state directory.
+    #[allow(clippy::unused_self)]
+    fn has_pathflow_active(&self, entry: &WorktreeEntry) -> bool {
+        let wt_path = Path::new(&entry.path);
+        let active_flag = wt_path.join(".state/session/pathflow-active");
+        active_flag.exists()
     }
 
     /// Reconcile the YAML registry against the filesystem.
@@ -984,5 +1104,172 @@ mod tests {
         {
             let _handle = WorktreeHandle::new(&entry, &mgr);
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Liveness check tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_liveness_status_no_session_id() {
+        let mgr = WorktreeManager::new("/tmp/project");
+        let entry = WorktreeEntry {
+            name: "test-wt".to_string(),
+            path: "/tmp/wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-31T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+            source: None,
+        };
+        assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
+    }
+
+    #[test]
+    fn test_liveness_status_empty_session_id() {
+        let mgr = WorktreeManager::new("/tmp/project");
+        let entry = WorktreeEntry {
+            name: "test-wt".to_string(),
+            path: "/tmp/wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-31T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some(String::new()),
+            task_id: None,
+            source: None,
+        };
+        assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
+    }
+
+    #[test]
+    fn test_liveness_status_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let sid = "ses-test-dead";
+
+        // Create a session status file with a definitely-dead PID.
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            r#"{"lead_pid": 999999999}"#,
+        )
+        .unwrap();
+
+        let entry = WorktreeEntry {
+            name: "test-wt".to_string(),
+            path: "/tmp/wt".to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-31T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: Some(sid.to_string()),
+            task_id: None,
+            source: None,
+        };
+        assert_eq!(mgr.liveness_status(&entry), "DEAD");
+    }
+
+    #[test]
+    fn test_read_lead_pid_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        assert!(mgr.read_lead_pid("ses-nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_read_lead_pid_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let sid = "ses-test-pid";
+
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            r#"{"lead_pid": 12345}"#,
+        )
+        .unwrap();
+
+        assert_eq!(mgr.read_lead_pid(sid), Some(12345));
+    }
+
+    #[test]
+    fn test_has_pathflow_active_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "test-wt".to_string(),
+            path: dir.path().to_string_lossy().to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-31T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+            source: None,
+        };
+        assert!(!mgr.has_pathflow_active(&entry));
+    }
+
+    #[test]
+    fn test_has_pathflow_active_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+
+        // Create pathflow-active flag.
+        let flag_dir = dir.path().join(".state/session");
+        std::fs::create_dir_all(&flag_dir).unwrap();
+        std::fs::write(flag_dir.join("pathflow-active"), "").unwrap();
+
+        let entry = WorktreeEntry {
+            name: "test-wt".to_string(),
+            path: dir.path().to_string_lossy().to_string(),
+            branch: "feat/test".to_string(),
+            created_at: "2026-03-31T10:00:00Z".to_string(),
+            status: "active".to_string(),
+            session_id: None,
+            task_id: None,
+            source: None,
+        };
+        assert!(mgr.has_pathflow_active(&entry));
+    }
+
+    #[test]
+    fn test_cleanup_stale_purges_old_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = registry::WorktreeRegistry::new("2026-03-31T10:00:00Z");
+
+        // Add 8 removed entries.
+        for i in 0..8 {
+            reg.worktrees.push(WorktreeEntry {
+                name: format!("removed-{i}"),
+                path: format!("/gone/{i}"),
+                branch: format!("feat/r{i}"),
+                created_at: "2026-03-01T10:00:00Z".to_string(),
+                status: "removed".to_string(),
+                session_id: None,
+                task_id: None,
+                source: None,
+            });
+        }
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let opts = CleanupOpts {
+            keep: Some(3),
+            ..Default::default()
+        };
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        assert!(removed.is_empty()); // No stale entries to remove
+
+        // But old removed entries should be purged.
+        let reg_after = registry::read_registry(&reg_path).unwrap();
+        let removed_count = reg_after
+            .worktrees
+            .iter()
+            .filter(|e| e.status == "removed")
+            .count();
+        assert_eq!(removed_count, 3, "should keep only 3 removed entries");
     }
 }

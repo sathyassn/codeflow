@@ -1319,7 +1319,7 @@ tasks:
         let fields = valid_task_fields("t1", "023", "INF");
         setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
 
-        // Default max_concurrent is 3, request 10 workers.
+        // Default max_concurrent is 5, request 10 workers.
         let yaml = "max_workers: 10\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
         let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert_eq!(batch.max_workers, 10);
@@ -1332,8 +1332,8 @@ tasks:
             result.unwrap_err()
         );
         assert_eq!(
-            batch.max_workers, 3,
-            "max_workers should be capped to max_concurrent (3)"
+            batch.max_workers, 5,
+            "max_workers should be capped to max_concurrent (5)"
         );
     }
 

@@ -3,7 +3,7 @@ id: "epic-01KMZXNG1DC41FB4M1WKG3NT5R"
 format_id: "INF-EPC-035"
 title: "Fix worktree stale eviction and config-driven limit enforcement"
 summary: "Fix bugs in worktree stale cleanup safety and enforce config-driven worktree limits"
-status: completed
+status: complete
 area_type: INF
 work_type: FIX
 domain: GENL
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-03-30T17:46:34Z"
-updated_at: "2026-03-30T00:00:00Z"
+updated_at: "2026-03-31T03:45:00Z"
 ---
 
 # INF-EPC-035: Fix worktree stale eviction and config-driven limit enforcement
@@ -55,7 +55,8 @@ Fix two related bugs in the worktree subsystem: (1) stale worktree eviction was 
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-035-001 | fix: worktree stale eviction and config-driven limit enforcement | completed | normal |
+| INF-TSK-035-001 | fix: worktree stale eviction and config-driven limit enforcement | complete | normal |
+| INF-TSK-035-002 | fix: consolidate worktree cleanup/prune/purge into single command with liveness checks and branch safety | complete | normal |
 
 ## Dependencies
 

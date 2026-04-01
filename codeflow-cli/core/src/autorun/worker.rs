@@ -694,6 +694,26 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
 
         let _ = self.tmux.kill_session(&tmux_name).await;
+
+        // Branch safety check before cleanup — warn on unpushed work.
+        let wt_dir = self.project_dir.join(".git-worktrees").join(&wt_name);
+        if wt_dir.exists() {
+            let safety = crate::worktree::check_branch_safety(&wt_dir);
+            if safety.risk >= crate::worktree::BranchRisk::High {
+                eprintln!(
+                    "warning: branch safety issue for {wt_name}: {} (proceeding with force cleanup)",
+                    safety.message
+                );
+                worker_log(
+                    &log_path,
+                    &format!(
+                        "BRANCH_SAFETY risk={} branch={}",
+                        safety.risk, safety.branch
+                    ),
+                );
+            }
+        }
+
         if let Err(e) = self.worktree.cleanup(&wt_name) {
             eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
         }
@@ -1133,8 +1153,7 @@ impl WorktreeProvider for RealWorktreeProvider {
         let mgr = crate::worktree::WorktreeManager::new(&self.project_dir);
         let opts = crate::worktree::CleanupOpts {
             force: true,
-            dry_run: false,
-            prune: false,
+            ..Default::default()
         };
         mgr.cleanup(name, &opts)?;
         Ok(())
