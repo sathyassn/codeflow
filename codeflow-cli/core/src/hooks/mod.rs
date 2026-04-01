@@ -155,6 +155,8 @@ pub enum BlockCategory {
     ProtectedResource,
     /// `WebFetch` domain block.
     WebFetch,
+    /// Dirty worktree (uncommitted changes before push).
+    DirtyWorktree,
 }
 
 /// `HookHandler` processes a single hook enforcement module.
@@ -422,6 +424,7 @@ mod tests {
             (BlockCategory::GhPrGuard, "\"gh_pr_guard\""),
             (BlockCategory::ProtectedResource, "\"protected_resource\""),
             (BlockCategory::WebFetch, "\"web_fetch\""),
+            (BlockCategory::DirtyWorktree, "\"dirty_worktree\""),
         ];
         for (variant, expected_json) in &variants {
             let json = serde_json::to_string(variant).expect("serialize");
@@ -441,6 +444,7 @@ mod tests {
             BlockCategory::GhPrGuard,
             BlockCategory::ProtectedResource,
             BlockCategory::WebFetch,
+            BlockCategory::DirtyWorktree,
         ];
         for cat in &categories {
             let output = HookOutput::Block {

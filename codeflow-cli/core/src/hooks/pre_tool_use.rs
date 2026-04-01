@@ -718,7 +718,53 @@ impl GateCheck {
             }
         }
 
+        // Dirty worktree guard: block push if uncommitted changes exist.
+        // This catches PF6-TSK-03 (commit outstanding changes) being skipped.
+        if let Some(dirty_files) = self.get_dirty_files() {
+            let file_list = dirty_files
+                .iter()
+                .map(|f| format!("  {f}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            return HookOutput::Block {
+                reason: format!(
+                    "BLOCKED: Uncommitted changes detected — commit all changes before push.\n\
+                     \n\
+                     Uncommitted files:\n\
+                     {file_list}\n\
+                     \n\
+                     Action: Commit these files before pushing. \
+                     In PathFlow, this is PF6-TSK-03 (commit outstanding changes) — \
+                     route to cf-git-operations: \
+                     SendMessage(to=\"cf-git-operations\", message=\"Please commit outstanding changes: ...\")\n\
+                     \n\
+                     Gate: dirty_worktree"
+                ),
+                category: Some(BlockCategory::DirtyWorktree),
+            };
+        }
+
         HookOutput::Allow
+    }
+
+    /// Returns a list of uncommitted files in the working tree, or `None` if clean.
+    /// Uses `git status --porcelain` which respects `.gitignore`.
+    fn get_dirty_files(&self) -> Option<Vec<String>> {
+        let output = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&self.project_dir)
+            .output()
+            .ok()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim().is_empty() {
+            return None;
+        }
+
+        let files: Vec<String> = stdout.lines().map(str::to_string).collect();
+
+        Some(files)
     }
 }
 
@@ -4922,6 +4968,324 @@ mod tests {
         assert!(
             matches!(result, HookOutput::Allow),
             "default scope_policy (soft) should allow in-scope edits"
+        );
+    }
+
+    // -- Dirty worktree guard tests --
+
+    /// Helper: create a full session structure with all sentinels needed for push gate.
+    fn setup_push_gate_session(dir: &std::path::Path) -> (PathBuf, PathBuf) {
+        let sid = "ses-dirtywt-test1234567890";
+        let sentinel_dir = dir
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Create cumulative phase sentinels pf-1..pf-5.
+        for i in 1..=5 {
+            sentinel::create_by_name(&sentinel_dir, &format!("pf-{i}")).unwrap();
+        }
+        // Create stage sentinels for FIX pipeline: ws-dev, ws-rev, ws-qa.
+        sentinel::create_by_name(&sentinel_dir, "ws-dev").unwrap();
+        sentinel::create_by_name(&sentinel_dir, "ws-rev").unwrap();
+        sentinel::create_by_name(&sentinel_dir, "ws-qa").unwrap();
+
+        // Create session status with work_type.
+        let session_dir = dir
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","work_type":"FIX"}"#,
+        )
+        .unwrap();
+
+        // Create pathflow config with FIX pipeline.
+        let config_dir = dir.join(".codeflow").join("config").join("pathflow");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("pathflow-config.json"),
+            r#"{"pipelines":{"FIX":["ws-dev","ws-rev","ws-qa"]}}"#,
+        )
+        .unwrap();
+
+        // Commit all setup files so the worktree is clean after setup.
+        use std::process::Command;
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "setup session structure"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        (sentinel_dir, dir.to_path_buf())
+    }
+
+    /// Helper: initialize a temp dir as a git repo with an initial commit.
+    fn init_git_repo(dir: &std::path::Path) {
+        use std::process::Command;
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        // Create initial commit so HEAD exists.
+        std::fs::write(dir.join(".gitkeep"), "").unwrap();
+        Command::new("git")
+            .args(["add", ".gitkeep"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_dirty_worktree_blocks_push() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let (sentinel_dir, project_dir) = setup_push_gate_session(dir.path());
+
+        // Create an uncommitted file.
+        std::fs::write(dir.path().join("uncommitted.rs"), "fn main() {}").unwrap();
+
+        let handler = GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-dirtywt-test1234567890"),
+            project_dir,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "git push origin fix/test"})),
+            event: HookEvent::PreToolUse,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2, "dirty worktree should block push");
+        if let HookOutput::Block { reason, category } = &result {
+            assert!(
+                reason.contains("Uncommitted changes detected"),
+                "block reason should mention uncommitted changes, got: {reason}"
+            );
+            assert_eq!(
+                *category,
+                Some(BlockCategory::DirtyWorktree),
+                "block category should be DirtyWorktree"
+            );
+        } else {
+            panic!("expected Block, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_clean_worktree_allows_push() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let (sentinel_dir, project_dir) = setup_push_gate_session(dir.path());
+
+        // No uncommitted files — repo is clean after init.
+        let handler = GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-dirtywt-test1234567890"),
+            project_dir,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "git push origin fix/test"})),
+            event: HookEvent::PreToolUse,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0, "clean worktree should allow push");
+    }
+
+    #[test]
+    fn test_dirty_worktree_lists_multiple_files() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let (sentinel_dir, project_dir) = setup_push_gate_session(dir.path());
+
+        // Create 3 dirty files: modified, staged, and untracked.
+        std::fs::write(dir.path().join(".gitkeep"), "modified").unwrap(); // Modified
+        std::fs::write(dir.path().join("staged.rs"), "staged").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "staged.rs"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap(); // Staged
+        std::fs::write(dir.path().join("untracked.txt"), "new").unwrap(); // Untracked
+
+        let handler = GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-dirtywt-test1234567890"),
+            project_dir,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "git push origin fix/test"})),
+            event: HookEvent::PreToolUse,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2);
+        if let HookOutput::Block { reason, .. } = &result {
+            // Should list all 3 files (with git status codes).
+            assert!(
+                reason.contains(".gitkeep"),
+                "should list modified .gitkeep, got: {reason}"
+            );
+            assert!(
+                reason.contains("staged.rs"),
+                "should list staged file, got: {reason}"
+            );
+            assert!(
+                reason.contains("untracked.txt"),
+                "should list untracked file, got: {reason}"
+            );
+        } else {
+            panic!("expected Block, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_dirty_worktree_after_sentinel_pass() {
+        // All sentinels present + dirty worktree → Block on dirty (not sentinel).
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let (sentinel_dir, project_dir) = setup_push_gate_session(dir.path());
+
+        // Add uncommitted file after all sentinels are in place.
+        std::fs::write(dir.path().join("leftover.rs"), "oops").unwrap();
+
+        let handler = GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-dirtywt-test1234567890"),
+            project_dir,
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "gh pr create --title test"})),
+            event: HookEvent::PreToolUse,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2);
+        if let HookOutput::Block { category, reason } = &result {
+            assert_eq!(
+                *category,
+                Some(BlockCategory::DirtyWorktree),
+                "should block on DirtyWorktree, not Gate. Reason: {reason}"
+            );
+        } else {
+            panic!("expected Block, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_sentinel_fail_takes_priority_over_dirty() {
+        // Missing sentinel + dirty worktree → Block on sentinel (priority).
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+
+        // Only create pf-1 through pf-4 (missing pf-5).
+        let sid = "ses-sentpriority12345678901";
+        let sentinel_dir = dir
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        for i in 1..=4 {
+            sentinel::create_by_name(&sentinel_dir, &format!("pf-{i}")).unwrap();
+        }
+
+        // Add dirty file.
+        std::fs::write(dir.path().join("dirty.rs"), "dirty").unwrap();
+
+        let handler = GateCheck::new(
+            sentinel_dir,
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked(sid),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "git push origin fix/test"})),
+            event: HookEvent::PreToolUse,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2);
+        if let HookOutput::Block { category, .. } = &result {
+            assert_eq!(
+                *category,
+                Some(BlockCategory::Gate),
+                "sentinel failure should take priority over dirty worktree"
+            );
+        } else {
+            panic!("expected Block, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_gitignored_files_dont_trigger() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+
+        // Add a .gitignore that ignores *.log files.
+        std::fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create only a gitignored file.
+        std::fs::write(dir.path().join("output.log"), "some log data").unwrap();
+
+        // get_dirty_files should return None since only gitignored files exist.
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-gitignore-test"),
+            dir.path().to_path_buf(),
+        );
+        let dirty = handler.get_dirty_files();
+        assert!(
+            dirty.is_none(),
+            "gitignored files should not trigger dirty check, got: {dirty:?}"
         );
     }
 }

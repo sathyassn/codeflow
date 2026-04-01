@@ -1,6 +1,6 @@
 //! Worktree command: git worktree lifecycle management.
 //!
-//! Supports subcommands: `list`, `cleanup`, `repair`.
+//! Supports subcommands: `list`, `cleanup`, `prune`, `repair`.
 //! Default (no subcommand) behaves like `list`.
 
 use std::path::Path;
@@ -31,6 +31,12 @@ pub enum WorktreeCommand {
         #[arg(long)]
         keep: Option<usize>,
     },
+    /// Remove orphaned worktree references from git internals
+    Prune {
+        /// Report what would be pruned without acting
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Repair shared state symlinks in a worktree
     Repair {
         /// Worktree path to repair (defaults to CODEFLOW_WORKTREE_PATH)
@@ -50,6 +56,7 @@ pub fn run(command: Option<WorktreeCommand>) -> Result<()> {
             interactive,
             keep,
         }) => run_cleanup(&project_dir, *force, *dry_run, *interactive, *keep),
+        Some(WorktreeCommand::Prune { dry_run }) => run_prune(&project_dir, *dry_run),
         Some(WorktreeCommand::Repair { path }) => run_repair(&project_dir, path.as_deref()),
     }
 }
@@ -146,6 +153,38 @@ fn run_cleanup(
     }
 
     Ok(())
+}
+
+fn run_prune(project_dir: &Path, dry_run: bool) -> Result<()> {
+    let mut args = vec!["worktree", "prune"];
+    if dry_run {
+        args.push("--dry-run");
+    }
+
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(project_dir)
+        .output()
+        .context("running git worktree prune")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stdout.is_empty() {
+        print!("{stdout}");
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+    }
+
+    if output.status.success() {
+        if stdout.is_empty() && stderr.is_empty() {
+            println!("no stale worktree references to prune");
+        }
+        Ok(())
+    } else {
+        anyhow::bail!("git worktree prune failed (exit {})", output.status)
+    }
 }
 
 fn run_repair(project_dir: &Path, path: Option<&str>) -> Result<()> {

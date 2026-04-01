@@ -378,7 +378,7 @@ fn get_branch_name(wt_path: &Path) -> String {
 }
 
 /// Check if a worktree has dirty (uncommitted) files.
-fn has_dirty_files(wt_path: &Path) -> bool {
+pub(crate) fn has_dirty_files(wt_path: &Path) -> bool {
     Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(wt_path)
@@ -857,5 +857,102 @@ mod tests {
 
         let result = cleanup_worktree(&mgr, "", &opts);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_branch_safety_merged_branch() {
+        // Set up a git repo with main, create a feature branch, merge it,
+        // then check that check_branch_safety reports BranchRisk::None.
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create and commit on feature branch.
+        Command::new("git")
+            .args(["checkout", "-b", "feat/merged-test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "feature work"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Merge into main.
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["merge", "feat/merged-test", "--no-ff", "-m", "merge feat"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Go back to feature branch to check safety.
+        Command::new("git")
+            .args(["checkout", "feat/merged-test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(is_branch_merged(dir.path(), "feat/merged-test"));
+    }
+
+    #[test]
+    fn test_is_branch_merged_not_merged() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat/not-merged"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "diverged"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(!is_branch_merged(dir.path(), "feat/not-merged"));
     }
 }

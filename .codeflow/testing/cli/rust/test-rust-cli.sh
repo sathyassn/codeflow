@@ -176,10 +176,23 @@ run_coverage_enforcement() {
         return 0
     fi
 
-    # Load exception crates from config
-    local exception_crates=""
+    # Load per-file exception thresholds from config.
+    # Config stores exceptions as: { "file": "crate/src/path.rs", "threshold": N }
+    # Build a lookup: exception_files[i]="file_suffix" exception_thresholds[i]=N
+    local -a exception_files=()
+    local -a exception_thresholds=()
     if [[ -f "$CONFIG_FILE" ]]; then
-        exception_crates=$(jq -r '.conventions.exceptions[]?.crate // empty' "$CONFIG_FILE" 2>/dev/null) || true
+        local exc_count
+        exc_count=$(jq -r '.conventions.exceptions | length' "$CONFIG_FILE" 2>/dev/null) || exc_count=0
+        for ((i = 0; i < exc_count; i++)); do
+            local exc_file exc_threshold
+            exc_file=$(jq -r ".conventions.exceptions[$i].file // empty" "$CONFIG_FILE" 2>/dev/null)
+            exc_threshold=$(jq -r ".conventions.exceptions[$i].threshold // empty" "$CONFIG_FILE" 2>/dev/null)
+            if [[ -n "$exc_file" && -n "$exc_threshold" ]]; then
+                exception_files+=("$exc_file")
+                exception_thresholds+=("$exc_threshold")
+            fi
+        done
     fi
 
     # Parse per-file coverage and enforce threshold
@@ -198,27 +211,26 @@ run_coverage_enforcement() {
         done
         [[ "$in_business" == "false" ]] && continue
 
-        # Check exception list (crate-level exceptions)
-        local is_excepted=false
-        for exc in $exception_crates; do
-            if [[ "$filename" == */"$exc/"* ]]; then
-                is_excepted=true
+        file_count=$((file_count + 1))
+
+        # Determine effective threshold: check per-file exceptions first
+        local effective_threshold="$COVERAGE_THRESHOLD"
+        for ((i = 0; i < ${#exception_files[@]}; i++)); do
+            if [[ "$filename" == *"${exception_files[$i]}" ]]; then
+                effective_threshold="${exception_thresholds[$i]}"
                 break
             fi
         done
-        [[ "$is_excepted" == "true" ]] && continue
-
-        file_count=$((file_count + 1))
 
         # Compare (integer truncation for threshold comparison)
         local pct_int="${pct%.*}"
         # Handle edge case where pct_int is empty (0% files)
         pct_int="${pct_int:-0}"
 
-        if [[ "$pct_int" -lt "$COVERAGE_THRESHOLD" ]]; then
+        if [[ "$pct_int" -lt "$effective_threshold" ]]; then
             # Extract short path (crate/src/...) for readability
             local short_name="${filename##*/codeflow-cli/}"
-            echo "  FAIL: ${short_name} — ${pct}% (below ${COVERAGE_THRESHOLD}%)"
+            echo "  FAIL: ${short_name} — ${pct}% (below ${effective_threshold}%)"
             per_file_fail=true
             fail_count=$((fail_count + 1))
         fi
