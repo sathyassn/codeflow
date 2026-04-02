@@ -105,9 +105,6 @@ fn run_cleanup(
         let entries = mgr.list(None).context("listing worktrees")?;
         let mut candidates = Vec::new();
         for entry in &entries {
-            if entry.status == codeflow_core::worktree::WorktreeStatus::Removed {
-                continue;
-            }
             let state = mgr.detect_state(entry);
             let liveness = mgr.liveness_status(entry);
             // Skip entries with confirmed live sessions (not just Active state).
@@ -248,7 +245,7 @@ mod tests {
             path: "/nonexistent/path".to_string(),
             branch: Some("feat/test".to_string()),
             created_at: "2025-01-01T00:00:00Z".to_string(),
-            status: codeflow_core::worktree::WorktreeStatus::Removed,
+            status: codeflow_core::worktree::WorktreeStatus::PendingCleanup,
             session_id: None,
             task_id: None,
             source: None,
@@ -672,16 +669,16 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_removed_entries_skipped_in_interactive() {
+    fn test_cleanup_pending_entries_shown_in_interactive() {
         let dir = tempfile::tempdir().unwrap();
         let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
-            name: "already-removed".to_string(),
-            path: "/gone/removed".to_string(),
+            name: "pending-cleanup".to_string(),
+            path: "/gone/pending".to_string(),
             branch: Some("feat/old".to_string()),
             created_at: "2026-04-01T10:00:00Z".to_string(),
-            status: codeflow_core::worktree::WorktreeStatus::Removed,
+            status: codeflow_core::worktree::WorktreeStatus::PendingCleanup,
             session_id: None,
             task_id: None,
             source: None,
@@ -689,7 +686,7 @@ mod tests {
         });
         write_registry(&reg_path, &reg).unwrap();
 
-        // Removed entries should be skipped -- "no worktrees to clean up".
+        // PendingCleanup entries are cleanup candidates (not skipped).
         let result = run_cleanup(dir.path(), false, false, true, None);
         assert!(result.is_ok());
     }

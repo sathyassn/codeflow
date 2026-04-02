@@ -15,14 +15,17 @@ use crate::file_lock;
 
 /// Typed worktree lifecycle status.
 ///
-/// Replaces free-form `String` status to enable exhaustive match checking.
+/// Two variants only: `Active` and `PendingCleanup`. When a worktree is
+/// cleaned up, its entry is DELETED from the registry array — no tombstones.
+///
 /// Serde uses `snake_case` for backwards compatibility with existing YAML files.
+/// Old YAML with `status: removed` deserializes as `PendingCleanup` via alias.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorktreeStatus {
     Active,
+    #[serde(alias = "removed")]
     PendingCleanup,
-    Removed,
 }
 
 impl std::fmt::Display for WorktreeStatus {
@@ -30,7 +33,6 @@ impl std::fmt::Display for WorktreeStatus {
         match self {
             Self::Active => f.write_str("active"),
             Self::PendingCleanup => f.write_str("pending_cleanup"),
-            Self::Removed => f.write_str("removed"),
         }
     }
 }
@@ -151,7 +153,7 @@ pub fn register_worktree(registry_path: &Path, entry: WorktreeEntry) -> Result<(
     write_registry(registry_path, &registry)
 }
 
-/// Deregister a worktree by setting its status to "removed".
+/// Deregister a worktree by REMOVING its entry from the registry array.
 ///
 /// Matches by path. If the registry doesn't exist or the path is not found,
 /// this is a no-op (returns `Ok(())`).
@@ -168,16 +170,10 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
 
     let mut registry = read_registry(registry_path)?;
 
-    let mut found = false;
-    for entry in &mut registry.worktrees {
-        if entry.path == worktree_path {
-            entry.status = WorktreeStatus::Removed;
-            found = true;
-            break;
-        }
-    }
+    let before_len = registry.worktrees.len();
+    registry.worktrees.retain(|e| e.path != worktree_path);
 
-    if found {
+    if registry.worktrees.len() < before_len {
         registry.metadata.last_updated = super::now_rfc3339();
         write_registry(registry_path, &registry)?;
     }
@@ -187,8 +183,9 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
 
 /// Deregister a worktree by name (defense-in-depth fallback).
 ///
-/// Matches by name instead of path. Matches both `Active` and `PendingCleanup`
-/// entries. If the registry doesn't exist or the name is not found, this is a no-op.
+/// Matches by name and REMOVES the entry from the array.
+/// Deletes regardless of current status.
+/// If the registry doesn't exist or the name is not found, this is a no-op.
 ///
 /// # Errors
 ///
@@ -201,19 +198,10 @@ pub fn deregister_by_name(registry_path: &Path, name: &str) -> Result<(), Worktr
 
     let mut registry = read_registry(registry_path)?;
 
-    let mut found = false;
-    for entry in &mut registry.worktrees {
-        if entry.name == name
-            && (entry.status == WorktreeStatus::Active
-                || entry.status == WorktreeStatus::PendingCleanup)
-        {
-            entry.status = WorktreeStatus::Removed;
-            found = true;
-            break;
-        }
-    }
+    let before_len = registry.worktrees.len();
+    registry.worktrees.retain(|e| e.name != name);
 
-    if found {
+    if registry.worktrees.len() < before_len {
         registry.metadata.last_updated = super::now_rfc3339();
         write_registry(registry_path, &registry)?;
     }
@@ -221,57 +209,9 @@ pub fn deregister_by_name(registry_path: &Path, name: &str) -> Result<(), Worktr
     Ok(())
 }
 
-/// Purge old "removed" entries from the registry, keeping at most `max_keep`.
-///
-/// Removes the oldest removed entries first. Active entries are never touched.
-/// If the registry doesn't exist, this is a no-op.
-///
-/// # Errors
-///
-/// - `WorktreeError::Io` on filesystem errors.
-/// - `WorktreeError::Yaml` on parse/serialize errors.
-pub fn purge_removed_entries(
-    registry_path: &Path,
-    max_keep: usize,
-) -> Result<usize, WorktreeError> {
-    if !registry_path.exists() {
-        return Ok(0);
-    }
-
-    let mut registry = read_registry(registry_path)?;
-
-    let removed_count = registry
-        .worktrees
-        .iter()
-        .filter(|e| e.status == WorktreeStatus::Removed)
-        .count();
-
-    if removed_count <= max_keep {
-        return Ok(0);
-    }
-
-    let to_remove = removed_count - max_keep;
-    let mut removed = 0;
-    registry.worktrees.retain(|e| {
-        if e.status == WorktreeStatus::Removed && removed < to_remove {
-            removed += 1;
-            false
-        } else {
-            true
-        }
-    });
-
-    if removed > 0 {
-        registry.metadata.last_updated = super::now_rfc3339();
-        write_registry(registry_path, &registry)?;
-    }
-
-    Ok(removed)
-}
-
 /// Mark a worktree as "pending_cleanup" by session ID.
 ///
-/// Status lifecycle: `active` -> `pending_cleanup` -> `removed`.
+/// Status lifecycle: `active` -> `pending_cleanup` -> (entry deleted on cleanup).
 ///
 /// The `pending_cleanup` status indicates that the PathFlow lifecycle is done
 /// (TeamDelete has fired) but the session may still be alive for a short
@@ -515,6 +455,8 @@ pub fn locked_register_with_limit(
 
 /// Deregister a worktree under an exclusive lock.
 ///
+/// REMOVES the entry from the array (no tombstone).
+///
 /// # Errors
 ///
 /// - `WorktreeError::Io` on filesystem errors.
@@ -542,15 +484,9 @@ pub fn locked_deregister_worktree(
             Ok(output.into_bytes())
         },
         |reg| {
-            let mut found = false;
-            for entry in &mut reg.worktrees {
-                if entry.path == wt_path {
-                    entry.status = WorktreeStatus::Removed;
-                    found = true;
-                    break;
-                }
-            }
-            if found {
+            let before_len = reg.worktrees.len();
+            reg.worktrees.retain(|e| e.path != wt_path);
+            if reg.worktrees.len() < before_len {
                 reg.metadata.last_updated = super::now_rfc3339();
             }
             Ok(())
@@ -561,7 +497,7 @@ pub fn locked_deregister_worktree(
 
 /// Deregister a worktree by name under an exclusive lock.
 ///
-/// Matches both `Active` and `PendingCleanup` entries.
+/// REMOVES the entry from the array regardless of current status.
 ///
 /// # Errors
 ///
@@ -587,18 +523,9 @@ pub fn locked_deregister_by_name(registry_path: &Path, name: &str) -> Result<(),
             Ok(output.into_bytes())
         },
         |reg| {
-            let mut found = false;
-            for entry in &mut reg.worktrees {
-                if entry.name == name_owned
-                    && (entry.status == WorktreeStatus::Active
-                        || entry.status == WorktreeStatus::PendingCleanup)
-                {
-                    entry.status = WorktreeStatus::Removed;
-                    found = true;
-                    break;
-                }
-            }
-            if found {
+            let before_len = reg.worktrees.len();
+            reg.worktrees.retain(|e| e.name != name_owned);
+            if reg.worktrees.len() < before_len {
                 reg.metadata.last_updated = super::now_rfc3339();
             }
             Ok(())
@@ -739,70 +666,6 @@ pub fn locked_update_session_id(
         },
     )
     .map_err(|e| WorktreeError::Yaml(format!("locked update_session_id: {e}")))
-}
-
-/// Purge old `Removed` entries from the registry under an exclusive lock.
-///
-/// Keeps at most `max_keep` removed entries (the most recent ones).
-/// Returns the number of entries purged.
-///
-/// # Errors
-///
-/// - `WorktreeError::Yaml` on parse/serialize or lock errors.
-pub fn locked_purge_removed(registry_path: &Path, max_keep: usize) -> Result<usize, WorktreeError> {
-    if !registry_path.exists() {
-        return Ok(0);
-    }
-
-    let mut purge_count = 0usize;
-    file_lock::locked_binary_rmw(
-        registry_path,
-        || WorktreeRegistry::new(""),
-        |bytes| {
-            if bytes.is_empty() {
-                return Ok(WorktreeRegistry::new(""));
-            }
-            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
-            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
-        },
-        |reg| {
-            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
-            let output =
-                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
-            Ok(output.into_bytes())
-        },
-        |reg| {
-            let removed_count = reg
-                .worktrees
-                .iter()
-                .filter(|e| e.status == WorktreeStatus::Removed)
-                .count();
-
-            if removed_count <= max_keep {
-                return Ok(());
-            }
-
-            let to_remove = removed_count - max_keep;
-            let mut removed = 0usize;
-            reg.worktrees.retain(|e| {
-                if e.status == WorktreeStatus::Removed && removed < to_remove {
-                    removed += 1;
-                    false
-                } else {
-                    true
-                }
-            });
-
-            if removed > 0 {
-                reg.metadata.last_updated = super::now_rfc3339();
-                purge_count = removed;
-            }
-            Ok(())
-        },
-    )
-    .map_err(|e| WorktreeError::Yaml(format!("locked purge_removed: {e}")))?;
-
-    Ok(purge_count)
 }
 
 /// Trigger daemon auto-start if active worktree count transitions above 1.
@@ -1020,7 +883,10 @@ mod tests {
         deregister_worktree(&path, "/tmp/wt/to-remove").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted from registry"
+        );
     }
 
     #[test]
@@ -1242,11 +1108,11 @@ session_id: ses-123
             lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
-            name: "removed-1".to_string(),
-            path: "/tmp/r1".to_string(),
-            branch: Some("feat/r1".to_string()),
+            name: "pending-1".to_string(),
+            path: "/tmp/p1".to_string(),
+            branch: Some("feat/p1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: WorktreeStatus::Removed,
+            status: WorktreeStatus::PendingCleanup,
             session_id: None,
             task_id: None,
             source: None,
@@ -1274,7 +1140,7 @@ session_id: ses-123
     }
 
     #[test]
-    fn test_list_active_filters_removed() {
+    fn test_list_active_filters_pending_cleanup() {
         let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
             name: "active-1".to_string(),
@@ -1288,11 +1154,11 @@ session_id: ses-123
             lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
-            name: "removed-1".to_string(),
-            path: "/tmp/r1".to_string(),
-            branch: Some("feat/r1".to_string()),
+            name: "pending-1".to_string(),
+            path: "/tmp/p1".to_string(),
+            branch: Some("feat/p1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: WorktreeStatus::Removed,
+            status: WorktreeStatus::PendingCleanup,
             session_id: None,
             task_id: None,
             source: None,
@@ -1687,11 +1553,14 @@ session_id: ses-123
         };
         register_worktree(&path, entry).unwrap();
 
-        // Deregister by name.
+        // Deregister by name — entry should be deleted.
         deregister_by_name(&path, "name-dereg").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted from registry"
+        );
     }
 
     #[test]
@@ -1729,95 +1598,88 @@ session_id: ses-123
     }
 
     #[test]
-    fn test_purge_removed_entries_basic() {
+    fn test_worktree_status_enum_no_removed() {
+        // Exhaustive match: only Active and PendingCleanup exist.
+        let statuses = [WorktreeStatus::Active, WorktreeStatus::PendingCleanup];
+        for status in &statuses {
+            let label = match status {
+                WorktreeStatus::Active => "active",
+                WorktreeStatus::PendingCleanup => "pending_cleanup",
+            };
+            assert_eq!(status.to_string(), label);
+        }
+    }
+
+    #[test]
+    fn test_locked_deregister_worktree_deletes_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("worktrees.yaml");
 
-        // Create 8 removed entries and 1 active.
-        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
-        for i in 0..8 {
-            reg.worktrees.push(WorktreeEntry {
-                name: format!("removed-{i}"),
-                path: format!("/tmp/wt/removed-{i}"),
-                branch: None,
-                created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: WorktreeStatus::Removed,
-                session_id: None,
-                task_id: None,
-                source: None,
-                lead_pid: None,
-            });
-        }
-        reg.worktrees.push(WorktreeEntry {
-            name: "active-wt".to_string(),
-            path: "/tmp/wt/active".to_string(),
-            branch: Some("feat/test".to_string()),
-            created_at: "2026-03-07T10:00:00Z".to_string(),
+        let entry = WorktreeEntry {
+            name: "del-by-path".to_string(),
+            path: "/tmp/wt/del-by-path".to_string(),
+            branch: Some("feat/del".to_string()),
+            created_at: "2026-04-02T10:00:00Z".to_string(),
             status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
             lead_pid: None,
-        });
-        write_registry(&path, &reg).unwrap();
+        };
+        register_worktree(&path, entry).unwrap();
 
-        // Purge keeping max 5.
-        let purged = purge_removed_entries(&path, 5).unwrap();
-        assert_eq!(purged, 3, "should purge 3 of the 8 removed entries");
+        locked_deregister_worktree(&path, "/tmp/wt/del-by-path").unwrap();
 
-        let updated = read_registry(&path).unwrap();
-        let removed_count = updated
-            .worktrees
-            .iter()
-            .filter(|e| e.status == WorktreeStatus::Removed)
-            .count();
-        assert_eq!(
-            removed_count, 5,
-            "should have exactly 5 removed entries left"
+        let reg = read_registry(&path).unwrap();
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted, not marked"
         );
-
-        // Active entry should be untouched.
-        let active_count = updated
-            .worktrees
-            .iter()
-            .filter(|e| e.status == WorktreeStatus::Active)
-            .count();
-        assert_eq!(active_count, 1);
     }
 
     #[test]
-    fn test_purge_removed_entries_nothing_to_purge() {
+    fn test_locked_deregister_by_name_deletes_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("worktrees.yaml");
 
-        let mut reg = WorktreeRegistry::new("2026-03-07T10:00:00Z");
-        for i in 0..3 {
-            reg.worktrees.push(WorktreeEntry {
-                name: format!("removed-{i}"),
-                path: format!("/tmp/wt/removed-{i}"),
-                branch: None,
-                created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: WorktreeStatus::Removed,
-                session_id: None,
-                task_id: None,
-                source: None,
-                lead_pid: None,
-            });
-        }
-        write_registry(&path, &reg).unwrap();
+        let entry = WorktreeEntry {
+            name: "del-by-name".to_string(),
+            path: "/tmp/wt/del-by-name".to_string(),
+            branch: Some("feat/del".to_string()),
+            created_at: "2026-04-02T10:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
 
-        // 3 removed, max_keep 5 — nothing to purge.
-        let purged = purge_removed_entries(&path, 5).unwrap();
-        assert_eq!(purged, 0);
+        locked_deregister_by_name(&path, "del-by-name").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted, not marked"
+        );
     }
 
     #[test]
-    fn test_purge_removed_entries_no_registry() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nonexistent.yaml");
-
-        let purged = purge_removed_entries(&path, 5).unwrap();
-        assert_eq!(purged, 0);
+    fn test_serde_removed_migration() {
+        // Old YAML with status: removed should deserialize as PendingCleanup.
+        let yaml = r#"
+name: old-wt
+path: /tmp/old-wt
+branch: feat/old
+created_at: "2026-01-01T00:00:00Z"
+status: removed
+"#;
+        let parsed: WorktreeEntry = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            parsed.status,
+            WorktreeStatus::PendingCleanup,
+            "removed should deserialize as PendingCleanup via serde alias"
+        );
     }
 
     // --- mark_pending_cleanup tests ---
@@ -1924,32 +1786,32 @@ session_id: ses-123
     }
 
     #[test]
-    fn test_mark_pending_cleanup_skips_already_removed() {
+    fn test_mark_pending_cleanup_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("worktrees.yaml");
 
         let mut reg = WorktreeRegistry::new("2026-03-25T10:00:00Z");
         reg.worktrees.push(WorktreeEntry {
-            name: "worktree-ses-removed".to_string(),
-            path: "/tmp/wt/removed".to_string(),
-            branch: Some("feat/removed".to_string()),
+            name: "worktree-ses-pending".to_string(),
+            path: "/tmp/wt/pending".to_string(),
+            branch: Some("feat/pending".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: WorktreeStatus::Removed,
-            session_id: Some("ses-01jqremovedtest00000000".to_string()),
+            status: WorktreeStatus::PendingCleanup,
+            session_id: Some("ses-01jqpendingtest00000000".to_string()),
             task_id: None,
             source: None,
             lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
-        // Mark pending_cleanup on a "removed" entry should be no-op.
-        mark_pending_cleanup(&path, "ses-01jqremovedtest00000000").unwrap();
+        // Mark pending_cleanup on an already-PendingCleanup entry should be no-op.
+        mark_pending_cleanup(&path, "ses-01jqpendingtest00000000").unwrap();
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
             loaded.worktrees[0].status,
-            WorktreeStatus::Removed,
-            "should not change status from removed"
+            WorktreeStatus::PendingCleanup,
+            "should remain pending_cleanup"
         );
     }
 
@@ -1962,16 +1824,15 @@ session_id: ses-123
         assert!(yaml.trim() == "active");
         let yaml = serde_yaml::to_string(&WorktreeStatus::PendingCleanup).unwrap();
         assert!(yaml.trim() == "pending_cleanup");
-        let yaml = serde_yaml::to_string(&WorktreeStatus::Removed).unwrap();
-        assert!(yaml.trim() == "removed");
 
         // Verify deserialization from snake_case strings.
         let s: WorktreeStatus = serde_yaml::from_str("active").unwrap();
         assert_eq!(s, WorktreeStatus::Active);
         let s: WorktreeStatus = serde_yaml::from_str("pending_cleanup").unwrap();
         assert_eq!(s, WorktreeStatus::PendingCleanup);
+        // Old "removed" deserializes as PendingCleanup via alias.
         let s: WorktreeStatus = serde_yaml::from_str("removed").unwrap();
-        assert_eq!(s, WorktreeStatus::Removed);
+        assert_eq!(s, WorktreeStatus::PendingCleanup);
     }
 
     #[test]
@@ -2112,7 +1973,10 @@ status: active
         locked_deregister_by_name(&path, "dereg-active").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted from registry"
+        );
     }
 
     #[test]
@@ -2136,57 +2000,10 @@ status: active
         locked_deregister_by_name(&path, "dereg-pending").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
-    }
-
-    // -- locked_purge_removed tests --
-
-    #[test]
-    fn test_locked_purge_removed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("worktrees.yaml");
-
-        let mut reg = WorktreeRegistry::new("2026-04-01T00:00:00Z");
-        for i in 0..5 {
-            reg.worktrees.push(WorktreeEntry {
-                name: format!("purge-{i}"),
-                path: format!("/tmp/purge-{i}"),
-                branch: None,
-                created_at: "2026-04-01T00:00:00Z".to_string(),
-                status: WorktreeStatus::Removed,
-                session_id: None,
-                task_id: None,
-                source: None,
-                lead_pid: None,
-            });
-        }
-        // Add one active entry that should be preserved.
-        reg.worktrees.push(WorktreeEntry {
-            name: "keep-active".to_string(),
-            path: "/tmp/keep-active".to_string(),
-            branch: Some("feat/keep".to_string()),
-            created_at: "2026-04-01T00:00:00Z".to_string(),
-            status: WorktreeStatus::Active,
-            session_id: None,
-            task_id: None,
-            source: None,
-            lead_pid: None,
-        });
-        write_registry(&path, &reg).unwrap();
-
-        // Keep 2, should purge 3.
-        let purged = locked_purge_removed(&path, 2).unwrap();
-        assert_eq!(purged, 3);
-
-        let after = read_registry(&path).unwrap();
-        let removed_count = after
-            .worktrees
-            .iter()
-            .filter(|e| e.status == WorktreeStatus::Removed)
-            .count();
-        assert_eq!(removed_count, 2);
-        // Active entry should still be there.
-        assert!(after.worktrees.iter().any(|e| e.name == "keep-active"));
+        assert!(
+            reg.worktrees.is_empty(),
+            "entry should be deleted from registry"
+        );
     }
 
     // -- ymd_to_days roundtrip tests --

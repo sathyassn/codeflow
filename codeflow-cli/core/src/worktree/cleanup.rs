@@ -179,6 +179,10 @@ pub fn check_branch_safety(wt_path: &Path) -> BranchSafetyResult {
 /// Remove a worktree and deregister it from the registry.
 ///
 /// This is the internal implementation called by `WorktreeManager::cleanup`.
+///
+/// Directory removal is unconditional when the directory exists. Deregistration
+/// happens only after the directory is confirmed gone. If removal fails, the
+/// entry stays in the registry for retry on the next run.
 pub(crate) fn cleanup_worktree(
     mgr: &WorktreeManager,
     name: &str,
@@ -195,11 +199,6 @@ pub(crate) fn cleanup_worktree(
         ));
     }
 
-    // PathFlow guard: block cleanup if active (unless force).
-    if mgr.is_pathflow_active() && !opts.force {
-        return Err(WorktreeError::PathFlowActive);
-    }
-
     let wt_path = mgr.base_dir().join(name);
 
     if opts.dry_run {
@@ -212,19 +211,15 @@ pub(crate) fn cleanup_worktree(
         rescue_uncommitted_work(&wt_path, name)?;
     }
 
-    // Attempt removal via git2.
-    let removed_via_git = remove_via_git2(mgr, name, opts.force);
+    // Best-effort git metadata cleanup.
+    let _ = remove_via_git2(mgr, name, opts.force);
 
-    // If git2 removal didn't fully clean up, remove the directory manually.
+    // Delete directory if it still exists (unconditional).
     if wt_path.exists() {
-        if opts.force {
-            fs::remove_dir_all(&wt_path)?;
-        } else if !removed_via_git {
-            return Err(WorktreeError::NotFound(name.to_string()));
-        }
+        fs::remove_dir_all(&wt_path)?;
     }
 
-    // Deregister from the YAML registry (locked to avoid TOCTOU).
+    // Deregister AFTER directory confirmed gone (locked to avoid TOCTOU).
     let wt_path_str = wt_path.to_string_lossy();
     registry::locked_deregister_worktree(mgr.registry_path(), &wt_path_str)?;
 
@@ -671,35 +666,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_pathflow_active_blocks() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path()).with_pathflow_guard(|| true);
-        let opts = CleanupOpts::default();
-
-        let result = cleanup_worktree(&mgr, "test-wt", &opts);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), WorktreeError::PathFlowActive));
-    }
-
-    #[test]
-    fn test_cleanup_pathflow_active_force_allows() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path()).with_pathflow_guard(|| true);
-        let opts = CleanupOpts {
-            force: true,
-            ..CleanupOpts::default()
-        };
-
-        let result = cleanup_worktree(&mgr, "nonexistent", &opts);
-        if let Err(e) = &result {
-            assert!(
-                !matches!(e, WorktreeError::PathFlowActive),
-                "force should bypass PathFlow guard"
-            );
-        }
-    }
-
-    #[test]
     fn test_cleanup_dry_run() {
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
@@ -823,9 +789,12 @@ mod tests {
 
         assert!(!mgr.base_dir().join("cleanup-test").exists());
 
-        let entries = mgr.list(Some("removed")).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "cleanup-test");
+        // Entry should be deleted from registry (not tombstoned as "removed").
+        let entries = mgr.list(None).unwrap();
+        assert!(
+            !entries.iter().any(|e| e.name == "cleanup-test"),
+            "entry should be deleted from registry after cleanup"
+        );
     }
 
     #[test]

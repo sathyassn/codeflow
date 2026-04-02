@@ -102,19 +102,13 @@ fn is_process_alive(pid: u32) -> bool {
 
 /// Clean orphaned worktrees before new worktree registration.
 ///
-/// Three cleanup passes:
-/// 1. Purge "removed" entries from the registry.
-/// 2. Deregister entries whose directories no longer exist on disk.
-/// 3. Prune git worktree references that are not in the registry.
+/// Two cleanup passes:
+/// 1. Deregister entries whose directories no longer exist on disk.
+/// 2. Prune git worktree references that are not in the registry.
 ///
 /// Errors are logged but never fail the session start.
 fn clean_orphaned_worktrees(project_dir: &Path, mgr: &WorktreeManager) {
-    // Pass 1: Purge "removed" entries (keep 0 — remove all).
-    if let Err(e) = crate::worktree::locked_purge_removed(mgr.registry_path(), 0) {
-        eprintln!("warn: worktree orphan cleanup: purge_removed failed: {e}");
-    }
-
-    // Pass 2: Deregister entries whose directories don't exist.
+    // Pass 1: Deregister entries whose directories don't exist.
     if let Ok(registry) = crate::worktree::read_registry(mgr.registry_path()) {
         for entry in &registry.worktrees {
             if entry.status == crate::worktree::WorktreeStatus::Active
@@ -962,13 +956,6 @@ impl SessionStartInit {
             result
                 .warnings
                 .push(format!("stale worktree prune failed: {e}"));
-        }
-
-        // Purge old "removed" entries from the registry (keep last 5 for forensics).
-        if let Err(e) = crate::worktree::locked_purge_removed(&registry_path, 5) {
-            result
-                .warnings
-                .push(format!("purge removed entries failed: {e}"));
         }
     }
 
@@ -4977,12 +4964,12 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_stale_worktrees_skips_removed_entries() {
+    fn test_clean_stale_worktrees_handles_pending_cleanup_entries() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let init = make_init(home.path().to_path_buf());
 
-        // Registry entry with status "removed" — already cleaned up.
+        // Registry entry with status "pending_cleanup" — directory missing (stale).
         let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
         reg.worktrees.push(crate::worktree::WorktreeEntry {
             name: "old-wt".to_string(),
@@ -4994,7 +4981,7 @@ mod tests {
                 .to_string(),
             branch: Some("feat/old".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: crate::worktree::WorktreeStatus::Removed,
+            status: crate::worktree::WorktreeStatus::PendingCleanup,
             session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
             task_id: None,
             source: None,
@@ -5015,11 +5002,12 @@ mod tests {
 
         init.clean_stale_worktrees(dir.path(), &mut result);
 
-        // Already removed — should be skipped.
+        // PendingCleanup entry with missing directory should be detected as stale.
+        // The stale sweep deregisters it (removes from array).
+        let reg_after = crate::worktree::read_registry(&registry_path).unwrap();
         assert!(
-            !result.messages.iter().any(|m| m.contains("STALE WORKTREE")),
-            "should skip already-removed worktree: {:?}",
-            result.messages,
+            reg_after.worktrees.is_empty(),
+            "stale pending_cleanup entry should be deregistered (removed from array)"
         );
     }
 

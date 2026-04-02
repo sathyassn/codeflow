@@ -25,10 +25,10 @@ pub use cleanup::{BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safe
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, WorktreeStatus, count_active, deregister_by_name, list_active,
-    locked_deregister_by_name, locked_deregister_worktree, locked_purge_removed,
-    locked_read_registry, locked_register_with_limit, locked_update_branch, locked_update_lead_pid,
+    locked_deregister_by_name, locked_deregister_worktree, locked_read_registry,
+    locked_register_with_limit, locked_update_branch, locked_update_lead_pid,
     locked_update_session_id, locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon,
-    maybe_auto_stop_daemon, purge_removed_entries, read_registry, write_registry,
+    maybe_auto_stop_daemon, read_registry, write_registry,
 };
 pub use setup::repair_symlinks;
 
@@ -130,9 +130,6 @@ pub struct WorktreeManager {
     base_dir: PathBuf,
     /// Path to the worktrees.yaml registry file.
     registry_path: PathBuf,
-    /// Optional callback that returns `true` if a `PathFlow` session is active.
-    /// When active, cleanup is blocked unless `force` is set.
-    pathflow_guard: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl WorktreeManager {
@@ -149,7 +146,6 @@ impl WorktreeManager {
             project_dir,
             base_dir,
             registry_path,
-            pathflow_guard: None,
         }
     }
 
@@ -165,18 +161,6 @@ impl WorktreeManager {
     #[must_use]
     pub fn with_registry_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.registry_path = path.into();
-        self
-    }
-
-    /// Set a `PathFlow` guard callback.
-    ///
-    /// The callback should return `true` when a `PathFlow` session is active.
-    /// During cleanup, if the guard returns `true` and `force` is not set,
-    /// cleanup will be blocked with `WorktreeError::PathFlowActive`.
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_pathflow_guard(mut self, guard: impl Fn() -> bool + Send + Sync + 'static) -> Self {
-        self.pathflow_guard = Some(Box::new(guard));
         self
     }
 
@@ -323,11 +307,6 @@ impl WorktreeManager {
         }
     }
 
-    /// Check if the `PathFlow` guard is active.
-    pub(crate) fn is_pathflow_active(&self) -> bool {
-        self.pathflow_guard.as_ref().is_some_and(|guard| guard())
-    }
-
     /// Remove all stale (and optionally orphaned) worktrees from the registry.
     ///
     /// Iterates over registry entries, detects their state, checks session
@@ -335,10 +314,8 @@ impl WorktreeManager {
     /// before removal. Active sessions are skipped. Unpushed branches are
     /// blocked unless `force` is set.
     ///
-    /// Also purges old "removed" entries beyond the `keep` threshold (default 5).
-    ///
-    /// Returns the names of worktrees that were removed (or would be removed
-    /// in dry-run mode).
+    /// Returns the names of worktrees that were actually removed (or would be
+    /// removed in dry-run mode).
     ///
     /// # Errors
     ///
@@ -348,10 +325,6 @@ impl WorktreeManager {
         let mut removed = Vec::new();
 
         for entry in &reg.worktrees {
-            if entry.status == registry::WorktreeStatus::Removed {
-                continue;
-            }
-
             let state = self.detect_state(entry);
             let liveness = self.liveness_status(entry);
 
@@ -375,7 +348,6 @@ impl WorktreeManager {
                     // Orphaned worktree — only with force.
                     WorktreeState::Orphaned => opts.force,
                 },
-                registry::WorktreeStatus::Removed => false,
             };
 
             if !is_candidate {
@@ -404,16 +376,19 @@ impl WorktreeManager {
                 }
             }
 
-            removed.push(entry.name.clone());
-            if !opts.dry_run {
-                self.cleanup(&entry.name, opts)?;
+            if opts.dry_run {
+                removed.push(entry.name.clone());
+            } else {
+                match self.cleanup(&entry.name, opts) {
+                    Ok(()) => removed.push(entry.name.clone()),
+                    Err(e) => {
+                        crate::diagnostics::warn(
+                            "worktree",
+                            &format!("cleanup '{}' failed: {e}, continuing", entry.name),
+                        );
+                    }
+                }
             }
-        }
-
-        // Purge old "removed" entries from registry (locked).
-        let max_keep = opts.keep.unwrap_or(5);
-        if !opts.dry_run {
-            let _ = registry::locked_purge_removed(&self.registry_path, max_keep);
         }
 
         Ok(removed)
@@ -538,12 +513,9 @@ impl WorktreeManager {
     ) -> Result<(Vec<String>, Vec<String>), WorktreeError> {
         let reg = registry::locked_read_registry(&self.registry_path)?;
 
-        // Find stale entries: in registry (active) but directory missing.
+        // Find stale entries: in registry but directory missing.
         let mut stale_entries = Vec::new();
         for entry in &reg.worktrees {
-            if entry.status == registry::WorktreeStatus::Removed {
-                continue;
-            }
             let state = self.detect_state(entry);
             if state == WorktreeState::Stale {
                 stale_entries.push(entry.name.clone());
@@ -557,12 +529,8 @@ impl WorktreeManager {
         // Find orphaned directories: on disk but not in registry.
         let mut orphaned_dirs = Vec::new();
         if self.base_dir.exists() {
-            let registry_paths: std::collections::HashSet<String> = reg
-                .worktrees
-                .iter()
-                .filter(|e| e.status != registry::WorktreeStatus::Removed)
-                .map(|e| e.path.clone())
-                .collect();
+            let registry_paths: std::collections::HashSet<String> =
+                reg.worktrees.iter().map(|e| e.path.clone()).collect();
 
             if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
                 for dir_entry in entries.flatten() {
@@ -700,7 +668,6 @@ impl std::fmt::Debug for WorktreeManager {
             .field("project_dir", &self.project_dir)
             .field("base_dir", &self.base_dir)
             .field("registry_path", &self.registry_path)
-            .field("pathflow_guard", &self.pathflow_guard.is_some())
             .finish()
     }
 }
@@ -759,24 +726,6 @@ mod tests {
             .with_registry_path("/custom/registry.yaml");
         assert_eq!(mgr.base_dir(), Path::new("/custom/worktrees"));
         assert_eq!(mgr.registry_path(), Path::new("/custom/registry.yaml"));
-    }
-
-    #[test]
-    fn test_manager_pathflow_guard_none() {
-        let mgr = WorktreeManager::new("/tmp/project");
-        assert!(!mgr.is_pathflow_active());
-    }
-
-    #[test]
-    fn test_manager_pathflow_guard_active() {
-        let mgr = WorktreeManager::new("/tmp/project").with_pathflow_guard(|| true);
-        assert!(mgr.is_pathflow_active());
-    }
-
-    #[test]
-    fn test_manager_pathflow_guard_inactive() {
-        let mgr = WorktreeManager::new("/tmp/project").with_pathflow_guard(|| false);
-        assert!(!mgr.is_pathflow_active());
     }
 
     #[test]
@@ -1116,10 +1065,12 @@ mod tests {
             "worktree dir should be removed after drop"
         );
 
-        // Verify registry was updated.
-        let entries = mgr.list(Some("removed")).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "drop-test");
+        // Verify registry entry was deleted (not tombstoned).
+        let entries = mgr.list(None).unwrap();
+        assert!(
+            !entries.iter().any(|e| e.name == "drop-test"),
+            "entry should be deleted from registry after drop"
+        );
     }
 
     #[test]
@@ -1354,19 +1305,19 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_stale_purges_old_removed() {
+    fn test_cleanup_stale_deletes_pending_cleanup_entries() {
         let dir = tempfile::tempdir().unwrap();
         let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
         let mut reg = registry::WorktreeRegistry::new("2026-03-31T10:00:00Z");
 
-        // Add 8 removed entries.
-        for i in 0..8 {
+        // Add 3 PendingCleanup entries with missing directories.
+        for i in 0..3 {
             reg.worktrees.push(WorktreeEntry {
-                name: format!("removed-{i}"),
+                name: format!("pending-{i}"),
                 path: format!("/gone/{i}"),
-                branch: Some(format!("feat/r{i}")),
+                branch: Some(format!("feat/p{i}")),
                 created_at: "2026-03-01T10:00:00Z".to_string(),
-                status: registry::WorktreeStatus::Removed,
+                status: registry::WorktreeStatus::PendingCleanup,
                 session_id: None,
                 task_id: None,
                 source: None,
@@ -1376,20 +1327,87 @@ mod tests {
         registry::write_registry(&reg_path, &reg).unwrap();
 
         let mgr = WorktreeManager::new(dir.path());
+        let opts = CleanupOpts::default();
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        assert_eq!(
+            removed.len(),
+            3,
+            "all 3 PendingCleanup entries should be cleaned"
+        );
+
+        // After cleanup, entries should be gone from registry (not tombstoned).
+        let reg_after = registry::read_registry(&reg_path).unwrap();
+        assert!(
+            reg_after.worktrees.is_empty(),
+            "all entries should be deleted from registry"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_no_removed_status() {
+        // Verify no entries with "removed" status exist after cleanup.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = registry::WorktreeRegistry::new("2026-03-31T10:00:00Z");
+
+        reg.worktrees.push(WorktreeEntry {
+            name: "pending-wt".to_string(),
+            path: "/gone/pending".to_string(),
+            branch: Some("feat/p".to_string()),
+            created_at: "2026-03-01T10:00:00Z".to_string(),
+            status: registry::WorktreeStatus::PendingCleanup,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let opts = CleanupOpts::default();
+        mgr.cleanup_stale(&opts).unwrap();
+
+        // Registry should have zero entries (not "removed" tombstones).
+        let reg_after = registry::read_registry(&reg_path).unwrap();
+        assert!(
+            reg_after.worktrees.is_empty(),
+            "cleaned entries should be deleted, not tombstoned"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_dry_run_no_side_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = registry::WorktreeRegistry::new("2026-03-31T10:00:00Z");
+
+        reg.worktrees.push(WorktreeEntry {
+            name: "dry-wt".to_string(),
+            path: "/gone/dry".to_string(),
+            branch: Some("feat/dry".to_string()),
+            created_at: "2026-03-01T10:00:00Z".to_string(),
+            status: registry::WorktreeStatus::PendingCleanup,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
         let opts = CleanupOpts {
-            keep: Some(3),
+            dry_run: true,
             ..Default::default()
         };
         let removed = mgr.cleanup_stale(&opts).unwrap();
-        assert!(removed.is_empty()); // No stale entries to remove
+        assert_eq!(removed.len(), 1, "dry run should report candidate");
 
-        // But old removed entries should be purged.
+        // Entry should still exist in registry (dry run = no modification).
         let reg_after = registry::read_registry(&reg_path).unwrap();
-        let removed_count = reg_after
-            .worktrees
-            .iter()
-            .filter(|e| e.status == registry::WorktreeStatus::Removed)
-            .count();
-        assert_eq!(removed_count, 3, "should keep only 3 removed entries");
+        assert_eq!(
+            reg_after.worktrees.len(),
+            1,
+            "dry run should not delete entries"
+        );
     }
 }

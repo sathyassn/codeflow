@@ -1780,10 +1780,12 @@ mod tests {
             result.messages,
         );
 
-        // Registry should show the worktree as removed.
-        let entries = mgr.list(Some("removed")).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "test-wt");
+        // Registry entry should be deleted (not tombstoned as "removed").
+        let entries = mgr.list(None).unwrap();
+        assert!(
+            !entries.iter().any(|e| e.name == "test-wt"),
+            "entry should be deleted from registry after cleanup"
+        );
     }
 
     #[test]
