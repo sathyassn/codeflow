@@ -1,6 +1,6 @@
 ---
 id: "epic-01KN7CB1H9PQT1MWXA1EV7RPMB"
-format_id: "INF-EPC-923"
+format_id: "INF-EPC-038"
 title: "Fix worktree cleanup directory removal"
 summary: "Fix worktree cleanup to actually delete .git-worktrees/ directories and remove WorktreeStatus::Removed tombstone state"
 status: complete
@@ -17,7 +17,7 @@ created_at: "2026-04-02T15:17:54Z"
 updated_at: "2026-04-02T15:17:54Z"
 ---
 
-# INF-EPC-923: Fix worktree cleanup directory removal
+# INF-EPC-038: Fix worktree cleanup directory removal
 
 > **MANDATORY VALIDATION:** Files created from this template MUST be validated against the epic validation command before committing:
 > `codeflow validate epic <path>`
@@ -56,7 +56,7 @@ Fix worktree cleanup to actually delete directories from `.git-worktrees/` and r
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-923-001 | fix: worktree cleanup directory removal | complete | normal |
+| INF-TSK-038-001 | fix: worktree cleanup directory removal | complete | normal |
 
 ## Dependencies
 
