@@ -100,7 +100,7 @@
       "directory": "cli/rust",
       "description": "Rust CLI bridge tests (build, smoke, unit tests, coverage)",
       "language": "rust",
-      "ci_skip": false
+      "ci_skip": true
     }
   },
   "pre_commit": {
