@@ -201,10 +201,17 @@ run_coverage_enforcement() {
     local fail_count=0
 
     while IFS=$'\t' read -r filename pct; do
-        # Skip files outside business packages
+        # Skip files outside business packages.
+        # Package names (e.g. "codeflow-core") map to directory paths
+        # (e.g. "core/src/"). llvm-cov outputs absolute paths on CI
+        # and relative paths locally, so we match on the directory suffix.
         local in_business=false
         for pkg in $BUSINESS_PKGS; do
-            if [[ "$filename" == */"$pkg/"* ]]; then
+            # Map package name to directory path component:
+            #   codeflow-core -> /core/src/
+            #   codeflow-cli  -> /cli/src/
+            local dir_component="${pkg#codeflow-}"
+            if [[ "$filename" == *"/${dir_component}/src/"* ]]; then
                 in_business=true
                 break
             fi

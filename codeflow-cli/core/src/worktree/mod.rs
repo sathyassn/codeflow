@@ -24,10 +24,11 @@ use crate::types::BranchName;
 pub use cleanup::{BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safety};
 pub use paths::WorktreePaths;
 pub use registry::{
-    WorktreeEntry, WorktreeRegistry, count_active, deregister_by_name, list_active,
-    locked_deregister_worktree, locked_read_registry, locked_register_with_limit,
-    locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon, maybe_auto_stop_daemon,
-    purge_removed_entries, read_registry, write_registry,
+    WorktreeEntry, WorktreeRegistry, WorktreeStatus, count_active, deregister_by_name, list_active,
+    locked_deregister_by_name, locked_deregister_worktree, locked_purge_removed,
+    locked_read_registry, locked_register_with_limit, locked_update_branch, locked_update_lead_pid,
+    locked_update_session_id, locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon,
+    maybe_auto_stop_daemon, purge_removed_entries, read_registry, write_registry,
 };
 pub use setup::repair_symlinks;
 
@@ -283,13 +284,14 @@ impl WorktreeManager {
     pub fn liveness_status(&self, entry: &WorktreeEntry) -> &'static str {
         match &entry.session_id {
             Some(sid) if !sid.is_empty() => {
-                if let Some(pid) = self.read_lead_pid(sid) {
+                if let Some(pid) = self.read_lead_pid(entry) {
                     if crate::session::process::is_process_alive(pid) {
                         return "ACTIVE";
                     }
                     return "DEAD";
                 }
                 // No PID file — check pathflow-active as fallback.
+                let _ = sid; // suppress unused warning
                 if self.has_pathflow_active(entry) {
                     "ACTIVE"
                 } else {
@@ -312,7 +314,10 @@ impl WorktreeManager {
         let reg = registry::read_registry(&self.registry_path)?;
         let entries = reg.worktrees;
         if let Some(filter) = status_filter {
-            Ok(entries.into_iter().filter(|e| e.status == filter).collect())
+            Ok(entries
+                .into_iter()
+                .filter(|e| e.status.to_string() == filter)
+                .collect())
         } else {
             Ok(entries)
         }
@@ -343,29 +348,37 @@ impl WorktreeManager {
         let mut removed = Vec::new();
 
         for entry in &reg.worktrees {
-            if entry.status == "removed" {
+            if entry.status == registry::WorktreeStatus::Removed {
                 continue;
             }
+
             let state = self.detect_state(entry);
+            let liveness = self.liveness_status(entry);
 
-            // Skip active worktrees with a live session.
-            if state == WorktreeState::Active {
-                if self.is_session_alive(entry) {
-                    continue;
-                }
-                // Session is dead but directory exists — treat as candidate
-                // only with force (it's technically still "active" on disk).
-                if !opts.force {
-                    continue;
-                }
-            }
+            // Determine if this entry is a cleanup candidate.
+            let is_candidate = match entry.status {
+                // PendingCleanup entries are always cleanable (no --force needed).
+                registry::WorktreeStatus::PendingCleanup => true,
+                registry::WorktreeStatus::Active => match state {
+                    // Directory missing — always cleanable.
+                    WorktreeState::Stale => true,
+                    // Dead session — cleanable without --force.
+                    WorktreeState::Active if liveness == "DEAD" => true,
+                    // No session_id and entry is old enough — cleanable.
+                    WorktreeState::Active
+                        if liveness == "UNKNOWN" && Self::is_older_than(entry, 3600) =>
+                    {
+                        true
+                    }
+                    // Live session — skip.
+                    WorktreeState::Active => false,
+                    // Orphaned worktree — only with force.
+                    WorktreeState::Orphaned => opts.force,
+                },
+                registry::WorktreeStatus::Removed => false,
+            };
 
-            let should_remove = matches!(
-                (opts.force, state),
-                (_, WorktreeState::Stale) | (true, WorktreeState::Orphaned | WorktreeState::Active)
-            );
-
-            if !should_remove {
+            if !is_candidate {
                 continue;
             }
 
@@ -397,52 +410,105 @@ impl WorktreeManager {
             }
         }
 
-        // Purge old "removed" entries from registry.
+        // Purge old "removed" entries from registry (locked).
         let max_keep = opts.keep.unwrap_or(5);
         if !opts.dry_run {
-            let _ = registry::purge_removed_entries(&self.registry_path, max_keep);
+            let _ = registry::locked_purge_removed(&self.registry_path, max_keep);
         }
 
         Ok(removed)
     }
 
-    /// Check if a worktree entry's owning session is still alive.
+    /// Read the `lead_pid` for a worktree entry.
     ///
-    /// Reads the session's `pathflow-session-status.json` to find the
-    /// `lead_pid`, then checks process liveness with `kill -0`.
-    /// Also checks the `pathflow-active` flag as a secondary signal.
-    ///
-    /// Returns `true` if the session appears to be alive.
-    fn is_session_alive(&self, entry: &WorktreeEntry) -> bool {
-        let sid = match &entry.session_id {
-            Some(sid) if !sid.is_empty() => sid,
-            _ => return false, // No session ID — cannot verify liveness.
-        };
+    /// Checks three sources in order:
+    /// 1. The `lead_pid` field on the registry entry (fast path).
+    /// 2. The session status file in the worktree path.
+    /// 3. The session status file in the main repo.
+    fn read_lead_pid(&self, entry: &WorktreeEntry) -> Option<u32> {
+        // 1. Fast path: check the entry itself.
+        if let Some(pid) = entry.lead_pid {
+            return Some(pid);
+        }
 
-        // Try reading lead_pid from the session status file.
-        if let Some(pid) = self.read_lead_pid(sid) {
-            if crate::session::process::is_process_alive(pid) {
-                return true;
+        let session_id = entry.session_id.as_deref().filter(|s| !s.is_empty())?;
+
+        // 2. Check the worktree's session status file.
+        let wt_path = Path::new(&entry.path);
+        if wt_path.exists() {
+            let wt_status = wt_path
+                .join(".state/session")
+                .join(session_id)
+                .join("pathflow/pathflow-session-status.json");
+            if let Some(pid) = Self::read_pid_from_status_file(&wt_status) {
+                return Some(pid);
             }
         }
 
-        // Fallback: check pathflow-active flag in the worktree.
-        self.has_pathflow_active(entry)
-    }
-
-    /// Read the `lead_pid` from a session's `pathflow-session-status.json`.
-    fn read_lead_pid(&self, session_id: &str) -> Option<u32> {
-        let status_path = self
+        // 3. Fallback: check the main repo's session directory.
+        let main_status = self
             .project_dir
             .join(".state/session")
             .join(session_id)
             .join("pathflow/pathflow-session-status.json");
+        Self::read_pid_from_status_file(&main_status)
+    }
 
-        let content = std::fs::read_to_string(&status_path).ok()?;
+    /// Read `lead_pid` from a `pathflow-session-status.json` file.
+    fn read_pid_from_status_file(path: &Path) -> Option<u32> {
+        let content = std::fs::read_to_string(path).ok()?;
         let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
         let pid = parsed.get("lead_pid")?.as_u64()?;
         #[allow(clippy::cast_possible_truncation)]
         Some(pid as u32)
+    }
+
+    /// Check if a worktree entry is older than `secs` seconds.
+    ///
+    /// Uses `created_at` field (ISO 8601). Returns `true` if parsing fails
+    /// (conservative: treat unparseable entries as old).
+    fn is_older_than(entry: &WorktreeEntry, secs: u64) -> bool {
+        // Simple ISO 8601 parsing: extract year-month-day hour:min:sec.
+        let ts = &entry.created_at;
+        if ts.len() < 19 {
+            return true; // Unparseable — treat as old.
+        }
+
+        // Use the same epoch-based approach as now_rfc3339().
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Parse created_at naively (YYYY-MM-DDTHH:MM:SSZ).
+        let parts: Vec<&str> = ts.split(|c: char| !c.is_ascii_digit()).collect();
+        if parts.len() < 6 {
+            return true;
+        }
+        let Ok(year) = parts[0].parse::<u64>() else {
+            return true;
+        };
+        let Ok(month) = parts[1].parse::<u64>() else {
+            return true;
+        };
+        let Ok(day) = parts[2].parse::<u64>() else {
+            return true;
+        };
+        let Ok(hour) = parts[3].parse::<u64>() else {
+            return true;
+        };
+        let Ok(minute) = parts[4].parse::<u64>() else {
+            return true;
+        };
+        let Ok(second) = parts[5].parse::<u64>() else {
+            return true;
+        };
+
+        // Rough epoch calculation (not leap-second accurate, but good enough).
+        let days = registry::ymd_to_days(year, month, day);
+        let created_epoch = days * 86400 + hour * 3600 + minute * 60 + second;
+
+        now.saturating_sub(created_epoch) > secs
     }
 
     /// Check if a worktree has a `pathflow-active` flag in its state directory.
@@ -475,7 +541,7 @@ impl WorktreeManager {
         // Find stale entries: in registry (active) but directory missing.
         let mut stale_entries = Vec::new();
         for entry in &reg.worktrees {
-            if entry.status == "removed" {
+            if entry.status == registry::WorktreeStatus::Removed {
                 continue;
             }
             let state = self.detect_state(entry);
@@ -494,7 +560,7 @@ impl WorktreeManager {
             let registry_paths: std::collections::HashSet<String> = reg
                 .worktrees
                 .iter()
-                .filter(|e| e.status != "removed")
+                .filter(|e| e.status != registry::WorktreeStatus::Removed)
                 .map(|e| e.path.clone())
                 .collect();
 
@@ -605,9 +671,9 @@ impl Drop for WorktreeHandle {
             }
         }
 
-        // Deregister from the YAML registry.
+        // Deregister from the YAML registry (locked to avoid TOCTOU).
         let path_str = self.path.to_string_lossy();
-        if let Err(e) = registry::deregister_worktree(&self.registry_path, &path_str) {
+        if let Err(e) = registry::locked_deregister_worktree(&self.registry_path, &path_str) {
             eprintln!(
                 "WorktreeHandle: failed to deregister worktree {}: {e}",
                 self.name
@@ -727,12 +793,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/tmp/nonexistent-worktree-path".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Stale);
     }
@@ -745,12 +812,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: dir.path().to_string_lossy().to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Orphaned);
     }
@@ -764,12 +832,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: dir.path().to_string_lossy().to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Active);
     }
@@ -891,8 +960,8 @@ mod tests {
         let entry = mgr.setup_detached("ses-test").unwrap();
 
         assert_eq!(entry.name, "ses-test");
-        assert_eq!(entry.branch, "", "branch should be empty for detached");
-        assert_eq!(entry.status, "active");
+        assert!(entry.branch.is_none(), "branch should be None for detached");
+        assert_eq!(entry.status, registry::WorktreeStatus::Active);
         assert!(entry.session_id.is_none());
 
         // Verify directory exists with .git file (valid worktree).
@@ -962,12 +1031,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "handle-test".to_string(),
             path: "/tmp/handle-test".to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -983,12 +1053,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "defuse-test".to_string(),
             path: "/tmp/defuse-test".to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let mut handle = WorktreeHandle::new(&entry, &mgr);
@@ -1004,12 +1075,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "debug-test".to_string(),
             path: "/tmp/debug-test".to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -1092,12 +1164,13 @@ mod tests {
                 .join("nonexistent-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         // This should not panic.
@@ -1116,12 +1189,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/tmp/wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
     }
@@ -1132,12 +1206,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/tmp/wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: Some(String::new()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
     }
@@ -1160,12 +1235,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/tmp/wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: Some(sid.to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert_eq!(mgr.liveness_status(&entry), "DEAD");
     }
@@ -1174,7 +1250,18 @@ mod tests {
     fn test_read_lead_pid_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
-        assert!(mgr.read_lead_pid("ses-nonexistent").is_none());
+        let entry = WorktreeEntry {
+            name: "test".to_string(),
+            path: dir.path().to_string_lossy().to_string(),
+            branch: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-nonexistent".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        assert!(mgr.read_lead_pid(&entry).is_none());
     }
 
     #[test]
@@ -1191,7 +1278,37 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(mgr.read_lead_pid(sid), Some(12345));
+        let entry = WorktreeEntry {
+            name: "test".to_string(),
+            path: dir.path().to_string_lossy().to_string(),
+            branch: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some(sid.to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        assert_eq!(mgr.read_lead_pid(&entry), Some(12345));
+    }
+
+    #[test]
+    fn test_read_lead_pid_from_entry_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "test".to_string(),
+            path: "/nonexistent".to_string(),
+            branch: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-test".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(99999),
+        };
+        // Should return the entry's lead_pid directly (fast path).
+        assert_eq!(mgr.read_lead_pid(&entry), Some(99999));
     }
 
     #[test]
@@ -1201,12 +1318,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: dir.path().to_string_lossy().to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert!(!mgr.has_pathflow_active(&entry));
     }
@@ -1224,12 +1342,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: dir.path().to_string_lossy().to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: registry::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         assert!(mgr.has_pathflow_active(&entry));
     }
@@ -1245,12 +1364,13 @@ mod tests {
             reg.worktrees.push(WorktreeEntry {
                 name: format!("removed-{i}"),
                 path: format!("/gone/{i}"),
-                branch: format!("feat/r{i}"),
+                branch: Some(format!("feat/r{i}")),
                 created_at: "2026-03-01T10:00:00Z".to_string(),
-                status: "removed".to_string(),
+                status: registry::WorktreeStatus::Removed,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             });
         }
         registry::write_registry(&reg_path, &reg).unwrap();
@@ -1268,7 +1388,7 @@ mod tests {
         let removed_count = reg_after
             .worktrees
             .iter()
-            .filter(|e| e.status == "removed")
+            .filter(|e| e.status == registry::WorktreeStatus::Removed)
             .count();
         assert_eq!(removed_count, 3, "should keep only 3 removed entries");
     }

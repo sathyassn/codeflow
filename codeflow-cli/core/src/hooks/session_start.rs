@@ -110,14 +110,16 @@ fn is_process_alive(pid: u32) -> bool {
 /// Errors are logged but never fail the session start.
 fn clean_orphaned_worktrees(project_dir: &Path, mgr: &WorktreeManager) {
     // Pass 1: Purge "removed" entries (keep 0 — remove all).
-    if let Err(e) = crate::worktree::purge_removed_entries(mgr.registry_path(), 0) {
+    if let Err(e) = crate::worktree::locked_purge_removed(mgr.registry_path(), 0) {
         eprintln!("warn: worktree orphan cleanup: purge_removed failed: {e}");
     }
 
     // Pass 2: Deregister entries whose directories don't exist.
     if let Ok(registry) = crate::worktree::read_registry(mgr.registry_path()) {
         for entry in &registry.worktrees {
-            if entry.status == "active" && !Path::new(&entry.path).exists() {
+            if entry.status == crate::worktree::WorktreeStatus::Active
+                && !Path::new(&entry.path).exists()
+            {
                 eprintln!(
                     "info: worktree orphan cleanup: deregistering missing dir: {}",
                     entry.name
@@ -872,7 +874,9 @@ impl SessionStartInit {
 
         for entry in &registry.worktrees {
             // Process "active" and "pending_cleanup" entries; skip "removed" and others.
-            if entry.status != "active" && entry.status != "pending_cleanup" {
+            if entry.status != crate::worktree::WorktreeStatus::Active
+                && entry.status != crate::worktree::WorktreeStatus::PendingCleanup
+            {
                 continue;
             }
 
@@ -929,7 +933,7 @@ impl SessionStartInit {
             }
 
             // Session is dead — clean up this worktree.
-            let status_label = if entry.status == "pending_cleanup" {
+            let status_label = if entry.status == crate::worktree::WorktreeStatus::PendingCleanup {
                 "PENDING_CLEANUP"
             } else {
                 "STALE"
@@ -961,7 +965,7 @@ impl SessionStartInit {
         }
 
         // Purge old "removed" entries from the registry (keep last 5 for forensics).
-        if let Err(e) = crate::worktree::purge_removed_entries(&registry_path, 5) {
+        if let Err(e) = crate::worktree::locked_purge_removed(&registry_path, 5) {
             result
                 .warnings
                 .push(format!("purge removed entries failed: {e}"));
@@ -992,7 +996,7 @@ impl SessionStartInit {
         let registered_names: std::collections::HashSet<String> = registry
             .worktrees
             .iter()
-            .filter(|e| e.status == "active")
+            .filter(|e| e.status == crate::worktree::WorktreeStatus::Active)
             .filter_map(|e| {
                 std::path::Path::new(&e.path)
                     .file_name()
@@ -1620,12 +1624,13 @@ impl SessionStartInit {
         let reg_entry = crate::worktree::WorktreeEntry {
             name: wt_name.clone(),
             path: String::new(), // placeholder — updated after setup_detached
-            branch: String::new(),
+            branch: None,
             created_at: now_ts,
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: Some(session_id.to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         crate::worktree::locked_register_with_limit(
             mgr.registry_path(),
@@ -1641,6 +1646,10 @@ impl SessionStartInit {
         // Set source field to "interactive" for interactive sessions.
         // Mirrors what autorun workers do with "autorun" in worker.rs.
         let _ = crate::worktree::locked_update_source(mgr.registry_path(), &wt_name, "interactive");
+
+        // Record lead PID in registry for fast liveness checks.
+        let pid = std::process::id();
+        let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
 
         // Create RAII handle for cleanup on panic.
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -1771,17 +1780,16 @@ impl SessionStartInit {
             return None;
         }
 
-        // 3. Update registry session_id (mirrors create_session_worktree lines 960-967).
+        // 3. Update registry session_id and lead_pid using locked operations.
         if let Some(wt_name) = wt_path.file_name().map(|n| n.to_string_lossy().to_string()) {
             let mgr = WorktreeManager::new(project_dir);
-            if let Ok(mut reg) = crate::worktree::read_registry(mgr.registry_path()) {
-                for e in &mut reg.worktrees {
-                    if e.name == wt_name {
-                        e.session_id = Some(session_id.to_string());
-                    }
-                }
-                let _ = crate::worktree::write_registry(mgr.registry_path(), &reg);
-            }
+            let _ = crate::worktree::locked_update_session_id(
+                mgr.registry_path(),
+                &wt_name,
+                session_id,
+            );
+            let pid = std::process::id();
+            let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
         }
 
         // 4. Update main env file with worker's session ID (mirrors lines 971-986).
@@ -4725,12 +4733,13 @@ mod tests {
                 .join("stale-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/stale".to_string(),
+            branch: Some("feat/stale".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4796,12 +4805,13 @@ mod tests {
                 .join("pending-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/pending".to_string(),
+            branch: Some("feat/pending".to_string()),
             created_at: "2026-03-27T00:00:00Z".to_string(),
-            status: "pending_cleanup".to_string(),
+            status: crate::worktree::WorktreeStatus::PendingCleanup,
             session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4868,12 +4878,13 @@ mod tests {
                 .join("active-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/active".to_string(),
+            branch: Some("feat/active".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: Some(live_sid.to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4934,12 +4945,13 @@ mod tests {
                 .join("legacy-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/legacy".to_string(),
+            branch: Some("feat/legacy".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -4980,12 +4992,13 @@ mod tests {
                 .join("old-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/old".to_string(),
+            branch: Some("feat/old".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: "removed".to_string(),
+            status: crate::worktree::WorktreeStatus::Removed,
             session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -5027,12 +5040,13 @@ mod tests {
         reg.worktrees.push(crate::worktree::WorktreeEntry {
             name: wt_name.to_string(),
             path: wt_dir.to_string_lossy().to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-18T00:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: Some("ses-orchestrator00000000000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
 
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");

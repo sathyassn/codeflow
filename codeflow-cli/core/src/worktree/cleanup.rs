@@ -224,12 +224,12 @@ pub(crate) fn cleanup_worktree(
         }
     }
 
-    // Deregister from the YAML registry.
+    // Deregister from the YAML registry (locked to avoid TOCTOU).
     let wt_path_str = wt_path.to_string_lossy();
-    registry::deregister_worktree(mgr.registry_path(), &wt_path_str)?;
+    registry::locked_deregister_worktree(mgr.registry_path(), &wt_path_str)?;
 
     // Defense-in-depth: also deregister by name for empty-path entries.
-    registry::deregister_by_name(mgr.registry_path(), name)?;
+    registry::locked_deregister_by_name(mgr.registry_path(), name)?;
 
     Ok(())
 }

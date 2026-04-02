@@ -109,6 +109,44 @@ impl CheckpointComplete {
             &serde_json::json!({"work_type": work_type}),
         );
     }
+
+    /// Update the worktree registry branch field with the current git branch.
+    ///
+    /// Called when the pf-3 sentinel is created (feature branch exists).
+    /// Uses `locked_update_branch` for atomic registry updates.
+    fn update_worktree_branch(&self) {
+        // Read the current branch from the project directory.
+        let branch = match std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&self.project_dir)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => return,
+        };
+
+        if branch.is_empty() {
+            return;
+        }
+
+        // Determine worktree name from the project directory.
+        let wt_name = match self.project_dir.file_name().and_then(|n| n.to_str()) {
+            Some(name) if name.starts_with("worktree-") => name.to_string(),
+            _ => return, // Not in a worktree.
+        };
+
+        // Find the registry path — it's symlinked into worktrees.
+        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
+        if !registry_path.exists() {
+            return;
+        }
+
+        if let Err(e) = crate::worktree::locked_update_branch(&registry_path, &wt_name, &branch) {
+            eprintln!("checkpoint-complete: branch update failed: {e}");
+        }
+    }
 }
 
 impl HookHandler for CheckpointComplete {
@@ -183,6 +221,9 @@ impl HookHandler for CheckpointComplete {
                         // Mirrors Go registerWorkType() in hooks.go:855-877.
                         if phase_normalized == "pf-3" {
                             self.register_work_type(&session_dir, sid.as_ref());
+                            // Update worktree registry branch field now that
+                            // the feature branch exists (AC #10).
+                            self.update_worktree_branch();
                         }
                     }
                 }

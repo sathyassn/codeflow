@@ -446,18 +446,6 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_prune_parses() {
-        let result = Cli::try_parse_from(["codeflow", "worktree", "prune"]);
-        assert!(result.is_ok(), "should parse worktree prune");
-    }
-
-    #[test]
-    fn test_worktree_prune_dry_run_parses() {
-        let result = Cli::try_parse_from(["codeflow", "worktree", "prune", "--dry-run"]);
-        assert!(result.is_ok(), "should parse worktree prune --dry-run");
-    }
-
-    #[test]
     fn test_worktree_repair_parses() {
         let result = Cli::try_parse_from(["codeflow", "worktree", "repair"]);
         assert!(result.is_ok(), "should parse worktree repair");

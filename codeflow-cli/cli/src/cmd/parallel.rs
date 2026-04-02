@@ -51,11 +51,7 @@ fn run_status(project_dir: &Path) -> Result<()> {
                         println!(
                             "  {:<20} {:<30} {:<20} {}",
                             entry.name,
-                            if entry.branch.is_empty() {
-                                "(detached)"
-                            } else {
-                                &entry.branch
-                            },
+                            entry.branch.as_deref().unwrap_or("(detached)"),
                             entry.session_id.as_deref().unwrap_or("-"),
                             entry.task_id.as_deref().unwrap_or("-"),
                         );
@@ -211,12 +207,13 @@ mod tests {
         reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
             name: "ses-test".to_string(),
             path: "/tmp/wt/test".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
             session_id: Some("ses-001".to_string()),
             task_id: Some("TSK-001".to_string()),
             source: None,
+            lead_pid: None,
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 

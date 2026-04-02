@@ -74,7 +74,11 @@ fn run_list(project_dir: &Path) -> Result<()> {
     for entry in &entries {
         let state = mgr.detect_state(entry);
         let liveness = mgr.liveness_status(entry);
-        println!("{} ({}) [{}] {}", entry.name, entry.branch, state, liveness);
+        let branch = entry.branch.as_deref().unwrap_or("(detached)");
+        println!(
+            "{} ({}) [{}] {} [{}]",
+            entry.name, branch, state, liveness, entry.status
+        );
     }
 
     Ok(())
@@ -101,18 +105,17 @@ fn run_cleanup(
         let entries = mgr.list(None).context("listing worktrees")?;
         let mut candidates = Vec::new();
         for entry in &entries {
-            if entry.status == "removed" {
+            if entry.status == codeflow_core::worktree::WorktreeStatus::Removed {
                 continue;
             }
             let state = mgr.detect_state(entry);
             let liveness = mgr.liveness_status(entry);
-            if liveness == "ACTIVE" {
-                continue;
-            }
-            if state == WorktreeState::Active && !force {
+            // Skip entries with confirmed live sessions (not just Active state).
+            if state == WorktreeState::Active && liveness == "ACTIVE" {
                 continue;
             }
             let wt_path = std::path::Path::new(&entry.path);
+            let branch = entry.branch.as_deref().unwrap_or("(detached)");
             let safety_msg = if wt_path.exists() {
                 let safety = codeflow_core::worktree::check_branch_safety(wt_path);
                 format!("risk={} {}", safety.risk, safety.message)
@@ -120,8 +123,8 @@ fn run_cleanup(
                 "directory missing".to_string()
             };
             println!(
-                "  {} ({}) [{}] {} -- {}",
-                entry.name, entry.branch, state, liveness, safety_msg
+                "  {} ({}) [{}] {} [{}] -- {}",
+                entry.name, branch, state, liveness, entry.status, safety_msg
             );
             candidates.push(entry.name.clone());
         }
@@ -243,12 +246,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/nonexistent/path".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2025-01-01T00:00:00Z".to_string(),
-            status: "removed".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Removed,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let state = mgr.detect_state(&entry);
@@ -264,18 +268,20 @@ mod tests {
         let entry = WorktreeEntry {
             name: "my-worktree".to_string(),
             path: "/tmp/wt".to_string(),
-            branch: "feat/something".to_string(),
+            branch: Some("feat/something".to_string()),
             created_at: "2025-01-01T00:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
         let state = mgr.detect_state(&entry);
-        let output = format!("{} ({}) [{}]", entry.name, entry.branch, state);
+        let branch = entry.branch.as_deref().unwrap_or("(detached)");
+        let output = format!("{} ({}) [{}]", entry.name, branch, state);
         assert!(output.contains("my-worktree"));
         assert!(output.contains("feat/something"));
     }
@@ -337,12 +343,13 @@ mod tests {
                 .join(".git-worktrees/stale-wt")
                 .to_string_lossy()
                 .to_string(),
-            branch: "feat/stale".to_string(),
+            branch: Some("feat/stale".to_string()),
             created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -359,12 +366,13 @@ mod tests {
         reg.worktrees.push(WorktreeEntry {
             name: "stale-wt".to_string(),
             path: "/nonexistent/stale-wt".to_string(),
-            branch: "feat/stale".to_string(),
+            branch: Some("feat/stale".to_string()),
             created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -373,7 +381,10 @@ mod tests {
 
         // Registry should not have changed (dry run).
         let reg_after = codeflow_core::worktree::read_registry(&reg_path).unwrap();
-        assert_eq!(reg_after.worktrees[0].status, "active");
+        assert_eq!(
+            reg_after.worktrees[0].status,
+            codeflow_core::worktree::WorktreeStatus::Active
+        );
     }
 
     #[test]
@@ -389,12 +400,13 @@ mod tests {
         reg.worktrees.push(WorktreeEntry {
             name: "orphan-wt".to_string(),
             path: wt_dir.to_string_lossy().to_string(),
-            branch: "feat/orphan".to_string(),
+            branch: Some("feat/orphan".to_string()),
             created_at: "2026-03-21T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -573,5 +585,152 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Repair { path: Some(_) })
         ));
+    }
+
+    // -- run_list with entries tests --
+
+    #[test]
+    fn test_list_shows_branch_and_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "list-wt".to_string(),
+            path: "/nonexistent/list-wt".to_string(),
+            branch: Some("feat/listed".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // run_list should succeed and print the entry.
+        let result = run_list(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_detached_branch_shows_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "detached-wt".to_string(),
+            path: "/nonexistent/detached-wt".to_string(),
+            branch: None,
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        let result = run_list(dir.path());
+        assert!(result.is_ok());
+    }
+
+    // -- interactive cleanup tests --
+
+    #[test]
+    fn test_cleanup_interactive_no_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Interactive with no entries should say "no worktrees to clean up".
+        let result = run_cleanup(dir.path(), false, false, true, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_interactive_shows_stale_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        // Add a stale entry (directory doesn't exist).
+        reg.worktrees.push(WorktreeEntry {
+            name: "stale-interactive".to_string(),
+            path: "/nonexistent/stale-interactive".to_string(),
+            branch: Some("feat/stale".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        let result = run_cleanup(dir.path(), false, false, true, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_removed_entries_skipped_in_interactive() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "already-removed".to_string(),
+            path: "/gone/removed".to_string(),
+            branch: Some("feat/old".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Removed,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Removed entries should be skipped -- "no worktrees to clean up".
+        let result = run_cleanup(dir.path(), false, false, true, None);
+        assert!(result.is_ok());
+    }
+
+    // -- cleanup output path tests --
+
+    #[test]
+    fn test_cleanup_non_interactive_empty_says_no_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        write_registry(&reg_path, &reg).unwrap();
+
+        let result = run_cleanup(dir.path(), false, false, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_dry_run_stale_shows_would_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "dry-run-stale".to_string(),
+            path: dir
+                .path()
+                .join(".git-worktrees/dry-run-stale")
+                .to_string_lossy()
+                .to_string(),
+            branch: Some("feat/dry".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Dry run should report "would remove" without actually removing.
+        let result = run_cleanup(dir.path(), false, true, false, None);
+        assert!(result.is_ok());
     }
 }

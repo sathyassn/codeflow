@@ -315,7 +315,7 @@ fn collect_active_sessions(state_loro_path: &Path) -> std::collections::HashSet<
             let registry_path = state_dir.join("worktrees").join("worktrees.yaml");
             if let Ok(registry) = crate::worktree::read_registry(&registry_path) {
                 for entry in &registry.worktrees {
-                    if entry.status == "active" {
+                    if entry.status == crate::worktree::WorktreeStatus::Active {
                         if let Some(ref sid) = entry.session_id {
                             sessions.insert(sid.clone());
                         }
@@ -806,7 +806,9 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
         std::collections::HashMap::new();
     if let Ok(reg) = crate::worktree::read_registry(&registry_path) {
         for entry in &reg.worktrees {
-            if entry.status == "active" || entry.status == "pending_cleanup" {
+            if entry.status == crate::worktree::WorktreeStatus::Active
+                || entry.status == crate::worktree::WorktreeStatus::PendingCleanup
+            {
                 if let Some(ref sid_str) = entry.session_id {
                     if !entry.path.is_empty() {
                         session_worktree_paths
@@ -1773,12 +1775,13 @@ mod tests {
                 .join(".git-worktrees/worktree-ses-registry-dead")
                 .to_string_lossy()
                 .to_string(),
-            branch: "fix/test".to_string(),
+            branch: Some("fix/test".to_string()),
             created_at: "2026-03-23T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: crate::worktree::WorktreeStatus::Active,
             session_id: Some("ses-registry-dead".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 

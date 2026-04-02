@@ -107,9 +107,7 @@ run_single_test() {
         else
             echo -e "${RED}✗${NC} $test_name"
         fi
-        if [[ "$RUNNER_VERBOSE" == "true" || "$RUNNER_STOP_ON_FAIL" == "true" ]]; then
-            echo "$output"
-        fi
+        echo "$output"
 
         if [[ "$RUNNER_STOP_ON_FAIL" == "true" ]]; then
             log_error "Stopping on first failure"

@@ -119,12 +119,13 @@ pub(crate) fn create_worktree(
     let entry = WorktreeEntry {
         name: name.to_string(),
         path: wt_path_str.to_string(),
-        branch: branch.to_string(),
+        branch: Some(branch.to_string()),
         created_at: super::now_rfc3339(),
-        status: "active".to_string(),
+        status: registry::WorktreeStatus::Active,
         session_id: None,
         task_id: None,
         source: None,
+        lead_pid: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
@@ -203,12 +204,13 @@ pub(crate) fn create_detached_worktree(
     let entry = WorktreeEntry {
         name: name.to_string(),
         path: wt_path_str.to_string(),
-        branch: String::new(),
+        branch: None,
         created_at: super::now_rfc3339(),
-        status: "active".to_string(),
+        status: registry::WorktreeStatus::Active,
         session_id: None,
         task_id: None,
         source: None,
+        lead_pid: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
@@ -876,8 +878,8 @@ mod tests {
         let entry = mgr.setup("test-wt", &branch).unwrap();
 
         assert_eq!(entry.name, "test-wt");
-        assert_eq!(entry.branch, "feat/test-wt");
-        assert_eq!(entry.status, "active");
+        assert_eq!(entry.branch, Some("feat/test-wt".to_string()));
+        assert_eq!(entry.status, registry::WorktreeStatus::Active);
         assert!(mgr.base_dir().join("test-wt").exists());
 
         // Verify local state dirs were created.
@@ -926,8 +928,8 @@ mod tests {
 
         // Verify entry fields.
         assert_eq!(entry.name, "detached-wt");
-        assert_eq!(entry.branch, "", "branch should be empty for detached");
-        assert_eq!(entry.status, "active");
+        assert!(entry.branch.is_none(), "branch should be None for detached");
+        assert_eq!(entry.status, registry::WorktreeStatus::Active);
         assert!(entry.session_id.is_none());
         assert!(!entry.created_at.is_empty());
 
@@ -993,8 +995,8 @@ mod tests {
         let entries = mgr.list(None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "reg-wt");
-        assert_eq!(entries[0].branch, "", "branch should be empty");
-        assert_eq!(entries[0].status, "active");
+        assert!(entries[0].branch.is_none(), "branch should be None");
+        assert_eq!(entries[0].status, registry::WorktreeStatus::Active);
     }
 
     #[test]
@@ -1216,5 +1218,152 @@ mod tests {
             wt_state.join("sentinels").is_dir(),
             "sentinels should be created"
         );
+    }
+
+    // -- setup_runtime_subdirs coverage --
+
+    #[test]
+    fn test_setup_runtime_subdirs_real_dir_replaced_with_symlink() {
+        // When runtime/shared exists as a real directory, it should be
+        // removed and replaced with a symlink to main repo's shared/.
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let wt_state = dir.path().join("worktree/.state");
+        let wt_runtime = wt_state.join("runtime");
+
+        // Create main repo's shared dir.
+        let main_shared = project_dir.join(".state/runtime/shared");
+        fs::create_dir_all(&main_shared).unwrap();
+
+        // Create worktree runtime with shared as a REAL directory (not symlink).
+        let wt_shared = wt_runtime.join("shared");
+        fs::create_dir_all(&wt_shared).unwrap();
+        // Put a marker file to prove it's a real dir.
+        fs::write(wt_shared.join("marker.txt"), "real").unwrap();
+
+        // Run setup -- should replace real dir with symlink.
+        setup_runtime_subdirs(project_dir, &wt_state).unwrap();
+
+        // Verify it's now a symlink.
+        let meta = wt_shared.symlink_metadata().unwrap();
+        assert!(
+            meta.file_type().is_symlink(),
+            "shared should be a symlink after repair"
+        );
+    }
+
+    #[test]
+    fn test_setup_runtime_subdirs_already_symlink_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let wt_state = dir.path().join("worktree/.state");
+        let wt_runtime = wt_state.join("runtime");
+        fs::create_dir_all(&wt_runtime).unwrap();
+
+        let main_shared = project_dir.join(".state/runtime/shared");
+        fs::create_dir_all(&main_shared).unwrap();
+
+        let wt_shared = wt_runtime.join("shared");
+        // Create as symlink first.
+        std::os::unix::fs::symlink(&main_shared, &wt_shared).unwrap();
+
+        // Run setup -- should be a no-op (already a symlink).
+        setup_runtime_subdirs(project_dir, &wt_state).unwrap();
+
+        let meta = wt_shared.symlink_metadata().unwrap();
+        assert!(meta.file_type().is_symlink());
+    }
+
+    // -- install_hooks coverage --
+
+    #[test]
+    fn test_install_hooks_already_symlink_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+
+        // Create a hook source.
+        let hooks_src = project_dir.join(".codeflow/scripts/git-hooks");
+        fs::create_dir_all(&hooks_src).unwrap();
+        fs::write(hooks_src.join("pre-commit"), "#!/bin/sh\nexit 0").unwrap();
+
+        // Create a worktree with .git file pointing to a hooks dir.
+        let wt_path = dir.path().join("wt");
+        let git_dir = dir.path().join("git-internal");
+        let hooks_dst = git_dir.join("hooks");
+        fs::create_dir_all(&hooks_dst).unwrap();
+        fs::create_dir_all(&wt_path).unwrap();
+        fs::write(
+            wt_path.join(".git"),
+            format!("gitdir: {}", git_dir.display()),
+        )
+        .unwrap();
+
+        // Pre-create the hook as a symlink.
+        let dst = hooks_dst.join("pre-commit");
+        std::os::unix::fs::symlink(hooks_src.join("pre-commit"), &dst).unwrap();
+
+        // install_hooks should skip (already a symlink).
+        install_hooks(project_dir, &wt_path).unwrap();
+
+        let meta = dst.symlink_metadata().unwrap();
+        assert!(meta.file_type().is_symlink());
+    }
+
+    #[test]
+    fn test_install_hooks_replaces_non_symlink_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+
+        // Create a hook source.
+        let hooks_src = project_dir.join(".codeflow/scripts/git-hooks");
+        fs::create_dir_all(&hooks_src).unwrap();
+        fs::write(hooks_src.join("commit-msg"), "#!/bin/sh\nexit 0").unwrap();
+
+        // Create a worktree with .git file.
+        let wt_path = dir.path().join("wt");
+        let git_dir = dir.path().join("git-internal");
+        let hooks_dst = git_dir.join("hooks");
+        fs::create_dir_all(&hooks_dst).unwrap();
+        fs::create_dir_all(&wt_path).unwrap();
+        fs::write(
+            wt_path.join(".git"),
+            format!("gitdir: {}", git_dir.display()),
+        )
+        .unwrap();
+
+        // Pre-create as a regular file (not symlink).
+        let dst = hooks_dst.join("commit-msg");
+        fs::write(&dst, "old content").unwrap();
+
+        // install_hooks should remove the regular file and create a symlink.
+        install_hooks(project_dir, &wt_path).unwrap();
+
+        let meta = dst.symlink_metadata().unwrap();
+        assert!(
+            meta.file_type().is_symlink(),
+            "hook should be replaced with symlink"
+        );
+    }
+
+    // -- clean_stale_session_dirs coverage --
+
+    #[test]
+    fn test_clean_stale_session_dirs_no_session_dir() {
+        // When .state/session doesn't exist, should be a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        clean_stale_session_dirs(dir.path()); // should not panic
+    }
+
+    #[test]
+    fn test_clean_stale_session_dirs_orphaned_removed() {
+        // A session dir without a status file or pointer should be removed.
+        let dir = tempfile::tempdir().unwrap();
+        let session_base = dir.path().join(".state/session");
+        let orphan = session_base.join("ses-01jqorphantest000000000");
+        fs::create_dir_all(&orphan).unwrap();
+
+        clean_stale_session_dirs(dir.path());
+
+        assert!(!orphan.exists(), "orphaned session dir should be removed");
     }
 }

@@ -17,6 +17,47 @@ PARALLEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # PARALLEL EXECUTION
 # ============================================================================
 
+## Dump log files for categories that had failures.
+## Called by the EXIT trap before results_dir is deleted.
+_dump_failed_logs() {
+    local results_dir="$1"
+    [[ -d "$results_dir" ]] || return 0
+
+    local any_failed=false
+    for result_file in "$results_dir"/*.result; do
+        [[ -f "$result_file" ]] || continue
+        local failed
+        failed=$(grep '^failed=' "$result_file" 2>/dev/null | cut -d= -f2)
+        if [[ "${failed:-0}" -gt 0 ]]; then
+            any_failed=true
+            break
+        fi
+    done
+
+    if [[ "$any_failed" == "true" ]]; then
+        echo "" >&2
+        echo "=== FAILED CATEGORY LOGS ===" >&2
+        for result_file in "$results_dir"/*.result; do
+            [[ -f "$result_file" ]] || continue
+            local failed
+            failed=$(grep '^failed=' "$result_file" 2>/dev/null | cut -d= -f2)
+            if [[ "${failed:-0}" -gt 0 ]]; then
+                local cat_name log_file
+                cat_name=$(basename "$result_file" .result)
+                log_file="${result_file%.result}.log"
+                echo "--- ${cat_name} (${failed} failure(s)) ---" >&2
+                if [[ -f "$log_file" ]]; then
+                    cat "$log_file" >&2
+                else
+                    echo "  (no log file)" >&2
+                fi
+                echo "" >&2
+            fi
+        done
+        echo "=== END FAILED LOGS ===" >&2
+    fi
+}
+
 run_all_tests_parallel() {
     local mode="${1:-$(get_current_mode)}"
     local max_jobs="${2:-6}"
@@ -35,7 +76,7 @@ run_all_tests_parallel() {
     local results_dir
     results_dir=$(mktemp -d "${TMPDIR:-/tmp}/codeflow-test-results-XXXXXX")
     # shellcheck disable=SC2064  # Intentional: expand $results_dir now, not at signal time
-    trap "rm -rf '$results_dir'" EXIT
+    trap "_dump_failed_logs '$results_dir'; rm -rf '$results_dir'" EXIT
 
     # Initialize coverage collection directory for parallel workers
     if [[ "$RUNNER_WITH_COVERAGE" == "true" ]] && is_coverage_enabled; then

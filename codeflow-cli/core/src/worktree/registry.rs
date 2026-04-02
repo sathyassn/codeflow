@@ -13,6 +13,28 @@ use crate::diagnostics;
 use crate::error::WorktreeError;
 use crate::file_lock;
 
+/// Typed worktree lifecycle status.
+///
+/// Replaces free-form `String` status to enable exhaustive match checking.
+/// Serde uses `snake_case` for backwards compatibility with existing YAML files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeStatus {
+    Active,
+    PendingCleanup,
+    Removed,
+}
+
+impl std::fmt::Display for WorktreeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active => f.write_str("active"),
+            Self::PendingCleanup => f.write_str("pending_cleanup"),
+            Self::Removed => f.write_str("removed"),
+        }
+    }
+}
+
 /// A single worktree entry in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorktreeEntry {
@@ -21,12 +43,13 @@ pub struct WorktreeEntry {
     /// Absolute filesystem path to the worktree directory.
     pub path: String,
     /// Git branch name associated with this worktree.
-    /// Empty string for detached worktrees (branch set later at PF3).
-    pub branch: String,
+    /// `None` for detached worktrees (branch set later at PF3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// ISO 8601 timestamp of when the worktree was created.
     pub created_at: String,
-    /// Current status: "active" or "removed".
-    pub status: String,
+    /// Current lifecycle status.
+    pub status: WorktreeStatus,
     /// Session ID that owns this worktree (set by SessionStart integration, task 009).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -36,6 +59,9 @@ pub struct WorktreeEntry {
     /// Source that created this worktree: "interactive" or "autorun".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// PID of the Claude Code lead process owning this worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_pid: Option<u32>,
 }
 
 /// Registry metadata.
@@ -134,6 +160,7 @@ pub fn register_worktree(registry_path: &Path, entry: WorktreeEntry) -> Result<(
 ///
 /// - `WorktreeError::Io` on filesystem errors.
 /// - `WorktreeError::Yaml` on parse/serialize errors.
+#[cfg(test)]
 pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<(), WorktreeError> {
     if !registry_path.exists() {
         return Ok(());
@@ -144,7 +171,7 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
     let mut found = false;
     for entry in &mut registry.worktrees {
         if entry.path == worktree_path {
-            entry.status = "removed".to_string();
+            entry.status = WorktreeStatus::Removed;
             found = true;
             break;
         }
@@ -160,9 +187,8 @@ pub fn deregister_worktree(registry_path: &Path, worktree_path: &str) -> Result<
 
 /// Deregister a worktree by name (defense-in-depth fallback).
 ///
-/// Matches by name instead of path. Useful when the path field is empty
-/// (e.g., entries created by pre-registration before `setup_detached` runs).
-/// If the registry doesn't exist or the name is not found, this is a no-op.
+/// Matches by name instead of path. Matches both `Active` and `PendingCleanup`
+/// entries. If the registry doesn't exist or the name is not found, this is a no-op.
 ///
 /// # Errors
 ///
@@ -177,8 +203,11 @@ pub fn deregister_by_name(registry_path: &Path, name: &str) -> Result<(), Worktr
 
     let mut found = false;
     for entry in &mut registry.worktrees {
-        if entry.name == name && entry.status == "active" {
-            entry.status = "removed".to_string();
+        if entry.name == name
+            && (entry.status == WorktreeStatus::Active
+                || entry.status == WorktreeStatus::PendingCleanup)
+        {
+            entry.status = WorktreeStatus::Removed;
             found = true;
             break;
         }
@@ -214,7 +243,7 @@ pub fn purge_removed_entries(
     let removed_count = registry
         .worktrees
         .iter()
-        .filter(|e| e.status == "removed")
+        .filter(|e| e.status == WorktreeStatus::Removed)
         .count();
 
     if removed_count <= max_keep {
@@ -224,7 +253,7 @@ pub fn purge_removed_entries(
     let to_remove = removed_count - max_keep;
     let mut removed = 0;
     registry.worktrees.retain(|e| {
-        if e.status == "removed" && removed < to_remove {
+        if e.status == WorktreeStatus::Removed && removed < to_remove {
             removed += 1;
             false
         } else {
@@ -281,8 +310,10 @@ pub fn mark_pending_cleanup(registry_path: &Path, session_id: &str) -> Result<()
         |reg| {
             let mut found = false;
             for entry in &mut reg.worktrees {
-                if entry.session_id.as_deref() == Some(&sid) && entry.status == "active" {
-                    entry.status = "pending_cleanup".to_string();
+                if entry.session_id.as_deref() == Some(&sid)
+                    && entry.status == WorktreeStatus::Active
+                {
+                    entry.status = WorktreeStatus::PendingCleanup;
                     found = true;
                     break;
                 }
@@ -347,7 +378,7 @@ pub fn count_active(registry: &WorktreeRegistry) -> usize {
     registry
         .worktrees
         .iter()
-        .filter(|e| e.status == "active")
+        .filter(|e| e.status == WorktreeStatus::Active)
         .count()
 }
 
@@ -357,7 +388,7 @@ pub fn list_active(registry: &WorktreeRegistry) -> Vec<&WorktreeEntry> {
     registry
         .worktrees
         .iter()
-        .filter(|e| e.status == "active")
+        .filter(|e| e.status == WorktreeStatus::Active)
         .collect()
 }
 
@@ -433,7 +464,7 @@ pub fn locked_register_with_limit(
             if let Some(existing) = reg
                 .worktrees
                 .iter_mut()
-                .find(|e| e.name == entry_owned.name && e.status == "active")
+                .find(|e| e.name == entry_owned.name && e.status == WorktreeStatus::Active)
             {
                 diagnostics::warn(
                     "worktree",
@@ -448,7 +479,7 @@ pub fn locked_register_with_limit(
                 if !entry_owned.path.is_empty() {
                     existing.path.clone_from(&entry_owned.path);
                 }
-                if !entry_owned.branch.is_empty() {
+                if entry_owned.branch.is_some() {
                     existing.branch.clone_from(&entry_owned.branch);
                 }
                 existing.created_at.clone_from(&entry_owned.created_at);
@@ -514,7 +545,7 @@ pub fn locked_deregister_worktree(
             let mut found = false;
             for entry in &mut reg.worktrees {
                 if entry.path == wt_path {
-                    entry.status = "removed".to_string();
+                    entry.status = WorktreeStatus::Removed;
                     found = true;
                     break;
                 }
@@ -526,6 +557,252 @@ pub fn locked_deregister_worktree(
         },
     )
     .map_err(|e| WorktreeError::Yaml(format!("locked deregister: {e}")))
+}
+
+/// Deregister a worktree by name under an exclusive lock.
+///
+/// Matches both `Active` and `PendingCleanup` entries.
+///
+/// # Errors
+///
+/// - `WorktreeError::Io` on filesystem errors.
+/// - `WorktreeError::Yaml` on parse/serialize errors.
+pub fn locked_deregister_by_name(registry_path: &Path, name: &str) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let name_owned = name.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            let mut found = false;
+            for entry in &mut reg.worktrees {
+                if entry.name == name_owned
+                    && (entry.status == WorktreeStatus::Active
+                        || entry.status == WorktreeStatus::PendingCleanup)
+                {
+                    entry.status = WorktreeStatus::Removed;
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked deregister_by_name: {e}")))
+}
+
+/// Update the `branch` field on a worktree entry identified by name.
+///
+/// Uses file-locked read-modify-write to avoid concurrent corruption.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or the file cannot be written.
+pub fn locked_update_branch(
+    registry_path: &Path,
+    worktree_name: &str,
+    branch: &str,
+) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let name = worktree_name.to_string();
+    let br = branch.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            if let Some(entry) = reg.worktrees.iter_mut().find(|e| e.name == name) {
+                entry.branch = Some(br.clone());
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked update_branch: {e}")))
+}
+
+/// Update the `lead_pid` field on a worktree entry identified by name.
+///
+/// Uses file-locked read-modify-write to avoid concurrent corruption.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or the file cannot be written.
+pub fn locked_update_lead_pid(
+    registry_path: &Path,
+    worktree_name: &str,
+    pid: u32,
+) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let name = worktree_name.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            if let Some(entry) = reg.worktrees.iter_mut().find(|e| e.name == name) {
+                entry.lead_pid = Some(pid);
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked update_lead_pid: {e}")))
+}
+
+/// Update the `session_id` field on a worktree entry identified by name.
+///
+/// Uses file-locked read-modify-write to avoid concurrent corruption.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or the file cannot be written.
+pub fn locked_update_session_id(
+    registry_path: &Path,
+    worktree_name: &str,
+    session_id: &str,
+) -> Result<(), WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(());
+    }
+
+    let name = worktree_name.to_string();
+    let sid = session_id.to_string();
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            if let Some(entry) = reg.worktrees.iter_mut().find(|e| e.name == name) {
+                entry.session_id = Some(sid.clone());
+                reg.metadata.last_updated = super::now_rfc3339();
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked update_session_id: {e}")))
+}
+
+/// Purge old `Removed` entries from the registry under an exclusive lock.
+///
+/// Keeps at most `max_keep` removed entries (the most recent ones).
+/// Returns the number of entries purged.
+///
+/// # Errors
+///
+/// - `WorktreeError::Yaml` on parse/serialize or lock errors.
+pub fn locked_purge_removed(registry_path: &Path, max_keep: usize) -> Result<usize, WorktreeError> {
+    if !registry_path.exists() {
+        return Ok(0);
+    }
+
+    let mut purge_count = 0usize;
+    file_lock::locked_binary_rmw(
+        registry_path,
+        || WorktreeRegistry::new(""),
+        |bytes| {
+            if bytes.is_empty() {
+                return Ok(WorktreeRegistry::new(""));
+            }
+            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
+            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
+        },
+        |reg| {
+            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
+            let output =
+                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
+            Ok(output.into_bytes())
+        },
+        |reg| {
+            let removed_count = reg
+                .worktrees
+                .iter()
+                .filter(|e| e.status == WorktreeStatus::Removed)
+                .count();
+
+            if removed_count <= max_keep {
+                return Ok(());
+            }
+
+            let to_remove = removed_count - max_keep;
+            let mut removed = 0usize;
+            reg.worktrees.retain(|e| {
+                if e.status == WorktreeStatus::Removed && removed < to_remove {
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+
+            if removed > 0 {
+                reg.metadata.last_updated = super::now_rfc3339();
+                purge_count = removed;
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| WorktreeError::Yaml(format!("locked purge_removed: {e}")))?;
+
+    Ok(purge_count)
 }
 
 /// Trigger daemon auto-start if active worktree count transitions above 1.
@@ -591,6 +868,19 @@ pub fn maybe_auto_stop_daemon(
     Ok(())
 }
 
+/// Convert (year, month, day) to days since Unix epoch.
+///
+/// Inverse of `days_to_ymd`. Uses Howard Hinnant's `days_from_civil`.
+pub(crate) fn ymd_to_days(year: u64, month: u64, day: u64) -> u64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let m = if month <= 2 { month + 9 } else { month - 3 };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Convert days since Unix epoch to (year, month, day).
 pub(crate) fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant's civil_from_days.
@@ -628,12 +918,13 @@ mod tests {
         reg.worktrees.push(WorktreeEntry {
             name: "my-wt".to_string(),
             path: "/tmp/wt/my-wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
 
         write_registry(&path, &reg).unwrap();
@@ -642,7 +933,7 @@ mod tests {
         let loaded = read_registry(&path).unwrap();
         assert_eq!(loaded.worktrees.len(), 1);
         assert_eq!(loaded.worktrees[0].name, "my-wt");
-        assert_eq!(loaded.worktrees[0].status, "active");
+        assert_eq!(loaded.worktrees[0].status, WorktreeStatus::Active);
         assert_eq!(loaded.metadata.version, "1.0.0");
     }
 
@@ -654,12 +945,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "new-wt".to_string(),
             path: "/tmp/wt/new-wt".to_string(),
-            branch: "feat/new".to_string(),
+            branch: Some("feat/new".to_string()),
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         register_worktree(&path, entry).unwrap();
@@ -678,22 +970,24 @@ mod tests {
         let entry1 = WorktreeEntry {
             name: "wt-1".to_string(),
             path: "/tmp/wt/1".to_string(),
-            branch: "feat/one".to_string(),
+            branch: Some("feat/one".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         let entry2 = WorktreeEntry {
             name: "wt-2".to_string(),
             path: "/tmp/wt/2".to_string(),
-            branch: "feat/two".to_string(),
+            branch: Some("feat/two".to_string()),
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         register_worktree(&path, entry1).unwrap();
@@ -713,19 +1007,20 @@ mod tests {
         let entry = WorktreeEntry {
             name: "to-remove".to_string(),
             path: "/tmp/wt/to-remove".to_string(),
-            branch: "feat/remove".to_string(),
+            branch: Some("feat/remove".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
         deregister_worktree(&path, "/tmp/wt/to-remove").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, "removed");
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
     }
 
     #[test]
@@ -736,12 +1031,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "wt".to_string(),
             path: "/tmp/wt/exists".to_string(),
-            branch: "feat/exists".to_string(),
+            branch: Some("feat/exists".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -750,7 +1046,7 @@ mod tests {
 
         let reg = read_registry(&path).unwrap();
         // Original entry should be unchanged.
-        assert_eq!(reg.worktrees[0].status, "active");
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Active);
     }
 
     #[test]
@@ -794,12 +1090,13 @@ mod tests {
         let entry = WorktreeEntry {
             name: "test-wt".to_string(),
             path: "/tmp/test-wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
@@ -829,12 +1126,13 @@ status: active
         let entry = WorktreeEntry {
             name: "sid-wt".to_string(),
             path: "/tmp/sid-wt".to_string(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-abc123".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -851,12 +1149,13 @@ status: active
         let entry = WorktreeEntry {
             name: "nosid-wt".to_string(),
             path: "/tmp/nosid-wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -872,12 +1171,13 @@ status: active
         let entry = WorktreeEntry {
             name: "tid-wt".to_string(),
             path: "/tmp/tid-wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-abc".to_string()),
             task_id: Some("INF-TSK-023-018".to_string()),
             source: None,
+            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -910,12 +1210,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "notid-wt".to_string(),
             path: "/tmp/notid-wt".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:30:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -932,32 +1233,35 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "active-1".to_string(),
             path: "/tmp/a1".to_string(),
-            branch: "feat/a1".to_string(),
+            branch: Some("feat/a1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "removed-1".to_string(),
             path: "/tmp/r1".to_string(),
-            branch: "feat/r1".to_string(),
+            branch: Some("feat/r1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "removed".to_string(),
+            status: WorktreeStatus::Removed,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "active-2".to_string(),
             path: "/tmp/a2".to_string(),
-            branch: "feat/a2".to_string(),
+            branch: Some("feat/a2".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
 
         assert_eq!(count_active(&reg), 2);
@@ -975,22 +1279,24 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "active-1".to_string(),
             path: "/tmp/a1".to_string(),
-            branch: "feat/a1".to_string(),
+            branch: Some("feat/a1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "removed-1".to_string(),
             path: "/tmp/r1".to_string(),
-            branch: "feat/r1".to_string(),
+            branch: Some("feat/r1".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "removed".to_string(),
+            status: WorktreeStatus::Removed,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
 
         let active = list_active(&reg);
@@ -1009,12 +1315,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "wt-1".to_string(),
             path: "/tmp/wt/1".to_string(),
-            branch: "feat/one".to_string(),
+            branch: Some("feat/one".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -1033,12 +1340,13 @@ session_id: ses-123
             let entry = WorktreeEntry {
                 name: format!("wt-{i}"),
                 path: format!("/tmp/wt/{i}"),
-                branch: format!("feat/{i}"),
+                branch: Some(format!("feat/{i}")),
                 created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: "active".to_string(),
+                status: WorktreeStatus::Active,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             };
             locked_register_with_limit(&reg_path, &entry, 3).unwrap();
         }
@@ -1057,12 +1365,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "wt-only".to_string(),
             path: "/tmp/wt/only".to_string(),
-            branch: "feat/only".to_string(),
+            branch: Some("feat/only".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -1091,12 +1400,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "wt-1".to_string(),
             path: "/tmp/wt/1".to_string(),
-            branch: "feat/one".to_string(),
+            branch: Some("feat/one".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: Some("TSK-001".to_string()),
             source: None,
+            lead_pid: None,
         };
 
         locked_register_with_limit(&path, &entry, 3).unwrap();
@@ -1116,12 +1426,13 @@ session_id: ses-123
             let entry = WorktreeEntry {
                 name: format!("wt-{i}"),
                 path: format!("/tmp/wt/{i}"),
-                branch: format!("feat/{i}"),
+                branch: Some(format!("feat/{i}")),
                 created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: "active".to_string(),
+                status: WorktreeStatus::Active,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1130,12 +1441,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "wt-3".to_string(),
             path: "/tmp/wt/3".to_string(),
-            branch: "feat/3".to_string(),
+            branch: Some("feat/3".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
 
         let result = locked_register_with_limit(&path, &entry, 3);
@@ -1158,12 +1470,13 @@ session_id: ses-123
             let entry = WorktreeEntry {
                 name: format!("wt-{i}"),
                 path: format!("/tmp/wt/{i}"),
-                branch: format!("feat/{i}"),
+                branch: Some(format!("feat/{i}")),
                 created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: "active".to_string(),
+                status: WorktreeStatus::Active,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1175,12 +1488,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "wt-new".to_string(),
             path: "/tmp/wt/new".to_string(),
-            branch: "feat/new".to_string(),
+            branch: Some("feat/new".to_string()),
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry, 3).unwrap();
 
@@ -1196,12 +1510,13 @@ session_id: ses-123
         let entry1 = WorktreeEntry {
             name: "dedup-wt".to_string(),
             path: "/tmp/wt/dedup-1".to_string(),
-            branch: "feat/one".to_string(),
+            branch: Some("feat/one".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-001".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1209,12 +1524,13 @@ session_id: ses-123
         let entry2 = WorktreeEntry {
             name: "dedup-wt".to_string(),
             path: "/tmp/wt/dedup-2".to_string(),
-            branch: "feat/two".to_string(),
+            branch: Some("feat/two".to_string()),
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-002".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1223,7 +1539,7 @@ session_id: ses-123
         let active: Vec<_> = reg
             .worktrees
             .iter()
-            .filter(|e| e.status == "active")
+            .filter(|e| e.status == WorktreeStatus::Active)
             .collect();
         assert_eq!(
             active.len(),
@@ -1234,7 +1550,11 @@ session_id: ses-123
             active[0].path, "/tmp/wt/dedup-2",
             "should have updated path"
         );
-        assert_eq!(active[0].branch, "feat/two", "should have updated branch");
+        assert_eq!(
+            active[0].branch,
+            Some("feat/two".to_string()),
+            "should have updated branch"
+        );
         assert_eq!(active[0].session_id, Some("ses-002".to_string()));
     }
 
@@ -1247,12 +1567,13 @@ session_id: ses-123
         let entry1 = WorktreeEntry {
             name: "preserve-wt".to_string(),
             path: "/tmp/wt/real-path".to_string(),
-            branch: "feat/real-branch".to_string(),
+            branch: Some("feat/real-branch".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-001".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1261,12 +1582,13 @@ session_id: ses-123
         let entry2 = WorktreeEntry {
             name: "preserve-wt".to_string(),
             path: String::new(),
-            branch: String::new(),
+            branch: None,
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-002".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1274,7 +1596,7 @@ session_id: ses-123
         let active: Vec<_> = reg
             .worktrees
             .iter()
-            .filter(|e| e.name == "preserve-wt" && e.status == "active")
+            .filter(|e| e.name == "preserve-wt" && e.status == WorktreeStatus::Active)
             .collect();
         assert_eq!(active.len(), 1);
 
@@ -1284,7 +1606,8 @@ session_id: ses-123
             "empty path should not overwrite non-empty"
         );
         assert_eq!(
-            active[0].branch, "feat/real-branch",
+            active[0].branch,
+            Some("feat/real-branch".to_string()),
             "empty branch should not overwrite non-empty"
         );
         // session_id should be updated (new value is Some).
@@ -1300,12 +1623,13 @@ session_id: ses-123
         let entry1 = WorktreeEntry {
             name: "guard-wt".to_string(),
             path: "/tmp/wt/guard".to_string(),
-            branch: "feat/guard".to_string(),
+            branch: Some("feat/guard".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-original".to_string()),
             task_id: Some("task-original".to_string()),
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1314,12 +1638,13 @@ session_id: ses-123
         let entry2 = WorktreeEntry {
             name: "guard-wt".to_string(),
             path: "/tmp/wt/guard".to_string(),
-            branch: "feat/guard".to_string(),
+            branch: Some("feat/guard".to_string()),
             created_at: "2026-03-07T11:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1327,7 +1652,7 @@ session_id: ses-123
         let active: Vec<_> = reg
             .worktrees
             .iter()
-            .filter(|e| e.name == "guard-wt" && e.status == "active")
+            .filter(|e| e.name == "guard-wt" && e.status == WorktreeStatus::Active)
             .collect();
         assert_eq!(active.len(), 1);
 
@@ -1352,12 +1677,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "name-dereg".to_string(),
             path: "/tmp/wt/name-dereg".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1365,7 +1691,7 @@ session_id: ses-123
         deregister_by_name(&path, "name-dereg").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, "removed");
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
     }
 
     #[test]
@@ -1376,12 +1702,13 @@ session_id: ses-123
         let entry = WorktreeEntry {
             name: "keep-me".to_string(),
             path: "/tmp/wt/keep".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1389,7 +1716,7 @@ session_id: ses-123
         deregister_by_name(&path, "not-found").unwrap();
 
         let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].status, "active");
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Active);
     }
 
     #[test]
@@ -1412,23 +1739,25 @@ session_id: ses-123
             reg.worktrees.push(WorktreeEntry {
                 name: format!("removed-{i}"),
                 path: format!("/tmp/wt/removed-{i}"),
-                branch: String::new(),
+                branch: None,
                 created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: "removed".to_string(),
+                status: WorktreeStatus::Removed,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             });
         }
         reg.worktrees.push(WorktreeEntry {
             name: "active-wt".to_string(),
             path: "/tmp/wt/active".to_string(),
-            branch: "feat/test".to_string(),
+            branch: Some("feat/test".to_string()),
             created_at: "2026-03-07T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: None,
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1440,7 +1769,7 @@ session_id: ses-123
         let removed_count = updated
             .worktrees
             .iter()
-            .filter(|e| e.status == "removed")
+            .filter(|e| e.status == WorktreeStatus::Removed)
             .count();
         assert_eq!(
             removed_count, 5,
@@ -1451,7 +1780,7 @@ session_id: ses-123
         let active_count = updated
             .worktrees
             .iter()
-            .filter(|e| e.status == "active")
+            .filter(|e| e.status == WorktreeStatus::Active)
             .count();
         assert_eq!(active_count, 1);
     }
@@ -1466,12 +1795,13 @@ session_id: ses-123
             reg.worktrees.push(WorktreeEntry {
                 name: format!("removed-{i}"),
                 path: format!("/tmp/wt/removed-{i}"),
-                branch: String::new(),
+                branch: None,
                 created_at: "2026-03-07T10:00:00Z".to_string(),
-                status: "removed".to_string(),
+                status: WorktreeStatus::Removed,
                 session_id: None,
                 task_id: None,
                 source: None,
+                lead_pid: None,
             });
         }
         write_registry(&path, &reg).unwrap();
@@ -1501,12 +1831,13 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-ses-test".to_string(),
             path: "/tmp/wt/test".to_string(),
-            branch: "hotfix/test".to_string(),
+            branch: Some("hotfix/test".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-01jqpendcleantest00000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1514,7 +1845,8 @@ session_id: ses-123
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
-            loaded.worktrees[0].status, "pending_cleanup",
+            loaded.worktrees[0].status,
+            WorktreeStatus::PendingCleanup,
             "should transition from active to pending_cleanup"
         );
     }
@@ -1525,22 +1857,24 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-active".to_string(),
             path: "/tmp/wt/active".to_string(),
-            branch: "feat/active".to_string(),
+            branch: Some("feat/active".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-01jqactive0000000000000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-pending".to_string(),
             path: "/tmp/wt/pending".to_string(),
-            branch: "feat/pending".to_string(),
+            branch: Some("feat/pending".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: "pending_cleanup".to_string(),
+            status: WorktreeStatus::PendingCleanup,
             session_id: Some("ses-01jqpending000000000000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
 
         assert_eq!(
@@ -1559,12 +1893,13 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-ses-other".to_string(),
             path: "/tmp/wt/other".to_string(),
-            branch: "feat/other".to_string(),
+            branch: Some("feat/other".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active,
             session_id: Some("ses-01jqdifferentsession000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1573,7 +1908,8 @@ session_id: ses-123
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
-            loaded.worktrees[0].status, "active",
+            loaded.worktrees[0].status,
+            WorktreeStatus::Active,
             "should remain active when session_id doesn't match"
         );
     }
@@ -1596,12 +1932,13 @@ session_id: ses-123
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-ses-removed".to_string(),
             path: "/tmp/wt/removed".to_string(),
-            branch: "feat/removed".to_string(),
+            branch: Some("feat/removed".to_string()),
             created_at: "2026-03-25T10:00:00Z".to_string(),
-            status: "removed".to_string(),
+            status: WorktreeStatus::Removed,
             session_id: Some("ses-01jqremovedtest00000000".to_string()),
             task_id: None,
             source: None,
+            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1610,8 +1947,257 @@ session_id: ses-123
 
         let loaded = read_registry(&path).unwrap();
         assert_eq!(
-            loaded.worktrees[0].status, "removed",
+            loaded.worktrees[0].status,
+            WorktreeStatus::Removed,
             "should not change status from removed"
         );
+    }
+
+    // -- WorktreeStatus serde tests --
+
+    #[test]
+    fn test_worktree_status_serde() {
+        // Verify snake_case serialization for backwards compat.
+        let yaml = serde_yaml::to_string(&WorktreeStatus::Active).unwrap();
+        assert!(yaml.trim() == "active");
+        let yaml = serde_yaml::to_string(&WorktreeStatus::PendingCleanup).unwrap();
+        assert!(yaml.trim() == "pending_cleanup");
+        let yaml = serde_yaml::to_string(&WorktreeStatus::Removed).unwrap();
+        assert!(yaml.trim() == "removed");
+
+        // Verify deserialization from snake_case strings.
+        let s: WorktreeStatus = serde_yaml::from_str("active").unwrap();
+        assert_eq!(s, WorktreeStatus::Active);
+        let s: WorktreeStatus = serde_yaml::from_str("pending_cleanup").unwrap();
+        assert_eq!(s, WorktreeStatus::PendingCleanup);
+        let s: WorktreeStatus = serde_yaml::from_str("removed").unwrap();
+        assert_eq!(s, WorktreeStatus::Removed);
+    }
+
+    #[test]
+    fn test_branch_option_serde() {
+        // branch: None should NOT appear in YAML.
+        let entry = WorktreeEntry {
+            name: "opt-test".to_string(),
+            path: "/tmp/opt-test".to_string(),
+            branch: None,
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(!yaml.contains("branch"), "None branch should be skipped");
+
+        // branch: Some("x") should appear.
+        let entry2 = WorktreeEntry {
+            branch: Some("feat/test".to_string()),
+            ..entry
+        };
+        let yaml2 = serde_yaml::to_string(&entry2).unwrap();
+        assert!(yaml2.contains("branch"), "Some branch should appear");
+
+        // Old YAML without branch field should parse to None.
+        let old_yaml = r#"
+name: old
+path: /tmp/old
+created_at: "2026-01-01T00:00:00Z"
+status: active
+"#;
+        let parsed: WorktreeEntry = serde_yaml::from_str(old_yaml).unwrap();
+        assert!(parsed.branch.is_none());
+        assert!(parsed.lead_pid.is_none());
+    }
+
+    // -- locked_update_branch tests --
+
+    #[test]
+    fn test_locked_update_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "br-test".to_string(),
+            path: "/tmp/br-test".to_string(),
+            branch: None,
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        locked_update_branch(&path, "br-test", "fix/cleanup").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].branch, Some("fix/cleanup".to_string()));
+    }
+
+    // -- locked_update_lead_pid tests --
+
+    #[test]
+    fn test_locked_update_lead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "pid-test".to_string(),
+            path: "/tmp/pid-test".to_string(),
+            branch: None,
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        locked_update_lead_pid(&path, "pid-test", 12345).unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].lead_pid, Some(12345));
+    }
+
+    // -- locked_update_session_id tests --
+
+    #[test]
+    fn test_locked_update_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "sid-upd".to_string(),
+            path: "/tmp/sid-upd".to_string(),
+            branch: None,
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        locked_update_session_id(&path, "sid-upd", "ses-new123").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].session_id, Some("ses-new123".to_string()));
+    }
+
+    // -- locked_deregister_by_name tests --
+
+    #[test]
+    fn test_locked_deregister_by_name_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "dereg-active".to_string(),
+            path: "/tmp/dereg-active".to_string(),
+            branch: Some("feat/x".to_string()),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        locked_deregister_by_name(&path, "dereg-active").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
+    }
+
+    #[test]
+    fn test_locked_deregister_by_name_pending_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let entry = WorktreeEntry {
+            name: "dereg-pending".to_string(),
+            path: "/tmp/dereg-pending".to_string(),
+            branch: Some("feat/p".to_string()),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::PendingCleanup,
+            session_id: Some("ses-test".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        register_worktree(&path, entry).unwrap();
+
+        locked_deregister_by_name(&path, "dereg-pending").unwrap();
+
+        let reg = read_registry(&path).unwrap();
+        assert_eq!(reg.worktrees[0].status, WorktreeStatus::Removed);
+    }
+
+    // -- locked_purge_removed tests --
+
+    #[test]
+    fn test_locked_purge_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktrees.yaml");
+
+        let mut reg = WorktreeRegistry::new("2026-04-01T00:00:00Z");
+        for i in 0..5 {
+            reg.worktrees.push(WorktreeEntry {
+                name: format!("purge-{i}"),
+                path: format!("/tmp/purge-{i}"),
+                branch: None,
+                created_at: "2026-04-01T00:00:00Z".to_string(),
+                status: WorktreeStatus::Removed,
+                session_id: None,
+                task_id: None,
+                source: None,
+                lead_pid: None,
+            });
+        }
+        // Add one active entry that should be preserved.
+        reg.worktrees.push(WorktreeEntry {
+            name: "keep-active".to_string(),
+            path: "/tmp/keep-active".to_string(),
+            branch: Some("feat/keep".to_string()),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&path, &reg).unwrap();
+
+        // Keep 2, should purge 3.
+        let purged = locked_purge_removed(&path, 2).unwrap();
+        assert_eq!(purged, 3);
+
+        let after = read_registry(&path).unwrap();
+        let removed_count = after
+            .worktrees
+            .iter()
+            .filter(|e| e.status == WorktreeStatus::Removed)
+            .count();
+        assert_eq!(removed_count, 2);
+        // Active entry should still be there.
+        assert!(after.worktrees.iter().any(|e| e.name == "keep-active"));
+    }
+
+    // -- ymd_to_days roundtrip tests --
+
+    #[test]
+    fn test_ymd_to_days_roundtrip() {
+        // Unix epoch: 1970-01-01 = day 0.
+        assert_eq!(ymd_to_days(1970, 1, 1), 0);
+        // Check roundtrip for a known date.
+        let days = ymd_to_days(2026, 4, 1);
+        let (y, m, d) = days_to_ymd(days);
+        assert_eq!((y, m, d), (2026, 4, 1));
     }
 }
