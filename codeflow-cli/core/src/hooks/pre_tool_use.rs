@@ -1290,13 +1290,18 @@ pub struct ProtectionGuard {
 impl ProtectionGuard {
     #[must_use]
     pub fn new(policy: EnforcementPolicy, project_dir: PathBuf) -> Self {
-        let project_root = std::env::var("CF_PROJECT_ROOT").unwrap_or_else(|_| {
-            project_dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("codeflow")
-                .to_string()
-        });
+        let project_root = {
+            let raw = std::env::var("CF_PROJECT_ROOT").unwrap_or_default();
+            if raw.is_empty() {
+                project_dir
+                    .file_name()
+                    .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string())
+            } else {
+                std::path::Path::new(&raw)
+                    .file_name()
+                    .map_or_else(|| raw.clone(), |n| n.to_string_lossy().to_string())
+            }
+        };
         let worktree_name = Self::read_worktree_name();
         Self {
             policy,
@@ -5287,5 +5292,44 @@ mod tests {
             dirty.is_none(),
             "gitignored files should not trigger dirty check, got: {dirty:?}"
         );
+    }
+
+    #[test]
+    fn test_protection_guard_extracts_basename_from_absolute_cf_project_root() {
+        // When CF_PROJECT_ROOT is an absolute path, ProtectionGuard must
+        // extract the basename for managed tmp folder paths.
+        // SAFETY: Test-only env var manipulation.
+        let prev = std::env::var("CF_PROJECT_ROOT").ok();
+        unsafe { std::env::set_var("CF_PROJECT_ROOT", "/Volumes/DATA/projects/codeflow") };
+
+        let guard = ProtectionGuard::new(
+            EnforcementPolicy::defaults(),
+            PathBuf::from("/Volumes/DATA/projects/codeflow"),
+        );
+        assert_eq!(guard.project_root, "codeflow");
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("CF_PROJECT_ROOT", v) },
+            None => unsafe { std::env::remove_var("CF_PROJECT_ROOT") },
+        }
+    }
+
+    #[test]
+    fn test_protection_guard_handles_bare_basename() {
+        // When CF_PROJECT_ROOT is already a bare basename, it should remain unchanged.
+        // SAFETY: Test-only env var manipulation.
+        let prev = std::env::var("CF_PROJECT_ROOT").ok();
+        unsafe { std::env::set_var("CF_PROJECT_ROOT", "myproject") };
+
+        let guard = ProtectionGuard::new(
+            EnforcementPolicy::defaults(),
+            PathBuf::from("/some/path/myproject"),
+        );
+        assert_eq!(guard.project_root, "myproject");
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("CF_PROJECT_ROOT", v) },
+            None => unsafe { std::env::remove_var("CF_PROJECT_ROOT") },
+        }
     }
 }

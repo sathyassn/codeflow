@@ -240,12 +240,12 @@ impl SessionStartInit {
                 result
                     .env_vars
                     .insert("CODEFLOW_SESSION_ID".into(), sid.as_str().to_string());
-                let project_name = project_dir
-                    .file_name()
-                    .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+                let project_root_path =
+                    crate::worktree::WorktreeManager::resolve_effective_root(project_dir);
+                let project_root_str = project_root_path.to_string_lossy().to_string();
                 result
                     .env_vars
-                    .insert("CF_PROJECT_ROOT".into(), project_name);
+                    .insert("CF_PROJECT_ROOT".into(), project_root_str);
 
                 // Propagate worktree path to teammate for correct path resolution.
                 if let Some(ref wt_path) = env_worktree_path {
@@ -338,16 +338,16 @@ impl SessionStartInit {
         };
         result.session_id = session_id.clone();
 
-        let project_name = project_dir
-            .file_name()
-            .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
+        let project_root_path =
+            crate::worktree::WorktreeManager::resolve_effective_root(project_dir);
+        let project_root_str = project_root_path.to_string_lossy().to_string();
         result.env_vars.insert(
             "CODEFLOW_SESSION_ID".into(),
             session_id.as_str().to_string(),
         );
         result
             .env_vars
-            .insert("CF_PROJECT_ROOT".into(), project_name.clone());
+            .insert("CF_PROJECT_ROOT".into(), project_root_str.clone());
 
         // --- Section 2a: EARLY per-PID env file write ---
         // Write only the per-PID env file early for teammate detection.
@@ -466,7 +466,7 @@ impl SessionStartInit {
             if let Err(e) = session::write_env_file_with_worktree(
                 &runtime_dir,
                 &session_id,
-                &project_name,
+                &project_root_str,
                 wt_path_for_env.as_deref().or(Some("")),
             ) {
                 result
@@ -540,7 +540,7 @@ impl SessionStartInit {
             if let Err(e) = session::write_env_file_with_worktree(
                 &wt_runtime,
                 &session_id,
-                &project_name,
+                &project_root_str,
                 Some(&wt_path_str),
             ) {
                 result
@@ -556,7 +556,7 @@ impl SessionStartInit {
             if let Err(e) = session::write_env_file_with_worktree(
                 &main_runtime,
                 &session_id,
-                &project_name,
+                &project_root_str,
                 Some(&wt_path_str),
             ) {
                 result
@@ -1117,10 +1117,10 @@ impl SessionStartInit {
         // For startup/unknown: generate a new SID and write env file.
         if source == "startup" || source == "unknown" {
             let sid = session::generate_session_id();
-            let project_name = project_dir
-                .file_name()
-                .map_or_else(|| "codeflow".into(), |n| n.to_string_lossy().to_string());
-            if let Err(e) = session::write_env_file(runtime_dir, &sid, &project_name) {
+            let project_root_path =
+                crate::worktree::WorktreeManager::resolve_effective_root(project_dir);
+            let project_root_str = project_root_path.to_string_lossy().to_string();
+            if let Err(e) = session::write_env_file(runtime_dir, &sid, &project_root_str) {
                 result.warnings.push(format!("env file write error: {e}"));
             }
             return Ok(sid);

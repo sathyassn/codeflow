@@ -696,7 +696,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         let _ = self.tmux.kill_session(&tmux_name).await;
 
         // Branch safety check before cleanup — warn on unpushed work.
-        let wt_dir = self.project_dir.join(".git-worktrees").join(&wt_name);
+        let wt_dir = self
+            .project_dir
+            .join(crate::worktree::DEFAULT_BASE_DIR)
+            .join(&wt_name);
         if wt_dir.exists() {
             let safety = crate::worktree::check_branch_safety(&wt_dir);
             if safety.risk >= crate::worktree::BranchRisk::High {

@@ -17,7 +17,12 @@ impl SecurityModule for TmpModule {
     fn check(&self, ctx: &CheckContext<'_>) -> Option<Verdict> {
         let cmd = ctx.command;
 
-        let project_root = std::env::var("CF_PROJECT_ROOT").unwrap_or_else(|_| "codeflow".into());
+        let project_root = {
+            let raw = std::env::var("CF_PROJECT_ROOT").unwrap_or_else(|_| "codeflow".into());
+            std::path::Path::new(&raw)
+                .file_name()
+                .map_or(raw.clone(), |n| n.to_string_lossy().to_string())
+        };
 
         let folders = ctx.policy.managed_tmp_folders(&project_root);
         let state_folder = ctx.policy.state_folder_path(&project_root);
@@ -154,5 +159,25 @@ mod tests {
                 ))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_tmp_check_extracts_basename_from_absolute_path() {
+        // CF_PROJECT_ROOT may contain an absolute path; TmpModule must extract
+        // the basename so that managed tmp folder paths use "codeflow", not
+        // "/Volumes/.../codeflow".
+        // SAFETY: Test-only env var manipulation.
+        let prev = std::env::var("CF_PROJECT_ROOT").ok();
+        unsafe { std::env::set_var("CF_PROJECT_ROOT", "/Volumes/DATA/projects/codeflow") };
+
+        // rm -rf on the managed folder should still be blocked using the basename.
+        let result = TmpModule.check(&ctx("rm -rf /tmp/claude/codeflow/managed"));
+        assert!(result.is_some(), "should block rm -rf on managed folder");
+
+        // Restore original env.
+        match prev {
+            Some(v) => unsafe { std::env::set_var("CF_PROJECT_ROOT", v) },
+            None => unsafe { std::env::remove_var("CF_PROJECT_ROOT") },
+        }
     }
 }

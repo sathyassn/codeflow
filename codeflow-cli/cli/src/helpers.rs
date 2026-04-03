@@ -105,6 +105,40 @@ fn read_worktree_path_from_shared_env(project_root: &Path) -> Option<String> {
     None
 }
 
+/// Detect the main repository root directory (never a worktree).
+///
+/// Unlike [`detect_project_dir`] which may return a worktree path,
+/// this function always resolves to the main repository root. This is
+/// needed for worktree management commands that must operate on the
+/// main repo's `.git-worktrees/` and `.state/worktrees/` directories.
+///
+/// Resolution order:
+/// 1. `CF_PROJECT_ROOT` environment variable (if absolute and exists)
+/// 2. Walk up from current directory looking for `.claude/` or `.codeflow/`,
+///    then resolve through `WorktreeManager::resolve_effective_root`
+pub fn detect_project_root() -> Result<PathBuf> {
+    // Fast path: CF_PROJECT_ROOT (absolute path to main repo).
+    if let Ok(root) = std::env::var("CF_PROJECT_ROOT") {
+        let p = PathBuf::from(&root);
+        if p.is_absolute() && p.is_dir() {
+            return Ok(codeflow_core::worktree::WorktreeManager::resolve_effective_root(&p));
+        }
+    }
+    // Walk up from current directory.
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let mut dir = cwd.as_path();
+    let candidate = loop {
+        if dir.join(".claude").is_dir() || dir.join(".codeflow").is_dir() {
+            break dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break cwd.clone(),
+        }
+    };
+    Ok(codeflow_core::worktree::WorktreeManager::resolve_effective_root(&candidate))
+}
+
 /// Resolve the current session ID from environment or state files.
 ///
 /// Takes `project_dir` (the repository root). The underlying

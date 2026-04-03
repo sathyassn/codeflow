@@ -58,7 +58,7 @@ pub enum WorktreeCommand {
 
 #[allow(clippy::needless_pass_by_value)] // clap passes enum by value
 pub fn run(command: Option<WorktreeCommand>) -> Result<()> {
-    let project_dir = helpers::detect_project_dir()?;
+    let project_dir = helpers::detect_project_root()?;
     match command.as_ref() {
         Some(WorktreeCommand::List) | None => run_list(&project_dir),
         Some(WorktreeCommand::Cleanup {
@@ -297,7 +297,7 @@ fn run_cleanup(
     }
 
     // Phase 2b: Scan for orphaned worktree directories (no registry entry).
-    let orphans = scan_orphaned_directories(project_dir, &entries);
+    let orphans = scan_orphaned_directories(mgr.base_dir(), &entries);
     if !orphans.is_empty() {
         println!("ORPHANED ({}):", orphans.len());
         for (name, path) in &orphans {
@@ -385,11 +385,10 @@ fn run_cleanup(
 /// have no matching registry entry. Skips directories younger than 5 minutes
 /// to avoid interfering with concurrent worktree setup.
 fn scan_orphaned_directories(
-    project_dir: &Path,
+    base_dir: &Path,
     registry_entries: &[codeflow_core::worktree::WorktreeEntry],
 ) -> Vec<(String, std::path::PathBuf)> {
-    let base_dir = project_dir.join(".git-worktrees");
-    let Ok(entries) = std::fs::read_dir(&base_dir) else {
+    let Ok(entries) = std::fs::read_dir(base_dir) else {
         return Vec::new();
     };
 
@@ -1314,7 +1313,7 @@ mod tests {
             lead_pid: None,
         }];
 
-        let orphans = scan_orphaned_directories(dir.path(), &registry_entries);
+        let orphans = scan_orphaned_directories(&base, &registry_entries);
         assert_eq!(orphans.len(), 1, "should find exactly one orphan");
         assert_eq!(orphans[0].0, "worktree-orphan123");
     }
@@ -1330,7 +1329,7 @@ mod tests {
         std::fs::create_dir_all(&orphan).unwrap();
         // Don't set mtime — it was just created, so it's < 5 min old.
 
-        let orphans = scan_orphaned_directories(dir.path(), &[]);
+        let orphans = scan_orphaned_directories(&base, &[]);
         assert!(
             orphans.is_empty(),
             "freshly created directory should be skipped by age guard"
@@ -1341,7 +1340,8 @@ mod tests {
     fn test_scan_orphaned_no_base_dir() {
         let dir = tempfile::tempdir().unwrap();
         // Don't create .git-worktrees — scan should return empty, not error.
-        let orphans = scan_orphaned_directories(dir.path(), &[]);
+        let nonexistent = dir.path().join(".git-worktrees");
+        let orphans = scan_orphaned_directories(&nonexistent, &[]);
         assert!(orphans.is_empty());
     }
 }

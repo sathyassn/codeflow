@@ -16,6 +16,7 @@ mod paths;
 mod registry;
 mod setup;
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::error::WorktreeError;
@@ -37,7 +38,7 @@ pub use setup::repair_symlinks;
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
 
 /// Default base directory for worktrees (relative to project root).
-const DEFAULT_BASE_DIR: &str = ".git-worktrees";
+pub const DEFAULT_BASE_DIR: &str = ".git-worktrees";
 
 /// Default registry file path (relative to project root).
 const DEFAULT_REGISTRY_PATH: &str = ".state/worktrees/worktrees.yaml";
@@ -135,15 +136,62 @@ pub struct WorktreeManager {
 }
 
 impl WorktreeManager {
+    /// Resolve the main repository root from any path (main repo or worktree).
+    ///
+    /// Two detection methods:
+    /// 1. Ancestor walk: if `dir` is inside `.git-worktrees/`, the parent of
+    ///    `.git-worktrees/` is the main repo.
+    /// 2. Git file parse: in a git worktree, `.git` is a FILE containing
+    ///    `gitdir: /main-repo/.git/worktrees/{name}`. Parse this to derive the
+    ///    main repo root.
+    ///
+    /// Returns `dir` unchanged if neither method matches.
+    #[must_use]
+    pub fn resolve_effective_root(dir: &Path) -> PathBuf {
+        // Method 1: Check if dir is inside .git-worktrees/
+        for ancestor in dir.ancestors().skip(1) {
+            if ancestor.file_name() == Some(OsStr::new(DEFAULT_BASE_DIR)) {
+                if let Some(main_repo) = ancestor.parent() {
+                    return main_repo.to_path_buf();
+                }
+            }
+        }
+        // Method 2: Parse .git file (standard git worktree mechanism)
+        let git_path = dir.join(".git");
+        if git_path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&git_path) {
+                if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
+                    let p = Path::new(gitdir);
+                    if let Some(main_repo) = p
+                        .parent()
+                        .filter(|d| d.file_name() == Some(OsStr::new("worktrees")))
+                        .and_then(|d| d.parent()) // .git/
+                        .and_then(|d| d.parent())
+                    // main repo
+                    {
+                        return main_repo.to_path_buf();
+                    }
+                }
+            }
+        }
+        dir.to_path_buf()
+    }
+
     /// Create a new `WorktreeManager` with default paths.
     ///
-    /// - Base directory: `{project_dir}/.git-worktrees/`
-    /// - Registry: `{project_dir}/.state/worktrees/worktrees.yaml`
+    /// If `project_dir` points inside a worktree (`.git-worktrees/` ancestor
+    /// or `.git` file), `base_dir` and `registry_path` are resolved relative
+    /// to the main repository root so that worktree management commands always
+    /// operate on the correct directories.
+    ///
+    /// The original `project_dir` is preserved unchanged for callers that need
+    /// the working directory context.
     #[must_use]
     pub fn new(project_dir: impl Into<PathBuf>) -> Self {
         let project_dir = project_dir.into();
-        let base_dir = project_dir.join(DEFAULT_BASE_DIR);
-        let registry_path = project_dir.join(DEFAULT_REGISTRY_PATH);
+        let effective_root = Self::resolve_effective_root(&project_dir);
+        let base_dir = effective_root.join(DEFAULT_BASE_DIR);
+        let registry_path = effective_root.join(DEFAULT_REGISTRY_PATH);
         Self {
             project_dir,
             base_dir,
@@ -1381,6 +1429,71 @@ mod tests {
             reg_after.worktrees.len(),
             1,
             "dry run should not delete entries"
+        );
+    }
+
+    // -- resolve_effective_root tests --
+
+    #[test]
+    fn test_resolve_effective_root_from_main_repo() {
+        // A directory with a .git DIRECTORY is the main repo itself.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let result = WorktreeManager::resolve_effective_root(dir.path());
+        assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn test_resolve_effective_root_from_codeflow_worktree() {
+        // dir inside .git-worktrees/worktree-xxx → returns parent of .git-worktrees/
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().join(".git-worktrees").join("worktree-abc123");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let result = WorktreeManager::resolve_effective_root(&wt_path);
+        assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn test_resolve_effective_root_from_git_worktree() {
+        // dir with .git file containing gitdir: → returns main repo root
+        let dir = tempfile::tempdir().unwrap();
+        let main_repo = dir.path().join("main-repo");
+        let git_internal = main_repo.join(".git").join("worktrees").join("wt-1");
+        std::fs::create_dir_all(&git_internal).unwrap();
+
+        let wt_dir = dir.path().join("worktree-dir");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let gitdir_content = format!("gitdir: {}", git_internal.display());
+        std::fs::write(wt_dir.join(".git"), gitdir_content).unwrap();
+
+        let result = WorktreeManager::resolve_effective_root(&wt_dir);
+        assert_eq!(result, main_repo);
+    }
+
+    #[test]
+    fn test_resolve_effective_root_plain_dir() {
+        // no .git, no .git-worktrees → returns dir unchanged
+        let dir = tempfile::tempdir().unwrap();
+        let result = WorktreeManager::resolve_effective_root(dir.path());
+        assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn test_new_from_worktree_corrects_base_dir() {
+        // WorktreeManager::new(worktree_path) → base_dir() = main/.git-worktrees/
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().join(".git-worktrees").join("worktree-test");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        let mgr = WorktreeManager::new(&wt_path);
+        // base_dir should point to main repo's .git-worktrees, not worktree's
+        assert_eq!(mgr.base_dir(), dir.path().join(".git-worktrees"));
+        // project_dir should preserve the original worktree path
+        assert_eq!(mgr.project_dir(), wt_path);
+        // registry should point to main repo's .state/worktrees/worktrees.yaml
+        assert_eq!(
+            mgr.registry_path(),
+            dir.path().join(".state/worktrees/worktrees.yaml")
         );
     }
 }

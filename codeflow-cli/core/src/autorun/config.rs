@@ -118,7 +118,7 @@ impl Default for WorktreeConfig {
         Self {
             mode: WorktreeMode::Autorun,
             max_concurrent: DEFAULT_MAX_CONCURRENT,
-            base_dir: ".git-worktrees".to_string(),
+            base_dir: crate::worktree::DEFAULT_BASE_DIR.to_string(),
             shared_files: default_shared_files(),
         }
     }
