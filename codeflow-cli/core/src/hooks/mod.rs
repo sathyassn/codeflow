@@ -99,6 +99,13 @@ pub struct HookInput {
     /// Task description (`TaskCompleted` events).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_description: Option<String>,
+
+    /// Tool response payload (PostToolUse only).
+    /// Claude Code sends this for PostToolUse events; we previously dropped it
+    /// during deserialization. Used by `handle_team_delete` to check whether
+    /// `TeamDelete` actually succeeded before running cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_response: Option<serde_json::Value>,
 }
 
 /// Result of a hook handler evaluation.
@@ -281,6 +288,7 @@ mod tests {
             task_subject: Some("PF1-TSK-01: Init".into()),
             task_id: Some("task-42".into()),
             task_description: Some("Initialize session".into()),
+            tool_response: Some(serde_json::json!({"success": true})),
         };
         let json = serde_json::to_string(&input).expect("serialize");
         let parsed: HookInput = serde_json::from_str(&json).expect("deserialize");
@@ -619,6 +627,7 @@ mod tests {
         assert!(!json.contains("task_subject"));
         assert!(!json.contains("task_id"));
         assert!(!json.contains("task_description"));
+        assert!(!json.contains("tool_response"));
         // But event should always be present.
         assert!(json.contains("session_start"));
     }

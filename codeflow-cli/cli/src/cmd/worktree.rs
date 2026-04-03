@@ -3,6 +3,8 @@
 //! Supports subcommands: `list`, `cleanup`, `prune`, `repair`.
 //! Default (no subcommand) behaves like `list`.
 
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -294,23 +296,51 @@ fn run_cleanup(
         return Ok(());
     }
 
+    // Phase 2b: Scan for orphaned worktree directories (no registry entry).
+    let orphans = scan_orphaned_directories(project_dir, &entries);
+    if !orphans.is_empty() {
+        println!("ORPHANED ({}):", orphans.len());
+        for (name, path) in &orphans {
+            println!("  {name} (orphaned -- no registry entry)");
+            if verbose {
+                println!("    path: {}", path.display());
+            }
+        }
+    }
+
     // Phase 3: Confirm (unless --yes or --dry-run).
+    let total_clean = all_to_clean.len() + orphans.len();
+    if total_clean == 0 {
+        println!("no worktrees to clean up");
+        return Ok(());
+    }
+
     if dry_run {
-        println!("\nwould remove {} worktree(s):", all_to_clean.len());
+        println!("\nwould remove {total_clean} worktree(s):");
         for (name, ..) in &all_to_clean {
             println!("  {name}");
+        }
+        for (name, _) in &orphans {
+            println!("  {name} (orphaned)");
         }
         return Ok(());
     }
 
-    if !yes && !interactive {
-        println!(
-            "\n{} worktree(s) will be removed. Use --yes to skip confirmation.",
-            all_to_clean.len()
-        );
+    if !yes {
+        eprint!("\n{total_clean} worktree(s) will be removed. Proceed? [y/N] ");
+        std::io::stderr().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading confirmation")?;
+        let answer = answer.trim().to_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("aborted");
+            return Ok(());
+        }
     }
 
-    // Phase 4: Execute.
+    // Phase 4: Execute registered worktrees.
     let opts = CleanupOpts {
         force: force_flag,
         dry_run,
@@ -323,16 +353,74 @@ fn run_cleanup(
         .cleanup_stale(&opts)
         .context("cleaning up stale worktrees")?;
 
-    if removed.is_empty() {
-        println!("no worktrees removed");
-    } else {
+    if !removed.is_empty() {
         println!("removed {} worktree(s):", removed.len());
         for name in &removed {
             println!("  {name}");
         }
     }
 
+    // Phase 5: Remove orphaned directories.
+    let mut orphans_removed = 0u32;
+    for (name, path) in &orphans {
+        match codeflow_core::worktree::cleanup_orphan(project_dir, path, false) {
+            Ok(()) => {
+                println!("  removed orphan: {name}");
+                orphans_removed += 1;
+            }
+            Err(e) => {
+                eprintln!("  failed to remove orphan '{name}': {e}");
+            }
+        }
+    }
+
+    if removed.is_empty() && orphans_removed == 0 {
+        println!("no worktrees removed");
+    }
+
     Ok(())
+}
+
+/// Scan `.git-worktrees/` for directories starting with `worktree-` that
+/// have no matching registry entry. Skips directories younger than 5 minutes
+/// to avoid interfering with concurrent worktree setup.
+fn scan_orphaned_directories(
+    project_dir: &Path,
+    registry_entries: &[codeflow_core::worktree::WorktreeEntry],
+) -> Vec<(String, std::path::PathBuf)> {
+    let base_dir = project_dir.join(".git-worktrees");
+    let Ok(entries) = std::fs::read_dir(&base_dir) else {
+        return Vec::new();
+    };
+
+    let registered_names: HashSet<&str> =
+        registry_entries.iter().map(|e| e.name.as_str()).collect();
+
+    let age_threshold = std::time::Duration::from_secs(5 * 60);
+    let now = std::time::SystemTime::now();
+
+    let mut orphans = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("worktree-") {
+            continue;
+        }
+        if registered_names.contains(name.as_str()) {
+            continue;
+        }
+        // Age guard: skip directories younger than 5 minutes.
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(created) = meta.created().or_else(|_| meta.modified()) {
+                if let Ok(age) = now.duration_since(created) {
+                    if age < age_threshold {
+                        continue;
+                    }
+                }
+            }
+        }
+        orphans.push((name, entry.path()));
+    }
+    orphans
 }
 
 fn run_prune(project_dir: &Path, dry_run: bool) -> Result<()> {
@@ -1188,5 +1276,72 @@ mod tests {
             }
             other => panic!("expected Cleanup, got {other:?}"),
         }
+    }
+
+    // -- Orphan scanning tests --
+
+    #[test]
+    fn test_scan_orphaned_directories_finds_unregistered() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create an orphaned worktree dir (old enough).
+        let orphan = base.join("worktree-orphan123");
+        std::fs::create_dir_all(&orphan).unwrap();
+        // Touch with old mtime via filetime.
+        let old_time = filetime::FileTime::from_unix_time(1_000_000_000, 0);
+        let _ = filetime::set_file_mtime(&orphan, old_time);
+
+        // Create a registered worktree dir.
+        let registered = base.join("worktree-registered");
+        std::fs::create_dir_all(&registered).unwrap();
+        let _ = filetime::set_file_mtime(&registered, old_time);
+
+        // Non-worktree dir (doesn't start with "worktree-").
+        let other = base.join("some-other-dir");
+        std::fs::create_dir_all(&other).unwrap();
+
+        let registry_entries = vec![WorktreeEntry {
+            name: "worktree-registered".to_string(),
+            path: registered.to_string_lossy().to_string(),
+            branch: None,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        }];
+
+        let orphans = scan_orphaned_directories(dir.path(), &registry_entries);
+        assert_eq!(orphans.len(), 1, "should find exactly one orphan");
+        assert_eq!(orphans[0].0, "worktree-orphan123");
+    }
+
+    #[test]
+    fn test_scan_orphaned_directories_age_guard_skips_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create a freshly-created orphan dir (just created = < 5 min old).
+        let orphan = base.join("worktree-fresh");
+        std::fs::create_dir_all(&orphan).unwrap();
+        // Don't set mtime — it was just created, so it's < 5 min old.
+
+        let orphans = scan_orphaned_directories(dir.path(), &[]);
+        assert!(
+            orphans.is_empty(),
+            "freshly created directory should be skipped by age guard"
+        );
+    }
+
+    #[test]
+    fn test_scan_orphaned_no_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Don't create .git-worktrees — scan should return empty, not error.
+        let orphans = scan_orphaned_directories(dir.path(), &[]);
+        assert!(orphans.is_empty());
     }
 }

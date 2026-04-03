@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use crate::error::WorktreeError;
 use crate::types::BranchName;
 
-pub use cleanup::{BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safety};
+pub use cleanup::{
+    BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safety, cleanup_orphan,
+};
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, WorktreeStatus, count_active, deregister_by_name, list_active,

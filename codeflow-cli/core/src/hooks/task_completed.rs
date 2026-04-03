@@ -263,6 +263,7 @@ mod tests {
             task_subject: Some(subject.to_string()),
             task_id: None,
             task_description: None,
+            tool_response: None,
         }
     }
 
@@ -322,6 +323,7 @@ mod tests {
             task_subject: None,
             task_id: None,
             task_description: None,
+            tool_response: None,
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -342,6 +344,7 @@ mod tests {
             task_subject: Some("Regular task with no PF ID".into()),
             task_id: Some("42".into()),
             task_description: Some("Just a task".into()),
+            tool_response: None,
         };
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
@@ -622,6 +625,7 @@ mod tests {
             task_subject: None, // Not set -- should fall back to tool_input
             task_id: None,
             task_description: None,
+            tool_response: None,
         };
         // Will fail on session ID (no env), but proves fallback extraction works.
         let result = handler.handle(input);
@@ -644,6 +648,7 @@ mod tests {
             task_subject: Some("PF3-TSK-01: Correct one".into()),
             task_id: None,
             task_description: None,
+            tool_response: None,
         };
         // Will fail on session ID, but the important thing is it doesn't return Allow
         // (which would mean it matched nothing / matched PF9-TSK-99).

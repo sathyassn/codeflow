@@ -31,7 +31,7 @@ signal-hook = "0.3"
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
-filetime = "0.2"
+filetime = { workspace = true }
 ctor = { workspace = true }
 
 [lints]

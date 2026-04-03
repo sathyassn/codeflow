@@ -326,9 +326,12 @@ impl HookHandler for SentinelWrite {
                 }
             }
             Some("TeamDelete") => match self.session_pathflow_dir() {
-                Ok((session_dir, session_id)) => {
-                    handle_team_delete(&session_dir, &self.project_dir, &session_id)
-                }
+                Ok((session_dir, session_id)) => handle_team_delete(
+                    &session_dir,
+                    &self.project_dir,
+                    &session_id,
+                    input.tool_response.as_ref(),
+                ),
                 Err(_) => Ok(HookOutput::Allow),
             },
             _ => Ok(HookOutput::Allow),
@@ -591,7 +594,27 @@ pub fn handle_team_delete(
     session_dir: &Path,
     project_dir: &Path,
     session_id: &str,
+    tool_response: Option<&serde_json::Value>,
 ) -> Result<HookOutput, HookError> {
+    // Check if TeamDelete actually succeeded before cleaning up.
+    // Claude Code sends tool_response with {"success": bool} for team operations.
+    let success = tool_response
+        .and_then(|r| {
+            // Handle string-encoded JSON response.
+            if let Some(s) = r.as_str() {
+                serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .and_then(|v| v.get("success").and_then(serde_json::Value::as_bool))
+            } else {
+                r.get("success").and_then(serde_json::Value::as_bool)
+            }
+        })
+        .unwrap_or(true); // Default: proceed if no response (backward compat)
+
+    if !success {
+        return Ok(HookOutput::Allow);
+    }
+
     // 1. Update session status to pf-complete FIRST (before destroying sentinels).
     // This ordering is critical: SessionEnd reads the status file to decide
     // whether cleanup is safe. The status must be "pf-complete" before the
@@ -616,13 +639,10 @@ pub fn handle_team_delete(
     }
 
     // 3. Remove pathflow-team.json.
+    // Worktree stays Active. SessionEnd marks PendingCleanup when process exits.
     let team_file_path = session_dir.join("pathflow-team.json");
     if team_file_path.exists() {
         let _ = fs::remove_file(&team_file_path);
-
-        // Mark worktree as "pending_cleanup" in the registry.
-        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
-        let _ = crate::worktree::mark_pending_cleanup(&registry_path, session_id);
     }
 
     // 4. Reset checkpoint file via init_all_phases (same as Go's ResetAllPhases).
@@ -1614,7 +1634,13 @@ mod tests {
         fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
         fs::write(sentinel_dir.join("pathflow-ws-dev"), "").unwrap();
 
-        let result = handle_team_delete(&session_dir, project_dir, session_id).unwrap();
+        let result = handle_team_delete(
+            &session_dir,
+            project_dir,
+            session_id,
+            Some(&serde_json::json!({"success": true})),
+        )
+        .unwrap();
         assert!(matches!(result, HookOutput::Allow));
 
         // Sentinel directory should be gone.
@@ -1630,7 +1656,13 @@ mod tests {
         fs::create_dir_all(&session_dir).unwrap();
 
         // No sentinel dir, no team file -- should not error.
-        let result = handle_team_delete(&session_dir, dir.path(), "ses-missing-test").unwrap();
+        let result = handle_team_delete(
+            &session_dir,
+            dir.path(),
+            "ses-missing-test",
+            Some(&serde_json::json!({"success": true})),
+        )
+        .unwrap();
         assert!(matches!(result, HookOutput::Allow));
     }
 
@@ -1666,7 +1698,13 @@ mod tests {
         )
         .unwrap();
 
-        let result = handle_team_delete(&session_dir, project_dir, "ses-reset-test").unwrap();
+        let result = handle_team_delete(
+            &session_dir,
+            project_dir,
+            "ses-reset-test",
+            Some(&serde_json::json!({"success": true})),
+        )
+        .unwrap();
         assert!(matches!(result, HookOutput::Allow));
 
         // Checkpoint should have been reset (re-initialized fresh).
@@ -1685,6 +1723,128 @@ mod tests {
                 .and_then(|v| v.as_object())
                 .is_some_and(serde_json::Map::is_empty),
             "registered should be empty after reset"
+        );
+    }
+
+    #[test]
+    fn test_handle_team_delete_skips_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        let session_id = "ses-fail-test";
+        let project_dir = dir.path();
+
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create pathflow-team.json.
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, r#"{"team_name":"my-team"}"#).unwrap();
+
+        // Create sentinel directory with sentinels.
+        let sentinel_dir = project_dir
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(session_id);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+
+        // Call with tool_response indicating failure.
+        let result = handle_team_delete(
+            &session_dir,
+            project_dir,
+            session_id,
+            Some(&serde_json::json!({"success": false})),
+        )
+        .unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Team file and sentinels should still exist (no cleanup performed).
+        assert!(
+            team_file.exists(),
+            "team file should survive failed TeamDelete"
+        );
+        assert!(
+            sentinel_dir.exists(),
+            "sentinels should survive failed TeamDelete"
+        );
+    }
+
+    #[test]
+    fn test_handle_team_delete_cleans_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        let session_id = "ses-success-test";
+        let project_dir = dir.path();
+
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create pathflow-team.json.
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, r#"{"team_name":"my-team"}"#).unwrap();
+
+        // Create sentinel directory.
+        let sentinel_dir = project_dir
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(session_id);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+
+        let result = handle_team_delete(
+            &session_dir,
+            project_dir,
+            session_id,
+            Some(&serde_json::json!({"success": true})),
+        )
+        .unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Cleanup should have proceeded.
+        assert!(
+            !team_file.exists(),
+            "team file should be removed on success"
+        );
+        assert!(
+            !sentinel_dir.exists(),
+            "sentinels should be removed on success"
+        );
+    }
+
+    #[test]
+    fn test_handle_team_delete_no_response_proceeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("pathflow");
+        let session_id = "ses-noresponse-test";
+        let project_dir = dir.path();
+
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Create pathflow-team.json.
+        let team_file = session_dir.join("pathflow-team.json");
+        fs::write(&team_file, r#"{"team_name":"my-team"}"#).unwrap();
+
+        // Create sentinel directory.
+        let sentinel_dir = project_dir
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(session_id);
+        fs::create_dir_all(&sentinel_dir).unwrap();
+        fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+
+        // Call with None tool_response (backward compatibility).
+        let result = handle_team_delete(&session_dir, project_dir, session_id, None).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        // Cleanup should proceed (backward compat default = true).
+        assert!(
+            !team_file.exists(),
+            "team file should be removed with no response"
+        );
+        assert!(
+            !sentinel_dir.exists(),
+            "sentinels should be removed with no response"
         );
     }
 

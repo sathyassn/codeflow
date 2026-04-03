@@ -90,6 +90,13 @@ impl SessionEndCleanup {
         let session_id = sid.as_str().to_string();
         result.session_id.clone_from(&session_id);
 
+        // Mark worktree for cleanup UNCONDITIONALLY when session ends.
+        // This is the primary PendingCleanup trigger (moved from PF7 PostToolUse).
+        // Runs before should_skip_cleanup so the worktree is marked even for
+        // sessions that are still technically active (crash recovery path).
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        let _ = crate::worktree::mark_pending_cleanup(&registry_path, &session_id);
+
         let session_state_dir = project_dir.join(".state").join("session").join(&session_id);
 
         // Log cleanup start.
@@ -1835,6 +1842,138 @@ mod tests {
                 .any(|m| m.contains("Cleaned worktree")),
             "should report cleanup success: {:?}",
             result.messages,
+        );
+    }
+
+    // -- mark_pending_cleanup at session end tests --
+
+    /// Helper to create a worktree registry with one Active entry for the given session.
+    fn create_active_registry(dir: &Path, session_id: &str) -> PathBuf {
+        use crate::worktree::{WorktreeEntry, WorktreeRegistry, WorktreeStatus, write_registry};
+
+        let registry_path = dir.join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-01-01T00:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: format!("worktree-{session_id}"),
+            path: "/tmp/wt".to_string(),
+            branch: Some("feat/test".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: WorktreeStatus::Active,
+            session_id: Some(session_id.to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&registry_path, &reg).unwrap();
+        registry_path
+    }
+
+    #[test]
+    fn test_session_end_marks_pending_cleanup_after_pf7() {
+        // Normal PF7 path: status is pf-complete, worktree should be marked PendingCleanup.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        let registry_path = create_active_registry(dir.path(), &session_id);
+
+        // Set status to pf-complete (simulating post-PF7).
+        let pathflow_dir = dir
+            .path()
+            .join(".state/session")
+            .join(&session_id)
+            .join("pathflow");
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::json!({"status": "pf-complete", "session_id": session_id}).to_string(),
+        )
+        .unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Verify the entry is now PendingCleanup.
+        let data = fs::read_to_string(&registry_path).unwrap();
+        assert!(
+            data.contains("pending_cleanup"),
+            "worktree should be marked PendingCleanup after session end: {data}"
+        );
+    }
+
+    #[test]
+    fn test_session_end_marks_pending_cleanup_after_crash() {
+        // Crash path: status is pf-in-progress with no team config.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        let registry_path = create_active_registry(dir.path(), &session_id);
+
+        // Set status to pf-in-progress (simulating a crash mid-session).
+        // No team config, so should_skip_cleanup returns false.
+        let pathflow_dir = dir
+            .path()
+            .join(".state/session")
+            .join(&session_id)
+            .join("pathflow");
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::json!({"status": "pf-in-progress", "session_id": session_id}).to_string(),
+        )
+        .unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Verify PendingCleanup was marked (runs before should_skip_cleanup).
+        let data = fs::read_to_string(&registry_path).unwrap();
+        assert!(
+            data.contains("pending_cleanup"),
+            "worktree should be marked PendingCleanup even after crash: {data}"
+        );
+    }
+
+    #[test]
+    fn test_session_end_marks_pending_cleanup_unconditionally() {
+        // Even when should_skip_cleanup returns true, mark_pending_cleanup
+        // should still run because it executes BEFORE the skip check.
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session_id = setup_session(dir.path());
+
+        let registry_path = create_active_registry(dir.path(), &session_id);
+
+        // Set status to pf-in-progress WITH a real team config (should_skip_cleanup = true).
+        let pathflow_dir = dir
+            .path()
+            .join(".state/session")
+            .join(&session_id)
+            .join("pathflow");
+        let team_name = "active-team";
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::json!({"status": "pf-in-progress", "session_id": session_id, "team_name": team_name}).to_string(),
+        ).unwrap();
+
+        // Create team config so should_skip_cleanup returns true.
+        let config_dir = home.path().join(".claude/teams").join(team_name);
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), "{}").unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let input = make_input(dir.path().to_str().unwrap());
+        let mut buf = Vec::new();
+        let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
+
+        // Verify PendingCleanup was still marked even though cleanup was skipped.
+        let data = fs::read_to_string(&registry_path).unwrap();
+        assert!(
+            data.contains("pending_cleanup"),
+            "worktree should be marked PendingCleanup even when cleanup skipped: {data}"
         );
     }
 }

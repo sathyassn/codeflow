@@ -215,8 +215,13 @@ pub(crate) fn cleanup_worktree(
     let _ = remove_via_git2(mgr, name, opts.force);
 
     // Delete directory if it still exists (unconditional).
+    // Catch NotFound to handle concurrent deletion (TOCTOU).
     if wt_path.exists() {
-        fs::remove_dir_all(&wt_path)?;
+        match fs::remove_dir_all(&wt_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 
     // Deregister AFTER directory confirmed gone (locked to avoid TOCTOU).
@@ -225,6 +230,44 @@ pub(crate) fn cleanup_worktree(
 
     // Defense-in-depth: also deregister by name for empty-path entries.
     registry::locked_deregister_by_name(mgr.registry_path(), name)?;
+
+    Ok(())
+}
+
+/// Remove an orphaned worktree directory that has no registry entry.
+///
+/// Performs best-effort git metadata cleanup via `git2`, then removes
+/// the directory. Catches `NotFound` for concurrent deletion safety.
+///
+/// # Errors
+///
+/// Returns `WorktreeError` on I/O or git metadata removal failures.
+pub fn cleanup_orphan(
+    project_dir: &Path,
+    orphan_path: &Path,
+    dry_run: bool,
+) -> Result<(), WorktreeError> {
+    if dry_run {
+        return Ok(());
+    }
+
+    let mgr = WorktreeManager::new(project_dir);
+    let name = orphan_path
+        .file_name()
+        .ok_or_else(|| WorktreeError::InvalidName("no filename".into()))?
+        .to_string_lossy();
+
+    // Best-effort git metadata cleanup.
+    let _ = remove_via_git2(&mgr, &name, true);
+
+    // Remove directory (catch NotFound for concurrent deletion).
+    if orphan_path.exists() {
+        match fs::remove_dir_all(orphan_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
 
     Ok(())
 }
@@ -923,5 +966,78 @@ mod tests {
             .unwrap();
 
         assert!(!is_branch_merged(dir.path(), "feat/not-merged"));
+    }
+
+    // -- TOCTOU and cleanup_orphan tests --
+
+    #[test]
+    fn test_cleanup_worktree_concurrent_delete() {
+        // If the directory disappears between exists() and remove_dir_all(),
+        // cleanup_worktree should not error (NotFound caught).
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+
+        // Create .git-worktrees base dir but NOT the worktree subdir.
+        fs::create_dir_all(mgr.base_dir()).unwrap();
+
+        // Create a registry so deregister has something to work with.
+        let registry_dir = dir.path().join(".state").join("worktrees");
+        fs::create_dir_all(&registry_dir).unwrap();
+
+        let opts = CleanupOpts {
+            force: true,
+            ..Default::default()
+        };
+
+        // The worktree dir doesn't exist — should succeed without error.
+        let result = cleanup_worktree(&mgr, "nonexistent-wt", &opts);
+        assert!(
+            result.is_ok(),
+            "cleanup should succeed even if dir doesn't exist: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_cleanup_orphan_removes_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let orphan_dir = dir.path().join(".git-worktrees").join("worktree-orphan");
+        fs::create_dir_all(&orphan_dir).unwrap();
+        fs::write(orphan_dir.join("marker.txt"), "test").unwrap();
+
+        let result = cleanup_orphan(dir.path(), &orphan_dir, false);
+        assert!(
+            result.is_ok(),
+            "cleanup_orphan should succeed: {:?}",
+            result.err()
+        );
+        assert!(!orphan_dir.exists(), "orphan directory should be removed");
+    }
+
+    #[test]
+    fn test_cleanup_orphan_dry_run_preserves() {
+        let dir = tempfile::tempdir().unwrap();
+        let orphan_dir = dir.path().join(".git-worktrees").join("worktree-orphan");
+        fs::create_dir_all(&orphan_dir).unwrap();
+
+        let result = cleanup_orphan(dir.path(), &orphan_dir, true);
+        assert!(result.is_ok());
+        assert!(
+            orphan_dir.exists(),
+            "orphan directory should be preserved in dry-run"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_orphan_nonexistent_no_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let orphan_dir = dir.path().join(".git-worktrees").join("worktree-gone");
+
+        let result = cleanup_orphan(dir.path(), &orphan_dir, false);
+        assert!(
+            result.is_ok(),
+            "cleanup_orphan should succeed for nonexistent path: {:?}",
+            result.err()
+        );
     }
 }

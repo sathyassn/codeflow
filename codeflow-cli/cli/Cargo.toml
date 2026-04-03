@@ -26,6 +26,7 @@ proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 ctor = { workspace = true }
+filetime = { workspace = true }
 
 [lints]
 workspace = true
