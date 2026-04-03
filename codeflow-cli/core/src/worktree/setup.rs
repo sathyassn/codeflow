@@ -286,19 +286,26 @@ fn clean_stale_session_dirs(project_dir: &Path) {
             continue;
         }
 
-        // Read the status file and check lead_pid using consolidated process utility.
+        // Read the status file and check liveness using centralized module.
         if let Ok(content) = fs::read_to_string(&status_file) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(pid) = parsed.get("lead_pid").and_then(serde_json::Value::as_u64) {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let pid32 = pid as u32;
-                    if !crate::session::process::is_process_alive(pid32) {
-                        diagnostics::warn(
-                            "worktree",
-                            &format!("removing stale session dir: {dir_name} (pid {pid} dead)"),
-                        );
-                        let _ = fs::remove_dir_all(&path);
-                    }
+                let lead_pid = parsed
+                    .get("lead_pid")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(0);
+                let liveness = crate::session::liveness::check_session_liveness(
+                    lead_pid,
+                    None,
+                    None,
+                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+                );
+                if !liveness.is_alive() {
+                    diagnostics::warn(
+                        "worktree",
+                        &format!("removing stale session dir: {dir_name} (liveness: {liveness})"),
+                    );
+                    let _ = fs::remove_dir_all(&path);
                 }
             }
         }

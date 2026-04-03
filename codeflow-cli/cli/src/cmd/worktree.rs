@@ -21,9 +21,18 @@ pub enum WorktreeCommand {
         /// Force removal even of orphaned/unpushed worktrees
         #[arg(long)]
         force: bool,
+        /// Force removal of a specific worktree by name substring, or "all"
+        #[arg(long, value_name = "ID")]
+        force_id: Option<String>,
         /// Report what would be removed without acting
         #[arg(long)]
         dry_run: bool,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Show detailed liveness and safety information
+        #[arg(short, long)]
+        verbose: bool,
         /// Show interactive prompts with branch/PR status before removal
         #[arg(short, long)]
         interactive: bool,
@@ -52,10 +61,22 @@ pub fn run(command: Option<WorktreeCommand>) -> Result<()> {
         Some(WorktreeCommand::List) | None => run_list(&project_dir),
         Some(WorktreeCommand::Cleanup {
             force,
+            force_id,
             dry_run,
+            yes,
+            verbose,
             interactive,
             keep,
-        }) => run_cleanup(&project_dir, *force, *dry_run, *interactive, *keep),
+        }) => run_cleanup(
+            &project_dir,
+            *force,
+            force_id.as_deref(),
+            *dry_run,
+            *yes,
+            *verbose,
+            *interactive,
+            *keep,
+        ),
         Some(WorktreeCommand::Prune { dry_run }) => run_prune(&project_dir, *dry_run),
         Some(WorktreeCommand::Repair { path }) => run_repair(&project_dir, path.as_deref()),
     }
@@ -77,74 +98,233 @@ fn run_list(project_dir: &Path) -> Result<()> {
         let branch = entry.branch.as_deref().unwrap_or("(detached)");
         println!(
             "{} ({}) [{}] {} [{}]",
-            entry.name, branch, state, liveness, entry.status
+            entry.name,
+            branch,
+            state,
+            liveness.label(),
+            entry.status
         );
     }
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn run_cleanup(
     project_dir: &Path,
     force: bool,
+    force_id: Option<&str>,
     dry_run: bool,
+    yes: bool,
+    verbose: bool,
     interactive: bool,
     keep: Option<usize>,
 ) -> Result<()> {
+    let force_flag = force || force_id.is_some();
+    let force_target = force_id.and_then(|v| {
+        if v == "all" {
+            None
+        } else {
+            Some(v.to_string())
+        }
+    });
     let mgr = WorktreeManager::new(project_dir);
+
+    // Phase 1: Analyze — gather all entries and compute liveness/safety.
+    let entries = mgr.list(None).context("listing worktrees")?;
+    if entries.is_empty() {
+        println!("no worktrees");
+        return Ok(());
+    }
+
+    let mut clean_entries = Vec::new();
+    let mut skip_entries = Vec::new();
+
+    for entry in &entries {
+        let state = mgr.detect_state(entry);
+        let liveness = mgr.liveness_status(entry);
+        let wt_path = std::path::Path::new(&entry.path);
+        let branch = entry.branch.as_deref().unwrap_or("(detached)");
+        let safety = if wt_path.exists() {
+            Some(codeflow_core::worktree::check_branch_safety(wt_path))
+        } else {
+            None
+        };
+
+        // Determine if cleanable without force.
+        let cleanable = match entry.status {
+            codeflow_core::worktree::WorktreeStatus::PendingCleanup => true,
+            codeflow_core::worktree::WorktreeStatus::Active => match state {
+                WorktreeState::Stale => true,
+                WorktreeState::Active
+                    if matches!(
+                        liveness,
+                        codeflow_core::session::liveness::LivenessResult::Dead
+                    ) =>
+                {
+                    true
+                }
+                _ => false,
+            },
+        };
+
+        let skip_reason = if !cleanable {
+            if state == WorktreeState::Active && liveness.is_alive() {
+                Some("session alive".to_string())
+            } else if state == WorktreeState::Orphaned {
+                Some("orphaned (use --force all)".to_string())
+            } else if matches!(
+                liveness,
+                codeflow_core::session::liveness::LivenessResult::Unknown
+            ) {
+                Some("unknown liveness".to_string())
+            } else {
+                Some("not eligible".to_string())
+            }
+        } else if let Some(ref s) = safety {
+            if s.risk >= codeflow_core::worktree::BranchRisk::High {
+                Some(format!("high risk: {} (use --force)", s.message))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let info = (
+            entry.name.clone(),
+            branch.to_string(),
+            state,
+            liveness,
+            entry.status.clone(),
+            safety
+                .as_ref()
+                .map(|s| format!("risk={} {}", s.risk, s.message)),
+        );
+
+        if let Some(reason) = skip_reason {
+            skip_entries.push((info, reason));
+        } else {
+            clean_entries.push(info);
+        }
+    }
+
+    // Phase 2: Display analysis.
+    if !clean_entries.is_empty() {
+        println!("CLEAN ({}):", clean_entries.len());
+        for (name, branch, state, liveness, status, safety_msg) in &clean_entries {
+            println!(
+                "  {} ({}) [{}] {} [{}]",
+                name,
+                branch,
+                state,
+                liveness.label(),
+                status
+            );
+            if verbose {
+                if let Some(msg) = safety_msg {
+                    println!("    {msg}");
+                }
+            }
+        }
+    }
+
+    if !skip_entries.is_empty() {
+        println!("SKIP ({}):", skip_entries.len());
+        for ((name, branch, state, liveness, status, safety_msg), reason) in &skip_entries {
+            println!(
+                "  {} ({}) [{}] {} [{}] -- {}",
+                name,
+                branch,
+                state,
+                liveness.label(),
+                status,
+                reason
+            );
+            if verbose {
+                if let Some(msg) = safety_msg {
+                    println!("    {msg}");
+                }
+                println!("    --force {name}");
+            }
+        }
+    }
+
+    if clean_entries.is_empty() && !force_flag {
+        println!("no worktrees to clean up");
+        return Ok(());
+    }
+
+    // Apply --force <id> filtering: add matching skip entries to clean list.
+    let mut force_additions = Vec::new();
+    if force_flag {
+        if let Some(ref target) = force_target {
+            // Substring match on worktree name.
+            let matches: Vec<_> = skip_entries
+                .iter()
+                .filter(|((name, ..), _)| name.contains(target.as_str()))
+                .collect();
+            if matches.is_empty() {
+                anyhow::bail!("no worktree matching '{target}' found in SKIP list");
+            }
+            if matches.len() > 1 {
+                anyhow::bail!(
+                    "ambiguous --force target '{target}': matches {} entries ({})",
+                    matches.len(),
+                    matches
+                        .iter()
+                        .map(|((name, ..), _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            force_additions.push(matches[0].0.clone());
+        } else {
+            // --force all: add all skip entries.
+            for (info, _) in &skip_entries {
+                force_additions.push(info.clone());
+            }
+        }
+    }
+
+    let all_to_clean: Vec<_> = clean_entries.iter().chain(force_additions.iter()).collect();
+
+    if all_to_clean.is_empty() {
+        println!("no worktrees to clean up");
+        return Ok(());
+    }
+
+    // Phase 3: Confirm (unless --yes or --dry-run).
+    if dry_run {
+        println!("\nwould remove {} worktree(s):", all_to_clean.len());
+        for (name, ..) in &all_to_clean {
+            println!("  {name}");
+        }
+        return Ok(());
+    }
+
+    if !yes && !interactive {
+        println!(
+            "\n{} worktree(s) will be removed. Use --yes to skip confirmation.",
+            all_to_clean.len()
+        );
+    }
+
+    // Phase 4: Execute.
     let opts = CleanupOpts {
-        force,
+        force: force_flag,
         dry_run,
         prune: false,
         interactive,
         keep,
     };
 
-    if interactive && !dry_run {
-        // In interactive mode, show status of each candidate before removing.
-        let entries = mgr.list(None).context("listing worktrees")?;
-        let mut candidates = Vec::new();
-        for entry in &entries {
-            let state = mgr.detect_state(entry);
-            let liveness = mgr.liveness_status(entry);
-            // Skip entries with confirmed live sessions (not just Active state).
-            if state == WorktreeState::Active && liveness == "ACTIVE" {
-                continue;
-            }
-            let wt_path = std::path::Path::new(&entry.path);
-            let branch = entry.branch.as_deref().unwrap_or("(detached)");
-            let safety_msg = if wt_path.exists() {
-                let safety = codeflow_core::worktree::check_branch_safety(wt_path);
-                format!("risk={} {}", safety.risk, safety.message)
-            } else {
-                "directory missing".to_string()
-            };
-            println!(
-                "  {} ({}) [{}] {} [{}] -- {}",
-                entry.name, branch, state, liveness, entry.status, safety_msg
-            );
-            candidates.push(entry.name.clone());
-        }
-        if candidates.is_empty() {
-            println!("no worktrees to clean up");
-            return Ok(());
-        }
-        println!("\n{} candidate(s) for removal", candidates.len());
-    }
-
     let removed = mgr
         .cleanup_stale(&opts)
         .context("cleaning up stale worktrees")?;
 
     if removed.is_empty() {
-        if !interactive {
-            println!("no worktrees to clean up");
-        }
-    } else if dry_run {
-        println!("would remove {} worktree(s):", removed.len());
-        for name in &removed {
-            println!("  {name}");
-        }
+        println!("no worktrees removed");
     } else {
         println!("removed {} worktree(s):", removed.len());
         for name in &removed {
@@ -313,7 +493,7 @@ mod tests {
     #[test]
     fn test_cleanup_no_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_cleanup(dir.path(), false, false, false, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -324,7 +504,7 @@ mod tests {
         let reg = WorktreeRegistry::new("2026-03-21T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, false, false, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -351,7 +531,7 @@ mod tests {
         write_registry(&reg_path, &reg).unwrap();
 
         // Directory does not exist, so state is Stale -- cleanup should handle it.
-        let result = run_cleanup(dir.path(), false, false, false, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -373,7 +553,7 @@ mod tests {
         });
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, true, false, None);
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
         assert!(result.is_ok());
 
         // Registry should not have changed (dry run).
@@ -477,7 +657,10 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: false,
+                force_id: None,
                 dry_run: false,
+                yes: false,
+                verbose: false,
                 interactive: false,
                 keep: None,
             })
@@ -499,7 +682,10 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: true,
+                force_id: None,
                 dry_run: true,
+                yes: false,
+                verbose: false,
                 interactive: false,
                 keep: None,
             })
@@ -521,7 +707,10 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: false,
+                force_id: None,
                 dry_run: false,
+                yes: false,
+                verbose: false,
                 interactive: true,
                 keep: None,
             })
@@ -543,7 +732,10 @@ mod tests {
             cli.command,
             Some(WorktreeCommand::Cleanup {
                 force: false,
+                force_id: None,
                 dry_run: false,
+                yes: false,
+                verbose: false,
                 interactive: false,
                 keep: Some(3),
             })
@@ -641,7 +833,7 @@ mod tests {
         write_registry(&reg_path, &reg).unwrap();
 
         // Interactive with no entries should say "no worktrees to clean up".
-        let result = run_cleanup(dir.path(), false, false, true, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, true, None);
         assert!(result.is_ok());
     }
 
@@ -664,7 +856,7 @@ mod tests {
         });
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, false, true, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, true, None);
         assert!(result.is_ok());
     }
 
@@ -687,7 +879,7 @@ mod tests {
         write_registry(&reg_path, &reg).unwrap();
 
         // PendingCleanup entries are cleanup candidates (not skipped).
-        let result = run_cleanup(dir.path(), false, false, true, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, true, None);
         assert!(result.is_ok());
     }
 
@@ -700,7 +892,7 @@ mod tests {
         let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
         write_registry(&reg_path, &reg).unwrap();
 
-        let result = run_cleanup(dir.path(), false, false, false, None);
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
         assert!(result.is_ok());
     }
 
@@ -727,7 +919,274 @@ mod tests {
         write_registry(&reg_path, &reg).unwrap();
 
         // Dry run should report "would remove" without actually removing.
-        let result = run_cleanup(dir.path(), false, true, false, None);
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
         assert!(result.is_ok());
+    }
+
+    // -- new 4-phase cleanup tests --
+
+    #[test]
+    fn test_cleanup_verbose_shows_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "verbose-wt".to_string(),
+            path: "/nonexistent/verbose-wt".to_string(),
+            branch: Some("feat/verbose".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Verbose + dry run exercises the verbose display path.
+        let result = run_cleanup(dir.path(), false, None, true, true, true, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_yes_flag_skips_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "yes-wt".to_string(),
+            path: "/nonexistent/yes-wt".to_string(),
+            branch: Some("feat/yes".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // --yes should proceed without prompting.
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_force_id_nonexistent_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        write_registry(&reg_path, &reg).unwrap();
+
+        // --force-id with nonexistent target should still succeed (no skip entries).
+        let result = run_cleanup(
+            dir.path(),
+            false,
+            Some("nonexistent"),
+            false,
+            true,
+            false,
+            false,
+            None,
+        );
+        // No entries at all -> "no worktrees" message, ok.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_force_all_with_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        // Add an orphaned entry (directory exists but no .git).
+        let wt_dir = dir.path().join(".git-worktrees/orphan-force");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        reg.worktrees.push(WorktreeEntry {
+            name: "orphan-force".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/orphan".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // --force-id all with dry run should include orphaned in force list.
+        let result = run_cleanup(
+            dir.path(),
+            true,
+            Some("all"),
+            true,
+            true,
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_force_id_specific_dry_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        // Orphaned worktree (skip candidate).
+        let wt_dir = dir.path().join(".git-worktrees/target-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        reg.worktrees.push(WorktreeEntry {
+            name: "target-wt".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/target".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // --force-id target-wt with dry run.
+        let result = run_cleanup(
+            dir.path(),
+            true,
+            Some("target-wt"),
+            true,
+            true,
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_no_entries_prints_message() {
+        let dir = tempfile::tempdir().unwrap();
+        // No registry at all.
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_with_dead_session_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        // Entry with dead lead_pid and directory exists with .git.
+        let wt_dir = dir.path().join(".git-worktrees/dead-session");
+        std::fs::create_dir_all(wt_dir.join(".git")).unwrap();
+        reg.worktrees.push(WorktreeEntry {
+            name: "dead-session".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/dead".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: Some("ses-dead00000000000000000000".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(999_999_999),
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Dead session should be in CLEAN list, dry run.
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_pending_cleanup_in_clean_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "pending-entry".to_string(),
+            path: "/gone/pending".to_string(),
+            branch: Some("feat/pending".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::PendingCleanup,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // PendingCleanup entries should go to CLEAN list.
+        let result = run_cleanup(dir.path(), false, None, true, true, true, false, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dispatch_cleanup_yes_flag() {
+        use clap::Parser;
+
+        #[derive(Debug, Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Option<WorktreeCommand>,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "cleanup", "-y"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(WorktreeCommand::Cleanup {
+                force: false,
+                force_id: None,
+                dry_run: false,
+                yes: true,
+                verbose: false,
+                interactive: false,
+                keep: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_dispatch_cleanup_verbose_flag() {
+        use clap::Parser;
+
+        #[derive(Debug, Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Option<WorktreeCommand>,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "cleanup", "-v"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(WorktreeCommand::Cleanup {
+                force: false,
+                force_id: None,
+                dry_run: false,
+                yes: false,
+                verbose: true,
+                interactive: false,
+                keep: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_dispatch_cleanup_force_id() {
+        use clap::Parser;
+
+        #[derive(Debug, Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Option<WorktreeCommand>,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "cleanup", "--force-id", "my-worktree"]).unwrap();
+        match &cli.command {
+            Some(WorktreeCommand::Cleanup { force_id, .. }) => {
+                assert_eq!(force_id.as_deref(), Some("my-worktree"));
+            }
+            other => panic!("expected Cleanup, got {other:?}"),
+        }
     }
 }

@@ -92,10 +92,11 @@ pub struct SessionStartInit {
     pub now: NowFn,
 }
 
-/// Check if a process with the given PID is alive.
+/// Check if a process with the given PID is alive (test helper).
 ///
-/// Uses `kill -0 <pid>` which sends no signal but exits 0 if the process
-/// exists (equivalent to `libc::kill(pid, 0)` without requiring `unsafe`).
+/// Delegates to the canonical `session::process::is_process_alive()`.
+/// Used only in tests for direct PID liveness assertions.
+#[cfg(test)]
 fn is_process_alive(pid: u32) -> bool {
     crate::session::process::is_process_alive(pid)
 }
@@ -781,7 +782,14 @@ impl SessionStartInit {
             return (None, false, None);
         }
 
-        if !is_process_alive(lead_pid) {
+        if !crate::session::liveness::check_session_liveness(
+            lead_pid,
+            None,
+            None,
+            crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+        )
+        .is_alive()
+        {
             result.messages.push(format!(
                 "STALE SESSION: lead_pid {lead_pid} is dead (team: {team_name}) — new lead"
             ));
@@ -907,16 +915,18 @@ impl SessionStartInit {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|v| u32::try_from(v).ok())
                         .unwrap_or(0);
-                    // PID is authoritative when available. Heartbeat is fallback
-                    // only when PID is unavailable (legacy entries with lead_pid=0).
-                    if lead_pid > 0 {
-                        is_process_alive(lead_pid)
-                    } else {
-                        crate::session::heartbeat::is_alive(
-                            std::path::Path::new(&entry.path),
-                            crate::session::heartbeat::MAX_AGE_SECS,
-                        )
-                    }
+                    let wt_path = std::path::Path::new(&entry.path);
+                    crate::session::liveness::check_session_liveness(
+                        lead_pid,
+                        if wt_path.exists() {
+                            Some(wt_path)
+                        } else {
+                            None
+                        },
+                        None,
+                        crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+                    )
+                    .is_alive()
                 } else {
                     // Status file not in main repo — check session pointer for worktree sessions.
                     session::is_live_worktree_session(project_dir, sid)
@@ -1040,10 +1050,13 @@ impl SessionStartInit {
                                     .and_then(serde_json::Value::as_u64)
                                     .and_then(|v| u32::try_from(v).ok())
                                     .unwrap_or(0);
-                                return crate::session::heartbeat::is_alive(
-                                    &wt_path,
-                                    crate::session::heartbeat::MAX_AGE_SECS,
-                                ) || (lead_pid > 0 && is_process_alive(lead_pid));
+                                return crate::session::liveness::check_session_liveness(
+                                    lead_pid,
+                                    Some(&wt_path),
+                                    None,
+                                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+                                )
+                                .is_alive();
                             }
                         }
                         false
@@ -1268,17 +1281,22 @@ impl SessionStartInit {
                                     .and_then(serde_json::Value::as_u64)
                                     .and_then(|v| u32::try_from(v).ok())
                                     .unwrap_or(0);
-                                if lead_pid > 0
-                                    && !wt_paths.get(&name).is_some_and(|p| {
-                                        crate::session::heartbeat::is_alive(
-                                            p,
-                                            crate::session::heartbeat::MAX_AGE_SECS,
-                                        )
-                                    })
-                                    && !is_process_alive(lead_pid)
-                                {
-                                    // Lead process dead — check if any teammate is still alive
+                                let heartbeat_dir = wt_paths.get(&name).map(PathBuf::as_path);
+                                let lead_liveness =
+                                    crate::session::liveness::check_session_liveness(
+                                        lead_pid,
+                                        heartbeat_dir,
+                                        None,
+                                        crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+                                    );
+                                if matches!(
+                                    lead_liveness,
+                                    crate::session::liveness::LivenessResult::Dead
+                                ) {
+                                    // Lead confirmed dead — check if any teammate is still alive
                                     // before sweeping (teammate may still be finishing work).
+                                    // Note: Unknown liveness (lead_pid=0) is NOT swept — we
+                                    // cannot confirm death without a valid PID.
                                     let team_path = session_base
                                         .join(&name)
                                         .join("pathflow")
@@ -1294,7 +1312,10 @@ impl SessionStartInit {
                                                         .and_then(serde_json::Value::as_u64)
                                                         .and_then(|v| u32::try_from(v).ok())
                                                         .unwrap_or(0);
-                                                    pid > 0 && is_process_alive(pid)
+                                                    pid > 0
+                                                        && crate::session::process::is_process_alive(
+                                                            pid,
+                                                        )
                                                 })
                                             });
                                     if !any_teammate_alive {
@@ -1479,7 +1500,7 @@ impl SessionStartInit {
             "team_name": "",
             "status": "created",
             "work_type": "",
-            "lead_pid": self.lead_pid,
+            "lead_pid": crate::session::process::validate_claude_pid(self.lead_pid),
             "last_completed_phase": "",
             "last_completed_stage": "",
             "source_at_start": source,
@@ -1635,7 +1656,8 @@ impl SessionStartInit {
         let _ = crate::worktree::locked_update_source(mgr.registry_path(), &wt_name, "interactive");
 
         // Record lead PID in registry for fast liveness checks.
-        let pid = std::process::id();
+        // Use validated Claude PID (walks process tree) instead of ephemeral hook PID.
+        let pid = crate::session::process::validate_claude_pid(self.lead_pid);
         let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
 
         // Create RAII handle for cleanup on panic.
@@ -1775,7 +1797,8 @@ impl SessionStartInit {
                 &wt_name,
                 session_id,
             );
-            let pid = std::process::id();
+            // Use validated Claude PID (walks process tree) instead of ephemeral hook PID.
+            let pid = crate::session::process::validate_claude_pid(self.lead_pid);
             let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
         }
 

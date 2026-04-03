@@ -13,6 +13,7 @@
 pub mod active_task;
 pub mod env;
 pub mod heartbeat;
+pub mod liveness;
 pub mod process;
 mod state;
 
@@ -295,7 +296,7 @@ fn current_env_file_inner(
 /// Check if a session is a live worktree session by reading its session pointer.
 ///
 /// Returns `true` if a session pointer exists, the worktree directory is present,
-/// AND either the lead PID is alive or the heartbeat is fresh.
+/// AND centralized liveness indicates the session is active or recent.
 /// Returns `false` if no pointer, pointer unreadable, worktree gone, or session dead.
 pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     let Some(pointer) = read_session_pointer(project_dir, sid) else {
@@ -305,10 +306,13 @@ pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     if !wt_path.exists() {
         return false;
     }
-    if pointer.lead_pid > 0 && process::is_process_alive(pointer.lead_pid) {
-        return true;
-    }
-    heartbeat::is_alive(wt_path, heartbeat::MAX_AGE_SECS)
+    liveness::check_session_liveness(
+        pointer.lead_pid,
+        Some(wt_path),
+        None,
+        liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+    )
+    .is_alive()
 }
 
 #[cfg(test)]

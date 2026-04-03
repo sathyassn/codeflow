@@ -833,41 +833,30 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
             .join("pathflow")
             .join("pathflow-session-status.json");
 
-        // Primary: heartbeat-based liveness using the session's worktree path.
-        // Each session's heartbeat is at {worktree}/.state/runtime/heartbeat.
-        let alive_by_heartbeat =
-            session_worktree_paths
-                .get(session_id.as_str())
-                .is_some_and(|wt_path| {
-                    crate::session::heartbeat::is_alive(
-                        wt_path,
-                        crate::session::heartbeat::MAX_AGE_SECS,
-                    )
-                });
+        // Centralized liveness: combines PID (name-verified), heartbeat, and flag.
+        let lead_pid = fs::read_to_string(&status_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .and_then(|status| status.get("lead_pid")?.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
 
-        if alive_by_heartbeat {
-            continue; // Session definitely alive via heartbeat.
+        let heartbeat_dir = session_worktree_paths
+            .get(session_id.as_str())
+            .map(std::path::Path::new);
+
+        let liveness = crate::session::liveness::check_session_liveness(
+            lead_pid,
+            heartbeat_dir,
+            None,
+            crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+        );
+
+        if liveness.is_alive() {
+            continue; // Session alive via centralized liveness.
         }
 
-        // Secondary: PID-based liveness (defense-in-depth).
-        let alive_by_pid = if let Ok(content) = fs::read_to_string(&status_path) {
-            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&content) {
-                status
-                    .get("lead_pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|lead_pid| {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let pid = lead_pid as u32;
-                        is_pid_alive(pid)
-                    })
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !alive_by_pid {
+        if !liveness.is_alive() {
             // Both heartbeat and PID say dead — release claims.
             let released = release_dead_session_claims(&config.state_loro_path, session_id)?;
             total_released += released;

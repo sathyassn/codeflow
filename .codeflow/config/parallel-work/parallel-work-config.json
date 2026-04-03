@@ -4,6 +4,7 @@
     "mode": "always",
     "max_concurrent": 5,
     "base_dir": ".git-worktrees",
+    "heartbeat_threshold_secs": 86400,
     "shared_files": [
       ".claude/settings.local.json",
       ".codeflow/config/parallel-work/parallel-work-config.local.json"

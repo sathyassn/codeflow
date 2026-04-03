@@ -262,27 +262,32 @@ impl WorktreeManager {
 
     /// Check if a worktree's owning session is alive (public API for CLI).
     ///
-    /// Returns `"ACTIVE"` if the session PID is alive, `"DEAD"` if the PID
-    /// is confirmed dead, or `"UNKNOWN"` if no session ID is available.
+    /// Returns a `LivenessResult` combining PID (name-verified), heartbeat,
+    /// and pathflow-active flag signals.
     #[must_use]
-    pub fn liveness_status(&self, entry: &WorktreeEntry) -> &'static str {
+    pub fn liveness_status(
+        &self,
+        entry: &WorktreeEntry,
+    ) -> crate::session::liveness::LivenessResult {
         match &entry.session_id {
             Some(sid) if !sid.is_empty() => {
-                if let Some(pid) = self.read_lead_pid(entry) {
-                    if crate::session::process::is_process_alive(pid) {
-                        return "ACTIVE";
-                    }
-                    return "DEAD";
-                }
-                // No PID file — check pathflow-active as fallback.
-                let _ = sid; // suppress unused warning
-                if self.has_pathflow_active(entry) {
-                    "ACTIVE"
+                let lead_pid = self.read_lead_pid(entry).unwrap_or(0);
+                let wt_path = std::path::Path::new(&entry.path);
+                let heartbeat_dir = if wt_path.exists() {
+                    Some(wt_path as &std::path::Path)
                 } else {
-                    "UNKNOWN"
-                }
+                    None
+                };
+                let pathflow_active = wt_path.join(".state/session/pathflow-active");
+                let _ = sid; // suppress unused warning
+                crate::session::liveness::check_session_liveness(
+                    lead_pid,
+                    heartbeat_dir,
+                    Some(&pathflow_active),
+                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+                )
             }
-            _ => "UNKNOWN",
+            _ => crate::session::liveness::LivenessResult::Unknown,
         }
     }
 
@@ -336,10 +341,17 @@ impl WorktreeManager {
                     // Directory missing — always cleanable.
                     WorktreeState::Stale => true,
                     // Dead session — cleanable without --force.
-                    WorktreeState::Active if liveness == "DEAD" => true,
+                    WorktreeState::Active
+                        if matches!(liveness, crate::session::liveness::LivenessResult::Dead) =>
+                    {
+                        true
+                    }
                     // No session_id and entry is old enough — cleanable.
                     WorktreeState::Active
-                        if liveness == "UNKNOWN" && Self::is_older_than(entry, 3600) =>
+                        if matches!(
+                            liveness,
+                            crate::session::liveness::LivenessResult::Unknown
+                        ) && Self::is_older_than(entry, 3600) =>
                     {
                         true
                     }
@@ -484,14 +496,6 @@ impl WorktreeManager {
         let created_epoch = days * 86400 + hour * 3600 + minute * 60 + second;
 
         now.saturating_sub(created_epoch) > secs
-    }
-
-    /// Check if a worktree has a `pathflow-active` flag in its state directory.
-    #[allow(clippy::unused_self)]
-    fn has_pathflow_active(&self, entry: &WorktreeEntry) -> bool {
-        let wt_path = Path::new(&entry.path);
-        let active_flag = wt_path.join(".state/session/pathflow-active");
-        active_flag.exists()
     }
 
     /// Reconcile the YAML registry against the filesystem.
@@ -1148,7 +1152,10 @@ mod tests {
             source: None,
             lead_pid: None,
         };
-        assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
+        assert_eq!(
+            mgr.liveness_status(&entry),
+            crate::session::liveness::LivenessResult::Unknown
+        );
     }
 
     #[test]
@@ -1165,7 +1172,10 @@ mod tests {
             source: None,
             lead_pid: None,
         };
-        assert_eq!(mgr.liveness_status(&entry), "UNKNOWN");
+        assert_eq!(
+            mgr.liveness_status(&entry),
+            crate::session::liveness::LivenessResult::Unknown
+        );
     }
 
     #[test]
@@ -1194,7 +1204,10 @@ mod tests {
             source: None,
             lead_pid: None,
         };
-        assert_eq!(mgr.liveness_status(&entry), "DEAD");
+        assert_eq!(
+            mgr.liveness_status(&entry),
+            crate::session::liveness::LivenessResult::Dead
+        );
     }
 
     #[test]
@@ -1260,48 +1273,6 @@ mod tests {
         };
         // Should return the entry's lead_pid directly (fast path).
         assert_eq!(mgr.read_lead_pid(&entry), Some(99999));
-    }
-
-    #[test]
-    fn test_has_pathflow_active_false() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path());
-        let entry = WorktreeEntry {
-            name: "test-wt".to_string(),
-            path: dir.path().to_string_lossy().to_string(),
-            branch: Some("feat/test".to_string()),
-            created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: registry::WorktreeStatus::Active,
-            session_id: None,
-            task_id: None,
-            source: None,
-            lead_pid: None,
-        };
-        assert!(!mgr.has_pathflow_active(&entry));
-    }
-
-    #[test]
-    fn test_has_pathflow_active_true() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path());
-
-        // Create pathflow-active flag.
-        let flag_dir = dir.path().join(".state/session");
-        std::fs::create_dir_all(&flag_dir).unwrap();
-        std::fs::write(flag_dir.join("pathflow-active"), "").unwrap();
-
-        let entry = WorktreeEntry {
-            name: "test-wt".to_string(),
-            path: dir.path().to_string_lossy().to_string(),
-            branch: Some("feat/test".to_string()),
-            created_at: "2026-03-31T10:00:00Z".to_string(),
-            status: registry::WorktreeStatus::Active,
-            session_id: None,
-            task_id: None,
-            source: None,
-            lead_pid: None,
-        };
-        assert!(mgr.has_pathflow_active(&entry));
     }
 
     #[test]
