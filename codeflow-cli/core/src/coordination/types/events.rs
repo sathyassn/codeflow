@@ -189,6 +189,14 @@ pub enum AutorunEvent {
         reason: String,
         timestamp: String,
     },
+
+    /// C28: A worker could not start because the worktree pool is full (retriable).
+    #[serde(rename = "worker_pool_full")]
+    WorkerPoolFull {
+        session_id: String,
+        task_id: String,
+        timestamp: String,
+    },
 }
 
 impl AutorunEvent {
@@ -205,6 +213,7 @@ impl AutorunEvent {
             Self::WorkerTimeout { .. } => "worker_timeout",
             Self::WorkerBlocked { .. } => "worker_blocked",
             Self::WorkerCancelled { .. } => "worker_cancelled",
+            Self::WorkerPoolFull { .. } => "worker_pool_full",
         }
     }
 }
@@ -605,6 +614,14 @@ mod tests {
                     timestamp: "ts".into(),
                 },
                 "worker_cancelled",
+            ),
+            (
+                AutorunEvent::WorkerPoolFull {
+                    session_id: "s".into(),
+                    task_id: "t".into(),
+                    timestamp: "ts".into(),
+                },
+                "worker_pool_full",
             ),
         ];
 

@@ -44,6 +44,9 @@ pub enum AutorunCommand {
     Attach {
         /// Task ID of the worker to attach to
         task_id: String,
+        /// Batch session ID (required when task exists in multiple batches)
+        #[arg(long)]
+        batch: Option<String>,
     },
     /// View logs from a worker's tmux session
     Logs {
@@ -52,11 +55,17 @@ pub enum AutorunCommand {
         /// Follow log output (poll at 500ms)
         #[arg(long, short = 'f')]
         follow: bool,
+        /// Batch session ID (required when task exists in multiple batches)
+        #[arg(long)]
+        batch: Option<String>,
     },
     /// Cancel a single running worker
     Cancel {
         /// Task ID of the worker to cancel
         task_id: String,
+        /// Batch session ID (required when task exists in multiple batches)
+        #[arg(long)]
+        batch: Option<String>,
     },
     /// Abort an entire batch (cancel all running, skip pending)
     Abort {
@@ -75,6 +84,9 @@ pub enum AutorunCommand {
         /// Session ID of the batch to resume (defaults to most recent non-completed)
         #[arg(long)]
         batch: Option<String>,
+        /// Run in foreground (default: detach to tmux session)
+        #[arg(long, visible_alias = "fg")]
+        foreground: bool,
     },
     /// List available batch files in the autorun config directory
     Batches,
@@ -121,16 +133,24 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
                 run_status(&project_dir, batch.as_deref()).await
             }
         }
-        Some(AutorunCommand::Attach { task_id }) => run_attach(&project_dir, &task_id).await,
-        Some(AutorunCommand::Logs { task_id, follow }) => {
-            run_logs(&project_dir, &task_id, follow).await
+        Some(AutorunCommand::Attach { task_id, batch }) => {
+            run_attach(&project_dir, &task_id, batch.as_deref()).await
         }
-        Some(AutorunCommand::Cancel { task_id }) => run_cancel(&project_dir, &task_id).await,
+        Some(AutorunCommand::Logs {
+            task_id,
+            follow,
+            batch,
+        }) => run_logs(&project_dir, &task_id, follow, batch.as_deref()).await,
+        Some(AutorunCommand::Cancel { task_id, batch }) => {
+            run_cancel(&project_dir, &task_id, batch.as_deref()).await
+        }
         Some(AutorunCommand::Abort { batch }) => run_abort(&project_dir, batch.as_deref()).await,
         Some(AutorunCommand::Results { batch }) => {
             run_results(&project_dir, batch.as_deref()).await
         }
-        Some(AutorunCommand::Resume { batch }) => run_resume(&project_dir, batch.as_deref()).await,
+        Some(AutorunCommand::Resume { batch, foreground }) => {
+            run_resume(&project_dir, batch.as_deref(), foreground).await
+        }
         Some(AutorunCommand::Batches) => run_batches_sync(&project_dir),
         Some(AutorunCommand::History {
             limit,
@@ -246,6 +266,57 @@ fn check_target_branch(project_dir: &Path, target: &str) -> Result<()> {
     anyhow::bail!("target branch '{target}' does not exist locally or at origin/{target}");
 }
 
+/// C6: Check batch guard -- reject if too many concurrent batches or same batch already running.
+async fn check_batch_guard(project_dir: &Path, batch_path: &Path) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let db_dir = project_dir.join(".state/db");
+    let Ok(store) = codeflow_core::store::SurrealStore::open(&db_dir).await else {
+        // DB not available yet -- skip guard (first run).
+        return Ok(());
+    };
+
+    let config = codeflow_core::autorun::load_config(project_dir).unwrap_or_default();
+
+    let sessions = store
+        .list_autorun_sessions(codeflow_core::models::AutorunSessionFilter::default())
+        .await
+        .unwrap_or_default();
+
+    let active: Vec<_> = sessions
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                codeflow_core::types::AutorunSessionStatus::Running
+                    | codeflow_core::types::AutorunSessionStatus::Aborting
+            )
+        })
+        .collect();
+
+    if active.len() >= config.autorun.max_concurrent_batches {
+        anyhow::bail!(
+            "max concurrent batches reached ({}/{}); wait for active batches to complete or increase autorun.max_concurrent_batches",
+            active.len(),
+            config.autorun.max_concurrent_batches,
+        );
+    }
+
+    // Check if the SAME batch file is already running.
+    let batch_display = batch_path.to_string_lossy();
+    for s in &active {
+        if s.batch_file == batch_display {
+            anyhow::bail!(
+                "batch file '{}' is already running in session '{}'; abort it first or use a different batch file",
+                batch_display,
+                s.id,
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -> Result<()> {
     use codeflow_core::store::DataStore;
 
@@ -254,6 +325,9 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
 
     // Phase 1: Pre-flight checks (before batch parse).
     preflight_checks(project_dir)?;
+
+    // C6: Batch guard -- check active batch count and duplicate batch file.
+    check_batch_guard(project_dir, batch_path).await?;
 
     // Detach to tmux if not foreground and stdout is a TTY.
     if !foreground && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -368,41 +442,56 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
 
 /// Launch the orchestrator in a dedicated tmux session and return immediately.
 fn run_detached(project_dir: &Path, batch_path: &Path) -> Result<()> {
-    let orch_session = "cf-autorun-orchestrator";
+    // C16: unique orchestrator tmux name using session ID suffix.
+    let session_id = codeflow_core::session::generate_session_id();
+    let sid_str = session_id.as_str();
+    let short_sid = &sid_str[sid_str.len().saturating_sub(8)..];
+    let orch_session = format!("cf-autorun-orch-{short_sid}");
 
-    // Kill any existing orchestrator session.
-    let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", orch_session])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // Build the foreground command to run inside the tmux session.
+    let exe = std::env::current_exe().context("getting current executable path")?;
 
-    // Create a new tmux session for the orchestrator.
+    // C11: Write orchestrator script to temp file and use -- pattern.
+    fn sq(s: &str) -> String {
+        s.replace('\'', "'\\''")
+    }
+    let script_dir = project_dir.join(".state/autorun/scripts");
+    std::fs::create_dir_all(&script_dir).context("creating autorun scripts directory")?;
+    let script_path = script_dir.join(format!("orch-{short_sid}.sh"));
+    let script_content = format!(
+        "#!/bin/bash\ncd '{}' && '{}' autorun run --batch '{}' --foreground\n",
+        sq(&project_dir.to_string_lossy()),
+        sq(&exe.to_string_lossy()),
+        sq(&batch_path.to_string_lossy()),
+    );
+    std::fs::write(&script_path, &script_content).context("writing orchestrator script")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    // Create tmux session with -- bash --login script.
     let status = std::process::Command::new("tmux")
-        .args(["new-session", "-d", "-s", orch_session])
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &orch_session,
+            "--",
+            "bash",
+            "--login",
+            &script_path.to_string_lossy(),
+        ])
         .status()
         .context("failed to create tmux session for orchestrator")?;
     if !status.success() {
         anyhow::bail!("failed to create tmux session '{orch_session}'");
     }
-
-    // Build the foreground command to run inside the tmux session.
-    let exe = std::env::current_exe().context("getting current executable path")?;
-    let batch_str = batch_path.to_string_lossy();
-    let cmd = format!(
-        "cd '{}' && '{}' autorun run --batch '{}' --foreground",
-        project_dir.to_string_lossy().replace('\'', "'\\''"),
-        exe.to_string_lossy().replace('\'', "'\\''"),
-        batch_str.replace('\'', "'\\''"),
-    );
-
-    let send_status = std::process::Command::new("tmux")
-        .args(["send-keys", "-t", orch_session, &cmd, "Enter"])
-        .status()
-        .context("failed to send command to orchestrator tmux session")?;
-    if !send_status.success() {
-        anyhow::bail!("failed to send orchestrator command to tmux");
-    }
+    // Keep the pane alive after the command exits.
+    let _ = std::process::Command::new("tmux")
+        .args(["set-option", "-t", &orch_session, "remain-on-exit", "on"])
+        .status();
 
     println!("autorun orchestrator launched in tmux session: {orch_session}");
     println!();
@@ -410,6 +499,65 @@ fn run_detached(project_dir: &Path, batch_path: &Path) -> Result<()> {
     println!("  Attach:   tmux attach -t {orch_session}");
     println!("  Worker:   codeflow autorun attach <task-id>");
     println!("  Abort:    codeflow autorun abort");
+
+    Ok(())
+}
+
+/// C7: Launch resume in a dedicated tmux session and return immediately.
+fn run_detached_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    let session_id = codeflow_core::session::generate_session_id();
+    let sid_str = session_id.as_str();
+    let short_sid = &sid_str[sid_str.len().saturating_sub(8)..];
+    let orch_session = format!("cf-autorun-resume-{short_sid}");
+
+    let exe = std::env::current_exe().context("getting current executable path")?;
+
+    fn sq(s: &str) -> String {
+        s.replace('\'', "'\\''")
+    }
+    let script_dir = project_dir.join(".state/autorun/scripts");
+    std::fs::create_dir_all(&script_dir).context("creating autorun scripts directory")?;
+    let script_path = script_dir.join(format!("resume-{short_sid}.sh"));
+    let batch_arg = batch
+        .map(|b| format!(" --batch '{}'", sq(b)))
+        .unwrap_or_default();
+    let script_content = format!(
+        "#!/bin/bash\ncd '{}' && '{}' autorun resume{} --foreground\n",
+        sq(&project_dir.to_string_lossy()),
+        sq(&exe.to_string_lossy()),
+        batch_arg,
+    );
+    std::fs::write(&script_path, &script_content).context("writing resume script")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    let status = std::process::Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &orch_session,
+            "--",
+            "bash",
+            "--login",
+            &script_path.to_string_lossy(),
+        ])
+        .status()
+        .context("failed to create tmux session for resume")?;
+    if !status.success() {
+        anyhow::bail!("failed to create tmux session '{orch_session}'");
+    }
+    let _ = std::process::Command::new("tmux")
+        .args(["set-option", "-t", &orch_session, "remain-on-exit", "on"])
+        .status();
+
+    println!("autorun resume launched in tmux session: {orch_session}");
+    println!();
+    println!("  Monitor:  codeflow autorun status --watch");
+    println!("  Attach:   tmux attach -t {orch_session}");
 
     Ok(())
 }
@@ -527,9 +675,10 @@ fn generate_batch_report(
     std::fs::create_dir_all(&abs_report_dir)
         .with_context(|| format!("creating report directory {}", abs_report_dir.display()))?;
 
-    // Write report file.
+    // Write report file. C25: Include session_id in filename for uniqueness.
     let date_str = start_time.format("%Y-%m-%d").to_string();
-    let filename = format!("{batch_name}-{date_str}.md");
+    let short_sid = &session_id[session_id.len().saturating_sub(8)..];
+    let filename = format!("{batch_name}-{short_sid}-{date_str}.md");
     let report_path = abs_report_dir.join(&filename);
     codeflow_core::file_lock::atomic_write(&report_path, md.as_bytes())
         .with_context(|| format!("writing batch report to {}", report_path.display()))?;
@@ -602,6 +751,9 @@ async fn open_store(
 }
 
 /// Find the most recent running/aborting session, or a specific one by ID.
+///
+/// C19: For results, also searches terminal statuses (Completed, Failed, etc.).
+/// C20: When multiple running sessions and no --batch, lists them and bails.
 async fn resolve_session_id(
     store: &codeflow_core::store::SurrealStore,
     batch: Option<&str>,
@@ -614,22 +766,38 @@ async fn resolve_session_id(
         return Ok(sid.to_string());
     }
 
-    // Find the most recent running or aborting session.
-    let sessions = store
+    // Find all running sessions.
+    let running = store
         .list_autorun_sessions(AutorunSessionFilter {
             status: Some(AutorunSessionStatus::Running),
-            limit: Some(1),
+            limit: Some(10),
             ..Default::default()
         })
         .await
         .context("querying autorun sessions")?;
 
-    if let Some(s) = sessions.first() {
+    // C20: If multiple running sessions, list them and ask for --batch.
+    if running.len() > 1 {
+        eprintln!("Multiple active autorun sessions found:");
+        for s in &running {
+            eprintln!(
+                "  {} (batch: {})",
+                s.id,
+                s.batch_name.as_deref().unwrap_or("unknown")
+            );
+        }
+        anyhow::bail!(
+            "{} active sessions found; specify --batch <session_id>",
+            running.len()
+        );
+    }
+
+    if let Some(s) = running.first() {
         return Ok(s.id.clone());
     }
 
     // Try aborting sessions.
-    let sessions = store
+    let aborting = store
         .list_autorun_sessions(AutorunSessionFilter {
             status: Some(AutorunSessionStatus::Aborting),
             limit: Some(1),
@@ -638,11 +806,88 @@ async fn resolve_session_id(
         .await
         .context("querying autorun sessions")?;
 
-    if let Some(s) = sessions.first() {
+    if let Some(s) = aborting.first() {
         return Ok(s.id.clone());
     }
 
-    anyhow::bail!("no active autorun session found; use --batch <session_id> to specify one");
+    // C19: Fall back to most recent terminal session (for results/history queries).
+    let all = store
+        .list_autorun_sessions(AutorunSessionFilter {
+            limit: Some(1),
+            all: true,
+            ..Default::default()
+        })
+        .await
+        .context("querying autorun sessions")?;
+
+    if let Some(s) = all.first() {
+        return Ok(s.id.clone());
+    }
+
+    anyhow::bail!("no autorun session found; use --batch <session_id> to specify one");
+}
+
+/// C17: Smart task resolution -- find which session contains a given task_id.
+///
+/// When `batch` is provided, uses it directly. Otherwise, searches ALL active
+/// sessions for the task_id. If found in exactly 1 session, returns it.
+/// If 0 or 2+ sessions, returns an error.
+async fn resolve_task_session(
+    store: &codeflow_core::store::SurrealStore,
+    task_id: &str,
+    batch: Option<&str>,
+) -> Result<String> {
+    use codeflow_core::models::AutorunSessionFilter;
+    use codeflow_core::store::DataStore;
+    use codeflow_core::types::AutorunSessionStatus;
+
+    if let Some(sid) = batch {
+        return Ok(sid.to_string());
+    }
+
+    // Search all active (running + aborting) sessions for the task.
+    let active = store
+        .list_autorun_sessions(AutorunSessionFilter {
+            limit: Some(20),
+            ..Default::default()
+        })
+        .await
+        .context("querying autorun sessions")?;
+
+    let active: Vec<_> = active
+        .into_iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                AutorunSessionStatus::Running | AutorunSessionStatus::Aborting
+            )
+        })
+        .collect();
+
+    let mut matching_sessions = Vec::new();
+    for session in &active {
+        let worker = store
+            .get_autorun_worker_by_task_id(&session.id, task_id)
+            .await?;
+        if worker.is_some() {
+            matching_sessions.push(session.id.clone());
+        }
+    }
+
+    match matching_sessions.len() {
+        1 => Ok(matching_sessions.into_iter().next().unwrap()),
+        0 => {
+            // Fall back to single-session resolution.
+            resolve_session_id(store, None).await
+        }
+        n => {
+            eprintln!("Task '{task_id}' found in {n} active sessions:");
+            for sid in &matching_sessions {
+                eprintln!("  {sid}");
+            }
+            anyhow::bail!("task '{task_id}' exists in {n} sessions; specify --batch <session_id>");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -753,12 +998,44 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                     .find(|w| w.task_id == run.task_id)
                     .and_then(|w| w.tmux_session.clone())
                     .unwrap_or_else(|| "--".to_string());
+                // C24: Show "Waiting" for pending tasks when session is active
+                // (deps met, waiting for pool slot) vs "Pending" (deps not met).
+                let display_status = if matches!(
+                    run.status,
+                    codeflow_core::types::AutorunTaskRunStatus::Pending
+                ) {
+                    // Check if all dependency task_runs are completed.
+                    // If we can't determine (no dep info in DB), use heuristic:
+                    // session is Running + task is Pending = Waiting for pool.
+                    if matches!(
+                        session.status,
+                        codeflow_core::types::AutorunSessionStatus::Running
+                    ) {
+                        "Waiting".to_string()
+                    } else {
+                        run.status.to_string()
+                    }
+                } else {
+                    run.status.to_string()
+                };
                 println!(
                     "  {:<24} {:<12} {:<28} {:>9}",
-                    run.task_id, run.status, tmux, duration
+                    run.task_id, display_status, tmux, duration
                 );
             }
         }
+    }
+
+    // C8: Print attach hint when any tasks are running.
+    let any_running = sessions.iter().any(|s| {
+        matches!(
+            s.status,
+            codeflow_core::types::AutorunSessionStatus::Running
+        )
+    });
+    if any_running {
+        println!();
+        println!("  Attach: codeflow autorun attach <TASK-ID> [--batch <SESSION-ID>]");
     }
 
     Ok(())
@@ -778,11 +1055,12 @@ async fn run_status_watch(
     }
 }
 
-async fn run_attach(project_dir: &Path, task_id: &str) -> Result<()> {
+async fn run_attach(project_dir: &Path, task_id: &str, batch: Option<&str>) -> Result<()> {
     use codeflow_core::store::DataStore;
 
     let store = open_store(project_dir).await?;
-    let session_id = resolve_session_id(store.as_ref(), None).await?;
+    // C17: Smart task resolution with --batch support.
+    let session_id = resolve_task_session(store.as_ref(), task_id, batch).await?;
 
     let worker = store
         .get_autorun_worker_by_task_id(&session_id, task_id)
@@ -807,11 +1085,17 @@ async fn run_attach(project_dir: &Path, task_id: &str) -> Result<()> {
     anyhow::bail!("failed to exec tmux attach-session: {err}");
 }
 
-async fn run_logs(project_dir: &Path, task_id: &str, follow: bool) -> Result<()> {
+async fn run_logs(
+    project_dir: &Path,
+    task_id: &str,
+    follow: bool,
+    batch: Option<&str>,
+) -> Result<()> {
     use codeflow_core::store::DataStore;
 
     let store = open_store(project_dir).await?;
-    let session_id = resolve_session_id(store.as_ref(), None).await?;
+    // C17: Smart task resolution with --batch support.
+    let session_id = resolve_task_session(store.as_ref(), task_id, batch).await?;
 
     let worker = store
         .get_autorun_worker_by_task_id(&session_id, task_id)
@@ -871,12 +1155,13 @@ async fn run_logs(project_dir: &Path, task_id: &str, follow: bool) -> Result<()>
     Ok(())
 }
 
-async fn run_cancel(project_dir: &Path, task_id: &str) -> Result<()> {
+async fn run_cancel(project_dir: &Path, task_id: &str, batch: Option<&str>) -> Result<()> {
     use codeflow_core::store::DataStore;
     use codeflow_core::types::{AutorunTaskRunStatus, AutorunWorkerStatus};
 
     let store = open_store(project_dir).await?;
-    let session_id = resolve_session_id(store.as_ref(), None).await?;
+    // C17+C18: Smart task resolution with explicit --batch support.
+    let session_id = resolve_task_session(store.as_ref(), task_id, batch).await?;
 
     let worker = store
         .get_autorun_worker_by_task_id(&session_id, task_id)
@@ -1121,7 +1406,8 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     for worker in &workers {
         if worker.status == codeflow_core::types::AutorunWorkerStatus::Running {
             eprintln!("cancelling running worker: {}", worker.task_id);
-            if let Err(e) = run_cancel(project_dir, &worker.task_id).await {
+            // C18: Pass explicit session_id to avoid re-resolving (could cancel wrong batch).
+            if let Err(e) = run_cancel(project_dir, &worker.task_id, Some(&session_id)).await {
                 eprintln!("warning: failed to cancel worker {}: {e}", worker.task_id);
             }
         }
@@ -1269,12 +1555,22 @@ async fn run_history(
     Ok(())
 }
 
-async fn run_resume(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+async fn run_resume(project_dir: &Path, batch: Option<&str>, foreground: bool) -> Result<()> {
     use codeflow_core::store::DataStore;
     use codeflow_core::types::{AutorunSessionStatus, AutorunTaskRunStatus};
 
     // Autorun MUST work from the real repo root, not a worktree.
     let project_dir = &resolve_repo_root(project_dir)?;
+
+    // C6: Batch guard applies to resume as well (AC 33).
+    // Use a placeholder path for the duplicate-file check since resume
+    // intentionally reuses the original batch file.
+    check_batch_guard(project_dir, Path::new("__resume__")).await?;
+
+    // C7: Detach to tmux if not foreground and stdout is a TTY.
+    if !foreground && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return run_detached_resume(project_dir, batch);
+    }
 
     let store = open_store(project_dir).await?;
 
@@ -1580,8 +1876,31 @@ async fn run_tmux(args: &[&str]) -> Result<bool, codeflow_core::AutorunError> {
 struct RealTmux;
 
 impl codeflow_core::autorun::TmuxRunner for RealTmux {
-    async fn create_session(&self, name: &str) -> Result<(), codeflow_core::AutorunError> {
-        if !run_tmux(&["new-session", "-d", "-s", name]).await? {
+    async fn create_session(
+        &self,
+        name: &str,
+        command: Option<Vec<String>>,
+    ) -> Result<(), codeflow_core::AutorunError> {
+        let success = match command {
+            Some(args) => {
+                // Create session with -- command args so tmux runs the command directly.
+                let mut tmux_args = vec![
+                    "new-session".to_string(),
+                    "-d".to_string(),
+                    "-s".to_string(),
+                    name.to_string(),
+                    "--".to_string(),
+                ];
+                tmux_args.extend(args);
+                let args_refs: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
+                run_tmux(&args_refs).await?
+            }
+            None => {
+                // Legacy: bare session without a command.
+                run_tmux(&["new-session", "-d", "-s", name]).await?
+            }
+        };
+        if !success {
             return Err(codeflow_core::AutorunError::WorkerFailed(format!(
                 "tmux new-session failed for {name}"
             )));
@@ -1653,68 +1972,95 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         let session = &cfg.tmux_session;
         let work_dir = &cfg.work_dir;
 
-        // Ensure .state/runtime directory exists in worktree.
-        let runtime_dir = PathBuf::from(work_dir).join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).map_err(|e| {
+        // Ensure .state/runtime/local directory exists in worktree.
+        let local_dir = PathBuf::from(work_dir).join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).map_err(|e| {
             codeflow_core::AutorunError::WorkerFailed(format!(
-                "creating runtime dir {}: {e}",
-                runtime_dir.display()
+                "creating local dir {}: {e}",
+                local_dir.display()
             ))
         })?;
 
-        // Set environment variables via tmux send-keys.
-        // AUTORUN_SESSION_ID uses the worker-specific session ID so that hooks
-        // use the same ID as CRDT claims (acquired with worker_sid in worker.rs).
+        // POSIX single-quote escaping helper: replace ' with '\''
+        fn sq(s: &str) -> String {
+            s.replace('\'', "'\\''")
+        }
+
+        // C3b: Write env file with all 5 exports.
         let autorun_sid = if cfg.worker_session_id.is_empty() {
             &cfg.session_id
         } else {
             &cfg.worker_session_id
         };
-        self.tmux
-            .send_command(session, &format!("export AUTORUN_SESSION_ID={autorun_sid}"))
-            .await?;
-        // AUTORUN_BATCH_ID tracks the batch-level session for correlation.
-        self.tmux
-            .send_command(
-                session,
-                &format!("export AUTORUN_BATCH_ID={}", cfg.session_id),
-            )
-            .await?;
-        self.tmux
-            .send_command(session, &format!("export AUTORUN_TASK_ID={}", cfg.task_id))
-            .await?;
-
         let acceptance_b64 = Self::encode_acceptance(&cfg.acceptance_criteria);
-        self.tmux
-            .send_command(
-                session,
-                &format!("export AUTORUN_ACCEPTANCE={acceptance_b64}"),
-            )
-            .await?;
-
-        self.tmux
-            .send_command(
-                session,
-                &format!("export CODEFLOW_WORKTREE_PATH={work_dir}"),
-            )
-            .await?;
-
-        // Escape single quotes in the prompt for POSIX single-quote shell quoting.
-        // Pattern: end current quote, insert escaped quote, restart quote ('\'')
-        let escaped_prompt = cfg.prompt.replace('\'', "'\\''");
-
-        // Send the Claude command. Uses regular '...' quoting (not $'...') so
-        // that backslash sequences like \n in the prompt are preserved literally.
-        // Quote work_dir with POSIX single-quote escaping to handle paths with spaces.
-        let escaped_work_dir = work_dir.replace('\'', "'\\''");
-        let exit_code_path = format!("{work_dir}/.state/runtime/worker-exit-code");
-        let escaped_exit_code_path = exit_code_path.replace('\'', "'\\''");
-        let claude_cmd = format!(
-            "cd '{escaped_work_dir}' && claude --dangerously-skip-permissions \
-             '{escaped_prompt}'; \
-             echo $? > '{escaped_exit_code_path}'"
+        let env_file_path = local_dir.join("autorun-worker-env.sh");
+        let env_content = format!(
+            "export AUTORUN_SESSION_ID='{sid}'\n\
+             export AUTORUN_BATCH_ID='{batch}'\n\
+             export AUTORUN_TASK_ID='{task}'\n\
+             export AUTORUN_ACCEPTANCE='{acc}'\n\
+             export CODEFLOW_WORKTREE_PATH='{wdir}'\n",
+            sid = sq(autorun_sid),
+            batch = sq(&cfg.session_id),
+            task = sq(&cfg.task_id),
+            acc = sq(&acceptance_b64),
+            wdir = sq(work_dir),
         );
-        self.tmux.send_command(session, &claude_cmd).await?;
+        std::fs::write(&env_file_path, &env_content).map_err(|e| {
+            codeflow_core::AutorunError::WorkerFailed(format!(
+                "writing env file {}: {e}",
+                env_file_path.display()
+            ))
+        })?;
+
+        // C3c: Write prompt file (raw, no escaping).
+        let prompt_file_path = local_dir.join("autorun-worker-prompt.txt");
+        std::fs::write(&prompt_file_path, &cfg.prompt).map_err(|e| {
+            codeflow_core::AutorunError::WorkerFailed(format!(
+                "writing prompt file {}: {e}",
+                prompt_file_path.display()
+            ))
+        })?;
+
+        // C3f: Exit code in .state/runtime/local/
+        let exit_code_path = format!("{work_dir}/.state/runtime/local/worker-exit-code");
+
+        // C3d: Write worker script.
+        let script_path = local_dir.join("autorun-worker.sh");
+        let script_content = format!(
+            "#!/bin/bash\n\
+             source '{env}'\n\
+             cd '{wdir}'\n\
+             claude --dangerously-skip-permissions \"$(cat '{prompt}')\"\n\
+             echo $? > '{exit}'\n",
+            env = sq(&env_file_path.to_string_lossy()),
+            wdir = sq(work_dir),
+            prompt = sq(&prompt_file_path.to_string_lossy()),
+            exit = sq(&exit_code_path),
+        );
+        std::fs::write(&script_path, &script_content).map_err(|e| {
+            codeflow_core::AutorunError::WorkerFailed(format!(
+                "writing worker script {}: {e}",
+                script_path.display()
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+        }
+
+        // C3e: Create tmux session with the worker script as the command.
+        self.tmux
+            .create_session(
+                session,
+                Some(vec![
+                    "bash".into(),
+                    "--login".into(),
+                    script_path.to_string_lossy().into_owned(),
+                ]),
+            )
+            .await?;
 
         // INNER TIMEOUT: Polls for Claude's exit-code marker file and handles
         // graceful shutdown (SIGTERM → grace period → SIGKILL). This complements
@@ -1952,7 +2298,7 @@ mod tests {
     fn test_config_loads_defaults_when_file_missing() {
         let dir = tempfile::tempdir().unwrap();
         let config = codeflow_core::autorun::load_config(dir.path()).unwrap();
-        assert_eq!(config.worktree.max_concurrent, 5);
+        assert_eq!(config.worktree.max_concurrent, 30);
         assert_eq!(config.claims.default_scope_policy, "soft");
         assert_eq!(config.claims.ttl_secs, 4200);
         assert!(config.sync.auto_start);
@@ -2358,9 +2704,12 @@ tasks:
 
     // -- RealClaude tests --
 
-    /// Mock tmux that records sent commands for verification.
+    /// Mock tmux that records sent commands and session creations for verification.
+    #[allow(clippy::type_complexity)]
     struct RecordingTmux {
         commands: std::sync::Arc<tokio::sync::Mutex<Vec<(String, String)>>>,
+        /// C9b: Records (name, command) pairs from create_session calls.
+        sessions_created: std::sync::Arc<tokio::sync::Mutex<Vec<(String, Option<Vec<String>>)>>>,
     }
 
     impl RecordingTmux {
@@ -2370,17 +2719,46 @@ tasks:
             std::sync::Arc<tokio::sync::Mutex<Vec<(String, String)>>>,
         ) {
             let commands = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let sessions_created = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
             (
                 Self {
                     commands: commands.clone(),
+                    sessions_created,
                 },
                 commands,
+            )
+        }
+
+        /// Create a RecordingTmux that also exposes sessions_created for inspection.
+        #[allow(clippy::type_complexity)]
+        fn with_sessions() -> (
+            Self,
+            std::sync::Arc<tokio::sync::Mutex<Vec<(String, String)>>>,
+            std::sync::Arc<tokio::sync::Mutex<Vec<(String, Option<Vec<String>>)>>>,
+        ) {
+            let commands = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let sessions_created = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            (
+                Self {
+                    commands: commands.clone(),
+                    sessions_created: sessions_created.clone(),
+                },
+                commands,
+                sessions_created,
             )
         }
     }
 
     impl codeflow_core::autorun::TmuxRunner for RecordingTmux {
-        async fn create_session(&self, _name: &str) -> Result<(), codeflow_core::AutorunError> {
+        async fn create_session(
+            &self,
+            name: &str,
+            command: Option<Vec<String>>,
+        ) -> Result<(), codeflow_core::AutorunError> {
+            self.sessions_created
+                .lock()
+                .await
+                .push((name.to_string(), command));
             Ok(())
         }
         async fn send_command(
@@ -2456,19 +2834,14 @@ tasks:
     }
 
     #[test]
-    fn test_real_claude_invoke_sends_env_vars_in_order() {
+    fn test_real_claude_invoke_writes_files_and_creates_session() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let local_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).unwrap();
         // Pre-create exit code marker so polling returns immediately.
-        std::fs::write(runtime_dir.join("worker-exit-code"), "0\n").unwrap();
-        std::fs::write(
-            runtime_dir.join("worker-output.json"),
-            r#"{"result": "ok"}"#,
-        )
-        .unwrap();
+        std::fs::write(local_dir.join("worker-exit-code"), "0\n").unwrap();
 
-        let (tmux, commands) = RecordingTmux::new();
+        let (tmux, _commands) = RecordingTmux::new();
         let claude = RealClaude {
             tmux,
             worker_timeout: Duration::from_secs(5),
@@ -2492,77 +2865,64 @@ tasks:
             .unwrap();
         assert_eq!(result.exit_code, 0);
 
-        let cmds = rt.block_on(commands.lock());
-        // Verify env vars were sent in the correct order.
+        // Verify file-based invocation artifacts were created.
+        let env_file = local_dir.join("autorun-worker-env.sh");
+        assert!(env_file.exists(), "env file should be created");
+        let env_content = std::fs::read_to_string(&env_file).unwrap();
         assert!(
-            cmds.len() >= 6,
-            "expected at least 6 commands, got {}",
-            cmds.len()
+            env_content.contains("AUTORUN_SESSION_ID='ses-env-worker'"),
+            "env file should contain worker session ID, got: {env_content}"
+        );
+        assert!(
+            env_content.contains("AUTORUN_BATCH_ID='ses-env'"),
+            "env file should contain batch ID, got: {env_content}"
+        );
+        assert!(
+            env_content.contains("AUTORUN_TASK_ID='task-env-test'"),
+            "env file should contain task ID, got: {env_content}"
+        );
+        assert!(
+            env_content.contains("AUTORUN_ACCEPTANCE="),
+            "env file should contain acceptance, got: {env_content}"
+        );
+        assert!(
+            env_content.contains("CODEFLOW_WORKTREE_PATH="),
+            "env file should contain worktree path, got: {env_content}"
         );
 
-        // Command 0: export AUTORUN_SESSION_ID (uses worker_session_id)
-        assert!(
-            cmds[0].1.contains("AUTORUN_SESSION_ID=ses-env-worker"),
-            "first env var should be worker session ID, got: {}",
-            cmds[0].1
-        );
-        // Command 1: export AUTORUN_BATCH_ID (batch-level session)
-        assert!(
-            cmds[1].1.contains("AUTORUN_BATCH_ID=ses-env"),
-            "second env var should be batch ID, got: {}",
-            cmds[1].1
-        );
-        // Command 2: export AUTORUN_TASK_ID
-        assert!(
-            cmds[2].1.contains("AUTORUN_TASK_ID=task-env-test"),
-            "third env var should be task ID, got: {}",
-            cmds[2].1
-        );
-        // Command 3: export AUTORUN_ACCEPTANCE (base64)
-        assert!(
-            cmds[3].1.contains("AUTORUN_ACCEPTANCE="),
-            "fourth env var should be acceptance, got: {}",
-            cmds[3].1
-        );
-        // Command 4: export CODEFLOW_WORKTREE_PATH
-        assert!(
-            cmds[4].1.contains("CODEFLOW_WORKTREE_PATH="),
-            "fifth env var should be worktree path, got: {}",
-            cmds[4].1
-        );
-        // Command 5: the actual claude command (interactive mode, no -p flag)
-        assert!(
-            cmds[5].1.contains("claude --dangerously-skip-permissions"),
-            "sixth command should be claude invocation, got: {}",
-            cmds[5].1
-        );
-        assert!(
-            !cmds[5].1.contains("claude -p"),
-            "claude command should NOT use -p flag (interactive mode)"
-        );
-        assert!(
-            !cmds[5].1.contains("--output-format json"),
-            "claude command should NOT use --output-format json (interactive mode)"
-        );
-        assert!(
-            cmds[5].1.contains("worker-exit-code"),
-            "exit code should be written to worker-exit-code"
-        );
+        let prompt_file = local_dir.join("autorun-worker-prompt.txt");
+        assert!(prompt_file.exists(), "prompt file should be created");
+        let prompt_content = std::fs::read_to_string(&prompt_file).unwrap();
+        assert_eq!(prompt_content, "test prompt");
 
-        // All commands should target the correct session.
-        for (session, _) in &*cmds {
-            assert_eq!(session, "worker-env");
-        }
+        let script_file = local_dir.join("autorun-worker.sh");
+        assert!(script_file.exists(), "worker script should be created");
+        let script_content = std::fs::read_to_string(&script_file).unwrap();
+        assert!(
+            script_content.contains("#!/bin/bash"),
+            "script should have shebang"
+        );
+        assert!(
+            script_content.contains("source"),
+            "script should source env file"
+        );
+        assert!(
+            script_content.contains("claude --dangerously-skip-permissions"),
+            "script should invoke claude"
+        );
+        assert!(
+            script_content.contains("worker-exit-code"),
+            "script should write exit code"
+        );
     }
 
     #[test]
     fn test_real_claude_invoke_reads_exit_code_from_marker() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let local_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).unwrap();
         // Non-zero exit code.
-        std::fs::write(runtime_dir.join("worker-exit-code"), "1\n").unwrap();
-        std::fs::write(runtime_dir.join("worker-output.json"), "{}").unwrap();
+        std::fs::write(local_dir.join("worker-exit-code"), "1\n").unwrap();
 
         let (tmux, _) = RecordingTmux::new();
         let claude = RealClaude {
@@ -2592,8 +2952,8 @@ tasks:
     #[test]
     fn test_real_claude_invoke_timeout() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let local_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).unwrap();
         // Do NOT create exit code marker -- should trigger timeout.
 
         let (tmux, commands) = RecordingTmux::new();
@@ -2633,10 +2993,9 @@ tasks:
     #[test]
     fn test_real_claude_invoke_preserves_backslash_sequences_in_prompt() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state/runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
-        std::fs::write(runtime_dir.join("worker-exit-code"), "0\n").unwrap();
-        std::fs::write(runtime_dir.join("worker-output.json"), "{}").unwrap();
+        let local_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(local_dir.join("worker-exit-code"), "0\n").unwrap();
 
         let (tmux, commands) = RecordingTmux::new();
         let claude = RealClaude {
@@ -2661,31 +3020,34 @@ tasks:
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _ = rt.block_on(codeflow_core::autorun::ClaudeInvoker::invoke(&claude, cfg));
 
-        let cmds = rt.block_on(commands.lock());
-        // Find the claude command (interactive mode, no -p flag).
-        let claude_cmd = cmds
-            .iter()
-            .find(|(_, cmd)| cmd.contains("claude --dangerously-skip-permissions"))
-            .expect("should have a claude command");
+        // With file-based invocation, the prompt is written to a file, not sent via tmux.
+        // Verify the prompt file preserves backslash sequences literally.
+        let prompt_file = dir
+            .path()
+            .join(".state/runtime/local/autorun-worker-prompt.txt");
+        let prompt_content = std::fs::read_to_string(&prompt_file).unwrap();
+        assert!(
+            prompt_content.contains("\\n"),
+            "backslash-n should be preserved literally in prompt file, got: {prompt_content}"
+        );
+        assert!(
+            prompt_content.contains("\\t"),
+            "backslash-t should be preserved literally in prompt file, got: {prompt_content}"
+        );
 
-        // Verify it uses regular '...' quoting, not $'...'.
+        // The worker script should use cat to read the prompt file.
+        let script_file = dir.path().join(".state/runtime/local/autorun-worker.sh");
+        let script_content = std::fs::read_to_string(&script_file).unwrap();
         assert!(
-            claude_cmd
-                .1
-                .contains("claude --dangerously-skip-permissions"),
-            "should invoke claude in interactive mode, got: {}",
-            claude_cmd.1
+            script_content.contains("cat"),
+            "script should use cat to read prompt file"
         );
+        // No send_command calls needed for the main invocation.
+        let cmds = rt.block_on(commands.lock());
         assert!(
-            !claude_cmd.1.contains("$'"),
-            "should NOT use $'...' quoting, got: {}",
-            claude_cmd.1
-        );
-        // The literal \n should be preserved in the command string.
-        assert!(
-            claude_cmd.1.contains("\\n"),
-            "backslash-n should be preserved literally, got: {}",
-            claude_cmd.1
+            cmds.is_empty(),
+            "no send_command calls should be made (file-based invocation), got {} calls",
+            cmds.len()
         );
     }
 
@@ -2699,6 +3061,50 @@ tasks:
         if let Ok(success) = result {
             assert!(!success);
         }
+    }
+
+    #[test]
+    fn test_invoke_creates_session_with_command() {
+        // C9b: Verify create_session receives the bash --login script args.
+        let dir = tempfile::tempdir().unwrap();
+        let local_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(local_dir.join("worker-exit-code"), "0\n").unwrap();
+
+        let (tmux, _commands, sessions) = RecordingTmux::with_sessions();
+        let claude = RealClaude {
+            tmux,
+            worker_timeout: Duration::from_secs(5),
+        };
+
+        let cfg = codeflow_core::autorun::InvokeConfig {
+            task_id: "task-session-test".into(),
+            work_dir: dir.path().to_string_lossy().into_owned(),
+            prompt: "test".into(),
+            session_id: "ses-sess".into(),
+            auto_merge: false,
+            target: "main".into(),
+            tmux_session: "w-sess".into(),
+            acceptance_criteria: Vec::new(),
+            worker_session_id: String::new(),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(codeflow_core::autorun::ClaudeInvoker::invoke(&claude, cfg))
+            .unwrap();
+
+        let created = rt.block_on(sessions.lock());
+        assert_eq!(created.len(), 1, "should have one create_session call");
+        let (name, cmd) = &created[0];
+        assert_eq!(name, "w-sess");
+        let cmd = cmd.as_ref().expect("should have command args");
+        assert_eq!(cmd[0], "bash");
+        assert_eq!(cmd[1], "--login");
+        assert!(
+            cmd[2].contains("autorun-worker.sh"),
+            "third arg should be the worker script path, got: {}",
+            cmd[2]
+        );
     }
 
     #[test]
@@ -2730,7 +3136,7 @@ tasks:
         let tmux = RealTmux;
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(codeflow_core::autorun::TmuxRunner::create_session(
-            &tmux, "",
+            &tmux, "", None,
         ));
         let _ = result;
     }
@@ -2985,7 +3391,7 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "attach", "task-a"]).unwrap();
-        if let AutorunCommand::Attach { task_id } = cli.cmd {
+        if let AutorunCommand::Attach { task_id, .. } = cli.cmd {
             assert_eq!(task_id, "task-a");
         } else {
             panic!("expected Attach variant");
@@ -3003,7 +3409,10 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "logs", "task-b"]).unwrap();
-        if let AutorunCommand::Logs { task_id, follow } = cli.cmd {
+        if let AutorunCommand::Logs {
+            task_id, follow, ..
+        } = cli.cmd
+        {
             assert_eq!(task_id, "task-b");
             assert!(!follow);
         } else {
@@ -3029,7 +3438,7 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "cancel", "task-c"]).unwrap();
-        if let AutorunCommand::Cancel { task_id } = cli.cmd {
+        if let AutorunCommand::Cancel { task_id, .. } = cli.cmd {
             assert_eq!(task_id, "task-c");
         } else {
             panic!("expected Cancel variant");
@@ -3213,7 +3622,7 @@ tasks:
             store.create_autorun_worker(&worker).await.unwrap();
 
             // run_cancel should fail because worker is not running.
-            let result = run_cancel(dir.path(), "task-done").await;
+            let result = run_cancel(dir.path(), "task-done", None).await;
             assert!(result.is_err());
             let msg = result.unwrap_err().to_string();
             assert!(
@@ -3301,7 +3710,7 @@ tasks:
             }
             // Store dropped here — run_cancel will open its own connection.
 
-            let result = run_cancel(dir.path(), "task-cancel-db").await;
+            let result = run_cancel(dir.path(), "task-cancel-db", None).await;
             assert!(result.is_ok(), "cancel should succeed: {result:?}");
 
             // Re-open to verify.
@@ -3957,7 +4366,8 @@ tasks:
     }
 
     #[test]
-    fn test_resolve_session_id_no_active() {
+    fn test_resolve_session_id_no_active_falls_back_to_completed() {
+        // C19: When no active sessions, fall back to most recent terminal session.
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let dir = tempfile::tempdir().unwrap();
@@ -3974,13 +4384,22 @@ tasks:
             let store = open_store(dir.path()).await.unwrap();
 
             let result = resolve_session_id(&store, None).await;
+            assert!(result.is_ok(), "should fall back to completed session");
+            assert_eq!(result.unwrap(), "ses-done");
+        });
+    }
+
+    #[test]
+    fn test_resolve_session_id_truly_empty() {
+        // When there are truly no sessions at all, should error.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            seed_store(dir.path(), vec![], vec![], vec![]).await;
+            let store = open_store(dir.path()).await.unwrap();
+
+            let result = resolve_session_id(&store, None).await;
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("no active autorun session")
-            );
         });
     }
 
@@ -4150,7 +4569,7 @@ tasks:
             )
             .await;
 
-            let result = run_attach(dir.path(), "task-missing").await;
+            let result = run_attach(dir.path(), "task-missing", None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("no worker found"));
         });
@@ -4180,7 +4599,7 @@ tasks:
             )
             .await;
 
-            let result = run_attach(dir.path(), "task-notmux").await;
+            let result = run_attach(dir.path(), "task-notmux", None).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -4213,7 +4632,7 @@ tasks:
             )
             .await;
 
-            let result = run_attach(dir.path(), "task-dead").await;
+            let result = run_attach(dir.path(), "task-dead", None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("does not exist"));
         });
@@ -4240,7 +4659,7 @@ tasks:
             )
             .await;
 
-            let result = run_logs(dir.path(), "task-missing", false).await;
+            let result = run_logs(dir.path(), "task-missing", false, None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("no worker found"));
         });
@@ -4270,7 +4689,7 @@ tasks:
             )
             .await;
 
-            let result = run_logs(dir.path(), "task-logs-notmux", false).await;
+            let result = run_logs(dir.path(), "task-logs-notmux", false, None).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -4303,7 +4722,7 @@ tasks:
             )
             .await;
 
-            let result = run_logs(dir.path(), "task-logs-dead", false).await;
+            let result = run_logs(dir.path(), "task-logs-dead", false, None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("does not exist"));
         });
@@ -4330,7 +4749,7 @@ tasks:
             )
             .await;
 
-            let result = run_cancel(dir.path(), "task-missing").await;
+            let result = run_cancel(dir.path(), "task-missing", None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("no worker found"));
         });
@@ -4550,7 +4969,8 @@ tasks:
         let path = generate_batch_report(&meta, &[]).unwrap();
 
         let filename = path.file_name().unwrap().to_str().unwrap();
-        assert_eq!(filename, "my-batch-2026-03-22.md");
+        // C25: report filename now includes session_id suffix.
+        assert_eq!(filename, "my-batch-ses-1-2026-03-22.md");
     }
 
     #[test]
@@ -4802,10 +5222,13 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "resume"]).unwrap();
-        assert!(matches!(cli.cmd, AutorunCommand::Resume { batch: None }));
+        assert!(matches!(
+            cli.cmd,
+            AutorunCommand::Resume { batch: None, .. }
+        ));
 
         let cli = TestCli::try_parse_from(["test", "resume", "--batch", "ses-abc"]).unwrap();
-        if let AutorunCommand::Resume { batch } = cli.cmd {
+        if let AutorunCommand::Resume { batch, .. } = cli.cmd {
             assert_eq!(batch.as_deref(), Some("ses-abc"));
         } else {
             panic!("expected Resume variant");

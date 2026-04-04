@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::error::AutorunError;
 
 /// Default maximum concurrent worktrees when config is absent.
-pub const DEFAULT_MAX_CONCURRENT: usize = 5;
+pub const DEFAULT_MAX_CONCURRENT: usize = 30;
 
 /// Grace period (seconds) -- skip liveness check for recently created worktrees.
 pub const WORKTREE_INIT_GRACE_SECS: u64 = 60;
@@ -48,6 +48,8 @@ pub struct AutorunConfig {
     pub blocked_behavior: String,
     /// Directory for autorun reports (relative to project root).
     pub report_dir: String,
+    /// Maximum number of concurrent autorun batches (default: 5).
+    pub max_concurrent_batches: usize,
 }
 
 impl Default for AutorunConfig {
@@ -56,6 +58,7 @@ impl Default for AutorunConfig {
             worker_timeout_secs: 3600,
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
+            max_concurrent_batches: 5,
         }
     }
 }
@@ -111,6 +114,9 @@ pub struct WorktreeConfig {
     /// visible across worktrees. Paths are relative to project root.
     #[serde(default = "default_shared_files")]
     pub shared_files: Vec<String>,
+    /// Grace period (seconds) for recently-created worktrees before
+    /// liveness checking kicks in (default: 60, minimum: 10).
+    pub init_grace_secs: u64,
 }
 
 impl Default for WorktreeConfig {
@@ -120,6 +126,7 @@ impl Default for WorktreeConfig {
             max_concurrent: DEFAULT_MAX_CONCURRENT,
             base_dir: crate::worktree::DEFAULT_BASE_DIR.to_string(),
             shared_files: default_shared_files(),
+            init_grace_secs: WORKTREE_INIT_GRACE_SECS,
         }
     }
 }
@@ -288,9 +295,15 @@ fn merge_json_values(base: &mut serde_json::Value, overlay: &serde_json::Value) 
 
 /// Validate config constraints.
 fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
-    if config.worktree.max_concurrent < 1 || config.worktree.max_concurrent > 10 {
+    if config.worktree.init_grace_secs < 10 {
         return Err(AutorunError::InvalidBatch(format!(
-            "worktree.max_concurrent must be 1..=10, got {}",
+            "worktree.init_grace_secs must be >= 10, got {}",
+            config.worktree.init_grace_secs
+        )));
+    }
+    if config.worktree.max_concurrent < 1 || config.worktree.max_concurrent > 100 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "worktree.max_concurrent must be 1..=100, got {}",
             config.worktree.max_concurrent
         )));
     }
@@ -318,6 +331,12 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
             valid_behaviors, config.autorun.blocked_behavior
         )));
     }
+    if config.autorun.max_concurrent_batches < 1 || config.autorun.max_concurrent_batches > 20 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.max_concurrent_batches must be 1..=20, got {}",
+            config.autorun.max_concurrent_batches
+        )));
+    }
     Ok(())
 }
 
@@ -331,7 +350,8 @@ mod tests {
     fn default_config_has_correct_values() {
         let cfg = ParallelWorkConfig::default();
         assert_eq!(cfg.worktree.mode, WorktreeMode::Autorun);
-        assert_eq!(cfg.worktree.max_concurrent, 5);
+        assert_eq!(cfg.worktree.max_concurrent, 30);
+        assert_eq!(cfg.worktree.init_grace_secs, 60);
         assert_eq!(cfg.worktree.base_dir, ".git-worktrees");
         assert_eq!(cfg.worktree.shared_files.len(), 2);
         assert!(
@@ -424,7 +444,7 @@ mod tests {
         let cfg = load_config(dir.path()).unwrap();
         assert_eq!(cfg.sync.interval_secs, 10);
         // All other sections should be defaults.
-        assert_eq!(cfg.worktree.max_concurrent, 5);
+        assert_eq!(cfg.worktree.max_concurrent, 30);
         assert_eq!(cfg.merge.max_rebase_attempts, 3);
         assert_eq!(cfg.claims.ttl_secs, 4200);
     }
@@ -455,9 +475,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_max_concurrent_eleven_rejected() {
+    fn validate_max_concurrent_over_100_rejected() {
         let mut cfg = ParallelWorkConfig::default();
-        cfg.worktree.max_concurrent = 11;
+        cfg.worktree.max_concurrent = 101;
         let err = validate_config(&cfg).unwrap_err();
         assert!(err.to_string().contains("max_concurrent"));
     }
@@ -467,7 +487,7 @@ mod tests {
         let mut cfg = ParallelWorkConfig::default();
         cfg.worktree.max_concurrent = 1;
         assert!(validate_config(&cfg).is_ok());
-        cfg.worktree.max_concurrent = 10;
+        cfg.worktree.max_concurrent = 100;
         assert!(validate_config(&cfg).is_ok());
     }
 
@@ -551,11 +571,11 @@ mod tests {
     #[test]
     fn full_config_from_spec_example() {
         let json = r#"{
-            "worktree": { "mode": "autorun", "max_concurrent": 5, "base_dir": ".git-worktrees", "shared_files": [".claude/settings.local.json", ".codeflow/config/parallel-work/parallel-work-config.local.json"] },
+            "worktree": { "mode": "autorun", "max_concurrent": 30, "base_dir": ".git-worktrees", "shared_files": [".claude/settings.local.json", ".codeflow/config/parallel-work/parallel-work-config.local.json"], "init_grace_secs": 60 },
             "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
-            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": ".state/autorun/reports" }
+            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": ".state/autorun/reports", "max_concurrent_batches": 5 }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg, ParallelWorkConfig::default());
@@ -582,6 +602,7 @@ mod tests {
         assert_eq!(cfg.worker_timeout_secs, 3600);
         assert_eq!(cfg.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.report_dir, ".state/autorun/reports");
+        assert_eq!(cfg.max_concurrent_batches, 5);
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "_local_override": "Copy this file to parallel-work-config.local.json (gitignored) to override per-machine. Only include fields you want to change. Env var CODEFLOW_WORKTREE_MODE also overrides worktree.mode.",
   "worktree": {
     "mode": "always",
-    "max_concurrent": 5,
+    "max_concurrent": 30,
     "base_dir": ".git-worktrees",
     "heartbeat_threshold_secs": 86400,
     "shared_files": [
@@ -32,6 +32,7 @@
   "autorun": {
     "worker_timeout_secs": 3600,
     "blocked_behavior": "skip_and_continue",
-    "report_dir": "project-management/tracking/autorun"
+    "report_dir": "project-management/tracking/autorun",
+    "max_concurrent_batches": 5
   }
 }

@@ -7,8 +7,7 @@ use serde::Deserialize;
 
 use crate::error::AutorunError;
 
-/// Default maximum concurrent workers.
-pub const DEFAULT_MAX_WORKERS: usize = 3;
+// DEFAULT_MAX_WORKERS removed (C13): when max_workers==0, use tasks.len().
 
 /// Fallback protected branches when enforcement-policy.json is missing.
 const DEFAULT_PROTECTED_BRANCHES: &[&str] = &["main", "master", "release/*", "production"];
@@ -164,7 +163,7 @@ pub fn parse_batch_data_with_project_dir(
     let order = topological_sort(&bf.tasks)?;
 
     let max_workers = if bf.max_workers == 0 {
-        DEFAULT_MAX_WORKERS
+        bf.tasks.len().max(1) // one worker per task when unspecified
     } else {
         bf.max_workers
     };
@@ -669,7 +668,8 @@ tasks:
     fn test_parse_default_max_workers() {
         let yaml = "tasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
-        assert_eq!(batch.max_workers, DEFAULT_MAX_WORKERS);
+        // C13: max_workers=0 defaults to tasks.len() (one worker per task).
+        assert_eq!(batch.max_workers, 1);
     }
 
     #[test]
@@ -911,15 +911,20 @@ tasks:
     }
 
     #[test]
-    fn test_validate_max_workers_zero_defaults() {
+    fn test_validate_max_workers_zero_defaults_to_task_count() {
         let yaml = "max_workers: 0\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap().max_workers,
-            DEFAULT_MAX_WORKERS,
-            "max_workers=0 should default to DEFAULT_MAX_WORKERS"
+            1,
+            "max_workers=0 should default to tasks.len()"
         );
+
+        // With multiple tasks, should default to the count.
+        let yaml2 = "max_workers: 0\ntasks:\n  - id: task-a\n  - id: task-b\n  - id: task-c\n";
+        let result2 = parse_batch_data(yaml2, "test.yaml").unwrap();
+        assert_eq!(result2.max_workers, 3);
     }
 
     #[test]
@@ -1319,10 +1324,10 @@ tasks:
         let fields = valid_task_fields("t1", "023", "INF");
         setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
 
-        // Default max_concurrent is 5, request 10 workers.
-        let yaml = "max_workers: 10\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        // Default max_concurrent is 30, request 50 workers.
+        let yaml = "max_workers: 50\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
         let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
-        assert_eq!(batch.max_workers, 10);
+        assert_eq!(batch.max_workers, 50);
 
         let result = validate_batch_extended(&mut batch, dir.path());
         // Validation should succeed (capping is not an error, just a warning).
@@ -1332,8 +1337,8 @@ tasks:
             result.unwrap_err()
         );
         assert_eq!(
-            batch.max_workers, 5,
-            "max_workers should be capped to max_concurrent (5)"
+            batch.max_workers, 30,
+            "max_workers should be capped to max_concurrent (30)"
         );
     }
 

@@ -15,6 +15,22 @@ use crate::error::AutorunError;
 use super::batch::ParsedBatch;
 use super::worker::WorkerRunner;
 
+/// C26: Append a timestamped log entry to the orchestrator log file.
+fn orchestrator_log(project_dir: &std::path::Path, session_id: &str, message: &str) {
+    use std::io::Write;
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let log_dir = project_dir.join(format!(".state/autorun/logs/{session_id}"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("orchestrator.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(f, "[{timestamp}] {message}");
+    }
+}
+
 /// Configuration for a single worker execution.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -160,6 +176,15 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             eprintln!("warning: failed to create autorun_session record: {e}");
         }
 
+        // C26: Log BATCH_START.
+        orchestrator_log(
+            project_dir,
+            session_id,
+            &format!(
+                "BATCH_START name={batch_name} tasks={total_tasks_i32} max_workers={max_workers_i32}"
+            ),
+        );
+
         // Emit batch_started event.
         let batch_started = crate::coordination::types::events::AutorunEvent::BatchStarted {
             session_id: session_id.to_string(),
@@ -184,6 +209,17 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         // exceeding worktree.max_concurrent even if batch.max_workers is larger.
         let loaded_config = crate::autorun::config::load_config(project_dir).unwrap_or_default();
         let effective_workers = batch.max_workers.min(loaded_config.worktree.max_concurrent);
+        // C27: Log cap warning to orchestrator log if workers were capped.
+        if batch.max_workers > loaded_config.worktree.max_concurrent {
+            orchestrator_log(
+                project_dir,
+                session_id,
+                &format!(
+                    "CAP_WARNING max_workers={} capped to max_concurrent={}",
+                    batch.max_workers, loaded_config.worktree.max_concurrent
+                ),
+            );
+        }
         let blocked_behavior = loaded_config.autorun.blocked_behavior.clone();
         let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
@@ -479,6 +515,8 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
 
             launched_any = true;
             state.running.lock().await.insert(task_id.clone());
+            // C26: Log DISPATCH.
+            orchestrator_log(project_dir, session_id, &format!("DISPATCH task={task_id}"));
             let task_spec = batch.tasks.iter().find(|t| t.id == *task_id);
 
             // Read file_scope and scope_policy from task markdown (source of truth).
@@ -495,7 +533,8 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             let scope_policy = task_spec
                 .and_then(|t| t.scope_policy.clone())
                 .unwrap_or(md_scope_policy);
-            let tmux_name = format!("cf-ar-{}", task_id.to_lowercase());
+            let short_sid = &session_id[session_id.len().saturating_sub(8)..];
+            let tmux_name = format!("cf-ar-{}-{}", short_sid, task_id.to_lowercase());
             let handle = Self::spawn_worker(
                 self.runner.clone(),
                 WorkerConfig {
@@ -547,6 +586,12 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
 
             running.lock().await.remove(&task_id);
             match result {
+                Ok(ref r) if r.status == "pool_full" => {
+                    // C23: pool_full is retriable. Remove from running
+                    // but do NOT add to completed/failed/results.
+                    // Task stays unstarted for the next dispatch cycle.
+                    eprintln!("worker pool full for task {task_id}, will retry on next cycle");
+                }
                 Ok(mut r) => {
                     r.duration_sec = duration;
                     if r.status == "completed" {

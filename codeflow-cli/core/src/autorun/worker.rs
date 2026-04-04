@@ -33,9 +33,14 @@ pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Executes commands via tmux. Enables testing without actual tmux sessions.
 pub trait TmuxRunner: Send + Sync {
     /// Create a new tmux session with the given name.
+    ///
+    /// When `command` is `Some(args)`, the session is created with `-- args...`
+    /// so tmux runs the command directly instead of a bare shell. When `None`,
+    /// a bare session is created (legacy behavior).
     fn create_session(
         &self,
         name: &str,
+        command: Option<Vec<String>>,
     ) -> impl std::future::Future<Output = Result<(), AutorunError>> + Send;
 
     /// Send a command string to the named tmux session.
@@ -303,7 +308,33 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         let wt_name = format!("worktree-{worker_sid}");
 
         // Create the worktree for filesystem isolation.
-        let wt_info = self.worktree.setup(&wt_name)?;
+        // C22: Catch worktree pool limit errors and return retriable pool_full status.
+        let wt_info = match self.worktree.setup(&wt_name) {
+            Ok(info) => info,
+            Err(e) if e.to_string().contains("max concurrent worktrees reached") => {
+                // C28: Emit WorkerPoolFull event.
+                Self::emit_autorun_event(
+                    &self.project_dir,
+                    &crate::coordination::types::events::AutorunEvent::WorkerPoolFull {
+                        session_id: cfg.session_id.clone(),
+                        task_id: cfg.task_id.clone(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    },
+                );
+                return Ok(WorkerResult {
+                    worker_id: cfg.worker_id,
+                    task_id: cfg.task_id,
+                    status: "pool_full".into(),
+                    exit_code: 0,
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    branch_name: String::new(),
+                    error: e.to_string(),
+                    duration_sec: 0,
+                });
+            }
+            Err(e) => return Err(e),
+        };
 
         let log_path = self.project_dir.join(format!(
             ".state/autorun/logs/{}/worker-{}.log",
@@ -421,9 +452,9 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         });
         let _ = std::fs::write(&active_task_path, active_task.to_string());
 
-        // Create the tmux session.
-        self.tmux.create_session(&tmux_name).await?;
-        worker_log(&log_path, &format!("TMUX_CREATED session={tmux_name}"));
+        // NOTE: tmux session is created by the invoker (RealClaude::invoke)
+        // using create_session with a command argument. The worker no longer
+        // creates the session itself.
 
         // Capture start time for duration tracking.
         let start_time = chrono::Utc::now();
@@ -1193,7 +1224,11 @@ mod tests {
     }
 
     impl TmuxRunner for MockTmux {
-        async fn create_session(&self, _name: &str) -> Result<(), AutorunError> {
+        async fn create_session(
+            &self,
+            _name: &str,
+            _command: Option<Vec<String>>,
+        ) -> Result<(), AutorunError> {
             self.session_created.store(true, Ordering::SeqCst);
             Ok(())
         }
@@ -1383,7 +1418,7 @@ mod tests {
     #[tokio::test]
     async fn test_tmux_worker_success() {
         let project_dir = make_project_dir();
-        let (tmux, created, killed) = MockTmux::new();
+        let (tmux, _created, killed) = MockTmux::new();
         let (wt, wt_setup, wt_cleanup, _, _) =
             MockWorktree::with_tracking(project_dir.path().to_path_buf());
         let claude = MockClaude::simple(0);
@@ -1393,7 +1428,7 @@ mod tests {
         assert_eq!(result.status, "completed");
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.pr_number, 42);
-        assert!(created.load(Ordering::SeqCst));
+        // NOTE: Worker no longer calls create_session (invoker does).
         assert!(killed.load(Ordering::SeqCst));
         assert!(
             wt_setup.load(Ordering::SeqCst),
@@ -1486,7 +1521,7 @@ mod tests {
     #[tokio::test]
     async fn test_tmux_worker_zero_timeout_fallback() {
         let project_dir = make_project_dir();
-        let (tmux, created, killed) = MockTmux::new();
+        let (tmux, _created, killed) = MockTmux::new();
         let wt = MockWorktree::new(project_dir.path().to_path_buf());
         let claude = MockClaude::simple(0);
         let worker = TmuxWorker::with_timeout(
@@ -1500,7 +1535,7 @@ mod tests {
         let result = worker.run(make_worker_config()).await.unwrap();
         assert_eq!(result.status, "completed");
         assert_eq!(result.exit_code, 0);
-        assert!(created.load(Ordering::SeqCst));
+        // NOTE: Worker no longer calls create_session (invoker does).
         assert!(killed.load(Ordering::SeqCst));
     }
 
@@ -1535,7 +1570,7 @@ mod tests {
         assert!(!tmux.has_session("test-session").await.unwrap());
 
         // After create, has_session returns true.
-        tmux.create_session("test-session").await.unwrap();
+        tmux.create_session("test-session", None).await.unwrap();
         assert!(created.load(Ordering::SeqCst));
         assert!(tmux.has_session("test-session").await.unwrap());
 
