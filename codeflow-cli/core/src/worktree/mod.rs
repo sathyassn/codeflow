@@ -25,6 +25,146 @@ use crate::types::BranchName;
 pub use cleanup::{
     BranchRisk, BranchSafetyResult, CleanupOpts, check_branch_safety, cleanup_orphan,
 };
+
+/// Classification action for a worktree entry during cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupAction {
+    /// Safe to remove (dead session, stale directory, pending_cleanup+unknown).
+    Clean,
+    /// Protected — alive session, too young, or unknown+recent.
+    Skip,
+    /// Removable only with `--force` (alive session, orphaned state).
+    ForceRequired,
+}
+
+/// Result of classifying a worktree entry for cleanup.
+#[derive(Debug, Clone)]
+pub struct EntryClassification {
+    /// What action should be taken.
+    pub action: CleanupAction,
+    /// Human-readable reason for the classification.
+    pub reason: String,
+}
+
+/// Classify a single worktree entry for cleanup.
+///
+/// Evaluates worktree state (via `detect_state`), session liveness, registry
+/// status, and entry age against the given threshold. Returns a classification
+/// that both CLI display and `cleanup_stale` execution can use.
+///
+/// # Arguments
+///
+/// * `mgr` - The worktree manager (used for `detect_state` and `liveness_status`).
+/// * `entry` - The registry entry to classify.
+/// * `threshold` - Duration threshold for Unknown liveness classification.
+#[must_use]
+pub fn classify_entry(
+    mgr: &WorktreeManager,
+    entry: &WorktreeEntry,
+    threshold: std::time::Duration,
+) -> EntryClassification {
+    let state = mgr.detect_state(entry);
+    let liveness = mgr.liveness_status(entry);
+
+    match entry.status {
+        registry::WorktreeStatus::PendingCleanup => {
+            // PendingCleanup entries are always cleanable.
+            match liveness {
+                crate::session::liveness::LivenessResult::Active
+                | crate::session::liveness::LivenessResult::Recent => {
+                    // Session intended to end but process is still alive — force required.
+                    EntryClassification {
+                        action: CleanupAction::ForceRequired,
+                        reason: "pending cleanup but session still alive".to_string(),
+                    }
+                }
+                crate::session::liveness::LivenessResult::Dead => EntryClassification {
+                    action: CleanupAction::Clean,
+                    reason: "pending cleanup, session dead".to_string(),
+                },
+                crate::session::liveness::LivenessResult::Unknown => {
+                    // pending_cleanup + Unknown → Clean (bypass threshold).
+                    EntryClassification {
+                        action: CleanupAction::Clean,
+                        reason: "pending cleanup, liveness unknown".to_string(),
+                    }
+                }
+            }
+        }
+        registry::WorktreeStatus::Active => {
+            match state {
+                WorktreeState::Stale => {
+                    // Directory missing — always cleanable.
+                    EntryClassification {
+                        action: CleanupAction::Clean,
+                        reason: "directory missing (stale)".to_string(),
+                    }
+                }
+                WorktreeState::Active => {
+                    match liveness {
+                        crate::session::liveness::LivenessResult::Dead => EntryClassification {
+                            action: CleanupAction::Clean,
+                            reason: "session dead".to_string(),
+                        },
+                        crate::session::liveness::LivenessResult::Active
+                        | crate::session::liveness::LivenessResult::Recent => EntryClassification {
+                            action: CleanupAction::ForceRequired,
+                            reason: "session alive".to_string(),
+                        },
+                        crate::session::liveness::LivenessResult::Unknown => {
+                            // Status-aware Unknown liveness classification.
+                            let threshold_secs = threshold.as_secs();
+                            if WorktreeManager::is_older_than(entry, threshold_secs) {
+                                // active + Unknown + old → Clean.
+                                EntryClassification {
+                                    action: CleanupAction::Clean,
+                                    reason: "liveness unknown, entry older than threshold"
+                                        .to_string(),
+                                }
+                            } else {
+                                // active + Unknown + young → Skip.
+                                EntryClassification {
+                                    action: CleanupAction::Skip,
+                                    reason: "liveness unknown, entry too recent".to_string(),
+                                }
+                            }
+                        }
+                    }
+                }
+                WorktreeState::Orphaned => {
+                    // Orphaned state requires force.
+                    EntryClassification {
+                        action: CleanupAction::ForceRequired,
+                        reason: "orphaned worktree state".to_string(),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Read the unknown liveness threshold from config with a 60-minute fallback.
+///
+/// Reads `worktree.unknown_liveness_threshold_minutes` from
+/// `.codeflow/config/parallel-work/parallel-work-config.json`.
+/// Returns `Duration::from_secs(3600)` if the file is missing,
+/// the key is absent, or parsing fails.
+#[must_use]
+pub fn unknown_liveness_threshold(project_dir: &Path) -> std::time::Duration {
+    let config_path = project_dir.join(".codeflow/config/parallel-work/parallel-work-config.json");
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(minutes) = parsed
+                .get("worktree")
+                .and_then(|w| w.get("unknown_liveness_threshold_minutes"))
+                .and_then(serde_json::Value::as_u64)
+            {
+                return std::time::Duration::from_secs(minutes * 60);
+            }
+        }
+    }
+    std::time::Duration::from_secs(3600) // 60 minutes default
+}
 pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, WorktreeStatus, count_active, deregister_by_name, list_active,
@@ -379,35 +519,22 @@ impl WorktreeManager {
         let reg = registry::locked_read_registry(&self.registry_path)?;
         let mut removed = Vec::new();
 
-        for entry in &reg.worktrees {
-            let state = self.detect_state(entry);
-            let liveness = self.liveness_status(entry);
+        let threshold =
+            unknown_liveness_threshold(&WorktreeManager::resolve_effective_root(&self.project_dir));
 
-            // Determine if this entry is a cleanup candidate.
-            let is_candidate = match entry.status {
-                // PendingCleanup entries are always cleanable (no --force needed).
-                registry::WorktreeStatus::PendingCleanup => true,
-                registry::WorktreeStatus::Active => match state {
-                    // Directory missing — always cleanable.
-                    WorktreeState::Stale => true,
-                    // Dead session — cleanable without --force.
-                    WorktreeState::Active
-                        if matches!(liveness, crate::session::liveness::LivenessResult::Dead) =>
-                    {
-                        true
-                    }
-                    // No session_id and entry is old enough — cleanable.
-                    WorktreeState::Active
-                        if matches!(
-                            liveness,
-                            crate::session::liveness::LivenessResult::Unknown
-                        ) && Self::is_older_than(entry, 3600) =>
-                    {
-                        true
-                    }
-                    // Live session or orphaned worktree — only with force.
-                    WorktreeState::Active | WorktreeState::Orphaned => opts.force,
-                },
+        for entry in &reg.worktrees {
+            let classification = classify_entry(self, entry, threshold);
+
+            let is_candidate = match classification.action {
+                CleanupAction::Clean => true,
+                CleanupAction::Skip => false,
+                CleanupAction::ForceRequired => {
+                    opts.force
+                        && match &opts.force_names {
+                            Some(names) => names.contains(&entry.name),
+                            None => true,
+                        }
+                }
             };
 
             if !is_candidate {
@@ -1576,5 +1703,288 @@ mod tests {
         // Without force, active entry with unknown liveness (young) should NOT
         // be a candidate.
         assert!(removed.is_empty(), "force=false should skip alive entries");
+    }
+
+    // ---------------------------------------------------------------
+    // classify_entry tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_classify_entry_dead_session() {
+        // Entry with a nonexistent path (stale dir) → Clean.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "dead-wt".to_string(),
+            path: "/nonexistent/dead-wt".to_string(),
+            branch: Some("feat/dead".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Clean);
+        assert!(result.reason.contains("stale"), "reason: {}", result.reason);
+    }
+
+    #[test]
+    fn test_classify_entry_alive_session() {
+        // Entry with existing dir+.git file and active liveness → ForceRequired.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_dir = dir.path().join("alive-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Set up pathflow-active flag to make liveness return something non-Unknown.
+        // Without session_id, liveness returns Unknown. With a very old entry,
+        // Unknown+old → Clean. So we need a young entry to test ForceRequired.
+        // Actually, a dir with .git but no session_id → liveness=Unknown.
+        // With young entry (recent created_at) and Active status → Skip.
+        // With Orphaned state → ForceRequired.
+        // Let's test orphaned state (dir exists, no .git = Orphaned).
+        let orphan_dir = dir.path().join("orphan-wt");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        // No .git file → Orphaned state.
+
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "orphan-wt".to_string(),
+            path: orphan_dir.to_string_lossy().to_string(),
+            branch: Some("feat/orphan".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::ForceRequired);
+        assert!(
+            result.reason.contains("orphaned"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_unknown_pending_cleanup() {
+        // pending_cleanup + Unknown liveness → Clean (bypass threshold).
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "pending-wt".to_string(),
+            path: "/nonexistent/pending-wt".to_string(),
+            branch: Some("feat/pending".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(), // Recent
+            status: registry::WorktreeStatus::PendingCleanup,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Clean);
+        assert!(
+            result.reason.contains("pending cleanup"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_unknown_active_old() {
+        // active + Unknown liveness + age > threshold → Clean.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_dir = dir.path().join("old-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "old-wt".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/old".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(), // Very old
+            status: registry::WorktreeStatus::Active,
+            session_id: None, // No session → Unknown liveness
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Clean);
+        assert!(
+            result.reason.contains("older than threshold"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_unknown_active_young() {
+        // active + Unknown liveness + age ≤ threshold → Skip.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_dir = dir.path().join("young-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        // Use now_rfc3339() to get a very recent timestamp.
+        let recent_ts = now_rfc3339();
+        let entry = WorktreeEntry {
+            name: "young-wt".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/young".to_string()),
+            created_at: recent_ts,
+            status: registry::WorktreeStatus::Active,
+            session_id: None, // No session → Unknown liveness
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Skip);
+        assert!(
+            result.reason.contains("too recent"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_force_names_scopes_force() {
+        // force=true + force_names=Some(["A"]) → only A force-cleaned, B untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        // Create two entries with Orphaned state (dir exists, no .git).
+        let wt_a = dir.path().join(".git-worktrees/entry-a");
+        let wt_b = dir.path().join(".git-worktrees/entry-b");
+        std::fs::create_dir_all(&wt_a).unwrap();
+        std::fs::create_dir_all(&wt_b).unwrap();
+
+        let mut reg = registry::WorktreeRegistry::new("2026-04-04T00:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "entry-a".to_string(),
+            path: wt_a.to_string_lossy().to_string(),
+            branch: Some("feat/a".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "entry-b".to_string(),
+            path: wt_b.to_string_lossy().to_string(),
+            branch: Some("feat/b".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+
+        // Force with only entry-a in force_names.
+        let opts = CleanupOpts {
+            force: true,
+            dry_run: true,
+            force_names: Some(vec!["entry-a".to_string()]),
+            ..CleanupOpts::default()
+        };
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        assert!(
+            removed.contains(&"entry-a".to_string()),
+            "entry-a should be force-cleaned"
+        );
+        assert!(
+            !removed.contains(&"entry-b".to_string()),
+            "entry-b should NOT be force-cleaned (not in force_names)"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_force_names_none_forces_all() {
+        // force=true + force_names=None → all eligible force-cleaned.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        let wt_a = dir.path().join(".git-worktrees/entry-a");
+        let wt_b = dir.path().join(".git-worktrees/entry-b");
+        std::fs::create_dir_all(&wt_a).unwrap();
+        std::fs::create_dir_all(&wt_b).unwrap();
+
+        let mut reg = registry::WorktreeRegistry::new("2026-04-04T00:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "entry-a".to_string(),
+            path: wt_a.to_string_lossy().to_string(),
+            branch: Some("feat/a".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        reg.worktrees.push(WorktreeEntry {
+            name: "entry-b".to_string(),
+            path: wt_b.to_string_lossy().to_string(),
+            branch: Some("feat/b".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+
+        let opts = CleanupOpts {
+            force: true,
+            dry_run: true,
+            force_names: None, // None means force all
+            ..CleanupOpts::default()
+        };
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        assert_eq!(removed.len(), 2, "both entries should be force-cleaned");
+    }
+
+    #[test]
+    fn test_unknown_liveness_threshold_default() {
+        // Returns 60 minutes when config is missing.
+        let dir = tempfile::tempdir().unwrap();
+        let threshold = unknown_liveness_threshold(dir.path());
+        assert_eq!(threshold, std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_unknown_liveness_threshold_from_config() {
+        // Returns configured value.
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/parallel-work");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("parallel-work-config.json"),
+            r#"{"worktree": {"unknown_liveness_threshold_minutes": 120}}"#,
+        )
+        .unwrap();
+        let threshold = unknown_liveness_threshold(dir.path());
+        assert_eq!(threshold, std::time::Duration::from_secs(7200));
     }
 }

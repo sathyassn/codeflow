@@ -9,7 +9,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use codeflow_core::worktree::{CleanupOpts, WorktreeManager, WorktreeState};
+use codeflow_core::worktree::{
+    CleanupAction, CleanupOpts, EntryClassification, WorktreeManager, WorktreeState,
+};
 
 use crate::helpers;
 
@@ -132,122 +134,81 @@ fn run_cleanup(
     });
     let mgr = WorktreeManager::new(project_dir);
 
-    // Phase 1: Analyze — gather all entries and compute liveness/safety.
+    // Phase 1: Analyze — gather all entries and classify using core logic.
     let entries = mgr.list(None).context("listing worktrees")?;
+    let threshold = codeflow_core::worktree::unknown_liveness_threshold(project_dir);
 
-    let mut clean_entries = Vec::new();
-    let mut skip_entries = Vec::new();
+    let mut clean_entries: Vec<(String, String, WorktreeState, EntryClassification, String)> =
+        Vec::new();
+    let mut skip_entries: Vec<(String, String, WorktreeState, EntryClassification, String)> =
+        Vec::new();
 
     for entry in &entries {
         let state = mgr.detect_state(entry);
+        let classification = codeflow_core::worktree::classify_entry(&mgr, entry, threshold);
+        let branch = entry.branch.as_deref().unwrap_or("(detached)").to_string();
         let liveness = mgr.liveness_status(entry);
-        let wt_path = std::path::Path::new(&entry.path);
-        let branch = entry.branch.as_deref().unwrap_or("(detached)");
-        let safety = if wt_path.exists() {
-            Some(codeflow_core::worktree::check_branch_safety(wt_path))
-        } else {
-            None
-        };
+        let liveness_label = liveness.label().to_string();
 
-        // Determine if cleanable without force.
-        let cleanable = match entry.status {
-            codeflow_core::worktree::WorktreeStatus::PendingCleanup => true,
-            codeflow_core::worktree::WorktreeStatus::Active => match state {
-                WorktreeState::Stale => true,
-                WorktreeState::Active
-                    if matches!(
-                        liveness,
-                        codeflow_core::session::liveness::LivenessResult::Dead
-                    ) =>
-                {
-                    true
+        // Check branch safety for Clean entries to potentially upgrade to skip.
+        let effective_classification =
+            if classification.action == CleanupAction::Clean && Path::new(&entry.path).exists() {
+                let safety = codeflow_core::worktree::check_branch_safety(Path::new(&entry.path));
+                if safety.risk >= codeflow_core::worktree::BranchRisk::High {
+                    EntryClassification {
+                        action: CleanupAction::ForceRequired,
+                        reason: format!("high risk: {} (use --force)", safety.message),
+                    }
+                } else {
+                    if safety.risk == codeflow_core::worktree::BranchRisk::Medium {
+                        codeflow_core::diagnostics::warn(
+                            "worktree",
+                            &format!("{}: {}", entry.name, safety.message),
+                        );
+                    }
+                    classification
                 }
-                _ => false,
-            },
-        };
-
-        let skip_reason = if !cleanable {
-            if state == WorktreeState::Active && liveness.is_alive() {
-                Some("session alive".to_string())
-            } else if state == WorktreeState::Orphaned {
-                Some("orphaned (use --force all)".to_string())
-            } else if matches!(
-                liveness,
-                codeflow_core::session::liveness::LivenessResult::Unknown
-            ) {
-                Some("unknown liveness".to_string())
             } else {
-                Some("not eligible".to_string())
-            }
-        } else if let Some(ref s) = safety {
-            if s.risk >= codeflow_core::worktree::BranchRisk::High {
-                Some(format!("high risk: {} (use --force)", s.message))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+                classification
+            };
 
         let info = (
             entry.name.clone(),
-            branch.to_string(),
+            branch,
             state,
-            liveness,
-            entry.status.clone(),
-            safety
-                .as_ref()
-                .map(|s| format!("risk={} {}", s.risk, s.message)),
+            effective_classification,
+            liveness_label,
         );
 
-        if let Some(reason) = skip_reason {
-            skip_entries.push((info, reason));
-        } else {
-            clean_entries.push(info);
+        match info.3.action {
+            CleanupAction::Clean => clean_entries.push(info),
+            CleanupAction::Skip | CleanupAction::ForceRequired => skip_entries.push(info),
         }
     }
 
     // Phase 1b: Scan for orphaned worktree directories (no registry entry).
-    // This must run unconditionally — orphans exist independently of registry state.
     let orphans = scan_orphaned_directories(mgr.base_dir(), &entries);
 
     // Phase 2: Display analysis.
     if !clean_entries.is_empty() {
         println!("CLEAN ({}):", clean_entries.len());
-        for (name, branch, state, liveness, status, safety_msg) in &clean_entries {
+        for (name, branch, state, classification, liveness_label) in &clean_entries {
             println!(
-                "  {} ({}) [{}] {} [{}]",
-                name,
-                branch,
-                state,
-                liveness.label(),
-                status
+                "  {} ({}) [{}] {} -- {}",
+                name, branch, state, liveness_label, classification.reason
             );
-            if verbose {
-                if let Some(msg) = safety_msg {
-                    println!("    {msg}");
-                }
-            }
         }
     }
 
     if !skip_entries.is_empty() {
         println!("SKIP ({}):", skip_entries.len());
-        for ((name, branch, state, liveness, status, safety_msg), reason) in &skip_entries {
+        for (name, branch, state, classification, liveness_label) in &skip_entries {
             println!(
-                "  {} ({}) [{}] {} [{}] -- {}",
-                name,
-                branch,
-                state,
-                liveness.label(),
-                status,
-                reason
+                "  {} ({}) [{}] {} -- {}",
+                name, branch, state, liveness_label, classification.reason
             );
             if verbose {
-                if let Some(msg) = safety_msg {
-                    println!("    {msg}");
-                }
-                println!("    --force {name}");
+                println!("    --force-id {name}");
             }
         }
     }
@@ -267,63 +228,72 @@ fn run_cleanup(
         return Ok(());
     }
 
-    // Apply --force <id> filtering: add matching skip entries to clean list.
-    let mut force_additions = Vec::new();
+    // Apply --force-id filtering: resolve substring to exact names.
+    let mut force_names: Option<Vec<String>> = None;
+    let mut force_additions: Vec<String> = Vec::new();
     if force_flag {
         if let Some(ref target) = force_target {
-            // Substring match on worktree name.
+            // Substring match on worktree name in skip list.
             let matches: Vec<_> = skip_entries
                 .iter()
-                .filter(|((name, ..), _)| name.contains(target.as_str()))
+                .filter(|(name, ..)| name.contains(target.as_str()))
                 .collect();
             if matches.is_empty() {
-                if !skip_entries.is_empty() {
+                // Check if it matches an orphan name.
+                let orphan_match = orphans
+                    .iter()
+                    .any(|(name, _)| name.contains(target.as_str()));
+                if orphan_match {
+                    println!(
+                        "'{target}' is an orphan and will be cleaned automatically (no --force needed)"
+                    );
+                } else if !skip_entries.is_empty() {
                     anyhow::bail!("no worktree matching '{target}' found in SKIP list");
                 }
-                // No skip entries at all — nothing to force-match against.
             } else if matches.len() > 1 {
                 anyhow::bail!(
-                    "ambiguous --force target '{target}': matches {} entries ({})",
+                    "ambiguous --force-id target '{target}': matches {} entries ({})",
                     matches.len(),
                     matches
                         .iter()
-                        .map(|((name, ..), _)| name.as_str())
+                        .map(|(name, ..)| name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
             } else {
-                force_additions.push(matches[0].0.clone());
-            }
-        } else {
-            // --force all: add all skip entries.
-            for (info, _) in &skip_entries {
-                force_additions.push(info.clone());
+                let matched_name = matches[0].0.clone();
+                force_additions.push(matched_name.clone());
+                force_names = Some(vec![matched_name]);
             }
         }
+        // --force all: force_names stays None (applies to all).
     }
 
-    let all_to_clean: Vec<_> = clean_entries.iter().chain(force_additions.iter()).collect();
-
-    // Phase 3: Confirm (unless --yes or --dry-run).
-    let total_clean = all_to_clean.len() + orphans.len();
-    if total_clean == 0 {
+    let clean_names: Vec<&str> = clean_entries.iter().map(|(n, ..)| n.as_str()).collect();
+    let total_to_clean = clean_names.len() + force_additions.len() + orphans.len();
+    if total_to_clean == 0 {
         println!("no worktrees to clean up");
         return Ok(());
     }
 
+    // Phase 3: Dry-run output includes orphans.
     if dry_run {
-        println!("\nwould remove {total_clean} worktree(s):");
-        for (name, ..) in &all_to_clean {
+        println!("\nwould remove {total_to_clean} worktree(s):");
+        for name in &clean_names {
+            println!("  {name}");
+        }
+        for name in &force_additions {
             println!("  {name}");
         }
         for (name, _) in &orphans {
-            println!("  {name} (orphaned)");
+            println!("  {name} (orphan)");
         }
         return Ok(());
     }
 
+    // Phase 3b: Confirm (unless --yes).
     if !yes {
-        eprint!("\n{total_clean} worktree(s) will be removed. Proceed? [y/N] ");
+        eprint!("\n{total_to_clean} worktree(s) will be removed. Proceed? [y/N] ");
         std::io::stderr().flush().ok();
         let mut answer = String::new();
         std::io::stdin()
@@ -336,33 +306,26 @@ fn run_cleanup(
         }
     }
 
-    // Phase 4: Execute registered worktrees.
+    // Phase 4: Execute registered worktree cleanup.
     let opts = CleanupOpts {
         force: force_flag,
         dry_run,
         prune: false,
         interactive,
         keep,
+        force_names,
     };
 
     let removed = mgr
         .cleanup_stale(&opts)
         .context("cleaning up stale worktrees")?;
 
-    if !removed.is_empty() {
-        println!("removed {} worktree(s):", removed.len());
-        for name in &removed {
-            println!("  {name}");
-        }
-    }
-
     // Phase 5: Remove orphaned directories.
-    let mut orphans_removed = 0u32;
+    let mut orphan_removed_names: Vec<String> = Vec::new();
     for (name, path) in &orphans {
         match codeflow_core::worktree::cleanup_orphan(project_dir, path, dry_run) {
             Ok(()) => {
-                println!("  removed orphan: {name}");
-                orphans_removed += 1;
+                orphan_removed_names.push(name.clone());
             }
             Err(e) => {
                 eprintln!("  failed to remove orphan '{name}': {e}");
@@ -370,7 +333,17 @@ fn run_cleanup(
         }
     }
 
-    if removed.is_empty() && orphans_removed == 0 {
+    // Phase 6: Unified summary output.
+    let total_removed = removed.len() + orphan_removed_names.len();
+    if total_removed > 0 {
+        println!("removed {total_removed} worktree(s):");
+        for name in &removed {
+            println!("  {name}");
+        }
+        for name in &orphan_removed_names {
+            println!("  {name} (orphan)");
+        }
+    } else {
         println!("no worktrees removed");
     }
 

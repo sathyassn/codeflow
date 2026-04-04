@@ -29,6 +29,10 @@ pub struct CleanupOpts {
     /// Maximum number of "removed" entries to keep in registry during purge.
     /// Defaults to 5 if `None`.
     pub keep: Option<usize>,
+    /// When set, force override applies only to entries whose names are in
+    /// this list (exact match). When `None` and `force` is true, force
+    /// applies to all eligible entries.
+    pub force_names: Option<Vec<String>>,
 }
 
 /// Risk level for removing a worktree based on its branch state.
