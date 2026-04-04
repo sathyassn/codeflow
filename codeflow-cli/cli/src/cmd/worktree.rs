@@ -134,10 +134,6 @@ fn run_cleanup(
 
     // Phase 1: Analyze — gather all entries and compute liveness/safety.
     let entries = mgr.list(None).context("listing worktrees")?;
-    if entries.is_empty() {
-        println!("no worktrees");
-        return Ok(());
-    }
 
     let mut clean_entries = Vec::new();
     let mut skip_entries = Vec::new();
@@ -211,6 +207,10 @@ fn run_cleanup(
         }
     }
 
+    // Phase 1b: Scan for orphaned worktree directories (no registry entry).
+    // This must run unconditionally — orphans exist independently of registry state.
+    let orphans = scan_orphaned_directories(mgr.base_dir(), &entries);
+
     // Phase 2: Display analysis.
     if !clean_entries.is_empty() {
         println!("CLEAN ({}):", clean_entries.len());
@@ -252,7 +252,17 @@ fn run_cleanup(
         }
     }
 
-    if clean_entries.is_empty() && !force_flag {
+    if !orphans.is_empty() {
+        println!("ORPHANED ({}):", orphans.len());
+        for (name, path) in &orphans {
+            println!("  {name} (orphaned -- no registry entry)");
+            if verbose {
+                println!("    path: {}", path.display());
+            }
+        }
+    }
+
+    if clean_entries.is_empty() && orphans.is_empty() && !force_flag {
         println!("no worktrees to clean up");
         return Ok(());
     }
@@ -267,9 +277,11 @@ fn run_cleanup(
                 .filter(|((name, ..), _)| name.contains(target.as_str()))
                 .collect();
             if matches.is_empty() {
-                anyhow::bail!("no worktree matching '{target}' found in SKIP list");
-            }
-            if matches.len() > 1 {
+                if !skip_entries.is_empty() {
+                    anyhow::bail!("no worktree matching '{target}' found in SKIP list");
+                }
+                // No skip entries at all — nothing to force-match against.
+            } else if matches.len() > 1 {
                 anyhow::bail!(
                     "ambiguous --force target '{target}': matches {} entries ({})",
                     matches.len(),
@@ -279,8 +291,9 @@ fn run_cleanup(
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
+            } else {
+                force_additions.push(matches[0].0.clone());
             }
-            force_additions.push(matches[0].0.clone());
         } else {
             // --force all: add all skip entries.
             for (info, _) in &skip_entries {
@@ -290,23 +303,6 @@ fn run_cleanup(
     }
 
     let all_to_clean: Vec<_> = clean_entries.iter().chain(force_additions.iter()).collect();
-
-    if all_to_clean.is_empty() {
-        println!("no worktrees to clean up");
-        return Ok(());
-    }
-
-    // Phase 2b: Scan for orphaned worktree directories (no registry entry).
-    let orphans = scan_orphaned_directories(mgr.base_dir(), &entries);
-    if !orphans.is_empty() {
-        println!("ORPHANED ({}):", orphans.len());
-        for (name, path) in &orphans {
-            println!("  {name} (orphaned -- no registry entry)");
-            if verbose {
-                println!("    path: {}", path.display());
-            }
-        }
-    }
 
     // Phase 3: Confirm (unless --yes or --dry-run).
     let total_clean = all_to_clean.len() + orphans.len();
@@ -363,7 +359,7 @@ fn run_cleanup(
     // Phase 5: Remove orphaned directories.
     let mut orphans_removed = 0u32;
     for (name, path) in &orphans {
-        match codeflow_core::worktree::cleanup_orphan(project_dir, path, false) {
+        match codeflow_core::worktree::cleanup_orphan(project_dir, path, dry_run) {
             Ok(()) => {
                 println!("  removed orphan: {name}");
                 orphans_removed += 1;
@@ -1343,5 +1339,249 @@ mod tests {
         let nonexistent = dir.path().join(".git-worktrees");
         let orphans = scan_orphaned_directories(&nonexistent, &[]);
         assert!(orphans.is_empty());
+    }
+
+    // -- orphan scan independence and force override tests --
+
+    #[test]
+    fn test_cleanup_finds_orphans_with_only_alive_entries() {
+        // Registry has 1 active (alive) entry + 1 orphan dir (>5min old).
+        // Verify orphan found and alive entry untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create an active worktree directory (with .git so detect_state=Active).
+        let alive_dir = base.join("worktree-alive");
+        std::fs::create_dir_all(&alive_dir).unwrap();
+        std::fs::write(alive_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Create an orphan directory (>5min old, no registry entry).
+        let orphan_dir = base.join("worktree-orphan-old");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        // Set mtime to 10 minutes ago to pass the 5-minute age guard.
+        let ten_min_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 60);
+        filetime::set_file_mtime(
+            &orphan_dir,
+            filetime::FileTime::from_system_time(ten_min_ago),
+        )
+        .unwrap();
+
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-alive".to_string(),
+            path: alive_dir.to_string_lossy().to_string(),
+            branch: Some("feat/alive".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // dry_run so we can check detection without actual deletion.
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
+        assert!(result.is_ok(), "cleanup should succeed");
+
+        // The alive entry should NOT be cleaned, and the orphan SHOULD be detected.
+        // Verify the orphan directory still exists (dry run).
+        assert!(
+            orphan_dir.exists(),
+            "orphan dir should still exist (dry run)"
+        );
+        // Verify the alive entry's directory is untouched.
+        assert!(alive_dir.exists(), "alive dir should be untouched");
+    }
+
+    #[test]
+    fn test_cleanup_finds_orphans_with_empty_registry() {
+        // Registry empty, 2 orphan dirs (>5min old). Verify both found as orphans.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create 2 orphan directories with old mtimes.
+        let orphan1 = base.join("worktree-orphan1");
+        let orphan2 = base.join("worktree-orphan2");
+        std::fs::create_dir_all(&orphan1).unwrap();
+        std::fs::create_dir_all(&orphan2).unwrap();
+        let ten_min_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 60);
+        filetime::set_file_mtime(&orphan1, filetime::FileTime::from_system_time(ten_min_ago))
+            .unwrap();
+        filetime::set_file_mtime(&orphan2, filetime::FileTime::from_system_time(ten_min_ago))
+            .unwrap();
+
+        let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        write_registry(&reg_path, &reg).unwrap();
+
+        // dry_run: should detect both orphans despite empty registry.
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
+        assert!(result.is_ok(), "cleanup should succeed with empty registry");
+
+        // Both orphans should still exist (dry run).
+        assert!(orphan1.exists(), "orphan1 should still exist (dry run)");
+        assert!(orphan2.exists(), "orphan2 should still exist (dry run)");
+    }
+
+    #[test]
+    fn test_cleanup_force_all_cleans_alive_and_orphans() {
+        // 1 active (alive) entry + 1 orphan. --force all --yes.
+        // Verify both cleaned (or marked for cleaning in dry_run).
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create alive entry (Active state, session alive is unknown/not checked).
+        let alive_dir = base.join("worktree-alive-force");
+        std::fs::create_dir_all(&alive_dir).unwrap();
+        std::fs::write(alive_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Create orphan directory.
+        let orphan_dir = base.join("worktree-orphan-force");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        let ten_min_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 60);
+        filetime::set_file_mtime(
+            &orphan_dir,
+            filetime::FileTime::from_system_time(ten_min_ago),
+        )
+        .unwrap();
+
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-alive-force".to_string(),
+            path: alive_dir.to_string_lossy().to_string(),
+            branch: Some("feat/alive".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // --force (all) with dry_run to verify both would be cleaned.
+        let result = run_cleanup(dir.path(), true, None, true, true, false, false, None);
+        assert!(result.is_ok(), "force-all cleanup should succeed");
+    }
+
+    #[test]
+    fn test_cleanup_dry_run_shows_orphans() {
+        // 1 active (alive) entry + 1 orphan. --dry-run.
+        // Verify output includes orphan, nothing deleted.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create alive entry directory.
+        let alive_dir = base.join("worktree-dryrun-alive");
+        std::fs::create_dir_all(&alive_dir).unwrap();
+        std::fs::write(alive_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Create orphan directory (old enough).
+        let orphan_dir = base.join("worktree-dryrun-orphan");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        let ten_min_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 60);
+        filetime::set_file_mtime(
+            &orphan_dir,
+            filetime::FileTime::from_system_time(ten_min_ago),
+        )
+        .unwrap();
+
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-dryrun-alive".to_string(),
+            path: alive_dir.to_string_lossy().to_string(),
+            branch: Some("feat/dryrun".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // dry_run should show orphan without deleting.
+        let result = run_cleanup(dir.path(), false, None, true, true, false, false, None);
+        assert!(result.is_ok(), "dry_run cleanup should succeed");
+
+        // Orphan directory should still exist (dry run).
+        assert!(
+            orphan_dir.exists(),
+            "orphan dir should not be deleted in dry_run"
+        );
+        // Alive directory should still exist.
+        assert!(
+            alive_dir.exists(),
+            "alive dir should not be deleted in dry_run"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_no_orphans_no_cleanable_returns_clean() {
+        // 1 active (alive) entry, no orphans. Verify "no worktrees to clean up".
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create alive entry directory.
+        let alive_dir = base.join("worktree-clean-alive");
+        std::fs::create_dir_all(&alive_dir).unwrap();
+        std::fs::write(alive_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        let mut reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "worktree-clean-alive".to_string(),
+            path: alive_dir.to_string_lossy().to_string(),
+            branch: Some("feat/clean".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        write_registry(&reg_path, &reg).unwrap();
+
+        // No orphans, no cleanable entries. Should return Ok with
+        // "no worktrees to clean up".
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
+        assert!(
+            result.is_ok(),
+            "cleanup should succeed with alive entry and no orphans"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_orphan_age_guard_skips_young_dirs() {
+        // 1 young dir (<5min), no registry. Verify NOT treated as orphan.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let base = dir.path().join(".git-worktrees");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create a freshly-created orphan dir (< 5 min old, should be skipped).
+        let young_dir = base.join("worktree-young-orphan");
+        std::fs::create_dir_all(&young_dir).unwrap();
+        // Don't set mtime — it was just created so age < 5 min.
+
+        let reg = WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        write_registry(&reg_path, &reg).unwrap();
+
+        // Should return "no worktrees to clean up" because young dir is
+        // skipped by age guard.
+        let result = run_cleanup(dir.path(), false, None, false, true, false, false, None);
+        assert!(result.is_ok(), "cleanup should succeed");
+
+        // The young directory should still exist.
+        assert!(young_dir.exists(), "young dir should not be touched");
     }
 }

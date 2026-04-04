@@ -405,10 +405,8 @@ impl WorktreeManager {
                     {
                         true
                     }
-                    // Live session — skip.
-                    WorktreeState::Active => false,
-                    // Orphaned worktree — only with force.
-                    WorktreeState::Orphaned => opts.force,
+                    // Live session or orphaned worktree — only with force.
+                    WorktreeState::Active | WorktreeState::Orphaned => opts.force,
                 },
             };
 
@@ -1495,5 +1493,88 @@ mod tests {
             mgr.registry_path(),
             dir.path().join(".state/worktrees/worktrees.yaml")
         );
+    }
+
+    // -- cleanup_stale force override tests --
+
+    #[test]
+    fn test_cleanup_stale_force_includes_alive_entries() {
+        // Active+alive entry with force=true. Verify entry IS a candidate.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        // Create a directory that looks like an active worktree (has .git).
+        let wt_dir = dir.path().join(".git-worktrees/alive-force");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        let mut reg = registry::WorktreeRegistry::new("2026-04-01T10:00:00Z");
+        reg.worktrees.push(WorktreeEntry {
+            name: "alive-force".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/alive".to_string()),
+            created_at: "2026-04-01T10:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let opts = CleanupOpts {
+            force: true,
+            dry_run: true,
+            ..CleanupOpts::default()
+        };
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        // With force=true, active+alive entry should be a candidate.
+        assert!(
+            !removed.is_empty(),
+            "force=true should include alive entries as candidates"
+        );
+        assert_eq!(removed[0], "alive-force");
+    }
+
+    #[test]
+    fn test_cleanup_stale_no_force_skips_alive_entries() {
+        // Active entry with recent created_at and unknown liveness, force=false.
+        // Because the entry is young (<1h), the "old Unknown" arm doesn't match.
+        // The final Active arm returns opts.force (false), so it's skipped.
+        let dir = tempfile::tempdir().unwrap();
+        let reg_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        // Create a directory that looks like an active worktree (has .git).
+        let wt_dir = dir.path().join(".git-worktrees/alive-noforce");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Use a recent timestamp so the entry is NOT older than 1 hour.
+        let recent_ts = now_rfc3339();
+        let mut reg = registry::WorktreeRegistry::new(&recent_ts);
+        reg.worktrees.push(WorktreeEntry {
+            name: "alive-noforce".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/alive".to_string()),
+            created_at: recent_ts,
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        registry::write_registry(&reg_path, &reg).unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let opts = CleanupOpts {
+            force: false,
+            dry_run: true,
+            ..CleanupOpts::default()
+        };
+        let removed = mgr.cleanup_stale(&opts).unwrap();
+        // Without force, active entry with unknown liveness (young) should NOT
+        // be a candidate.
+        assert!(removed.is_empty(), "force=false should skip alive entries");
     }
 }
