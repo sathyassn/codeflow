@@ -3,7 +3,7 @@ id: "epic-01KMVASRB0H931T1MZPXGJZ7V8"
 format_id: "INF-EPC-033"
 title: "Fix autorun subsystem: invocation, naming, cleanup, observability"
 summary: "Fix the autorun subsystem across invocation, worker naming, stale session cleanup, pruning, claim TTL eviction, status transitions, and session-level Timeout handling."
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "FIX"
 domain: "GENL"
@@ -67,7 +67,7 @@ The autorun subsystem accumulated a set of interrelated bugs and gaps: incorrect
 | INF-TSK-033-004 | Add autorun session/worker/task_run pruning and indexes | complete | normal |
 | INF-TSK-033-005 | Add proactive claim TTL eviction from Loro CRDT document | complete | normal |
 | INF-TSK-033-006 | Add conditional status transitions for autorun sessions | complete | normal |
-| INF-TSK-033-007 | Wire session-level Timeout status and remove/document Paused/Aborting | todo | normal |
+| INF-TSK-033-007 | Wire session-level Timeout status and remove/document Paused/Aborting | complete | normal |
 
 ## Dependencies
 

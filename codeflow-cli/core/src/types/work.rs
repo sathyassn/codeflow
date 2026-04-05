@@ -289,11 +289,13 @@ impl FromStr for ActiveWorkStatus {
 pub enum AutorunSessionStatus {
     Pending,
     Running,
+    /// Reserved -- no callers; not yet implemented.
     Paused,
     Completed,
     Failed,
     Cancelled,
     Timeout,
+    /// Transient: set by CLI abort flow (cmd/autorun.rs) before orchestrator processes abort signal.
     Aborting,
 }
 

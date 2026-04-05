@@ -332,16 +332,21 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             .iter()
             .filter(|r| r.status == "completed")
             .count();
+        let timed_out = final_results.iter().any(|r| r.status == "timeout");
         let failed_count = final_results
             .iter()
-            .filter(|r| r.status == "failed" || r.status == "timeout")
+            .filter(|r| r.status == "failed")
+            .count();
+        let timeout_count = final_results
+            .iter()
+            .filter(|r| r.status == "timeout")
             .count();
         let skipped_count = final_results
             .iter()
             .filter(|r| r.status == "skipped")
             .count();
 
-        let final_status = Self::determine_final_status(aborted, failed_count);
+        let final_status = Self::determine_final_status(aborted, timed_out, failed_count);
 
         // Update autorun_session at batch end.
         // CAS: expect Running — prevents overwriting a status set by another process
@@ -350,7 +355,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         let session_update = crate::models::AutorunSessionUpdate {
             status: Some(final_status),
             completed_tasks: Some(completed_count.min(i32::MAX as usize) as i32),
-            failed_tasks: Some(failed_count.min(i32::MAX as usize) as i32),
+            failed_tasks: Some((failed_count + timeout_count).min(i32::MAX as usize) as i32),
             skipped_tasks: Some(skipped_count.min(i32::MAX as usize) as i32),
             completed_at: Some(chrono::Utc::now().to_rfc3339()),
             ..Default::default()
@@ -383,7 +388,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             &batch_name,
             aborted,
             completed_count,
-            failed_count,
+            failed_count + timeout_count,
             skipped_count,
         );
 
@@ -464,10 +469,15 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
     /// Determine the final session status based on abort state and failure count.
     fn determine_final_status(
         aborted: bool,
+        timed_out: bool,
         failed_count: usize,
     ) -> crate::types::AutorunSessionStatus {
+        // Precedence: abort > timeout (when no failures) > failure > success.
+        // Explicit abort always wins — if both aborted and timed_out, return Cancelled.
         if aborted {
             crate::types::AutorunSessionStatus::Cancelled
+        } else if timed_out && failed_count == 0 {
+            crate::types::AutorunSessionStatus::Timeout
         } else if failed_count > 0 {
             crate::types::AutorunSessionStatus::Failed
         } else {
@@ -1311,24 +1321,42 @@ mod tests {
         // across all input combinations. This function is called by execute()
         // at line 263 — if removed, these assertions fail.
         assert_eq!(
-            Orchestrator::<OrderTracker>::determine_final_status(true, 0),
+            Orchestrator::<OrderTracker>::determine_final_status(true, false, 0),
             crate::types::AutorunSessionStatus::Cancelled,
             "aborted with no failures should be Cancelled"
         );
         assert_eq!(
-            Orchestrator::<OrderTracker>::determine_final_status(true, 3),
+            Orchestrator::<OrderTracker>::determine_final_status(true, false, 3),
             crate::types::AutorunSessionStatus::Cancelled,
             "aborted with failures should still be Cancelled (abort takes priority)"
         );
         assert_eq!(
-            Orchestrator::<OrderTracker>::determine_final_status(false, 2),
+            Orchestrator::<OrderTracker>::determine_final_status(false, false, 2),
             crate::types::AutorunSessionStatus::Failed,
             "not aborted with failures should be Failed"
         );
         assert_eq!(
-            Orchestrator::<OrderTracker>::determine_final_status(false, 0),
+            Orchestrator::<OrderTracker>::determine_final_status(false, false, 0),
             crate::types::AutorunSessionStatus::Completed,
             "not aborted, no failures should be Completed"
+        );
+        // Timeout cases: timed_out=true without abort returns Timeout when no failures.
+        assert_eq!(
+            Orchestrator::<OrderTracker>::determine_final_status(false, true, 0),
+            crate::types::AutorunSessionStatus::Timeout,
+            "timed_out with no abort and no failures should be Timeout"
+        );
+        // Abort takes precedence over timeout.
+        assert_eq!(
+            Orchestrator::<OrderTracker>::determine_final_status(true, true, 0),
+            crate::types::AutorunSessionStatus::Cancelled,
+            "aborted + timed_out should be Cancelled (abort takes precedence)"
+        );
+        // Timeout with failures: failure takes precedence over timeout.
+        assert_eq!(
+            Orchestrator::<OrderTracker>::determine_final_status(false, true, 2),
+            crate::types::AutorunSessionStatus::Failed,
+            "timed_out with failures should be Failed (failure takes precedence over timeout)"
         );
 
         // Also verify the non-abort path through execute() produces Completed.
