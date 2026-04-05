@@ -79,6 +79,9 @@ pub fn release_all(
         coordinator.release(&path, session_id, token)?;
     }
 
+    // Proactively evict any expired claims from other sessions.
+    let _ = compact_expired_claims(coordinator);
+
     Ok(count)
 }
 
@@ -113,6 +116,56 @@ pub fn validate_token(
         // No active claim — nothing to validate against.
         None => Ok(()),
     }
+}
+
+/// Remove all expired claim entries from the Loro CRDT document.
+///
+/// Iterates every claim in the coordinator's claims map and removes entries
+/// where `now - claim.acquired_at >= claim.ttl_secs`, matching the lazy
+/// expiry check in `LoroCoordinator::acquire` (`loro.rs:290`).
+///
+/// Returns the number of evicted entries.
+///
+/// **Concurrency:** This function mutates the `LoroCoordinator` in-place.
+/// Callers MUST wrap it inside [`crate::file_lock::locked_binary_rmw`] when
+/// operating on the shared `state.loro` file to hold the sidecar lock for
+/// the duration of the read-modify-write cycle.
+///
+/// # Errors
+///
+/// Returns a `CoordinationError` if a claim entry cannot be deleted from
+/// the underlying Loro map.
+pub fn compact_expired_claims(
+    coordinator: &mut LoroCoordinator,
+) -> Result<usize, CoordinationError> {
+    let claims_map = coordinator.doc().get_map("claims");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut expired_keys: Vec<String> = Vec::new();
+
+    claims_map.for_each(|key, value| {
+        if let loro::ValueOrContainer::Value(loro::LoroValue::String(json_str)) = value {
+            if let Ok(claim) = serde_json::from_str::<Claim>(&json_str) {
+                let expired = now.saturating_sub(claim.acquired_at) >= claim.ttl_secs;
+                if expired {
+                    expired_keys.push(key.to_string());
+                }
+            }
+        }
+    });
+
+    let count = expired_keys.len();
+    for key in &expired_keys {
+        claims_map.delete(key)?;
+    }
+    if count > 0 {
+        coordinator.doc().commit();
+    }
+
+    Ok(count)
 }
 
 /// List all active (non-expired) claims.
@@ -294,5 +347,102 @@ mod tests {
         let (acquired, conflicts) = acquire_batch(&mut coord, &paths, &sid).unwrap();
         assert!(acquired.is_empty());
         assert!(conflicts.is_empty());
+    }
+
+    // -- compact_expired_claims tests --
+
+    #[test]
+    fn compact_removes_expired_claims() {
+        let mut coord = LoroCoordinator::in_memory();
+        // TTL=0 means claims expire immediately.
+        coord.set_ttl_secs(0);
+        let s1 = session("ses-001");
+        let s2 = session("ses-002");
+        coord.acquire("src/a.rs", &s1).unwrap();
+        coord.acquire("src/b.rs", &s2).unwrap();
+
+        let evicted = compact_expired_claims(&mut coord).unwrap();
+        assert_eq!(evicted, 2, "both expired claims should be evicted");
+
+        // Verify the claims are actually gone from the CRDT map.
+        let active = list_active(&coord);
+        assert!(active.is_empty(), "no active claims should remain");
+    }
+
+    #[test]
+    fn compact_retains_valid_claims() {
+        let mut coord = LoroCoordinator::in_memory();
+        // Use a large TTL so claims are not expired.
+        coord.set_ttl_secs(99_999);
+        let sid = session("ses-001");
+        coord.acquire("src/a.rs", &sid).unwrap();
+        coord.acquire("src/b.rs", &sid).unwrap();
+
+        let evicted = compact_expired_claims(&mut coord).unwrap();
+        assert_eq!(evicted, 0, "no claims should be evicted");
+
+        let active = list_active(&coord);
+        assert_eq!(active.len(), 2, "both claims should survive");
+    }
+
+    #[test]
+    fn compact_on_empty_crdt_is_noop() {
+        let mut coord = LoroCoordinator::in_memory();
+
+        let evicted = compact_expired_claims(&mut coord).unwrap();
+        assert_eq!(evicted, 0, "empty CRDT should be a no-op");
+    }
+
+    #[test]
+    fn compact_mixed_expired_and_valid() {
+        let mut coord = LoroCoordinator::in_memory();
+
+        // First claim: TTL=0 (expired immediately).
+        coord.set_ttl_secs(0);
+        let s1 = session("ses-001");
+        coord.acquire("src/expired.rs", &s1).unwrap();
+
+        // Second claim: TTL=99999 (long-lived).
+        coord.set_ttl_secs(99_999);
+        let s2 = session("ses-002");
+        coord.acquire("src/valid.rs", &s2).unwrap();
+
+        let evicted = compact_expired_claims(&mut coord).unwrap();
+        assert_eq!(evicted, 1, "only the expired claim should be evicted");
+
+        // The valid claim should still be active.
+        let active = list_active(&coord);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].0, "src/valid.rs");
+    }
+
+    #[test]
+    fn release_all_also_compacts_expired() {
+        let mut coord = LoroCoordinator::in_memory();
+
+        // Create an expired claim from s1.
+        coord.set_ttl_secs(0);
+        let s1 = session("ses-001");
+        coord.acquire("src/stale.rs", &s1).unwrap();
+
+        // Create a valid claim from s2.
+        coord.set_ttl_secs(99_999);
+        let s2 = session("ses-002");
+        coord.acquire("src/fresh.rs", &s2).unwrap();
+
+        // release_all for s2 should release s2's claim AND compact s1's expired claim.
+        let released = release_all(&mut coord, &s2).unwrap();
+        assert_eq!(released, 1, "should release s2's claim");
+
+        // The expired s1 claim should also be gone (compacted by release_all).
+        let claims_map = coord.doc().get_map("claims");
+        let mut remaining = 0;
+        claims_map.for_each(|_key, _value| {
+            remaining += 1;
+        });
+        assert_eq!(
+            remaining, 0,
+            "expired s1 claim should have been compacted by release_all"
+        );
     }
 }

@@ -127,6 +127,13 @@ impl SentinelWrite {
             );
         }
 
+        // Ensure worktree registry and session status have the branch field.
+        // At stage-complete time, the feature branch is guaranteed to exist
+        // (resolves the pf-3 timing race where branch creation is async).
+        if let Err(e) = crate::worktree::update_branch_from_current(&self.project_dir) {
+            eprintln!("sentinel-write: branch update failed: {e}");
+        }
+
         // Release all claims held by the completing session (AC #6).
         self.release_claims_on_stage_complete();
 

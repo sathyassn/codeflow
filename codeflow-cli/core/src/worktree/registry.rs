@@ -579,6 +579,68 @@ pub fn locked_update_branch(
     .map_err(|e| WorktreeError::Yaml(format!("locked update_branch: {e}")))
 }
 
+/// Read the current git branch and update both the worktree registry and
+/// the `pathflow-session-status.json` `branch` field.
+///
+/// This is the **single source of truth** for branch recording after a
+/// feature branch is created. It resolves the timing race where the pf-3
+/// checkpoint fires before cf-git-operations has actually created the branch.
+///
+/// Safe to call multiple times (idempotent). Safe to call when not in a
+/// worktree (no-ops on the registry update, still writes session status).
+///
+/// # Errors
+///
+/// Returns an error if the registry update fails. Session status update
+/// failures are logged but not propagated (non-fatal).
+pub fn update_branch_from_current(project_dir: &Path) -> Result<(), WorktreeError> {
+    // Read the current git branch.
+    let branch = match std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_dir)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => return Ok(()), // No branch — detached HEAD or git failure.
+    };
+
+    if branch.is_empty() {
+        return Ok(());
+    }
+
+    // Update worktree registry (only if in a worktree).
+    let wt_name = project_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|name| name.starts_with("worktree-"))
+        .map(String::from);
+
+    if let Some(ref name) = wt_name {
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        if registry_path.exists() {
+            locked_update_branch(&registry_path, name, &branch)?;
+        }
+    }
+
+    // Update session status with branch field.
+    if let Ok(sid) = crate::session::current_session_id(project_dir) {
+        let base = crate::hooks::pipeline::resolve_state_base(project_dir);
+        let session_dir = base
+            .join(".state")
+            .join("session")
+            .join(sid.as_ref())
+            .join("pathflow");
+        crate::hooks::post_tool_use::update_session_status(
+            &session_dir,
+            &serde_json::json!({"branch": branch}),
+        );
+    }
+
+    Ok(())
+}
+
 /// Update the `lead_pid` field on a worktree entry identified by name.
 ///
 /// Uses file-locked read-modify-write to avoid concurrent corruption.

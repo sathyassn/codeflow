@@ -135,6 +135,9 @@ impl SessionEndCleanup {
         // --- Section 7: Worktree cleanup ---
         self.clean_worktree(project_dir, &mut result);
 
+        // --- Section 7b: Claim TTL eviction ---
+        Self::compact_expired_claims(project_dir, &mut result);
+
         // --- Section 8: Read team info ---
         let team_name = self.read_team_name(&session_state_dir);
         result.team_name.clone_from(&team_name);
@@ -481,6 +484,58 @@ impl SessionEndCleanup {
                     );
                 }
             }
+        }
+    }
+
+    /// Proactively evict expired claim entries from the Loro CRDT document.
+    ///
+    /// Uses `locked_binary_rmw` to hold the sidecar lock for the entire
+    /// read-modify-write cycle, matching the concurrency pattern used by
+    /// all other claim operations. Non-fatal: errors are logged as warnings.
+    fn compact_expired_claims(project_dir: &Path, result: &mut CleanupResult) {
+        let state_path = project_dir
+            .join(".state")
+            .join("coordination")
+            .join("state.loro");
+
+        if !state_path.exists() {
+            return; // No coordination state — nothing to compact.
+        }
+
+        use crate::coordination::claims::compact_expired_claims as compact;
+        use crate::coordination::loro::LoroCoordinator;
+
+        let rmw_result = crate::file_lock::locked_binary_rmw(
+            &state_path,
+            LoroCoordinator::in_memory,
+            |bytes| {
+                LoroCoordinator::from_bytes(bytes, &state_path)
+                    .map_err(|e| format!("loro load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("loro save: {e}")),
+            |coord| {
+                match compact(coord) {
+                    Ok(count) => {
+                        if count > 0 {
+                            result
+                                .messages
+                                .push(format!("SessionEnd: compacted {count} expired claim(s)"));
+                        }
+                    }
+                    Err(e) => {
+                        result
+                            .warnings
+                            .push(format!("SessionEnd: claim compaction failed: {e}"));
+                    }
+                }
+                Ok(())
+            },
+        );
+
+        if let Err(e) = rmw_result {
+            result.warnings.push(format!(
+                "SessionEnd: claim compaction failed (lock/io): {e}"
+            ));
         }
     }
 

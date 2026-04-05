@@ -110,40 +110,14 @@ impl CheckpointComplete {
         );
     }
 
-    /// Update the worktree registry branch field with the current git branch.
+    /// Update the worktree registry branch field and session status branch
+    /// with the current git branch.
     ///
     /// Called when the pf-3 sentinel is created (feature branch exists).
-    /// Uses `locked_update_branch` for atomic registry updates.
+    /// Delegates to `update_branch_from_current` which handles both the
+    /// worktree registry and session status atomically.
     fn update_worktree_branch(&self) {
-        // Read the current branch from the project directory.
-        let branch = match std::process::Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(&self.project_dir)
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            }
-            _ => return,
-        };
-
-        if branch.is_empty() {
-            return;
-        }
-
-        // Determine worktree name from the project directory.
-        let wt_name = match self.project_dir.file_name().and_then(|n| n.to_str()) {
-            Some(name) if name.starts_with("worktree-") => name.to_string(),
-            _ => return, // Not in a worktree.
-        };
-
-        // Find the registry path — it's symlinked into worktrees.
-        let registry_path = self.project_dir.join(".state/worktrees/worktrees.yaml");
-        if !registry_path.exists() {
-            return;
-        }
-
-        if let Err(e) = crate::worktree::locked_update_branch(&registry_path, &wt_name, &branch) {
+        if let Err(e) = crate::worktree::update_branch_from_current(&self.project_dir) {
             eprintln!("checkpoint-complete: branch update failed: {e}");
         }
     }

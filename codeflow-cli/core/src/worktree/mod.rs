@@ -171,7 +171,7 @@ pub use registry::{
     locked_deregister_by_name, locked_deregister_worktree, locked_read_registry,
     locked_register_with_limit, locked_update_branch, locked_update_lead_pid,
     locked_update_session_id, locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon,
-    maybe_auto_stop_daemon, read_registry, write_registry,
+    maybe_auto_stop_daemon, read_registry, update_branch_from_current, write_registry,
 };
 pub use setup::repair_symlinks;
 
