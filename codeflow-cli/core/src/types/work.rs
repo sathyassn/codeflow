@@ -297,6 +297,20 @@ pub enum AutorunSessionStatus {
     Aborting,
 }
 
+impl AutorunSessionStatus {
+    /// Returns `true` if the status represents a terminal (final) state.
+    ///
+    /// Terminal statuses: `Completed`, `Failed`, `Cancelled`, `Timeout`.
+    /// Non-terminal statuses: `Pending`, `Running`, `Paused`, `Aborting`.
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Timeout
+        )
+    }
+}
+
 impl fmt::Display for AutorunSessionStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -986,6 +1000,24 @@ mod tests {
             let parsed: AutorunTaskRunStatus = s.parse().unwrap();
             assert_eq!(parsed, status);
         }
+    }
+
+    // -- AutorunSessionStatus::is_terminal tests --
+
+    #[test]
+    fn test_autorun_session_status_terminal() {
+        assert!(AutorunSessionStatus::Completed.is_terminal());
+        assert!(AutorunSessionStatus::Failed.is_terminal());
+        assert!(AutorunSessionStatus::Cancelled.is_terminal());
+        assert!(AutorunSessionStatus::Timeout.is_terminal());
+    }
+
+    #[test]
+    fn test_autorun_session_status_non_terminal() {
+        assert!(!AutorunSessionStatus::Pending.is_terminal());
+        assert!(!AutorunSessionStatus::Running.is_terminal());
+        assert!(!AutorunSessionStatus::Paused.is_terminal());
+        assert!(!AutorunSessionStatus::Aborting.is_terminal());
     }
 }
 

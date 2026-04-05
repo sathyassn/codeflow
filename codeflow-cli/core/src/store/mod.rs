@@ -12,7 +12,20 @@ use crate::models::{
     AutorunSessionUpdate, AutorunTaskRunUpdate, AutorunWorkerUpdate, EpicFilter, EpicUpdate,
     MemoryEventFilter, SessionFilter, SessionUpdate, TaskFilter, TaskUpdate,
 };
-use crate::types::FormatId;
+use crate::types::{AutorunSessionStatus, FormatId};
+
+/// Result of a compare-and-swap (CAS) status transition.
+///
+/// Used by `update_autorun_session_cas` to communicate whether the conditional
+/// update succeeded or was a no-op because the current status did not match
+/// the expected status.
+#[derive(Debug, Clone)]
+pub enum CasResult {
+    /// The update was applied successfully. Contains the updated record.
+    Updated(Box<AutorunSession>),
+    /// The WHERE guard prevented the update (status was not the expected value).
+    NoOp,
+}
 
 /// Result of a prune operation.
 #[derive(Debug, Default, Clone)]
@@ -106,6 +119,16 @@ pub trait DataStore: Send + Sync {
         id: &str,
         update: AutorunSessionUpdate,
     ) -> impl std::future::Future<Output = Result<(), DbError>> + Send;
+
+    /// Compare-and-swap update: only applies the MERGE if the current status
+    /// matches `expected`. Returns `CasResult::Updated` with the new record on
+    /// success, or `CasResult::NoOp` if the WHERE guard prevented the write.
+    fn update_autorun_session_cas(
+        &self,
+        id: &str,
+        expected: AutorunSessionStatus,
+        update: AutorunSessionUpdate,
+    ) -> impl std::future::Future<Output = Result<CasResult, DbError>> + Send;
 
     fn create_autorun_worker(
         &self,
@@ -260,6 +283,14 @@ impl DataStore for NoopStore {
         _: AutorunSessionUpdate,
     ) -> Result<(), DbError> {
         Ok(())
+    }
+    async fn update_autorun_session_cas(
+        &self,
+        _: &str,
+        _: AutorunSessionStatus,
+        _: AutorunSessionUpdate,
+    ) -> Result<CasResult, DbError> {
+        Ok(CasResult::NoOp)
     }
     async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> {
         Ok(())
@@ -535,6 +566,44 @@ pub mod mock {
             Ok(())
         }
 
+        async fn update_autorun_session_cas(
+            &self,
+            id: &str,
+            expected: AutorunSessionStatus,
+            update: AutorunSessionUpdate,
+        ) -> Result<CasResult, DbError> {
+            let mut sessions = self.autorun_sessions.lock().unwrap();
+            if let Some(s) = sessions.get_mut(id) {
+                if s.status != expected {
+                    return Ok(CasResult::NoOp);
+                }
+                if let Some(status) = update.status {
+                    s.status = status;
+                }
+                if let Some(v) = update.completed_tasks {
+                    s.completed_tasks = v;
+                }
+                if let Some(v) = update.failed_tasks {
+                    s.failed_tasks = v;
+                }
+                if let Some(v) = update.skipped_tasks {
+                    s.skipped_tasks = v;
+                }
+                if let Some(v) = update.completed_at {
+                    s.completed_at = Some(v);
+                }
+                if let Some(v) = update.tmux_session {
+                    s.tmux_session = v;
+                }
+                if let Some(v) = update.stale_reason {
+                    s.stale_reason = v;
+                }
+                Ok(CasResult::Updated(Box::new(s.clone())))
+            } else {
+                Ok(CasResult::NoOp)
+            }
+        }
+
         async fn create_autorun_worker(&self, worker: &AutorunWorker) -> Result<(), DbError> {
             self.autorun_workers
                 .lock()
@@ -791,6 +860,7 @@ pub mod mock {
         async fn create_autorun_session(&self, _: &AutorunSession) -> Result<(), DbError> { Err(DbError::Query("test: forced failure".into())) }
         async fn get_autorun_session(&self, _: &str) -> Result<Option<AutorunSession>, DbError> { Ok(None) }
         async fn update_autorun_session(&self, _: &str, _: AutorunSessionUpdate) -> Result<(), DbError> { Err(DbError::Query("test: forced failure".into())) }
+        async fn update_autorun_session_cas(&self, _: &str, _: AutorunSessionStatus, _: AutorunSessionUpdate) -> Result<CasResult, DbError> { Err(DbError::Query("test: forced failure".into())) }
         async fn create_autorun_worker(&self, _: &AutorunWorker) -> Result<(), DbError> { Ok(()) }
         async fn update_autorun_worker(&self, _: &str, _: AutorunWorkerUpdate) -> Result<(), DbError> { Ok(()) }
         async fn create_autorun_task_run(&self, _: &AutorunTaskRun) -> Result<(), DbError> { Ok(()) }

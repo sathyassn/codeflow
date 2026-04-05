@@ -33,7 +33,7 @@ pub use error::{
 };
 pub use hooks::{HookEvent, HookHandler, HookInput, HookOutput};
 pub use ledger::{Event, JsonlWriter, LedgerWriter};
-pub use store::{DataStore, SyncResult};
+pub use store::{CasResult, DataStore, SyncResult};
 pub use types::{
     ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,
     BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, LedgerEvent,

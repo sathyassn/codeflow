@@ -619,6 +619,44 @@ impl DataStore for SurrealStore {
         Ok(())
     }
 
+    async fn update_autorun_session_cas(
+        &self,
+        id: &str,
+        expected: crate::types::AutorunSessionStatus,
+        update: AutorunSessionUpdate,
+    ) -> Result<crate::store::CasResult, DbError> {
+        let data = merge_fields! {
+            "status" => update.status,
+            "completed_tasks" => update.completed_tasks,
+            "failed_tasks" => update.failed_tasks,
+            "skipped_tasks" => update.skipped_tasks,
+            "completed_at" => update.completed_at,
+            "tmux_session" => update.tmux_session,
+            "stale_reason" => update.stale_reason,
+        };
+
+        let Some(data) = data else {
+            return Ok(crate::store::CasResult::NoOp);
+        };
+
+        let mut response = self
+            .db
+            .query(
+                "UPDATE type::thing('autorun_session', $id) MERGE $data WHERE status = $expected RETURN AFTER",
+            )
+            .bind(("id", id.to_string()))
+            .bind(("data", data))
+            .bind(("expected", expected))
+            .await?;
+
+        let results: Vec<AutorunSession> = response.take(0)?;
+        if let Some(session) = results.into_iter().next() {
+            Ok(crate::store::CasResult::Updated(Box::new(session)))
+        } else {
+            Ok(crate::store::CasResult::NoOp)
+        }
+    }
+
     async fn create_autorun_worker(&self, worker: &AutorunWorker) -> Result<(), DbError> {
         let id = worker.id.clone();
         let data = worker.clone();
@@ -3045,5 +3083,158 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // -- CAS tests (INF-TSK-033-006) --
+
+    #[tokio::test]
+    async fn test_cas_update_success_when_status_matches() {
+        let store = test_store().await;
+        let session = make_autorun_session("cas-1", AutorunSessionStatus::Running, None);
+        store.create_autorun_session(&session).await.unwrap();
+
+        let result = store
+            .update_autorun_session_cas(
+                "cas-1",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    status: Some(AutorunSessionStatus::Completed),
+                    completed_at: Some("2026-04-05T12:00:00Z".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        match result {
+            crate::store::CasResult::Updated(updated) => {
+                assert_eq!(updated.status, AutorunSessionStatus::Completed);
+                assert_eq!(
+                    updated.completed_at.as_deref(),
+                    Some("2026-04-05T12:00:00Z")
+                );
+            }
+            crate::store::CasResult::NoOp => panic!("expected Updated, got NoOp"),
+        }
+
+        // Verify DB state is consistent.
+        let fetched = store.get_autorun_session("cas-1").await.unwrap().unwrap();
+        assert_eq!(fetched.status, AutorunSessionStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_cas_update_noop_when_status_mismatch() {
+        let store = test_store().await;
+        let session = make_autorun_session(
+            "cas-2",
+            AutorunSessionStatus::Completed,
+            Some("2026-04-05T10:00:00Z"),
+        );
+        store.create_autorun_session(&session).await.unwrap();
+
+        // Try to transition from Running, but it's already Completed.
+        let result = store
+            .update_autorun_session_cas(
+                "cas-2",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    status: Some(AutorunSessionStatus::Failed),
+                    stale_reason: Some(Some("stale".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, crate::store::CasResult::NoOp));
+
+        // Verify the original status was NOT overwritten.
+        let fetched = store.get_autorun_session("cas-2").await.unwrap().unwrap();
+        assert_eq!(fetched.status, AutorunSessionStatus::Completed);
+        assert!(fetched.stale_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cas_update_noop_for_nonexistent_session() {
+        let store = test_store().await;
+
+        let result = store
+            .update_autorun_session_cas(
+                "cas-nonexistent",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    status: Some(AutorunSessionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, crate::store::CasResult::NoOp));
+    }
+
+    #[tokio::test]
+    async fn test_cas_concurrent_transitions_one_wins() {
+        let store = test_store().await;
+        let session = make_autorun_session("cas-race", AutorunSessionStatus::Running, None);
+        store.create_autorun_session(&session).await.unwrap();
+
+        // First CAS: Running -> Completed (should win).
+        let r1 = store
+            .update_autorun_session_cas(
+                "cas-race",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    status: Some(AutorunSessionStatus::Completed),
+                    completed_at: Some("2026-04-05T12:00:00Z".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(r1, crate::store::CasResult::Updated(_)));
+
+        // Second CAS: Running -> Failed (should be NoOp since status is now Completed).
+        let r2 = store
+            .update_autorun_session_cas(
+                "cas-race",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    status: Some(AutorunSessionStatus::Failed),
+                    stale_reason: Some(Some("stale".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(r2, crate::store::CasResult::NoOp));
+
+        // Final state should be Completed (first writer won).
+        let fetched = store
+            .get_autorun_session("cas-race")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, AutorunSessionStatus::Completed);
+        assert!(fetched.stale_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cas_noop_on_empty_update() {
+        let store = test_store().await;
+        let session = make_autorun_session("cas-empty", AutorunSessionStatus::Running, None);
+        store.create_autorun_session(&session).await.unwrap();
+
+        // All fields are None -> merge_fields! returns None -> NoOp.
+        let result = store
+            .update_autorun_session_cas(
+                "cas-empty",
+                AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, crate::store::CasResult::NoOp));
     }
 }

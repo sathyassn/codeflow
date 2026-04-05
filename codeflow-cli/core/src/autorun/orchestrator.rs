@@ -179,17 +179,31 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         }
 
         // C5: Store orchestrator tmux session name from env var.
+        // CAS: session was just created as Running; guard prevents overwrite if
+        // another process already moved it to a terminal state.
         if let Ok(orch_tmux) = std::env::var("CODEFLOW_ORCH_TMUX") {
-            let _ = self
+            match self
                 .store
-                .update_autorun_session(
+                .update_autorun_session_cas(
                     session_id,
+                    crate::types::AutorunSessionStatus::Running,
                     crate::models::AutorunSessionUpdate {
                         tmux_session: Some(Some(orch_tmux)),
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+            {
+                Ok(crate::store::CasResult::NoOp) => {
+                    eprintln!(
+                        "warning: CAS no-op storing tmux session for {session_id} (status changed)"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to store tmux session for {session_id}: {e}");
+                }
+                Ok(crate::store::CasResult::Updated(_)) => {}
+            }
         }
 
         // C26: Log BATCH_START.
@@ -330,6 +344,8 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         let final_status = Self::determine_final_status(aborted, failed_count);
 
         // Update autorun_session at batch end.
+        // CAS: expect Running — prevents overwriting a status set by another process
+        // (e.g., stale detector already marked it Failed).
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let session_update = crate::models::AutorunSessionUpdate {
             status: Some(final_status),
@@ -339,12 +355,25 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             completed_at: Some(chrono::Utc::now().to_rfc3339()),
             ..Default::default()
         };
-        if let Err(e) = self
+        match self
             .store
-            .update_autorun_session(session_id, session_update)
+            .update_autorun_session_cas(
+                session_id,
+                crate::types::AutorunSessionStatus::Running,
+                session_update,
+            )
             .await
         {
-            eprintln!("warning: failed to update autorun_session record: {e}");
+            Ok(crate::store::CasResult::NoOp) => {
+                eprintln!(
+                    "warning: CAS no-op for final status of {session_id} \
+                     (expected Running, another process already transitioned it)"
+                );
+            }
+            Err(e) => {
+                eprintln!("warning: failed to update autorun_session record: {e}");
+            }
+            Ok(crate::store::CasResult::Updated(_)) => {}
         }
 
         // Emit appropriate batch event.

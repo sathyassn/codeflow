@@ -66,7 +66,7 @@ The autorun subsystem accumulated a set of interrelated bugs and gaps: incorrect
 | INF-TSK-033-003 | Autorun stale session detection, cleanup, and abort fixes | complete | normal |
 | INF-TSK-033-004 | Add autorun session/worker/task_run pruning and indexes | complete | normal |
 | INF-TSK-033-005 | Add proactive claim TTL eviction from Loro CRDT document | complete | normal |
-| INF-TSK-033-006 | Add conditional status transitions for autorun sessions | todo | normal |
+| INF-TSK-033-006 | Add conditional status transitions for autorun sessions | complete | normal |
 | INF-TSK-033-007 | Wire session-level Timeout status and remove/document Paused/Aborting | todo | normal |
 
 ## Dependencies

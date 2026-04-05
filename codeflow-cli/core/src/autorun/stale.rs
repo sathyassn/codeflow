@@ -387,9 +387,14 @@ pub async fn cleanup_stale_session<S: DataStore>(
     }
 
     // Update session to Failed with stale_reason.
-    let _ = store
-        .update_autorun_session(
+    // CAS: only write if the session is still in a non-terminal state (use the
+    // status we read earlier as the expected value). This prevents overwriting a
+    // terminal status that the orchestrator may have set between our read and
+    // this write.
+    match store
+        .update_autorun_session_cas(
             session_id,
+            session.status,
             AutorunSessionUpdate {
                 status: Some(AutorunSessionStatus::Failed),
                 stale_reason: Some(Some(stale_reason.to_string())),
@@ -397,7 +402,19 @@ pub async fn cleanup_stale_session<S: DataStore>(
                 ..Default::default()
             },
         )
-        .await;
+        .await
+    {
+        Ok(crate::store::CasResult::NoOp) => {
+            eprintln!(
+                "warning: stale cleanup CAS no-op for {session_id} \
+                 (status changed since read — another process transitioned it)"
+            );
+        }
+        Err(e) => {
+            eprintln!("warning: failed to update stale session {session_id}: {e}");
+        }
+        Ok(crate::store::CasResult::Updated(_)) => {}
+    }
 
     // Clean up heartbeat file.
     let heartbeat_path = project_dir
