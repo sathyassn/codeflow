@@ -26,6 +26,7 @@ loro = { workspace = true }
 base64 = { workspace = true }
 which = "7"
 signal-hook = "0.3"
+libc = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

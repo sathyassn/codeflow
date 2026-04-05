@@ -50,6 +50,11 @@ pub struct AutorunConfig {
     pub report_dir: String,
     /// Maximum number of concurrent autorun batches (default: 5).
     pub max_concurrent_batches: usize,
+    /// Heartbeat file touch interval in seconds (default: 30).
+    pub heartbeat_interval_secs: u64,
+    /// Seconds without heartbeat before a session is considered stale (default: 90).
+    /// Must be >= 2 * heartbeat_interval_secs.
+    pub stale_threshold_secs: u64,
 }
 
 impl Default for AutorunConfig {
@@ -59,6 +64,8 @@ impl Default for AutorunConfig {
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
             max_concurrent_batches: 5,
+            heartbeat_interval_secs: 30,
+            stale_threshold_secs: 90,
         }
     }
 }
@@ -335,6 +342,18 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
         return Err(AutorunError::InvalidBatch(format!(
             "autorun.max_concurrent_batches must be 1..=20, got {}",
             config.autorun.max_concurrent_batches
+        )));
+    }
+    if config.autorun.heartbeat_interval_secs < 10 || config.autorun.heartbeat_interval_secs > 300 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.heartbeat_interval_secs must be 10..=300, got {}",
+            config.autorun.heartbeat_interval_secs
+        )));
+    }
+    if config.autorun.stale_threshold_secs < 2 * config.autorun.heartbeat_interval_secs {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.stale_threshold_secs ({}) must be >= 2 * heartbeat_interval_secs ({})",
+            config.autorun.stale_threshold_secs, config.autorun.heartbeat_interval_secs
         )));
     }
     Ok(())

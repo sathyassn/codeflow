@@ -87,9 +87,24 @@ pub enum AutorunCommand {
         /// Run in foreground (default: detach to tmux session)
         #[arg(long, visible_alias = "fg")]
         foreground: bool,
+        /// Force resume even if live workers are detected
+        #[arg(long)]
+        force: bool,
     },
     /// List available batch files in the autorun config directory
     Batches,
+    /// Clean up stale autorun sessions (dead orchestrator)
+    Cleanup {
+        /// Session ID of specific batch to clean
+        #[arg(long)]
+        batch: Option<String>,
+        /// Clean all stale sessions
+        #[arg(long)]
+        all: bool,
+        /// Show what would be cleaned without doing it
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show historical autorun batch executions
     History {
         /// Maximum number of batches to show
@@ -145,12 +160,19 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             run_cancel(&project_dir, &task_id, batch.as_deref()).await
         }
         Some(AutorunCommand::Abort { batch }) => run_abort(&project_dir, batch.as_deref()).await,
+        Some(AutorunCommand::Cleanup {
+            batch,
+            all,
+            dry_run,
+        }) => run_cleanup(&project_dir, batch.as_deref(), all, dry_run).await,
         Some(AutorunCommand::Results { batch }) => {
             run_results(&project_dir, batch.as_deref()).await
         }
-        Some(AutorunCommand::Resume { batch, foreground }) => {
-            run_resume(&project_dir, batch.as_deref(), foreground).await
-        }
+        Some(AutorunCommand::Resume {
+            batch,
+            foreground,
+            force,
+        }) => run_resume(&project_dir, batch.as_deref(), foreground, force).await,
         Some(AutorunCommand::Batches) => run_batches_sync(&project_dir),
         Some(AutorunCommand::History {
             limit,
@@ -326,6 +348,27 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
     // Phase 1: Pre-flight checks (before batch parse).
     preflight_checks(project_dir)?;
 
+    // C11: Auto-sweep stale sessions before batch guard to free slots.
+    if let Ok(config) = codeflow_core::autorun::load_config(project_dir) {
+        if let Ok(store) = open_store(project_dir).await {
+            match codeflow_core::autorun::sweep_stale_sessions(
+                store.as_ref(),
+                project_dir,
+                config.autorun.stale_threshold_secs,
+            )
+            .await
+            {
+                Ok(summary) if summary.sessions_cleaned > 0 => {
+                    eprintln!(
+                        "auto-sweep: cleaned {} stale session(s)",
+                        summary.sessions_cleaned
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     // C6: Batch guard -- check active batch count and duplicate batch file.
     check_batch_guard(project_dir, batch_path).await?;
 
@@ -459,10 +502,11 @@ fn run_detached(project_dir: &Path, batch_path: &Path) -> Result<()> {
     std::fs::create_dir_all(&script_dir).context("creating autorun scripts directory")?;
     let script_path = script_dir.join(format!("orch-{short_sid}.sh"));
     let script_content = format!(
-        "#!/bin/bash\ncd '{}' && '{}' autorun run --batch '{}' --foreground\n",
+        "#!/bin/bash\nexport CODEFLOW_ORCH_TMUX='{orch}'\ncd '{}' && '{}' autorun run --batch '{}' --foreground\n",
         sq(&project_dir.to_string_lossy()),
         sq(&exe.to_string_lossy()),
         sq(&batch_path.to_string_lossy()),
+        orch = sq(&orch_session),
     );
     std::fs::write(&script_path, &script_content).context("writing orchestrator script")?;
     #[cfg(unix)]
@@ -898,6 +942,9 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     use codeflow_core::store::DataStore;
 
     let store = open_store(project_dir).await?;
+    let stale_threshold = codeflow_core::autorun::load_config(project_dir)
+        .map(|c| c.autorun.stale_threshold_secs)
+        .unwrap_or(90);
 
     // Determine which sessions to show.
     let sessions = if let Some(sid) = batch {
@@ -937,8 +984,9 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             .filter(|w| w.status == codeflow_core::types::AutorunWorkerStatus::Running)
             .count();
 
-        // Check tmux liveness for running workers.
+        // C12: Real stale detection for running sessions.
         let mut orphan_count = 0;
+        let mut session_stale = false;
         for w in &workers {
             if w.status == codeflow_core::types::AutorunWorkerStatus::Running {
                 if let Some(ref tmux_name) = w.tmux_session {
@@ -948,6 +996,29 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                 }
             }
         }
+        // Check orchestrator liveness.
+        if matches!(
+            session.status,
+            codeflow_core::types::AutorunSessionStatus::Running
+        ) {
+            let pid_alive = session
+                .pid
+                .is_some_and(codeflow_core::autorun::check_pid_alive);
+            let tmux_alive = session
+                .tmux_session
+                .as_deref()
+                .map(codeflow_core::autorun::check_tmux_alive);
+            let (hb_alive, _) = codeflow_core::autorun::check_heartbeat_alive(
+                project_dir,
+                &session.id,
+                stale_threshold,
+            );
+            // Only pass stale signal -- if heartbeat file doesn't exist, don't
+            // report a false-positive stale status.
+            let heartbeat = if hb_alive { None } else { Some(false) };
+            session_stale =
+                codeflow_core::autorun::is_session_stale(pid_alive, tmux_alive, heartbeat);
+        }
 
         let elapsed = format_elapsed(&session.created_at);
         let batch_name = session
@@ -955,8 +1026,16 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             .as_deref()
             .unwrap_or(&session.id[..session.id.len().min(20)]);
 
+        let stale_label = if session_stale {
+            " (stale)"
+        } else if orphan_count > 0 {
+            " (orphan)"
+        } else {
+            ""
+        };
+
         println!(
-            "{:<24} {:<10} {:>5} {:>5} {:>5} {:>5}  {}{}",
+            "{:<24} {:<10} {:>5} {:>5} {:>5} {:>5}  {}{stale_label}",
             batch_name,
             session.status,
             session.total_tasks,
@@ -964,11 +1043,6 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             session.failed_tasks,
             running,
             elapsed,
-            if orphan_count > 0 {
-                format!(" ({orphan_count} orphan)")
-            } else {
-                String::new()
-            },
         );
 
         // Per-worker detail.
@@ -1036,6 +1110,7 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     if any_running {
         println!();
         println!("  Attach: codeflow autorun attach <TASK-ID> [--batch <SESSION-ID>]");
+        println!("  Cleanup: codeflow autorun cleanup --all");
     }
 
     Ok(())
@@ -1077,6 +1152,12 @@ async fn run_attach(project_dir: &Path, task_id: &str, batch: Option<&str>) -> R
     if !tmux_has_session(tmux_name) {
         anyhow::bail!("tmux session '{tmux_name}' does not exist (worker may have stopped)");
     }
+
+    // C20: Warn the user before attaching.
+    eprintln!("  AUTORUN SESSION -- agent is working autonomously.");
+    eprintln!("  Typing will inject messages into the agent's conversation.");
+    eprintln!("  Ctrl+B D to detach safely. Ctrl+C will kill the worker.");
+    eprintln!();
 
     // exec replaces current process.
     let err = exec::Command::new("tmux")
@@ -1268,12 +1349,17 @@ async fn run_cancel(project_dir: &Path, task_id: &str, batch: Option<&str>) -> R
             .output();
     }
 
-    // Step 8-9: Cleanup worktree and deregister.
+    // Step 8-9: Deregister unconditionally, then cleanup worktree if it exists.
     if let Some(ref wt_path) = worker.worktree_path {
-        let _ = std::process::Command::new("git")
-            .args(["worktree", "remove", "--force", wt_path])
-            .current_dir(project_dir)
-            .output();
+        let registry_path = project_dir.join(".state/worktrees");
+        let _ = codeflow_core::worktree::locked_deregister_worktree(&registry_path, wt_path);
+        let wt = Path::new(wt_path);
+        if wt.exists() {
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", wt_path])
+                .current_dir(project_dir)
+                .output();
+        }
     }
 
     // Step 10: Close PR if open.
@@ -1453,6 +1539,145 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+async fn run_cleanup(
+    project_dir: &Path,
+    batch: Option<&str>,
+    all: bool,
+    dry_run: bool,
+) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let project_dir = &resolve_repo_root(project_dir)?;
+    let config =
+        codeflow_core::autorun::load_config(project_dir).context("loading parallel-work config")?;
+    let store = open_store(project_dir).await?;
+
+    if let Some(sid) = batch {
+        // Clean a specific session.
+        let session = store
+            .get_autorun_session(sid)
+            .await?
+            .with_context(|| format!("no autorun session found with id '{sid}'"))?;
+
+        if !matches!(
+            session.status,
+            codeflow_core::types::AutorunSessionStatus::Running
+        ) {
+            println!(
+                "Session '{sid}' is not running (status: {}). Nothing to clean.",
+                session.status
+            );
+            return Ok(());
+        }
+
+        if dry_run {
+            println!("[dry-run] Would clean session '{sid}'");
+            return Ok(());
+        }
+
+        let report = codeflow_core::autorun::cleanup_stale_session(
+            store.as_ref(),
+            project_dir,
+            sid,
+            "manual cleanup",
+        )
+        .await
+        .context("cleaning session")?;
+
+        println!(
+            "Cleaned session '{}': {} workers killed, {} worktrees removed, {} claims released",
+            report.session_id,
+            report.workers_killed,
+            report.worktrees_removed,
+            report.claims_released,
+        );
+        return Ok(());
+    }
+
+    if !all {
+        anyhow::bail!(
+            "specify --batch <ID> for a specific session, or --all for all stale sessions"
+        );
+    }
+
+    // Detect stale sessions.
+    let stale = codeflow_core::autorun::detect_stale_sessions(
+        store.as_ref(),
+        project_dir,
+        config.autorun.stale_threshold_secs,
+    )
+    .await
+    .context("detecting stale sessions")?;
+
+    if stale.is_empty() {
+        println!("No stale sessions found.");
+        return Ok(());
+    }
+
+    println!("Found {} stale session(s):", stale.len());
+    for info in &stale {
+        let pid_status = if info.pid_alive { "alive" } else { "dead" };
+        let tmux_status = match info.tmux_alive {
+            Some(true) => "alive",
+            Some(false) => "dead",
+            None => "unknown",
+        };
+        println!(
+            "  {} (pid={} [{}], tmux={}, orphan_workers={}, live_workers={})",
+            info.session.id,
+            info.session.pid.unwrap_or(0),
+            pid_status,
+            tmux_status,
+            info.orphan_worker_count,
+            info.live_worker_count,
+        );
+    }
+
+    if dry_run {
+        println!("[dry-run] Would clean {} session(s)", stale.len());
+        return Ok(());
+    }
+
+    // Clean each detected session directly (avoids double-detect from sweep).
+    let mut cleaned = 0usize;
+    let mut errors: Vec<(String, String)> = Vec::new();
+    for info in &stale {
+        let reason = format!(
+            "manual cleanup: pid_alive={}, tmux_alive={:?}",
+            info.pid_alive, info.tmux_alive
+        );
+        match codeflow_core::autorun::cleanup_stale_session(
+            store.as_ref(),
+            project_dir,
+            &info.session.id,
+            &reason,
+        )
+        .await
+        {
+            Ok(report) => {
+                println!(
+                    "  cleaned '{}': {} workers killed, {} worktrees removed, {} claims released",
+                    report.session_id,
+                    report.workers_killed,
+                    report.worktrees_removed,
+                    report.claims_released,
+                );
+                cleaned += 1;
+            }
+            Err(e) => {
+                errors.push((info.session.id.clone(), e.to_string()));
+            }
+        }
+    }
+
+    println!("Sweep complete: {cleaned} cleaned, {} errors", errors.len());
+    for (sid, err) in &errors {
+        eprintln!("  error cleaning '{sid}': {err}");
+    }
+
+    Ok(())
+}
+
 async fn run_results(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     use codeflow_core::store::DataStore;
 
@@ -1555,12 +1780,38 @@ async fn run_history(
     Ok(())
 }
 
-async fn run_resume(project_dir: &Path, batch: Option<&str>, foreground: bool) -> Result<()> {
+async fn run_resume(
+    project_dir: &Path,
+    batch: Option<&str>,
+    foreground: bool,
+    force: bool,
+) -> Result<()> {
     use codeflow_core::store::DataStore;
     use codeflow_core::types::{AutorunSessionStatus, AutorunTaskRunStatus};
 
     // Autorun MUST work from the real repo root, not a worktree.
     let project_dir = &resolve_repo_root(project_dir)?;
+
+    // C13: Auto-sweep stale sessions before resume to make them resumable.
+    if let Ok(config) = codeflow_core::autorun::load_config(project_dir) {
+        if let Ok(store) = open_store(project_dir).await {
+            match codeflow_core::autorun::sweep_stale_sessions(
+                store.as_ref(),
+                project_dir,
+                config.autorun.stale_threshold_secs,
+            )
+            .await
+            {
+                Ok(summary) if summary.sessions_cleaned > 0 => {
+                    eprintln!(
+                        "auto-sweep: cleaned {} stale session(s)",
+                        summary.sessions_cleaned
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
 
     // C6: Batch guard applies to resume as well (AC 33).
     // Use a placeholder path for the duplicate-file check since resume
@@ -1620,6 +1871,34 @@ async fn run_resume(project_dir: &Path, batch: Option<&str>, foreground: bool) -
     if resumable_runs.is_empty() {
         println!("All tasks in batch '{session_id}' are completed. Nothing to resume.");
         return Ok(());
+    }
+
+    // C14: Check for live worker tmux sessions before resuming.
+    if !force {
+        let workers = store.list_autorun_workers(&session_id).await?;
+        let live_workers: Vec<_> = workers
+            .iter()
+            .filter(|w| {
+                w.status == codeflow_core::types::AutorunWorkerStatus::Running
+                    && w.tmux_session.as_deref().is_some_and(tmux_has_session)
+            })
+            .collect();
+        if !live_workers.is_empty() {
+            eprintln!(
+                "WARNING: {} live worker tmux session(s) detected for this batch:",
+                live_workers.len()
+            );
+            for w in &live_workers {
+                eprintln!(
+                    "  task={}, tmux={}",
+                    w.task_id,
+                    w.tmux_session.as_deref().unwrap_or("?")
+                );
+            }
+            anyhow::bail!(
+                "live workers detected. Use --force to resume anyway, or cancel them first."
+            );
+        }
     }
 
     println!(
@@ -2029,10 +2308,12 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         let script_path = local_dir.join("autorun-worker.sh");
         let script_content = format!(
             "#!/bin/bash\n\
+             _EXIT_FILE='{exit}'\n\
+             trap 'echo 1 > \"$_EXIT_FILE\"' HUP TERM\n\
              source '{env}'\n\
              cd '{wdir}'\n\
              claude --dangerously-skip-permissions \"$(cat '{prompt}')\"\n\
-             echo $? > '{exit}'\n",
+             echo $? > \"$_EXIT_FILE\"\n",
             env = sq(&env_file_path.to_string_lossy()),
             wdir = sq(work_dir),
             prompt = sq(&prompt_file_path.to_string_lossy()),
@@ -3598,6 +3879,8 @@ tasks:
                 failed_tasks: 0,
                 pid: None,
                 skipped_tasks: 0,
+                tmux_session: None,
+                stale_reason: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 completed_at: None,
             };
@@ -3663,6 +3946,8 @@ tasks:
                     failed_tasks: 0,
                     pid: None,
                     skipped_tasks: 0,
+                    tmux_session: None,
+                    stale_reason: None,
                     created_at: now.clone(),
                     completed_at: None,
                 };
@@ -3762,6 +4047,8 @@ tasks:
                     failed_tasks: 0,
                     pid: None,
                     skipped_tasks: 0,
+                    tmux_session: None,
+                    stale_reason: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -3840,6 +4127,8 @@ tasks:
                     failed_tasks: i32::from(i == 1),
                     pid: None,
                     skipped_tasks: 0,
+                    tmux_session: None,
+                    stale_reason: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -4032,6 +4321,8 @@ tasks:
             failed_tasks: 1,
             pid: None,
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         }

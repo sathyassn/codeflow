@@ -2555,4 +2555,145 @@ Read and implement.
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("batch_started"));
     }
+
+    // -- worker_log coverage --
+
+    #[test]
+    fn test_worker_log_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("logs/worker.log");
+        worker_log(&log_path, "test message");
+        assert!(log_path.exists(), "log file should be created");
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains("test message"));
+        assert!(content.contains("[20"), "should contain ISO timestamp");
+    }
+
+    #[test]
+    fn test_worker_log_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("worker.log");
+        worker_log(&log_path, "first");
+        worker_log(&log_path, "second");
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains("first"));
+        assert!(content.contains("second"));
+        assert_eq!(content.lines().count(), 2);
+    }
+
+    #[test]
+    fn test_worker_log_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("deep/nested/dir/worker.log");
+        worker_log(&log_path, "nested");
+        assert!(log_path.exists());
+    }
+
+    // -- parse_task_markdown edge case coverage --
+
+    #[test]
+    fn test_parse_task_markdown_with_file_scope() {
+        let content =
+            "---\ntitle: Test\nfile_scope:\n  - src/main.rs\n  - src/lib.rs\n---\n# Body\n";
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.file_scope, vec!["src/main.rs", "src/lib.rs"]);
+    }
+
+    #[test]
+    fn test_parse_task_markdown_with_approach() {
+        let content =
+            "---\ntitle: Test\n---\n## Approach\nDo the thing step by step.\n\n## Other\nStuff.\n";
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.approach, "Do the thing step by step.");
+    }
+
+    #[test]
+    fn test_parse_task_markdown_approach_no_next_heading() {
+        let content =
+            "---\ntitle: Test\n---\n## Approach\nFull approach with no following section.\n";
+        let meta = parse_task_markdown(content);
+        assert!(meta.approach.contains("Full approach"));
+    }
+
+    #[test]
+    fn test_parse_task_markdown_invalid_yaml() {
+        let content = "---\n: invalid: yaml: [broken\n---\nBody text.\n";
+        let meta = parse_task_markdown(content);
+        // Should not panic -- just return empty metadata.
+        assert!(meta.title.is_empty());
+    }
+
+    #[test]
+    fn test_parse_task_markdown_description_from_body_section() {
+        let content = "---\ntitle: Test\n---\n## Description\nThis is the description from body.\n\n## Next\n";
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.description, "This is the description from body.");
+    }
+
+    #[test]
+    fn test_parse_task_markdown_frontmatter_description_takes_precedence() {
+        let content =
+            "---\ntitle: Test\ndescription: From frontmatter\n---\n## Description\nFrom body.\n";
+        let meta = parse_task_markdown(content);
+        assert_eq!(meta.description, "From frontmatter");
+    }
+
+    // -- build_task_prompt edge cases --
+
+    #[test]
+    fn test_build_task_prompt_with_approach() {
+        let meta = TaskMetadata {
+            title: "Test".into(),
+            description: "Desc".into(),
+            approach: "Step 1, Step 2".into(),
+            ..Default::default()
+        };
+        let prompt = build_task_prompt(&meta);
+        assert!(prompt.contains("## Approach"));
+        assert!(prompt.contains("Step 1, Step 2"));
+    }
+
+    #[test]
+    fn test_build_task_prompt_with_file_scope() {
+        let meta = TaskMetadata {
+            title: "Test".into(),
+            file_scope: vec!["src/main.rs".into(), "src/lib.rs".into()],
+            ..Default::default()
+        };
+        let prompt = build_task_prompt(&meta);
+        assert!(prompt.contains("src/main.rs"));
+        assert!(prompt.contains("src/lib.rs"));
+    }
+
+    // -- Coverage: completed worker with no PR (pr_number=0) --
+
+    struct MockClaudeNoPr;
+
+    impl ClaudeInvoker for MockClaudeNoPr {
+        async fn invoke(&self, _cfg: InvokeConfig) -> Result<InvokeResult, AutorunError> {
+            Ok(InvokeResult {
+                exit_code: 0,
+                pr_number: 0,
+                pr_url: String::new(),
+                branch_name: "feat/no-pr".into(),
+                output: String::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tmux_worker_success_no_pr() {
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaudeNoPr;
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        assert_eq!(result.status, "completed");
+        assert_eq!(
+            result.pr_number, 0,
+            "pr_number should be 0 when no PR created"
+        );
+    }
 }

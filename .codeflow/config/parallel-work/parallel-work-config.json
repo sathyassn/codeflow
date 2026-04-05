@@ -33,6 +33,8 @@
     "worker_timeout_secs": 3600,
     "blocked_behavior": "skip_and_continue",
     "report_dir": "project-management/tracking/autorun",
-    "max_concurrent_batches": 5
+    "max_concurrent_batches": 5,
+    "heartbeat_interval_secs": 30,
+    "stale_threshold_secs": 90
   }
 }

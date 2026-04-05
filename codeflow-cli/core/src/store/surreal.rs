@@ -602,6 +602,8 @@ impl DataStore for SurrealStore {
             "failed_tasks" => update.failed_tasks,
             "skipped_tasks" => update.skipped_tasks,
             "completed_at" => update.completed_at,
+            "tmux_session" => update.tmux_session,
+            "stale_reason" => update.stale_reason,
         };
 
         let Some(data) = data else {
@@ -1347,6 +1349,8 @@ mod tests {
             failed_tasks: 0,
             pid: Some(1234),
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: "2026-03-08T00:00:00Z".into(),
             completed_at: None,
         };

@@ -169,11 +169,27 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             failed_tasks: 0,
             pid: Some(i64::from(std::process::id())),
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         };
         if let Err(e) = self.store.create_autorun_session(&ar_session).await {
             eprintln!("warning: failed to create autorun_session record: {e}");
+        }
+
+        // C5: Store orchestrator tmux session name from env var.
+        if let Ok(orch_tmux) = std::env::var("CODEFLOW_ORCH_TMUX") {
+            let _ = self
+                .store
+                .update_autorun_session(
+                    session_id,
+                    crate::models::AutorunSessionUpdate {
+                        tmux_session: Some(Some(orch_tmux)),
+                        ..Default::default()
+                    },
+                )
+                .await;
         }
 
         // C26: Log BATCH_START.
@@ -221,6 +237,27 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             );
         }
         let blocked_behavior = loaded_config.autorun.blocked_behavior.clone();
+
+        // C4: Start heartbeat background task.
+        let heartbeat_dir = project_dir.join(".state/autorun");
+        let _ = std::fs::create_dir_all(&heartbeat_dir);
+        let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{session_id}"));
+        let heartbeat_interval =
+            std::time::Duration::from_secs(loaded_config.autorun.heartbeat_interval_secs);
+        let heartbeat_handle = tokio::spawn({
+            let path = heartbeat_path.clone();
+            async move {
+                loop {
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .truncate(true)
+                        .write(true)
+                        .open(&path);
+                    tokio::time::sleep(heartbeat_interval).await;
+                }
+            }
+        });
+
         let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
 
@@ -270,6 +307,10 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             Self::abort_cleanup(&state, &batch.order).await;
         }
 
+        // C4: Stop heartbeat and clean up file.
+        heartbeat_handle.abort();
+        let _ = std::fs::remove_file(&heartbeat_path);
+
         let final_results = state.results.lock().await.clone();
 
         // Compute final counts.
@@ -296,6 +337,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             failed_tasks: Some(failed_count.min(i32::MAX as usize) as i32),
             skipped_tasks: Some(skipped_count.min(i32::MAX as usize) as i32),
             completed_at: Some(chrono::Utc::now().to_rfc3339()),
+            ..Default::default()
         };
         if let Err(e) = self
             .store

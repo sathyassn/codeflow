@@ -8,6 +8,7 @@
 pub mod batch;
 pub mod config;
 pub mod orchestrator;
+pub mod stale;
 pub mod worker;
 
 pub use batch::{
@@ -16,6 +17,11 @@ pub use batch::{
 };
 pub use config::{AutorunConfig, ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
+pub use stale::{
+    CleanupReport, StaleSessionInfo, SweepSummary, check_heartbeat_alive, check_pid_alive,
+    check_tmux_alive, cleanup_stale_session, detect_stale_sessions, is_session_stale,
+    sweep_stale_sessions,
+};
 pub use worker::{
     ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TaskMetadata, TmuxRunner,
     TmuxWorker, WorkerRunner, WorktreeInfo, WorktreeProvider, build_task_prompt,

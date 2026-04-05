@@ -502,6 +502,12 @@ pub mod mock {
                 if let Some(v) = update.completed_at {
                     s.completed_at = Some(v);
                 }
+                if let Some(v) = update.tmux_session {
+                    s.tmux_session = v;
+                }
+                if let Some(v) = update.stale_reason {
+                    s.stale_reason = v;
+                }
             }
             Ok(())
         }
@@ -1115,6 +1121,8 @@ pub mod mock {
                 failed_tasks: 0,
                 pid: None,
                 skipped_tasks: 0,
+                tmux_session: None,
+                stale_reason: None,
                 created_at: "2026-03-08T00:00:00Z".into(),
                 completed_at: None,
             })
@@ -1226,6 +1234,8 @@ pub mod mock {
             failed_tasks: 1,
             pid: None,
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: created_at.into(),
             completed_at: None,
         }

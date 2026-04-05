@@ -39,6 +39,8 @@ pub struct AutorunSessionUpdate {
     pub failed_tasks: Option<i32>,
     pub skipped_tasks: Option<i32>,
     pub completed_at: Option<String>,
+    pub tmux_session: Option<Option<String>>,
+    pub stale_reason: Option<Option<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +173,7 @@ mod tests {
             failed_tasks: Some(0),
             skipped_tasks: Some(1),
             completed_at: Some("2026-03-07T02:00:00Z".to_string()),
+            ..Default::default()
         };
         assert_eq!(u.completed_tasks, Some(5));
         assert_eq!(u.failed_tasks, Some(0));

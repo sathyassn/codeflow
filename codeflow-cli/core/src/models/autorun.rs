@@ -22,6 +22,10 @@ pub struct AutorunSession {
     pub pid: Option<i64>,
     #[serde(default)]
     pub skipped_tasks: i32,
+    #[serde(default)]
+    pub tmux_session: Option<String>,
+    #[serde(default)]
+    pub stale_reason: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
 }
@@ -106,6 +110,8 @@ mod tests {
             failed_tasks: 0,
             pid: Some(12345),
             skipped_tasks: 2,
+            tmux_session: None,
+            stale_reason: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -126,6 +132,8 @@ mod tests {
             failed_tasks: 0,
             pid: None,
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -146,6 +154,8 @@ mod tests {
             failed_tasks: 1,
             pid: Some(999),
             skipped_tasks: 1,
+            tmux_session: None,
+            stale_reason: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: Some("2026-03-21T01:00:00Z".into()),
         };
@@ -168,6 +178,8 @@ mod tests {
             failed_tasks: 0,
             pid: None,
             skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
