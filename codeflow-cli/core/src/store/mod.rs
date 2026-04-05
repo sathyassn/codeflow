@@ -14,6 +14,15 @@ use crate::models::{
 };
 use crate::types::FormatId;
 
+/// Result of a prune operation.
+#[derive(Debug, Default, Clone)]
+pub struct PruneResult {
+    pub sessions_deleted: u64,
+    pub workers_deleted: u64,
+    pub task_runs_deleted: u64,
+    pub failures: Vec<String>,
+}
+
 /// Result of a sync operation.
 #[derive(Debug, Default)]
 pub struct SyncResult {
@@ -140,6 +149,17 @@ pub trait DataStore: Send + Sync {
         session_id: &str,
         task_id: &str,
     ) -> impl std::future::Future<Output = Result<Option<AutorunWorker>, DbError>> + Send;
+
+    /// Prune old autorun sessions, workers, and task runs in FK-safe cascade order.
+    ///
+    /// Deletes records for terminal-status sessions (Completed, Failed, Cancelled, Timeout)
+    /// whose `completed_at` is before `before`. If `keep_last > 0`, retains the N most
+    /// recent terminal sessions regardless of age.
+    fn prune_autorun_sessions(
+        &self,
+        before: &str,
+        keep_last: usize,
+    ) -> impl std::future::Future<Output = Result<PruneResult, DbError>> + Send;
 
     // -- Generic query --
 
@@ -275,6 +295,9 @@ impl DataStore for NoopStore {
         _: &str,
     ) -> Result<Option<AutorunWorker>, DbError> {
         Ok(None)
+    }
+    async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> {
+        Ok(PruneResult::default())
     }
     async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> {
         Ok(serde_json::json!([]))
@@ -659,6 +682,69 @@ pub mod mock {
                 .cloned())
         }
 
+        async fn prune_autorun_sessions(
+            &self,
+            before: &str,
+            keep_last: usize,
+        ) -> Result<PruneResult, DbError> {
+            use crate::types::AutorunSessionStatus;
+
+            let terminal = [
+                AutorunSessionStatus::Completed,
+                AutorunSessionStatus::Failed,
+                AutorunSessionStatus::Cancelled,
+                AutorunSessionStatus::Timeout,
+            ];
+
+            let sessions_lock = self.autorun_sessions.lock().unwrap();
+            let mut candidates: Vec<&AutorunSession> = sessions_lock
+                .values()
+                .filter(|s| {
+                    terminal.contains(&s.status)
+                        && s.completed_at.as_deref().is_some_and(|ca| ca < before)
+                })
+                .collect();
+
+            // Sort by completed_at descending to preserve keep_last most recent
+            candidates.sort_by(|a, b| {
+                b.completed_at
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(a.completed_at.as_deref().unwrap_or(""))
+            });
+
+            let to_delete: Vec<String> = candidates
+                .into_iter()
+                .skip(keep_last)
+                .map(|s| s.id.clone())
+                .collect();
+            drop(sessions_lock);
+
+            let mut result = PruneResult::default();
+
+            // FK-safe order: task_runs, workers, sessions
+            {
+                let mut runs = self.autorun_task_runs.lock().unwrap();
+                let before_len = runs.len();
+                runs.retain(|_, r| !to_delete.contains(&r.session_id));
+                result.task_runs_deleted = (before_len - runs.len()) as u64;
+            }
+            {
+                let mut workers = self.autorun_workers.lock().unwrap();
+                let before_len = workers.len();
+                workers.retain(|_, w| !to_delete.contains(&w.session_id));
+                result.workers_deleted = (before_len - workers.len()) as u64;
+            }
+            {
+                let mut sessions = self.autorun_sessions.lock().unwrap();
+                let before_len = sessions.len();
+                sessions.retain(|id, _| !to_delete.contains(id));
+                result.sessions_deleted = (before_len - sessions.len()) as u64;
+            }
+
+            Ok(result)
+        }
+
         async fn query_to_json(&self, _query: &str) -> Result<serde_json::Value, DbError> {
             Ok(serde_json::json!([]))
         }
@@ -713,6 +799,7 @@ pub mod mock {
         async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> { Ok(vec![]) }
         async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> { Ok(vec![]) }
         async fn get_autorun_worker_by_task_id(&self, _: &str, _: &str) -> Result<Option<AutorunWorker>, DbError> { Ok(None) }
+        async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Err(DbError::Query("test: forced failure".into())) }
         async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
         async fn sync_from_events(&self, e: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> { Ok(SyncResult { events_processed: e.count() as u64, ..Default::default() }) }
     }
@@ -1611,5 +1698,136 @@ pub mod mock {
             .await
             .unwrap();
         assert!(not_found.is_none());
+    }
+
+    // -- MockStore prune tests --
+
+    fn make_autorun_session_for_prune(
+        id: &str,
+        status: crate::types::AutorunSessionStatus,
+        completed_at: Option<&str>,
+    ) -> AutorunSession {
+        AutorunSession {
+            id: id.to_string(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("test".into()),
+            status,
+            max_session_workers: 2,
+            total_tasks: 3,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: completed_at.map(String::from),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_prune_deletes_terminal_sessions() {
+        use crate::types::AutorunSessionStatus;
+
+        let store = MockStore::new();
+        store
+            .create_autorun_session(&make_autorun_session_for_prune(
+                "ms-1",
+                AutorunSessionStatus::Completed,
+                Some("2026-01-05T00:00:00Z"),
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session_for_prune(
+                "ms-2",
+                AutorunSessionStatus::Running,
+                None,
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("mw-1", "ms-1", "task-mw1", 1))
+            .await
+            .unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run(
+                "mtr-1",
+                "ms-1",
+                "task-mtr1",
+                "2026-01-01T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 1);
+        assert_eq!(result.workers_deleted, 1);
+        assert_eq!(result.task_runs_deleted, 1);
+
+        // Running session still exists
+        assert!(store.get_autorun_session("ms-2").await.unwrap().is_some());
+        // Completed session is gone
+        assert!(store.get_autorun_session("ms-1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_prune_respects_keep_last() {
+        use crate::types::AutorunSessionStatus;
+
+        let store = MockStore::new();
+        store
+            .create_autorun_session(&make_autorun_session_for_prune(
+                "mkl-1",
+                AutorunSessionStatus::Completed,
+                Some("2026-01-05T00:00:00Z"),
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session_for_prune(
+                "mkl-2",
+                AutorunSessionStatus::Completed,
+                Some("2026-01-10T00:00:00Z"),
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session_for_prune(
+                "mkl-3",
+                AutorunSessionStatus::Completed,
+                Some("2026-01-15T00:00:00Z"),
+            ))
+            .await
+            .unwrap();
+
+        // keep_last=2: only oldest (mkl-1) should be deleted
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 2)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 1);
+        assert!(store.get_autorun_session("mkl-1").await.unwrap().is_none());
+        assert!(store.get_autorun_session("mkl-2").await.unwrap().is_some());
+        assert!(store.get_autorun_session("mkl-3").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mock_prune_noop_when_empty() {
+        let store = MockStore::new();
+        let result = store
+            .prune_autorun_sessions("2026-12-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 0);
+        assert_eq!(result.workers_deleted, 0);
+        assert_eq!(result.task_runs_deleted, 0);
+        assert!(result.failures.is_empty());
     }
 }

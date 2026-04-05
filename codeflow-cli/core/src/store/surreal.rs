@@ -790,6 +790,114 @@ impl DataStore for SurrealStore {
         Ok(results.into_iter().next())
     }
 
+    async fn prune_autorun_sessions(
+        &self,
+        before: &str,
+        keep_last: usize,
+    ) -> Result<super::PruneResult, DbError> {
+        let mut result = super::PruneResult::default();
+
+        // Step 0: Find session IDs to prune.
+        // Query terminal-status sessions completed before the cutoff.
+        // We select id and completed_at so we can ORDER BY completed_at.
+        let ids_sql = "SELECT id, completed_at FROM autorun_session \
+             WHERE status IN ['completed', 'failed', 'cancelled', 'timeout'] \
+             AND completed_at < $before \
+             ORDER BY completed_at DESC";
+        let mut resp = self
+            .db
+            .query(ids_sql)
+            .bind(("before", before.to_string()))
+            .await?;
+
+        #[derive(Debug, serde::Deserialize)]
+        struct IdRow {
+            #[serde(deserialize_with = "crate::models::serde_helpers::deserialize_record_id")]
+            id: String,
+        }
+        let rows: Vec<IdRow> = resp.take(0)?;
+        let mut candidate_ids: Vec<String> = rows.into_iter().map(|r| r.id).collect();
+
+        // If keep_last > 0, skip the N most recent (already sorted DESC)
+        if keep_last > 0 && candidate_ids.len() > keep_last {
+            candidate_ids = candidate_ids.into_iter().skip(keep_last).collect();
+        } else if keep_last > 0 {
+            // All candidates are within the keep_last window
+            return Ok(result);
+        }
+
+        if candidate_ids.is_empty() {
+            return Ok(result);
+        }
+
+        // Step 1: Count + DELETE task_runs (FK-safe: children first)
+        match self
+            .db
+            .query(
+                "LET $count = (SELECT count() AS cnt FROM autorun_task_run WHERE session_id IN $ids GROUP ALL); \
+                 DELETE FROM autorun_task_run WHERE session_id IN $ids; \
+                 RETURN $count;"
+            )
+            .bind(("ids", candidate_ids.clone()))
+            .await
+        {
+            Ok(mut resp) => {
+                let counts: Vec<serde_json::Value> = resp.take(2).unwrap_or_default();
+                result.task_runs_deleted = counts
+                    .first()
+                    .and_then(|v| v.get("cnt"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+            }
+            Err(e) => {
+                result.failures.push(format!("task_runs: {e}"));
+            }
+        }
+
+        // Step 2: Count + DELETE workers
+        match self
+            .db
+            .query(
+                "LET $count = (SELECT count() AS cnt FROM autorun_worker WHERE session_id IN $ids GROUP ALL); \
+                 DELETE FROM autorun_worker WHERE session_id IN $ids; \
+                 RETURN $count;"
+            )
+            .bind(("ids", candidate_ids.clone()))
+            .await
+        {
+            Ok(mut resp) => {
+                let counts: Vec<serde_json::Value> = resp.take(2).unwrap_or_default();
+                result.workers_deleted = counts
+                    .first()
+                    .and_then(|v| v.get("cnt"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+            }
+            Err(e) => {
+                result.failures.push(format!("workers: {e}"));
+            }
+        }
+
+        // Step 3: DELETE sessions by their IDs
+        for sid in &candidate_ids {
+            match self
+                .db
+                .query("DELETE type::thing('autorun_session', $id)")
+                .bind(("id", sid.clone()))
+                .await
+            {
+                Ok(_) => {
+                    result.sessions_deleted += 1;
+                }
+                Err(e) => {
+                    result.failures.push(format!("session {sid}: {e}"));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     // -- Generic query --
 
     async fn query_to_json(&self, query: &str) -> Result<serde_json::Value, DbError> {
@@ -2608,5 +2716,334 @@ mod tests {
         let store = test_store().await;
         let result = store.get_task("nonexistent").await.unwrap();
         assert!(result.is_none());
+    }
+
+    // -- Prune autorun tests --
+
+    /// Helper: create an autorun session with the given status and completed_at.
+    fn make_autorun_session(
+        id: &str,
+        status: AutorunSessionStatus,
+        completed_at: Option<&str>,
+    ) -> AutorunSession {
+        AutorunSession {
+            id: id.to_string(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("test".into()),
+            status,
+            max_session_workers: 2,
+            total_tasks: 3,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: completed_at.map(String::from),
+        }
+    }
+
+    fn make_autorun_worker(id: &str, session_id: &str) -> crate::models::AutorunWorker {
+        use crate::types::AutorunWorkerStatus;
+        crate::models::AutorunWorker {
+            id: id.to_string(),
+            session_id: session_id.to_string(),
+            worker_num: 1,
+            task_id: format!("task-{id}"),
+            status: AutorunWorkerStatus::Completed,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            worker_session_id: None,
+            pr_number: None,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    fn make_autorun_task_run(id: &str, session_id: &str) -> crate::models::AutorunTaskRun {
+        use crate::types::AutorunTaskRunStatus;
+        crate::models::AutorunTaskRun {
+            id: id.to_string(),
+            worker_id: format!("w-{id}"),
+            task_id: format!("task-{id}"),
+            session_id: session_id.to_string(),
+            status: AutorunTaskRunStatus::Completed,
+            branch_name: None,
+            worktree_path: None,
+            pr_number: None,
+            pr_url: None,
+            blocked_reason: None,
+            claim_conflicts: None,
+            merge_conflicts: None,
+            started_at: None,
+            completed_at: None,
+            duration_seconds: None,
+            exit_code: None,
+            error_message: None,
+            verification_result: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prune_deletes_terminal_sessions() {
+        let store = test_store().await;
+
+        // Create completed session (old)
+        let s1 = make_autorun_session(
+            "prune-s1",
+            AutorunSessionStatus::Completed,
+            Some("2026-01-10T00:00:00Z"),
+        );
+        // Create failed session (old)
+        let s2 = make_autorun_session(
+            "prune-s2",
+            AutorunSessionStatus::Failed,
+            Some("2026-01-11T00:00:00Z"),
+        );
+        // Create running session (should NOT be pruned)
+        let s3 = make_autorun_session("prune-s3", AutorunSessionStatus::Running, None);
+
+        store.create_autorun_session(&s1).await.unwrap();
+        store.create_autorun_session(&s2).await.unwrap();
+        store.create_autorun_session(&s3).await.unwrap();
+
+        // Create workers and task_runs for the terminal sessions
+        store
+            .create_autorun_worker(&make_autorun_worker("pw1", "prune-s1"))
+            .await
+            .unwrap();
+        store
+            .create_autorun_worker(&make_autorun_worker("pw2", "prune-s2"))
+            .await
+            .unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run("ptr1", "prune-s1"))
+            .await
+            .unwrap();
+        store
+            .create_autorun_task_run(&make_autorun_task_run("ptr2", "prune-s2"))
+            .await
+            .unwrap();
+
+        // Prune everything before 2026-02-01
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 2);
+        assert_eq!(result.workers_deleted, 2);
+        assert_eq!(result.task_runs_deleted, 2);
+        assert!(result.failures.is_empty());
+
+        // Running session should still exist
+        let s3_check = store.get_autorun_session("prune-s3").await.unwrap();
+        assert!(s3_check.is_some());
+
+        // Deleted sessions should be gone
+        let s1_check = store.get_autorun_session("prune-s1").await.unwrap();
+        assert!(s1_check.is_none());
+        let s2_check = store.get_autorun_session("prune-s2").await.unwrap();
+        assert!(s2_check.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_prune_respects_keep_last() {
+        let store = test_store().await;
+
+        // Create 3 completed sessions with different completed_at times
+        let s1 = make_autorun_session(
+            "kl-s1",
+            AutorunSessionStatus::Completed,
+            Some("2026-01-05T00:00:00Z"),
+        );
+        let s2 = make_autorun_session(
+            "kl-s2",
+            AutorunSessionStatus::Completed,
+            Some("2026-01-10T00:00:00Z"),
+        );
+        let s3 = make_autorun_session(
+            "kl-s3",
+            AutorunSessionStatus::Completed,
+            Some("2026-01-15T00:00:00Z"),
+        );
+
+        store.create_autorun_session(&s1).await.unwrap();
+        store.create_autorun_session(&s2).await.unwrap();
+        store.create_autorun_session(&s3).await.unwrap();
+
+        // Prune with keep_last=2: should only delete oldest (s1)
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 2)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 1);
+
+        // s1 deleted, s2 and s3 kept
+        let s1_check = store.get_autorun_session("kl-s1").await.unwrap();
+        assert!(s1_check.is_none());
+        let s2_check = store.get_autorun_session("kl-s2").await.unwrap();
+        assert!(s2_check.is_some());
+        let s3_check = store.get_autorun_session("kl-s3").await.unwrap();
+        assert!(s3_check.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_prune_ignores_non_terminal_statuses() {
+        let store = test_store().await;
+
+        // Pending session
+        let s1 = make_autorun_session(
+            "nt-s1",
+            AutorunSessionStatus::Pending,
+            Some("2026-01-01T00:00:00Z"),
+        );
+        // Running session
+        let s2 = make_autorun_session("nt-s2", AutorunSessionStatus::Running, None);
+
+        store.create_autorun_session(&s1).await.unwrap();
+        store.create_autorun_session(&s2).await.unwrap();
+
+        let result = store
+            .prune_autorun_sessions("2026-12-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 0);
+        assert_eq!(result.workers_deleted, 0);
+        assert_eq!(result.task_runs_deleted, 0);
+
+        // Both sessions still exist
+        assert!(store.get_autorun_session("nt-s1").await.unwrap().is_some());
+        assert!(store.get_autorun_session("nt-s2").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_prune_noop_when_nothing_to_prune() {
+        let store = test_store().await;
+
+        let result = store
+            .prune_autorun_sessions("2026-01-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 0);
+        assert_eq!(result.workers_deleted, 0);
+        assert_eq!(result.task_runs_deleted, 0);
+        assert!(result.failures.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_prune_fk_safe_cascade_order() {
+        let store = test_store().await;
+
+        // Create a completed session with workers and task_runs
+        let session = make_autorun_session(
+            "fk-s1",
+            AutorunSessionStatus::Cancelled,
+            Some("2026-01-05T00:00:00Z"),
+        );
+        store.create_autorun_session(&session).await.unwrap();
+
+        // Create multiple workers and task_runs
+        for i in 0..3 {
+            let wid = format!("fk-w{i}");
+            store
+                .create_autorun_worker(&make_autorun_worker(&wid, "fk-s1"))
+                .await
+                .unwrap();
+            let trid = format!("fk-tr{i}");
+            store
+                .create_autorun_task_run(&make_autorun_task_run(&trid, "fk-s1"))
+                .await
+                .unwrap();
+        }
+
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 1);
+        assert_eq!(result.workers_deleted, 3);
+        assert_eq!(result.task_runs_deleted, 3);
+        assert!(result.failures.is_empty());
+
+        // Verify session is gone
+        assert!(store.get_autorun_session("fk-s1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_prune_all_terminal_statuses() {
+        let store = test_store().await;
+
+        // Test all 4 terminal statuses
+        let s_completed = make_autorun_session(
+            "ts-completed",
+            AutorunSessionStatus::Completed,
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let s_failed = make_autorun_session(
+            "ts-failed",
+            AutorunSessionStatus::Failed,
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let s_cancelled = make_autorun_session(
+            "ts-cancelled",
+            AutorunSessionStatus::Cancelled,
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let s_timeout = make_autorun_session(
+            "ts-timeout",
+            AutorunSessionStatus::Timeout,
+            Some("2026-01-01T00:00:00Z"),
+        );
+
+        store.create_autorun_session(&s_completed).await.unwrap();
+        store.create_autorun_session(&s_failed).await.unwrap();
+        store.create_autorun_session(&s_cancelled).await.unwrap();
+        store.create_autorun_session(&s_timeout).await.unwrap();
+
+        let result = store
+            .prune_autorun_sessions("2026-02-01T00:00:00Z", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.sessions_deleted, 4);
+
+        // All terminal sessions should be gone
+        assert!(
+            store
+                .get_autorun_session("ts-completed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_autorun_session("ts-failed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_autorun_session("ts-cancelled")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_autorun_session("ts-timeout")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

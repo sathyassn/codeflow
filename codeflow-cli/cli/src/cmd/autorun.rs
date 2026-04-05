@@ -105,6 +105,18 @@ pub enum AutorunCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Prune old completed/failed autorun sessions and their workers/task_runs
+    Prune {
+        /// Delete sessions older than this duration (e.g. 30d, 7d, 24h)
+        #[arg(long)]
+        older_than: String,
+        /// Keep the N most recent terminal sessions regardless of age
+        #[arg(long, default_value = "0")]
+        keep_last: usize,
+        /// Show what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show historical autorun batch executions
     History {
         /// Maximum number of batches to show
@@ -174,6 +186,11 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             force,
         }) => run_resume(&project_dir, batch.as_deref(), foreground, force).await,
         Some(AutorunCommand::Batches) => run_batches_sync(&project_dir),
+        Some(AutorunCommand::Prune {
+            older_than,
+            keep_last,
+            dry_run,
+        }) => run_prune(&project_dir, &older_than, keep_last, dry_run).await,
         Some(AutorunCommand::History {
             limit,
             since,
@@ -1712,6 +1729,109 @@ async fn run_results(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             "{:<24} {:<12} {:>9}  {:<6} {:>5}  {}",
             run.task_id, run.status, duration, pr, exit, error
         );
+    }
+
+    Ok(())
+}
+
+/// Parse a duration string like "30d", "7d", "24h" into a cutoff ISO timestamp.
+fn parse_duration_to_cutoff(duration_str: &str) -> Result<String> {
+    let s = duration_str.trim();
+    let (num_str, unit) = if let Some(n) = s.strip_suffix('d') {
+        (n, 'd')
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 'h')
+    } else {
+        anyhow::bail!(
+            "invalid duration format '{duration_str}'. Expected format: 30d, 7d, 24h (d=days, h=hours)"
+        );
+    };
+
+    let num: i64 = num_str
+        .parse()
+        .with_context(|| format!("invalid number in duration '{duration_str}'"))?;
+
+    let secs = match unit {
+        'd' => num * 86400,
+        'h' => num * 3600,
+        _ => unreachable!(),
+    };
+
+    let duration = chrono::TimeDelta::seconds(secs);
+    let dt = chrono::Utc::now() - duration;
+    Ok(dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+async fn run_prune(
+    project_dir: &Path,
+    older_than: &str,
+    keep_last: usize,
+    dry_run: bool,
+) -> Result<()> {
+    use codeflow_core::store::DataStore;
+
+    let cutoff = parse_duration_to_cutoff(older_than)?;
+
+    let db_dir = project_dir.join(".state/db");
+    let store = codeflow_core::store::SurrealStore::open(&db_dir)
+        .await
+        .context("failed to open database")?;
+
+    if dry_run {
+        // Count what would be deleted using queries
+        let terminal = serde_json::json!(["completed", "failed", "cancelled", "timeout"]);
+
+        let count_sql = if keep_last > 0 {
+            format!(
+                "SELECT count() AS cnt FROM autorun_session \
+                 WHERE status IN $terminal AND completed_at < $before \
+                 AND id NOT IN (\
+                     SELECT VALUE id FROM autorun_session \
+                     WHERE status IN $terminal \
+                     ORDER BY completed_at DESC LIMIT {keep_last}\
+                 ) GROUP ALL"
+            )
+        } else {
+            "SELECT count() AS cnt FROM autorun_session \
+             WHERE status IN $terminal AND completed_at < $before GROUP ALL"
+                .to_string()
+        };
+
+        let mut resp = store
+            .db()
+            .query(&count_sql)
+            .bind(("terminal", terminal))
+            .bind(("before", cutoff.clone()))
+            .await?;
+        let counts: Vec<serde_json::Value> = resp.take(0).unwrap_or_default();
+        let session_count = counts
+            .first()
+            .and_then(|v| v.get("cnt"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+
+        println!("Dry run: would prune records older than {cutoff}");
+        println!("  Sessions: {session_count}");
+        println!("  (Workers and task_runs would be cascade-deleted)");
+        if keep_last > 0 {
+            println!("  Keeping {keep_last} most recent terminal sessions");
+        }
+        return Ok(());
+    }
+
+    let result = store.prune_autorun_sessions(&cutoff, keep_last).await?;
+
+    println!("Pruned autorun records older than {cutoff}:");
+    println!("  Sessions deleted: {}", result.sessions_deleted);
+    println!("  Workers deleted:  {}", result.workers_deleted);
+    println!("  Task runs deleted: {}", result.task_runs_deleted);
+
+    if !result.failures.is_empty() {
+        eprintln!("\nPartial failures:");
+        for f in &result.failures {
+            eprintln!("  - {f}");
+        }
+        std::process::exit(1);
     }
 
     Ok(())

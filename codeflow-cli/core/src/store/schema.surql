@@ -174,6 +174,8 @@ DEFINE FIELD OVERWRITE skipped_tasks       ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_session TYPE string;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_session TYPE option<string>;
 
+DEFINE INDEX OVERWRITE idx_session_created ON autorun_session FIELDS created_at;
+
 DEFINE TABLE OVERWRITE autorun_worker SCHEMAFULL;
 DEFINE FIELD OVERWRITE session_id    ON TABLE autorun_worker TYPE string;
 DEFINE FIELD OVERWRITE worker_num    ON TABLE autorun_worker TYPE int;
@@ -187,6 +189,8 @@ DEFINE FIELD OVERWRITE worker_session_id ON TABLE autorun_worker TYPE option<str
 DEFINE FIELD OVERWRITE pr_number     ON TABLE autorun_worker TYPE option<int>;
 DEFINE FIELD OVERWRITE started_at    ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at  ON TABLE autorun_worker TYPE option<string>;
+
+DEFINE INDEX OVERWRITE idx_worker_session ON autorun_worker FIELDS session_id;
 
 DEFINE TABLE OVERWRITE autorun_task_run SCHEMAFULL;
 DEFINE FIELD OVERWRITE worker_id           ON TABLE autorun_task_run TYPE string;
@@ -207,6 +211,8 @@ DEFINE FIELD OVERWRITE exit_code           ON TABLE autorun_task_run TYPE option
 DEFINE FIELD OVERWRITE error_message       ON TABLE autorun_task_run TYPE option<string>;
 DEFINE FIELD OVERWRITE verification_result ON TABLE autorun_task_run TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_task_run TYPE string;
+
+DEFINE INDEX OVERWRITE idx_taskrun_session ON autorun_task_run FIELDS session_id;
 
 -- =============================================================================
 -- COORDINATION TABLES
