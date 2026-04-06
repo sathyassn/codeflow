@@ -323,9 +323,9 @@ pub fn setup_interactive_worktree(
 ) -> Result<WorktreePaths, WorktreeError>
 ```
 
-This function consolidates the five setup steps: `create_detached_worktree`, `setup_shared_symlinks`, `create_local_dirs`, `setup_runtime_subdirs`, `write_env_file_with_worktree`, and `locked_register_with_limit`.
+This function is the single public entry point for worktree setup. It calls internal helper functions (`create_detached_worktree`, `setup_shared_symlinks`, `create_local_dirs`, `setup_runtime_subdirs`, `write_env_file_with_worktree`, `locked_register_with_limit`) which are private to `setup.rs`.
 
-The autorun worker refactors to call `setup_interactive_worktree()` instead of calling the individual functions directly.
+The autorun worker refactors to call `WorktreeManager::setup_detached()` instead of calling the individual helper functions directly.
 
 → Back to [Table of Contents](#table-of-contents)
 
@@ -382,7 +382,7 @@ SessionStart fires (source=startup)
   |
   +-- IF CODEFLOW_MANAGED not set  (unmanaged path)
         |
-        +-- detect_project_dir() (3 steps only — steps 4+5 removed)
+        +-- detect_project_dir() (4 steps — step 5 removed, steps 1-4 retained)
         +-- Parse session_id from stdin JSON (existing behavior)
         +-- Write shared codeflow-env.sh (safe: single session at a time)
         +-- Init pathflow state (project-root paths)
@@ -407,7 +407,7 @@ Teammates spawned inside this session inherit all env vars. Their `SessionStart`
 
 When `CODEFLOW_MANAGED` is not set, the session is started by `claude` directly (no CLI wrapper). This is the legacy path. Behavior is unchanged from today except that PID file logic is removed:
 
-- `detect_project_dir()` uses steps 1-3 only (env vars + CWD walk)
+- `detect_project_dir()` uses steps 1-4 (env vars + CWD walk + per-PID env file fallback for tmux teammates; step 5 shared env fallback removed)
 - SessionStart generates session ID from stdin JSON (existing behavior — no regression)
 - The shared `codeflow-env.sh` is written (safe: only one unmanaged session should run at a time)
 - No worktree is created
@@ -554,25 +554,24 @@ Same branch update as PostToolUse: when `checkpoint-complete` creates the `pathf
 
 ## 6. Eliminated Components
 
-### 6.1 PID-Based Env Files (Removed)
+### 6.1 PID-Based Env Files (Fixed, Not Removed)
 
 **Current files:** `.state/runtime/codeflow-env-{pid}.sh`
 
-**Written by:** `session_start.rs` (every startup)
+**Written by:** `session_start.rs` (every startup — currently written early, before worktree path is known)
 **Read by:** `helpers.rs` `detect_project_dir()` step 4
-**Cleaned by:** `session_end.rs`
+**Cleaned by:** `session_end.rs` via `clean_stale_pid_env_files()`
 
-**Why removed:** In the managed path, `CODEFLOW_WORKTREE_PATH` is set as an env var before Claude starts. `detect_project_dir()` reads it at step 1 and returns immediately — it never reaches step 4. The per-PID files add complexity and cleanup burden without providing value in the managed path.
+**Why fixed (not removed):** In the managed path, `CODEFLOW_WORKTREE_PATH` is set as an env var before Claude starts. `detect_project_dir()` reads it at step 1 and returns immediately — it never reaches step 4. However, tmux teammates in the unmanaged path may have a different CWD than the project root. The per-PID file serves as a reliable fallback for these callers. Removing it entirely would break tmux teammate path resolution.
 
-In the unmanaged path, per-PID files are also removed because the single-session constraint means the shared `codeflow-env.sh` is reliable. The fragile PID detection (`get_claude_code_pid()`) is no longer called.
+The problem is not the existence of the per-PID file — it is the **write timing**: currently written early (before the worktree path is available), the file contains an empty or incorrect `CODEFLOW_WORKTREE_PATH`. Fixing the write to defer until after worktree creation resolves the race condition.
 
-**Removal scope:**
+**Fix scope:**
 
-- `session/env.rs`: remove `write_pid_env_file()`
-- `cli/helpers.rs`: remove `read_worktree_path_from_pid_file()` (defined at `helpers.rs:76`)
-- `session_start.rs`: remove per-PID write call
-- `session_end.rs`: remove per-PID cleanup call
-- `helpers.rs`: remove step 4 from `detect_project_dir()`
+- `session/env.rs`: keep `write_pid_env_file()` and `read_pid_env_file()`; remove `clean_stale_pid_env_files()`
+- `session_start.rs`: remove the early write call (before worktree creation); keep the deferred write call after `setup_interactive_worktree()` completes with the correct worktree path
+- `session_end.rs`: remove the `clean_stale_pid_env_files()` call (function deleted)
+- `helpers.rs`: step 4 (per-PID env file lookup) is **retained** in `detect_project_dir()`
 
 ### 6.2 Shared codeflow-env.sh in Worktree Mode (Removed)
 
@@ -584,23 +583,24 @@ In worktree mode (managed path), this file is never written. Each worktree has i
 
 **File:** `codeflow-cli/cli/src/helpers.rs:20`
 
-Current implementation has 4+ steps. New implementation has 3:
+Current implementation has 5 steps (step 5 is implicit). New implementation removes step 5 only, retaining steps 1-4:
 
 ```
-CURRENT (4 steps, fragile):
+CURRENT (5 steps, fragile):
   Step 1: CODEFLOW_WORKTREE_PATH env var  → return if valid dir
   Step 2: CF_PROJECT_ROOT env var         → return if valid dir
   Step 3: Walk CWD for .claude/.codeflow  → project root
-  Step 4: Per-PID env file lookup         → REMOVED
-  (implicit Step 5: shared env fallback)  → REMOVED
+  Step 4: Per-PID env file lookup         → fragile (incorrect path in early write)
+  Step 5: Shared codeflow-env.sh read     → REMOVED (race condition source)
 
-NEW (3 steps, reliable):
+NEW (4 steps, reliable):
   Step 1: CODEFLOW_WORKTREE_PATH env var  → return if valid dir
   Step 2: CF_PROJECT_ROOT env var         → return if valid dir
-  Step 3: Walk CWD for .claude/.codeflow  → project root (fallback)
+  Step 3: Walk CWD for .claude/.codeflow  → project root
+  Step 4: Per-PID env file lookup         → FIXED (deferred write ensures correct path)
 ```
 
-In the managed path, step 1 always succeeds — the function returns after one env var check. Steps 2 and 3 are never reached for hook calls inside a `codeflow interactive` session.
+In the managed path, step 1 always succeeds — the function returns after one env var check. Steps 2 through 4 are never reached for hook calls inside a `codeflow interactive` session. Step 4 continues to serve as the fallback for tmux teammates in the unmanaged path.
 
 ### 6.4 Teammate Detection via pending_tmux_count (Removed)
 
@@ -1095,8 +1095,8 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 | `codeflow-cli/core/src/hooks/session_end.rs` | — | Modify | Remove per-PID env file cleanup |
 | `codeflow-cli/core/src/hooks/post_tool_use.rs` | — | Modify | Add `update_branch_from_current()` + `InteractiveSession.branch` update when `pathflow-pf-3` sentinel created |
 | `codeflow-cli/core/src/hooks/task_completed.rs` | — | Modify | Add same branch update when `pathflow-pf-3` sentinel created via checkpoint-complete |
-| `codeflow-cli/core/src/session/env.rs` | — | Remove fn | Remove `write_pid_env_file()` |
-| `codeflow-cli/cli/src/helpers.rs` | — | Simplify | Remove step 4 from `detect_project_dir()` (per-PID file lookup); remove `read_worktree_path_from_pid_file()` (defined at `helpers.rs:76`) |
+| `codeflow-cli/core/src/session/env.rs` | — | Modify | Fix write timing: remove `clean_stale_pid_env_files()`; keep `write_pid_env_file()` and `read_pid_env_file()`; the early (pre-worktree) write call in `session_start.rs` is removed, the deferred write call after worktree creation is kept |
+| `codeflow-cli/cli/src/helpers.rs` | — | Simplify | Remove step 5 from `detect_project_dir()` (shared env fallback — the race condition source); step 4 (per-PID file lookup via `read_worktree_path_from_pid_file()` at `helpers.rs:76`) is retained |
 | `codeflow-cli/core/src/models/mod.rs` | — | Add | Export `InteractiveSession` |
 | **Autorun field rename — see [Section 13.3](#133-blast-radius) for full table** | | | |
 | `codeflow-cli/core/src/autorun/batch.rs` | 1942 | Rename fields | `BatchFile`: `target`→`integration_branch`, `auto_merge`→`integration_auto_merge`, `final_pr_base`→`final_pr_target`; `ParsedBatch`: same + `target_is_auto`→`integration_branch_is_auto`; ~80 lines of field references across struct, parse, resolve_target, tests |
@@ -1121,14 +1121,13 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 
 | Location | Code Removed | Reason |
 |----------|-------------|--------|
-| `session/env.rs` | `write_pid_env_file()` function | PID files eliminated |
-| `cli/helpers.rs` | `read_worktree_path_from_pid_file()` function (at `helpers.rs:76`) | PID files eliminated; function was only in helpers.rs, not session/env.rs |
+| `session/env.rs` | `clean_stale_pid_env_files()` function | Stale cleanup removed; file lifecycle simplified to deferred write + read |
 | `session/process.rs` | `get_claude_code_pid()` function (or demoted to test-only) | No longer called in production path |
-| `hooks/session_start.rs` | PID file write call | PID files eliminated |
+| `hooks/session_start.rs` | Early PID file write call (before worktree creation) | Write was producing empty/incorrect `CODEFLOW_WORKTREE_PATH`; deferred write after worktree creation is kept |
 | `hooks/session_start.rs` | `pending_tmux_count` detection logic (managed path only) | Replaced by env var check |
 | `hooks/session_start.rs` | Stale worktree cleanup (managed path only) | Managed by CLI commands |
-| `hooks/session_end.rs` | PID file cleanup | PID files eliminated |
-| `helpers.rs` | `detect_project_dir()` step 4 | PID files eliminated |
+| `hooks/session_end.rs` | `clean_stale_pid_env_files()` call | Function deleted from `session/env.rs` |
+| `helpers.rs` | `detect_project_dir()` step 5 (shared env fallback) | Race condition source; step 4 (per-PID lookup) is retained |
 
 → Back to [Table of Contents](#table-of-contents)
 
