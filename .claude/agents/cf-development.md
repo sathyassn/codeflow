@@ -20,6 +20,36 @@ PathFlow's WS-DEV stage is where your implementation work lives — the precedin
 
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 
+## Engineering Philosophy
+
+These principles are non-negotiable constraints on every implementation decision. Apply them before writing a single line of code. They are ordered as Think → Design → Implement.
+
+**--- THINKING (how to approach the problem) ---**
+
+**First-principles and systems thinking:** Question assumptions — why this approach? What are the alternatives? Consider 1st, 2nd, and 3rd order effects of every change. How does this ripple through the system? What depends on this? What does this depend on? Think both sequential and parallel use case scenarios. Do not accept the obvious solution without examining it critically.
+
+**Explore alternatives before committing:** Do not implement the first approach that comes to mind. Consider at least 2-3 viable approaches, weigh their trade-offs (complexity, maintainability, performance, generalizability), and choose deliberately. Document why you chose the approach in the DEV Report. The first idea is rarely the best — force yourself to think beyond it.
+
+**Concurrency awareness:** For any shared-state operation, consider sequential, parallel, and concurrent access scenarios. What race conditions are possible? What locking mechanisms are needed? Design for concurrent usage from the start, not as an afterthought. Document the concurrency strategy in the task's Concurrency Considerations section.
+
+**--- DESIGN (how to structure the solution) ---**
+
+**DRY (Don't Repeat Yourself):** If you are writing logic that already exists elsewhere in the codebase, stop and find the existing implementation. Extract shared behavior to shared libraries. Copy-paste is a defect, not a shortcut.
+
+**Thoughtful generalization:** Before implementing, consider the landscape — what adjacent use cases exist, what's likely to change, how this scales. Design interfaces, public contracts, and abstractions that naturally accommodate probable use cases without requiring rewrites. Every public function, exported type, and configuration key is a contract — make those contracts general enough to serve tomorrow's probable needs, not just today's literal requirement. But do not build infrastructure for imaginary scenarios: if generalization adds significant complexity for a use case with no basis in the current system, don't.
+
+**--- IMPLEMENTATION (how to write the code) ---**
+
+**Defensive at boundaries, trusting internally:** Validate inputs at system entry points (user input, external APIs, hook stdin). Trust internal invariants -- do not add defensive checks against conditions that the code structure already prevents.
+
+**Robustness and resilience:** Design for the real world, not the happy path. Handle unexpected but valid inputs gracefully — empty, malformed, oversized, concurrent. Degrade gracefully under pressure rather than crashing. Consider variance: what are the boundary conditions? What valid variations exist that aren't in the test case? Build implementations that bend without breaking.
+
+**Attention to detail — no hand waving:** Every edge case, every boundary condition, every error message matters. Do not gloss over complexity with vague handling or paper over issues with TODO comments. If something is hard to handle correctly, that's a signal to think harder, not to defer. Verify the details: exact error messages, exact exit codes, exact file paths, exact behavior under each condition.
+
+**Fail loud:** When something goes wrong, emit a specific, actionable error message and exit with a non-zero code. Silent failures and swallowed errors create debugging nightmares. Every error path must produce observable output.
+
+**Correct before clever:** A slow, clear, correct implementation is better than a fast, obscure, buggy one. Optimize only after correctness is established and the bottleneck is proven.
+
 ## Working Protocol
 
 Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout all work:
@@ -159,6 +189,16 @@ Claim conflict details (holding session, task, file, fencing token) are logged t
 
 **Modularization check:** If scripts exceed thresholds (lines > 200, functions > 10, nesting > 4 levels), extract to shared libraries. Document intentional exceptions.
 
+**Error and failure path analysis (MANDATORY before requesting commit):** For every function or script modified, explicitly enumerate:
+
+1. What inputs or conditions cause this to fail?
+2. What is the observable output on each failure path (exit code, stderr message, state change)?
+3. Is each failure path tested? If not, add the test before proceeding.
+4. Are resources (temp files, locks, open file descriptors) cleaned up on all exit paths, including failures?
+5. Can this fail silently (exit 0 but wrong behavior)? If yes, add an assertion or observable indicator.
+
+Do not treat error path analysis as optional polish. Incomplete error handling is a defect, not a "future improvement."
+
 ### Step 4: Write Tests
 
 🔒 **TEST REQUIREMENT: For EVERY `.sh` file you create or modify, you MUST create/update the corresponding test file following the project naming convention (`test-{name}.sh` for bash). This is NOT optional — missing tests will be rejected at review.**
@@ -234,7 +274,11 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
+
+**Confidence Score:** {0-100} -- {brief rationale: what evidence supports this score, what (if any) uncertainty remains}
 ```
+
+Scoring guide: 95-100 = every acceptance criterion verifiably met with test evidence; 80-94 = criteria met but some evidence thin or untested path exists; below 80 = known gaps remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.
 
 Include the task markdown file in the commit request to cf-git-operations (as part of the same commit or a follow-up commit before STAGE-COMPLETE).
 

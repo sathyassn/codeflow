@@ -5,7 +5,7 @@
 # Validates that pathflow-config.json has:
 #   1. Required mirroring configuration fields
 #   2. Inline template properties (subject, description, activeForm) on all 7 phases
-#   3. Inline template properties (subject, description, activeForm) on all 6 stages
+#   3. Inline template properties (subject, description, activeForm) on all 7 stages
 #   4. No separate phase_templates or stage_templates sections (consolidated)
 #
 # Exit codes:
@@ -152,12 +152,12 @@ for phase in $EXPECTED_PHASES; do
 done
 
 # ============================================================================
-# TEST 6: Stage inline template properties - all 6 stages present
+# TEST 6: Stage inline template properties - all 7 stages present
 # ============================================================================
 
 test_section "Stage Inline Properties"
 
-readonly EXPECTED_STAGES="WS-DEV WS-PLAN WS-DOCS WS-TEST WS-REV WS-QA"
+readonly EXPECTED_STAGES="WS-DEV WS-SEC WS-PLAN WS-DOCS WS-TEST WS-REV WS-QA"
 
 for stage in $EXPECTED_STAGES; do
     if jq -e ".stages.\"$stage\"" "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -169,7 +169,7 @@ done
 
 # Count stages
 STAGE_COUNT=$(jq '.stages | keys | length' "$CONFIG_FILE" 2>/dev/null)
-assert_equals "6" "$STAGE_COUNT" "Exactly 6 stages present"
+assert_equals "7" "$STAGE_COUNT" "Exactly 7 stages present"
 
 # ============================================================================
 # TEST 7: Stage inline template required fields
@@ -216,10 +216,10 @@ for stage in $EXPECTED_STAGES; do
     fi
 done
 
-if [[ "$STAGES_WITH_STAGE_ID" -eq 6 ]]; then
+if [[ "$STAGES_WITH_STAGE_ID" -eq 7 ]]; then
     test_pass "All stage descriptions reference {stage_id} placeholder"
 else
-    test_fail "All stage descriptions reference {stage_id} placeholder (found $STAGES_WITH_STAGE_ID/6)"
+    test_fail "All stage descriptions reference {stage_id} placeholder (found $STAGES_WITH_STAGE_ID/7)"
 fi
 
 # ============================================================================
@@ -266,10 +266,10 @@ for stage in $EXPECTED_STAGES; do
     fi
 done
 
-if [[ "$STAGES_WITH_TEMPLATES" -eq 6 ]]; then
-    test_pass "All 6 stages have complete inline template properties"
+if [[ "$STAGES_WITH_TEMPLATES" -eq 7 ]]; then
+    test_pass "All 7 stages have complete inline template properties"
 else
-    test_fail "All 6 stages have complete inline template properties (found $STAGES_WITH_TEMPLATES/6)"
+    test_fail "All 7 stages have complete inline template properties (found $STAGES_WITH_TEMPLATES/7)"
 fi
 
 # ============================================================================

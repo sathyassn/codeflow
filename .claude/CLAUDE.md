@@ -338,6 +338,8 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - Check acceptance criteria met against task definition
 - Query cf-knowledge-layer for stage completion records
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
+- **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
+- **Delivery summary:** Read the `## Deliverables` section in the task markdown. Confirm Expected Outcome and Deployment fields are populated (no placeholders). If placeholders remain, request the stage teammate update before proceeding.
 
 4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-07, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
 
@@ -381,7 +383,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 | PF2-CONTEXT | pf-1 | pathflow-pf-2 (checkpoint-driven) | Spawn cf-knowledge-layer | Active work state, tracking decision |
 | PF3-CLASSIFY | pf-2 | pathflow-pf-3 (checkpoint-driven, on all PF3 tasks complete) | Create branch (UNLOCKS Edit/Write) | Branch, tracking_level='tracked' |
 | PF4-EXECUTE | pf-3 | pathflow-ws-* (pattern-matched) | Register task (adhoc_only), begin work, run work pipeline | Task record (adhoc), code, docs, tests, reviews |
-| PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria | Verification record |
+| PF5-VERIFY | ws-* stages done | (none) | Verify acceptance criteria, confidence scores ≥95 from all stages, delivery summary populated | Verification record |
 | PF6-COMPLETE | ws-rev | pathflow-pf-6 (checkpoint-driven) | Create PR, verify CI, sync | PR created, PR verified, task status updated |
 | PF7-END | pf-6 | pathflow-pf-7 (checkpoint-driven, must complete before TeamDelete) | Shutdown, mark tasks complete, TeamDelete | Clean session end |
 
@@ -591,12 +593,13 @@ When a file requires staging (see table above), teammates use this procedure:
 
 | Stage | Teammate | Spawn Prompt |
 |-------|----------|-------------|
-| WS-DEV | cf-development | `"Read .claude/agents/cf-development.md for your instructions, then implement: {feature description}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance: {criteria}. Files: {scope}. Before STAGE-COMPLETE, update Criteria Status and DEV Report in the task doc. When done, request commit via cf-git-operations."` |
-| WS-PLAN | cf-planning | `"Read .claude/agents/cf-planning.md for your instructions, then create a design document for: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Deliverable: {ADR/brief/epic}. Write to: {path}. Before STAGE-COMPLETE, update Criteria Status and PLAN Report in the task doc."` |
-| WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Update: {files}. Follow project doc standards. Before STAGE-COMPLETE, update Criteria Status and DOCS Report in the task doc."` |
-| WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}. Before STAGE-COMPLETE, update Criteria Status REV column and REV Report in the task doc."` |
-| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: codeflow test --mode full --coverage. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc."` |
-| WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Target: {coverage}. Framework: {shell/pytest}. Before STAGE-COMPLETE, update Criteria Status and TEST Report in the task doc."` |
+| WS-DEV | cf-development | `"Read .claude/agents/cf-development.md for your instructions, then implement: {feature description}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance: {criteria}. Files: {scope}. Before STAGE-COMPLETE, update Criteria Status and DEV Report in the task doc. When done, request commit via cf-git-operations. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-PLAN | cf-planning | `"Read .claude/agents/cf-planning.md for your instructions, then create a design document for: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Deliverable: {ADR/brief/epic}. Write to: {path}. Before STAGE-COMPLETE, update Criteria Status and PLAN Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Update: {files}. Follow project doc standards. Before STAGE-COMPLETE, update Criteria Status and DOCS Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-SEC | cf-security | `"Read .claude/agents/cf-security.md for your instructions, then run WS-SEC security scan on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Scan all code changes in the changeset against OWASP Top 10, secret detection, input validation, and concurrency security. Before STAGE-COMPLETE, update Criteria Status SEC column and SEC Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}. Before STAGE-COMPLETE, update Criteria Status REV column and REV Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: codeflow test --mode full --coverage. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Target: {coverage}. Framework: {shell/pytest}. Before STAGE-COMPLETE, update Criteria Status and TEST Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
 
 ### Task Specification Quality
 
@@ -650,9 +653,9 @@ Each stage teammate writes its work record directly into the task markdown file 
 
 **Pipeline-to-column and report name mapping:**
 
-| Pipeline | Primary Col | Primary Report | REV Col | REV Report | QA Col | QA Report |
-|----------|------------|----------------|---------|------------|--------|-----------|
-| FEAT / FIX / RFCT / CICD / HTFX / CHOR | DEV | `### DEV Report` | REV | `### REV Report` | QA | `### QA Report` |
+| Pipeline | Primary Col | Primary Report | SEC Col | SEC Report | REV Col | REV Report | QA Col | QA Report |
+|----------|------------|----------------|---------|------------|---------|------------|--------|-----------|
+| FEAT / FIX / RFCT / CICD / HTFX / CHOR | DEV | `### DEV Report` | SEC | `### SEC Report` | REV | `### REV Report` | QA | `### QA Report` |
 | DOCS | DOCS | `### DOCS Report` | REV | `### REV Report` | -- | (omit) |
 | TEST | TEST | `### TEST Report` | REV | `### REV Report` | QA | `### QA Report` |
 | PLAN / SPKE | PLAN | `### PLAN Report` | REV | `### REV Report` | -- | (omit) |
@@ -664,11 +667,13 @@ Note: The `## Stage Reports` subsection headings in the task markdown must match
 | Stage | Pipeline | Criteria Status Update | Report Section |
 |-------|----------|----------------------|----------------|
 | WS-DEV | FEAT/FIX/RFCT/CICD/HTFX/CHOR | Mark DEV column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DEV Report` — implementation summary, files changed, test results, deviations |
+| WS-SEC | FEAT/FIX/RFCT/CICD/HTFX/CHOR | Mark SEC column: `PASS` / `FAIL` per criterion | `### SEC Report` — OWASP checklist, findings, secret detection, input validation |
 | WS-PLAN | PLAN / SPKE | Mark PLAN column: `DONE` / `PARTIAL` / `N/A` per criterion | `### PLAN Report` — design decisions, deliverables, deviations |
 | WS-DOCS | DOCS | Mark DOCS column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DOCS Report` — documentation summary, files updated, deviations |
 | WS-TEST | TEST | Mark TEST column: `DONE` / `PARTIAL` / `N/A` per criterion | `### TEST Report` — test implementation summary, coverage, deviations |
 | WS-REV | All pipelines | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment, findings log, rework history |
 | WS-QA | FEAT/FIX/RFCT/CICD/HTFX/CHOR / TEST | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, regressions |
+| All stages | All pipelines | N/A (score not per-criterion) | `### Confidence Score` — each stage records its 0-100 score and rationale before STAGE-COMPLETE; team lead checks scores ≥95 at PF5-VERIFY |
 
 **Status legend:**
 
@@ -940,12 +945,12 @@ The work type determines which stages execute during PF4-EXECUTE:
 
 | Work Type | Pipeline | Primary Teammate |
 |-----------|----------|------------------|
-| FEAT | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| FIX | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| RFCT | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| CICD | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| HTFX | WS-DEV --> WS-REV --> WS-QA | cf-development |
-| CHOR | WS-DEV --> WS-REV --> WS-QA | cf-development |
+| FEAT | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
+| FIX | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
+| RFCT | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
+| CICD | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
+| HTFX | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
+| CHOR | WS-DEV --> WS-SEC --> WS-REV --> WS-QA | cf-development |
 | DOCS | WS-DOCS --> WS-REV | cf-documentation |
 | TEST | WS-TEST --> WS-REV --> WS-QA | cf-quality-assurance |
 | PLAN | WS-PLAN --> WS-REV | cf-planning |
@@ -958,6 +963,7 @@ The work type determines which stages execute during PF4-EXECUTE:
 | Stage | Teammate | Purpose |
 |-------|----------|---------|
 | WS-DEV | cf-development | Code implementation + unit tests |
+| WS-SEC | cf-security | Security scan: OWASP Top 10, secret detection, dependency audit, input validation |
 | WS-PLAN | cf-planning | Design, architecture, analysis, investigation |
 | WS-DOCS | cf-documentation | Documentation writing |
 | WS-REV | cf-review | Independent review (adapts per work type: CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW) |

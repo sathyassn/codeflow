@@ -39,7 +39,11 @@ updated_at: "{ISO-8601}"
 
 ## Acceptance Criteria
 
-- [ ] {Specific, measurable criterion}
+> **Chain-coverage requirement:** Epic acceptance criteria MUST cover the full delivery chain, not just top-level outcomes. Each criterion should trace from creation through integration, testing, and observable verification. Criteria that only state "X is implemented" without specifying how to verify it are insufficient.
+>
+> Verify all applicable links: creation, content correctness, error handling, integration wiring, test coverage, standards compliance, and observable behavior.
+
+- [ ] {Specific, measurable criterion -- verifiable by reading source or running a command}
 - [ ] {Specific, measurable criterion}
 
 ### PII Handling Review

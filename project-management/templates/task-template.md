@@ -48,6 +48,17 @@ stage_history: "[]"                    # JSON array of stage transition records
 
 {Detailed description of what this task accomplishes and why it is needed.}
 
+## Deliverables
+
+> **MANDATORY:** Every task must specify what is being delivered, where it integrates, and the expected outcome. Vague deliverables like "update code" are insufficient.
+
+| Deliverable | Type | Location | Integration Point |
+|-------------|------|----------|-------------------|
+| {what is delivered} | {feature/fix/config/doc/test} | {file path or system} | {what consumes/uses this} |
+
+**Expected Outcome:** {What behavior/capability exists after this task is complete that did not exist before}
+**Deployment:** {How this reaches its consumers -- PR merge, config reload, manual step, etc.}
+
 ## Pre-Work Analysis
 
 > **MANDATORY at task start.** Before implementation, review
@@ -113,6 +124,21 @@ Mechanisms available in codebase:
 
 ## Acceptance Criteria
 
+> **Chain-coverage requirement:** Acceptance criteria MUST cover all links in the implementation chain. A criterion that verifies only creation but not content, or only happy-path but not error handling, is incomplete. For every acceptance criterion, ask: does this verify the FULL delivery chain?
+>
+> **The 8-link delivery chain (verify ALL that apply):**
+>
+> | Link | What to Verify |
+> |------|---------------|
+> | 1. Creation | File/function/config entry exists at correct path |
+> | 2. Content | Required fields/logic/text present and correct |
+> | 3. Error handling | Failure modes produce expected output/exit codes |
+> | 4. Integration | Component wired into caller/consumer/config correctly |
+> | 5. Testing | Test file exists, is registered, and exercises the behavior |
+> | 6. Coverage | 85%+ per-file coverage threshold met |
+> | 7. Standards | Lint/format/style checks pass (shellcheck, ruff, clippy, markdownlint) |
+> | 8. Verification | Observable behavior confirmed by running the code, not just reading it |
+
 1. {Specific, measurable criterion with file:line if applicable}
 2. {Specific, measurable criterion}
 3. All modified script/code files (.sh, .py) have corresponding test files created/updated and registered in test-config.json
@@ -132,20 +158,20 @@ Mechanisms available in codebase:
 ### Criteria Status
 
 <!-- Pipeline column mapping:
-     FEAT/FIX/RFCT/CICD/HTFX/CHOR: DEV | REV | QA
+     FEAT/FIX/RFCT/CICD/HTFX/CHOR: DEV | SEC | REV | QA
      DOCS:                          DOCS | REV
      TEST:                          TEST | REV | QA
      PLAN/SPKE:                     PLAN | REV
      Replace columns to match task work_type before use. -->
 
 > Legend: -- Not evaluated | DONE Implemented | PASS Verified passing | FAIL Verified failing | PARTIAL Partially met | N/A Not applicable
-> Pipeline: WS-DEV -> WS-REV -> WS-QA (default for FEAT/FIX/RFCT/CICD/HTFX/CHOR; replace with pipeline-appropriate stages per comment above)
+> Pipeline: WS-DEV -> WS-SEC -> WS-REV -> WS-QA (default for FEAT/FIX/RFCT/CICD/HTFX/CHOR; replace with pipeline-appropriate stages per comment above)
 
-| # | Criterion | DEV | REV | QA | Notes |
-|---|-----------|-----|-----|-----|-------|
-| 1 | {criterion text} | -- | -- | -- | |
-| 2 | {criterion text} | -- | -- | -- | |
-| 3 | {criterion text} | -- | -- | -- | |
+| # | Criterion | DEV | SEC | REV | QA | Notes |
+|---|-----------|-----|-----|-----|-----|-------|
+| 1 | {criterion text} | -- | -- | -- | -- | |
+| 2 | {criterion text} | -- | -- | -- | -- | |
+| 3 | {criterion text} | -- | -- | -- | -- | |
 
 ## Dependencies
 
@@ -171,7 +197,7 @@ Mechanisms available in codebase:
 ## Stage Reports
 
 <!-- Pipeline stage report mapping:
-     FEAT/FIX/RFCT/CICD/HTFX/CHOR: DEV Report | REV Report | QA Report
+     FEAT/FIX/RFCT/CICD/HTFX/CHOR: DEV Report | SEC Report | REV Report | QA Report
      DOCS:                          DOCS Report | REV Report
      TEST:                          TEST Report | REV Report | QA Report
      PLAN/SPKE:                     PLAN Report | REV Report
@@ -200,6 +226,36 @@ Mechanisms available in codebase:
 
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
+
+### SEC Report
+
+> Populated by cf-security before STAGE-COMPLETE: WS-SEC
+
+**Verdict:** {PASS | FAIL}
+**Scope:** {files scanned}
+
+#### OWASP Checklist
+
+| # | Category | Result | Evidence |
+|---|----------|--------|----------|
+| A01 | Broken Access Control | {PASS/FAIL/N/A} | {file:line or justification} |
+| A02 | Cryptographic Failures | {PASS/FAIL/N/A} | {evidence} |
+| A03 | Injection | {PASS/FAIL/N/A} | {evidence} |
+| A04 | Insecure Design | {PASS/FAIL/N/A} | {evidence} |
+| A05 | Security Misconfiguration | {PASS/FAIL/N/A} | {evidence} |
+| A06 | Vulnerable Components | {PASS/FAIL/N/A} | {evidence} |
+| A07 | Authentication Failures | {PASS/FAIL/N/A} | {evidence} |
+| A08 | Data Integrity Failures | {PASS/FAIL/N/A} | {evidence} |
+| A09 | Logging & Monitoring | {PASS/FAIL/N/A} | {evidence} |
+| A10 | SSRF | {PASS/FAIL/N/A} | {evidence} |
+
+#### Findings
+
+| # | Severity | Category | Finding | File:Line | Resolution |
+|---|----------|----------|---------|-----------|------------|
+| 1 | {CRITICAL/HIGH/MEDIUM} | {category} | {description} | {file:line} | {OPEN/RESOLVED} |
+
+**Confidence Score:** {0-100} -- {brief rationale}
 
 ### REV Report
 
@@ -281,6 +337,18 @@ Mechanisms available in codebase:
 | Retry | Trigger | Failures | Fix Applied | Re-test Result |
 |-------|---------|----------|-------------|----------------|
 | 1 | Initial QA | {n} failures | N/A | {PASS/FAIL} |
+
+### Confidence Score
+
+> **Hard gate at PF5-VERIFY.** The team lead MUST NOT mark PF5-TSK-02 complete unless ALL pipeline stages report a confidence score of 95 or higher. A score below 95 from any stage is a rework trigger regardless of verdict.
+
+| Stage | Agent | Score (0-100) | Rationale |
+|-------|-------|--------------|-----------|
+| WS-DEV | cf-development | {n} | {brief rationale} |
+| WS-REV | cf-review | {n} | {brief rationale} |
+| WS-QA | cf-quality-assurance | {n} | {brief rationale -- omit if pipeline has no WS-QA} |
+
+**Scoring guide:** 95-100 = every acceptance criterion verifiably met with evidence; 80-94 = criteria met but some evidence thin or untested path exists; below 80 = known gaps remain. Round down when uncertain.
 
 ## Notes
 

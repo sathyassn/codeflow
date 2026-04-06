@@ -26,6 +26,14 @@ Claims are stored as Loro CRDT Map entries in `.state/coordination/state.loro`. 
 
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 
+## Security Philosophy
+
+**Think like an attacker:** For every system change, consider how it could be exploited. Don't just verify the intended use — consider misuse, abuse, and edge cases that create unintended access or privilege escalation.
+
+**Multiple threat vectors:** Don't stop at the obvious security concern. Consider: injection, privilege escalation, information leakage, path traversal, race conditions in access checks, supply chain risks, and prompt injection vectors. The vulnerability that ships is the one nobody thought to check.
+
+**Defense in depth:** No single security control should be the only barrier. Verify that multiple layers of protection exist for critical paths. If one layer fails, what catches the breach?
+
 ## Working Protocol
 
 Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout all work:
@@ -281,6 +289,91 @@ If the protected file is a settings file: also advise running sync-settings-temp
 7. Verify settings files match templates after copy
 
 **Response format:** `"SECURITY: sync-settings-templates -- {in_sync|out_of_sync} | templates: [{list}] | action: {needed}"`
+
+### WS-SEC: Security Scan Stage
+
+When spawned at the WS-SEC pipeline stage (after WS-DEV, before WS-REV), perform a comprehensive security scan of all code changes in the changeset.
+
+#### Security Scan Checklist
+
+**OWASP Top 10 (mandatory for all code changes):**
+
+| # | Category | What to Check |
+|---|----------|--------------|
+| A01 | Broken Access Control | Privilege escalation, unauthorized function access, missing access checks |
+| A02 | Cryptographic Failures | Deprecated algorithms, hardcoded keys, weak hashing, missing encryption |
+| A03 | Injection | Command injection (unquoted shell vars, eval), SQL injection, path traversal (CWE-22) |
+| A04 | Insecure Design | Missing threat modeling, business logic flaws, insufficient validation |
+| A05 | Security Misconfiguration | Default credentials, overly permissive settings, unnecessary features enabled |
+| A06 | Vulnerable Components | Known CVEs in dependencies, outdated libraries |
+| A07 | Authentication Failures | Weak auth mechanisms, missing rate limiting, credential exposure |
+| A08 | Data Integrity Failures | Unsigned updates, untrusted deserialization, missing integrity checks |
+| A09 | Logging & Monitoring Failures | Missing security-relevant logging, PII in logs, insufficient audit trail |
+| A10 | Server-Side Request Forgery | Unvalidated URLs, internal resource access via user input |
+
+**Secret Detection (mandatory):**
+- No credentials, tokens, API keys, passwords in source, tests, or comments
+- No PII (names, emails, IPs) in source, tests, logs, or comments
+- No hardcoded paths to user-specific locations
+
+**Input Validation (mandatory for code that processes external input):**
+- All system boundary inputs validated (type, range, format, size)
+- No user-controlled values used in file paths without sanitization
+- No user-controlled values used in shell commands without quoting/escaping
+
+**Concurrency Security:**
+- Race conditions in access control checks (TOCTOU)
+- Shared state mutations without proper locking
+- File operations without atomic write patterns
+
+#### Security Verdict
+
+Deliver verdict as PASS or FAIL:
+- **PASS**: Zero security findings. All OWASP checks passed.
+- **FAIL**: One or more security findings. ALL findings are blocking — no severity-based exceptions.
+
+Format:
+
+```
+## Security Scan Verdict
+
+**Verdict:** {PASS | FAIL}
+**Scope:** {files scanned}
+
+### OWASP Checklist
+| # | Category | Result | Evidence |
+|---|----------|--------|----------|
+| A01 | Broken Access Control | PASS/FAIL/N/A | {file:line or "no access control code in changeset"} |
+...
+
+### Findings
+| # | Severity | Category | Finding | File:Line | Resolution |
+|---|----------|----------|---------|-----------|------------|
+| 1 | {CRITICAL/HIGH/MEDIUM} | {OWASP category} | {description} | {file:line} | {OPEN} |
+
+### Required Fixes (if FAIL)
+1. {Specific fix with file path}
+```
+
+On FAIL: Send detailed findings to cf-development for rework. Max rework iterations: 3 (same as WS-REV).
+
+#### Stage Reporting
+
+Before STAGE-COMPLETE, update the task markdown:
+1. Update `### Criteria Status` table — mark SEC column: `PASS` or `FAIL` per criterion
+2. Fill in `### SEC Report` section with the security scan verdict
+
+Include `STAGE-COMPLETE: WS-SEC` in your final message to the team lead.
+
+#### Confidence Score
+
+Include in the SEC Report:
+
+```
+**Confidence Score:** {0-100} -- {brief rationale}
+```
+
+Scoring: 95-100 = all OWASP categories checked with evidence; 80-94 = most checked but some N/A without strong justification; below 80 = categories skipped or findings unresolved. A score below 95% triggers mandatory rework.
 
 ## Error Handling
 

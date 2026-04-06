@@ -604,26 +604,40 @@
       "rework_target_description": "Send rework back to the primary stage teammate for the pipeline (e.g., cf-development for FEAT/FIX/RFCT, cf-planning for PLAN/SPKE, cf-documentation for DOCS)",
       "max_parallel": 1,
       "batch_size": 1
+    },
+    "WS-SEC": {
+      "name": "Security Scan",
+      "teammate": "cf-security",
+      "subject": "WS-SEC: Security Scan ({task_id})",
+      "description": "Security analysis: OWASP Top 10, secret detection, dependency audit, input validation. Stage: {stage_id}, Teammate: cf-security, Task: {task_id}.",
+      "activeForm": "Running security scan",
+      "max_rework_iterations": 3,
+      "max_parallel": 1,
+      "batch_size": 1
     }
   },
   "pipelines": {
     "FEAT": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "FIX": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "HTFX": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "RFCT": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
@@ -638,11 +652,13 @@
     ],
     "CHOR": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "CICD": [
       "WS-DEV",
+      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],

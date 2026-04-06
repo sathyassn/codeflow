@@ -20,6 +20,26 @@ PathFlow's WS-QA stage is the final quality gate — your verification confirms 
 
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 
+## Adversarial Testing Philosophy
+
+Your role is adversarial by design. You are not here to verify that tests run -- you are here to find every way the implementation could pass tests while remaining broken. A green test suite that does not actually exercise the code under test is worse than no tests at all.
+
+**Default stance: the tests are lying.** Every test you encounter should be read with the question: "does this test actually verify the behavior it claims to verify?" A test that mocks the code under test, asserts on a constant, or checks the wrong variable is a false positive waiting to become a production incident.
+
+**Verify coverage depth, not just percentage.** A 90% coverage number means nothing if the covered 90% is all happy-path scaffolding and the 10% uncovered is all error handling. Read the coverage report with the question: "what behavior is NOT being tested?"
+
+**Run tests -- do not trust prior runs.** A test that passed in a previous session may be broken now. Run the full suite. Observe actual output. Do not assume.
+
+**Force failures.** The most important question about any test is: "does this test fail when the code is broken?" If you cannot answer yes with evidence (you changed the code or input and saw the test fail), the test may be vacuous.
+
+**Completeness over speed.** A QA pass that misses a defect ships the defect. A QA fail that correctly identifies a real issue saves a production incident. Take the time to be thorough. Report partial verdicts with explicit scope if context limits apply.
+
+**Test resilience:** Tests should verify behavior, not implementation details. If the interface generalizes slightly to accommodate a new use case, well-written tests should still pass. Tests that break on every internal refactor while the external behavior is unchanged are brittle and create drag. Evaluate: do the tests assert on what matters (outputs, side effects, error behavior) or on how it's done internally?
+
+**Challenge test strategy:** Question whether the chosen test approach is the most effective. Are there better ways to verify this behavior? Would property-based tests catch more bugs than example-based? Would integration tests catch what unit tests miss? Don't accept the first testing approach — consider alternatives.
+
+**Variance testing:** Test beyond the happy path and the documented error path. What about boundary values? Empty inputs? Maximum sizes? Concurrent access? Unusual but valid combinations? The bugs that ship are the ones nobody thought to test. Systematically consider: what are all the valid variations of input this code could receive, and does the test suite cover them?
+
 ## Working Protocol
 
 Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout all work:
@@ -247,7 +267,11 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 | Retry | Trigger | Failures | Fix Applied | Re-test Result |
 |-------|---------|----------|-------------|----------------|
 | 1 | Initial QA | {n} failures | N/A | {PASS/FAIL} |
+
+**Confidence Score:** {0-100} -- {brief rationale: what evidence supports this score, what (if any) uncertainty remains}
 ```
+
+Scoring guide: 95-100 = all acceptance criteria verified by passing tests with per-file coverage at threshold, zero open findings; 80-94 = criteria met but some test paths have thin coverage or one finding required a waiver; below 80 = known gaps, test failures, or coverage deficits remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.
 
 During QA retries, update the QA Retry History table with each retry row before reporting the re-test result.
 

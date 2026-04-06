@@ -20,6 +20,20 @@ PathFlow's WS-PLAN stage channels your design work — context from earlier phas
 
 > **Breadcrumbs:** [CLAUDE.md Section 4](../CLAUDE.md) (PathFlow) · [CLAUDE.md Section 5](../CLAUDE.md) (Coordination) · [cf-working-protocol](../skills/cf-working-protocol/SKILL.md)
 
+## Planning Philosophy
+
+Your designs become the blueprint that developers implement, reviewers verify, and QA validates. A vague plan produces vague code. A thorough plan produces thorough code.
+
+**Think before decomposing:** Before breaking work into tasks, understand the full system context. What does this change touch? What depends on it? What are the 1st, 2nd, and 3rd order effects? A plan that misses a dependency creates a blocked task that wastes an entire session.
+
+**Generate options, then choose:** For every design decision, generate at least 2-3 viable approaches before recommending one. Present trade-offs objectively (complexity, maintainability, performance, generalizability). The first idea is rarely the best — force yourself to think of alternatives even when the obvious approach seems sufficient. Document the alternatives considered and why you chose the recommended one.
+
+**Design for robustness:** When specifying acceptance criteria, consider variance — what edge cases, boundary conditions, and unexpected-but-valid inputs should the implementation handle? What concurrent access patterns exist? A task that says "handle the input" without specifying what happens with empty, malformed, or oversized input will produce brittle code.
+
+**Attention to detail in specifications:** Every vague acceptance criterion becomes a guessing game for the developer and a judgment call for the reviewer. Be specific: exact file paths, exact function signatures, exact error behaviors, exact test scenarios. If you can't be specific, that's a signal you need more analysis, not less detail.
+
+**No hand-waving:** If a requirement is complex, decompose it — don't summarize it with "handle appropriately" or "implement as needed." Every task should be detailed enough that a developer can implement without guessing, and a reviewer can verify without ambiguity.
+
 ## Working Protocol
 
 Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout all work:
@@ -174,7 +188,22 @@ Apply the appropriate design operation based on the deliverable type:
    - Query cf-knowledge-layer: `"PLANNER: check-ongoing-epic -- area={area}"` before creating new epics in PLN or DOC areas
    - Check `project-management/epics/{AREA}/` for existing epics in other areas too
 3. Define epic scope -- summary, in-scope/out-of-scope, acceptance criteria, prerequisites.
-4. Break into tasks -- each independently implementable, right-sized (XS-XL), with file paths, approach, and verification steps.
+4. **Break into tasks with chain-coverage acceptance criteria.** Each task must be independently implementable, right-sized (XS-XL), with file paths, approach, and verification steps. Critically, acceptance criteria MUST cover the full delivery chain -- not just "X is created" but the complete set of verifiable links:
+
+   | Link | Criterion Type | Example |
+   |------|---------------|---------|
+   | Creation | File/function/config entry exists at correct path | "Hook script exists at `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-team-guard.sh`" |
+   | Content | Required fields/logic/text present and correct | "Script contains `check_pathflow_active()` function with correct exit-2 behavior" |
+   | Error handling | Failure modes produce expected output/exit codes | "Invalid input returns exit code 2 with error message to stderr" |
+   | Integration | Component wired into caller/consumer/config correctly | "Hook registered in `.claude/settings.json` under `PreToolUse` event with correct matcher" |
+   | Testing | Test file exists, is registered, covers the behavior | "Test file `test-cf-pre-tool-use-team-guard.sh` exists and is registered in `test-config.json`" |
+   | Coverage | 85%+ per-file coverage threshold met | "Coverage report shows 87% for `team-guard.sh`" |
+   | Standards | Lint/format/style checks pass | "shellcheck passes with zero errors on the script" |
+   | Verification | Observable behavior confirmed by running the code | "Running hook with valid/invalid input produces expected block/allow behavior" |
+
+   A task whose acceptance criteria only cover Creation and Content is incomplete -- it will pass review but fail QA. Write criteria that cover ALL 8 links relevant to the deliverable.
+
+   When defining acceptance criteria, also consider: does the proposed design accommodate probable adjacent use cases? Acceptance criteria should validate not just that the implementation works today, but that the interface is general enough to serve likely future needs without requiring a rewrite. Flag designs that are unnecessarily specific when a slightly more general approach costs little.
 5. Map dependencies -- identify blocked-by/blocks relationships, minimize sequential dependencies.
 6. Set task metadata -- `origin: planned`, `estimate: XS/S/M/L/XL`, `autorun_eligible: true/false`, `acceptance: [testable criteria]`, `file_scope: [list of file patterns]`, and `scope_policy` (required — see criteria table below):
 
@@ -545,6 +574,9 @@ Add a script to clean up stale sessions. Add tests.
 - [ ] **Effort estimates justified:** Confidence level stated with reasoning
 - [ ] **Validation passed:** `codeflow validate task` / `codeflow validate epic` ran successfully on all created markdown
 - [ ] **Stage reporting sections present (task docs):** Every new task document includes `### Criteria Status` with correct pipeline columns and `## Stage Reports` with correct subsections for the pipeline
+- [ ] **Chain-coverage audit:** Every acceptance criterion in every task produced by this plan covers all applicable links in the 8-link delivery chain (creation, content, error handling, integration, testing, coverage, standards, verification). Criteria that verify only top-level creation without specifying how to observe the behavior are rejected and rewritten before commit.
+- [ ] **Confidence gate ready:** Each task produced includes a `### Confidence Score` subsection in its `## Stage Reports` section (from the task template), so that each stage agent can record its score before STAGE-COMPLETE. Verify the subsection exists in all task docs before requesting commit.
+- [ ] **Delivery summary complete:** Every task definition includes a `## Deliverables` section with the table (Deliverable, Type, Location, Integration Point), Expected Outcome, and Deployment fields fully populated -- no placeholders.
 - [ ] **Committed via cf-git-operations** with `plan: {description}` format
 - [ ] **Scope compliance:** Changes within scope of the assigned task
 

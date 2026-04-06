@@ -47,6 +47,7 @@ Ongoing documentation maintenance including state/sentinel path migration update
 |----|-------|--------|----------|
 | DOC-TSK-001-001 | Update SKILL.md and docs for state/sentinel path migration | in_progress | normal |
 | DOC-TSK-001-002 | Fix slash command structure, diagrams, and navigation | in_progress | normal |
+| DOC-TSK-001-005 | Process Improvement: Quality Gates, Confidence Scores, Engineering Philosophy | complete | normal |
 
 ## Dependencies
 
