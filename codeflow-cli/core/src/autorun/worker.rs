@@ -365,8 +365,51 @@ pub(crate) async fn serialized_merge(
         };
     }
 
-    // Step 6: Brief pause for GitHub to register the push.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Step 6: Verify GitHub registered the push by checking PR head SHA.
+    let local_sha = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        });
+
+    if let Some(ref sha) = local_sha {
+        for attempt in 1..=5 {
+            let pr_head = std::process::Command::new("gh")
+                .args([
+                    "pr",
+                    "view",
+                    &pr_number.to_string(),
+                    "--json",
+                    "headRefOid",
+                    "-q",
+                    ".headRefOid",
+                ])
+                .current_dir(wt_path)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                });
+
+            if pr_head.as_deref() == Some(sha.as_str()) {
+                break;
+            }
+            if attempt < 5 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
 
     // Step 7: gh pr merge.
     let merge_output = std::process::Command::new("gh")
