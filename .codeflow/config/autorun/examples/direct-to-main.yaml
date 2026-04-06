@@ -7,6 +7,11 @@
 # Because main is a protected branch, auto_merge is forbidden and PRs
 # must be merged by a human via the GitHub UI.
 #
+# final_pr behavior:
+#   When target is "main", final_pr is inferred false. There is no
+#   integration branch to PR from — each worker PR targets main directly.
+#   Setting final_pr: true with target: main is a validation error.
+#
 # Workflow:
 #   main
 #     ├── feat/task-001             ← worker branch off main

@@ -4,10 +4,13 @@
 # specified — the system provides autonomous defaults.
 #
 # Autonomous defaults:
-#   target: auto-generated as autorun/{batch-name}-{session-suffix} off main
+#   target:     auto-generated as autorun/{batch-name}-{session-suffix} off main
 #   auto_merge: inferred from target — integration branches auto-merge after
 #               CI passes; protected branches (main, master, release/*,
 #               production) are forbidden with auto_merge.
+#   final_pr:   NOT auto-inferred for auto-generated targets — false by default.
+#               Set final_pr: true explicitly if you want a summary PR from
+#               the integration branch to main after all workers complete.
 #
 # This is the recommended pattern for most autorun batches. Omitting
 # target and auto_merge keeps the batch file minimal and lets the system

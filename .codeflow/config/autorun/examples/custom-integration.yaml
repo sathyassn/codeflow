@@ -2,7 +2,8 @@
 # ==================================
 # Tasks targeting an explicit custom integration branch. Worker PRs
 # auto-merge to the integration branch after CI passes via the CRDT
-# merge queue (serialized FIFO merges).
+# merge queue (serialized FIFO merges). After all workers complete,
+# a final summary PR is created from the integration branch to main.
 #
 # Use this pattern when you need a named, persistent integration branch
 # rather than the auto-generated autorun/{batch-name}-{session-suffix}.
@@ -13,8 +14,16 @@
 #           ├── feat/task-001         ← worker branch (created off integration)
 #           └── feat/task-002         ← worker branch (created off integration)
 #
-# After all workers complete, a human reviews the summary PR from the
-# integration branch to main.
+# final_pr behavior:
+#   When target is an explicit non-main branch, final_pr is inferred true.
+#   Setting it explicitly (as below) is recommended for clarity.
+#   After all workers merge to autorun/sprint-42, the orchestrator creates
+#   a single PR from autorun/sprint-42 to main for human review.
+#
+# final_pr_base:
+#   Defaults to "main" when omitted. Set explicitly for teams using a
+#   develop → main workflow (e.g. final_pr_base: develop).
+#   Must differ from target.
 #
 # Protected branch restriction:
 #   auto_merge: true REQUIRES target to be a non-protected branch.
@@ -42,6 +51,8 @@ name: sprint-42
 max_workers: 3
 target: autorun/sprint-42
 auto_merge: true
+final_pr: true          # inferred true when target is explicit non-main; set explicitly for clarity
+final_pr_base: main     # optional (main is the default)
 tasks:
   - id: FRT-TSK-001-001
   - id: FRT-TSK-001-002

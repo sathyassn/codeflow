@@ -29,6 +29,13 @@
 # from target — protected branches (main, master, release/*, production)
 # cannot auto-merge; integration branches can.
 #
+# final_pr behavior:
+#   No target is specified, so the system auto-generates an integration
+#   branch. For auto-generated targets, resolve_target() sets final_pr
+#   to true — a summary PR from the integration branch to main is created
+#   after all tasks complete. Set final_pr: false explicitly to suppress
+#   it.
+#
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/examples/complex-dependencies.yaml
 #

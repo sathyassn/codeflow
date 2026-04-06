@@ -7,9 +7,14 @@
 # Autonomous defaults apply: target branch is auto-generated as
 # autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
 # from target — protected branches (main, master, release/*, production)
-# cannot auto-merge; integration branches can. PRs target the integration
-# branch and are reviewed via a human-reviewed summary PR from the
-# integration branch to main.
+# cannot auto-merge; integration branches can.
+#
+# final_pr behavior:
+#   No target is specified, so the system auto-generates an integration
+#   branch. For auto-generated targets, final_pr is NOT auto-inferred —
+#   it defaults to false. Set final_pr: true explicitly to create a
+#   summary PR from the integration branch to main after both tasks
+#   complete.
 #
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/examples/simple-sequential.yaml
