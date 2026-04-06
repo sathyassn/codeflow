@@ -249,7 +249,7 @@ codeflow -i
         |     |              .state/session/, .state/sentinels/
         |     |
         |     +-- setup_runtime_subdirs(project_dir, wt_state_dir)
-        |     |     worktree/setup.rs:107 (approx)
+        |     |     worktree/setup.rs:511 (fn definition)
         |     |     Creates runtime subdirectories for session state
         |     |
         |     +-- write_env_file_with_worktree(wt_path, session_id, project_dir)
@@ -568,7 +568,8 @@ In the unmanaged path, per-PID files are also removed because the single-session
 
 **Removal scope:**
 
-- `session/env.rs`: remove `write_pid_env_file()`, `read_worktree_path_from_pid_file()`
+- `session/env.rs`: remove `write_pid_env_file()`
+- `cli/helpers.rs`: remove `read_worktree_path_from_pid_file()` (defined at `helpers.rs:76`)
 - `session_start.rs`: remove per-PID write call
 - `session_end.rs`: remove per-PID cleanup call
 - `helpers.rs`: remove step 4 from `detect_project_dir()`
@@ -1046,9 +1047,10 @@ With teammate detection removed from the managed path, the only remaining use of
 | Use Case | Before | After |
 |----------|--------|-------|
 | Teammate detection | PID comparison + tmux count | Removed (use CODEFLOW_MANAGED env var instead) |
-| Stale worktree detection | PID file existence | `session/liveness.rs::is_session_alive(pid)` from `InteractiveSession.pid` |
+| Stale worktree detection | PID file existence | `session/liveness.rs::is_session_alive(pid)` from `InteractiveSession.pid` + heartbeat at `.state/interactive/heartbeat-{SID}` |
 | SessionEnd PID cleanup | Clean up `codeflow-env-{pid}.sh` | Removed (no PID files) |
-| Dead worker claim release | Heartbeat TTL + `cleanup_dead_workers()` | Retained (autorun only) |
+| Dead worker claim release | Heartbeat TTL + `cleanup_dead_workers()` | Retained (autorun workers) |
+| Interactive session liveness | PID-only | Heartbeat file at `.state/interactive/heartbeat-{SID}` written by SessionStart; enables `codeflow interactive cleanup` to detect stale sessions |
 
 **What `session/liveness.rs` does after this change:**
 
@@ -1066,9 +1068,9 @@ pub fn is_session_alive(lead_pid: u32) -> bool {
 
 Autorun uses `stale.rs::check_pid_alive(pid: i64)` (verified at `stale.rs:50`) for the same check via the `StaleSessionInfo` pattern. The interactive session cleanup reuses this function.
 
-The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is retained for autorun workers (heartbeat TTL for claim release via `cleanup_dead_workers()`). Interactive sessions use PID-only liveness — no heartbeat file needed.
+The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is retained for both autorun workers and interactive sessions. The SessionStart hook writes a heartbeat file at `.state/interactive/heartbeat-{SID}` for managed interactive sessions. This heartbeat enables `codeflow interactive cleanup` to detect stale sessions reliably — it complements PID liveness (which requires the process to still exist) with a time-bounded file that survives brief process pauses. Autorun workers use heartbeat TTL for claim release via `cleanup_dead_workers()`.
 
-**Summary:** PID/liveness is a cleanup tool, not a routing mechanism. It is no longer called in the hot path (hooks). It is called only from administrative commands (`interactive cleanup`, `interactive list`, `doctor`).
+**Summary:** PID/liveness and heartbeat are cleanup tools, not routing mechanisms. They are no longer called in the hook hot path. They are called only from administrative commands (`interactive cleanup`, `interactive list`, `doctor`). The heartbeat file at `.state/interactive/heartbeat-{SID}` is written by SessionStart for managed interactive sessions and provides time-bounded liveness detection alongside PID checks.
 
 → Back to [Table of Contents](#table-of-contents)
 
@@ -1093,8 +1095,8 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 | `codeflow-cli/core/src/hooks/session_end.rs` | — | Modify | Remove per-PID env file cleanup |
 | `codeflow-cli/core/src/hooks/post_tool_use.rs` | — | Modify | Add `update_branch_from_current()` + `InteractiveSession.branch` update when `pathflow-pf-3` sentinel created |
 | `codeflow-cli/core/src/hooks/task_completed.rs` | — | Modify | Add same branch update when `pathflow-pf-3` sentinel created via checkpoint-complete |
-| `codeflow-cli/core/src/session/env.rs` | — | Remove fns | Remove `write_pid_env_file()` and `read_worktree_path_from_pid_file()` |
-| `codeflow-cli/cli/src/helpers.rs` | — | Simplify | Remove step 4 from `detect_project_dir()` (per-PID file lookup); remove `read_worktree_path_from_pid_file()` call |
+| `codeflow-cli/core/src/session/env.rs` | — | Remove fn | Remove `write_pid_env_file()` |
+| `codeflow-cli/cli/src/helpers.rs` | — | Simplify | Remove step 4 from `detect_project_dir()` (per-PID file lookup); remove `read_worktree_path_from_pid_file()` (defined at `helpers.rs:76`) |
 | `codeflow-cli/core/src/models/mod.rs` | — | Add | Export `InteractiveSession` |
 | **Autorun field rename — see [Section 13.3](#133-blast-radius) for full table** | | | |
 | `codeflow-cli/core/src/autorun/batch.rs` | 1942 | Rename fields | `BatchFile`: `target`→`integration_branch`, `auto_merge`→`integration_auto_merge`, `final_pr_base`→`final_pr_target`; `ParsedBatch`: same + `target_is_auto`→`integration_branch_is_auto`; ~80 lines of field references across struct, parse, resolve_target, tests |
@@ -1120,14 +1122,13 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 | Location | Code Removed | Reason |
 |----------|-------------|--------|
 | `session/env.rs` | `write_pid_env_file()` function | PID files eliminated |
-| `session/env.rs` | `read_worktree_path_from_pid_file()` function | PID files eliminated |
+| `cli/helpers.rs` | `read_worktree_path_from_pid_file()` function (at `helpers.rs:76`) | PID files eliminated; function was only in helpers.rs, not session/env.rs |
 | `session/process.rs` | `get_claude_code_pid()` function (or demoted to test-only) | No longer called in production path |
 | `hooks/session_start.rs` | PID file write call | PID files eliminated |
 | `hooks/session_start.rs` | `pending_tmux_count` detection logic (managed path only) | Replaced by env var check |
 | `hooks/session_start.rs` | Stale worktree cleanup (managed path only) | Managed by CLI commands |
 | `hooks/session_end.rs` | PID file cleanup | PID files eliminated |
 | `helpers.rs` | `detect_project_dir()` step 4 | PID files eliminated |
-| `helpers.rs` | `read_worktree_path_from_pid_file()` call | PID files eliminated |
 
 → Back to [Table of Contents](#table-of-contents)
 

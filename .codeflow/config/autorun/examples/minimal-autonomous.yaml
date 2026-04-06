@@ -8,8 +8,8 @@
 #   auto_merge: inferred from target — integration branches auto-merge after
 #               CI passes; protected branches (main, master, release/*,
 #               production) are forbidden with auto_merge.
-#   final_pr:   NOT auto-inferred for auto-generated targets — false by default.
-#               Set final_pr: true explicitly if you want a summary PR from
+#   final_pr:   true — resolve_target() sets final_pr for auto-generated targets.
+#               Set final_pr: false explicitly to skip the summary PR from
 #               the integration branch to main after all workers complete.
 #
 # This is the recommended pattern for most autorun batches. Omitting
