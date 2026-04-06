@@ -342,6 +342,7 @@ mod tests {
             session_id: codeflow_core::types::SessionId::new_unchecked("ses-001"),
             task_id: "TSK-001".to_string(),
             branch: "feat/test".to_string(),
+            target_branch: String::new(),
             pr_ready_at: "2026-03-21T10:00:00Z".to_string(),
         };
         codeflow_core::coordination::merge_queue::enqueue(&coord, &entry).unwrap();

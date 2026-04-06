@@ -3,15 +3,16 @@
 # Four independent audit and gap analysis tasks from the INF-EPC-024 epic.
 # These tasks have no interdependencies and can run in parallel.
 #
-# PRs are created targeting main for human review (auto_merge: false).
+# Autonomous defaults apply: target branch is auto-generated as
+# autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
+# from target — protected branches (main, master, release/*, production)
+# cannot auto-merge; integration branches can.
 #
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/batches/inf-epc-024-phase1-audits.yaml
 
 name: inf-epc-024-phase1-audits
 max_workers: 3
-auto_merge: false
-target: main
 tasks:
   - id: INF-TSK-024-034
   - id: INF-TSK-024-005

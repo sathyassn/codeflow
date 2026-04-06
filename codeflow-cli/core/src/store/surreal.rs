@@ -1497,6 +1497,8 @@ mod tests {
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-03-08T00:00:00Z".into(),
             completed_at: None,
         };
@@ -2777,6 +2779,8 @@ mod tests {
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             completed_at: completed_at.map(String::from),
         }

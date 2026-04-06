@@ -22,7 +22,9 @@
   "merge": {
     "auto_rebase": true,
     "queue_enabled": true,
-    "max_rebase_attempts": 3
+    "max_rebase_attempts": 3,
+    "queue_enforcing": true,
+    "queue_timeout_secs": 600
   },
   "claims": {
     "default_scope_policy": "soft",
@@ -35,6 +37,7 @@
     "report_dir": "project-management/tracking/autorun",
     "max_concurrent_batches": 5,
     "heartbeat_interval_secs": 30,
-    "stale_threshold_secs": 90
+    "stale_threshold_secs": 90,
+    "epic_update": "orchestrator"
   }
 }

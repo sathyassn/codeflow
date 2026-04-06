@@ -2574,6 +2574,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -2765,6 +2768,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -3230,6 +3236,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -3264,6 +3273,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 
@@ -3298,6 +3310,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         session::set_active_task(&runtime_dir, &task).unwrap();
 

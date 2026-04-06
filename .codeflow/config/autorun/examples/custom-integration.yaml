@@ -1,11 +1,15 @@
-# Auto-Merge Integration Branch Batch
-# =====================================
-# Tasks with auto_merge enabled. Worker PRs are automatically merged
-# to an integration branch (not main) after CI passes.
+# Custom Integration Branch Batch
+# ==================================
+# Tasks targeting an explicit custom integration branch. Worker PRs
+# auto-merge to the integration branch after CI passes via the CRDT
+# merge queue (serialized FIFO merges).
+#
+# Use this pattern when you need a named, persistent integration branch
+# rather than the auto-generated autorun/{batch-name}-{session-suffix}.
 #
 # Integration branch convention:
 #   main
-#     └── autorun/sprint-42           ← integration branch (created off main)
+#     └── autorun/sprint-42           ← custom integration branch (pre-created off main)
 #           ├── feat/task-001         ← worker branch (created off integration)
 #           └── feat/task-002         ← worker branch (created off integration)
 #
@@ -23,7 +27,7 @@
 #   concurrent merges that could cause conflicts.
 #
 # Usage:
-#   codeflow autorun run --batch .codeflow/config/autorun/examples/auto-merge-integration.yaml
+#   codeflow autorun run --batch .codeflow/config/autorun/examples/custom-integration.yaml
 #
 # Task Requirements:
 #   Each task ID must have a corresponding markdown file at:
@@ -36,8 +40,8 @@
 
 name: sprint-42
 max_workers: 3
-auto_merge: true
 target: autorun/sprint-42
+auto_merge: true
 tasks:
   - id: FRT-TSK-001-001
   - id: FRT-TSK-001-002

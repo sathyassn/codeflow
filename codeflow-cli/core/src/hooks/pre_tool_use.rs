@@ -4652,6 +4652,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("permissive".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4700,6 +4703,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("hard".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4748,6 +4754,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("hard".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4796,6 +4805,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4844,6 +4856,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4894,6 +4909,9 @@ mod tests {
             work_type: None,
             scope_policy: Some("soft".to_string()),
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 
@@ -4952,6 +4970,9 @@ mod tests {
             work_type: None,
             scope_policy: None, // No policy specified = default to soft.
             file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
         set_active_task(&runtime_dir, &task).unwrap();
 

@@ -351,8 +351,8 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)
 7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
    - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
-   - **Autorun + auto_merge** (non-protected target): auto-merge via `gh pr merge --delete-branch`
-   - **Autorun + no auto_merge**: task is already complete from PF6-TSK-01, proceed to PF7
+   - **Autorun + `AUTORUN_AUTO_MERGE=true`** (non-protected target): PR is enqueued in the CRDT merge queue; the Rust worker layer handles serialized auto-merge after the Claude session exits. Do NOT attempt `gh pr merge` here.
+   - **Autorun + `AUTORUN_AUTO_MERGE=false`** (or protected target): task is already complete from PF6-TSK-01, proceed to PF7
 8. Record PR outcome (PF6-TSK-08, cf-knowledge-layer — `record-pr-outcome`, must run before sync-local)
 9. Sync local (PF6-TSK-09, cf-git-operations — `sync-local`): pull main/target branch
 
@@ -430,6 +430,9 @@ In autorun mode (no human present), phase transitions happen automatically:
 | `AUTORUN_TASK_ID` | Pre-assigned task ID from the batch file | CLI orchestrator |
 | `AUTORUN_ACCEPTANCE` | Base64-encoded acceptance criteria extracted from task markdown | CLI orchestrator |
 | `CODEFLOW_WORKTREE_PATH` | Path to the worker's isolated git worktree | Worker setup (`worker.rs`) |
+| `AUTORUN_TARGET` | PR base branch for this worker (from batch `target` field or auto-generated integration branch) | CLI orchestrator |
+| `AUTORUN_AUTO_MERGE` | Whether to auto-merge after CI passes (`true`/`false`; inferred from target if not explicit) | CLI orchestrator |
+| `AUTORUN_EPIC_UPDATE` | Epic markdown update strategy (`orchestrator` = skip per-worker update, let orchestrator batch-update post-run) | CLI orchestrator |
 
 **Per-phase autorun behavior diff:**
 
@@ -440,7 +443,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 | PF3-CLASSIFY | Classify from user request | Classify from task `work_type` in WorkGraph |
 | PF4-EXECUTE | Spawn teammates, wait for user if blocked | Spawn teammates, resolve autonomously or mark `blocked` |
 | PF5-VERIFY | Same | Same |
-| PF6-COMPLETE | Notify user to merge PR via GitHub UI | `auto_merge=true` + non-protected: auto-merge. Otherwise: task complete, no merge wait. |
+| PF6-COMPLETE | Notify user to merge PR via GitHub UI | `AUTORUN_AUTO_MERGE=true` + non-protected target: merge queue handles auto-merge after Claude exits. Otherwise: task complete, no merge wait. |
 | PF7-END | Same | Same |
 
 **Tracking decision in autorun:** There is no "wait for user request" step. The task is pre-assigned. The tracking decision is always `tracked` -- autorun does not handle untracked sessions.
@@ -1201,7 +1204,7 @@ Three complementary mechanisms provide defense-in-depth:
 🔒 **All git write operations go through cf-git-operations teammate. Never run git write commands directly.**
 
 - No direct commits to main/master
-- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `cicd/*`, `spike/*`, `hotfix/*`
+- Feature branches: `feat/*`, `fix/*`, `plan/*`, `docs/*`, `refactor/*`, `test/*`, `chore/*`, `cicd/*`, `spike/*`, `hotfix/*`, `autorun/*`
 - Commit messages follow conventional format (enforced by cf-git-operations)
 - All changes through PRs to main
 - Merge conflict detection: Before PR creation (PF6-TSK-05), `check_merge_conflicts()` from `git/conflict.rs` verifies the branch can merge cleanly. In parallel sessions, the merge queue (`coordination/merge_queue.rs`) serializes PR merges.

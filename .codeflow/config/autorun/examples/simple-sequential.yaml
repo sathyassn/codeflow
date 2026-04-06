@@ -4,7 +4,12 @@
 # after the first completes successfully. If the first fails, the second
 # is skipped automatically.
 #
-# PRs are created targeting main for human review (auto_merge: false).
+# Autonomous defaults apply: target branch is auto-generated as
+# autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
+# from target — protected branches (main, master, release/*, production)
+# cannot auto-merge; integration branches can. PRs target the integration
+# branch and are reviewed via a human-reviewed summary PR from the
+# integration branch to main.
 #
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/examples/simple-sequential.yaml
@@ -24,7 +29,6 @@
 
 name: simple-sequential
 max_workers: 1
-auto_merge: false
 tasks:
   - id: AREA-TSK-NNN-001
   - id: AREA-TSK-NNN-002

@@ -1,0 +1,34 @@
+# Manual Review Batch
+# ====================
+# Tasks that require human review before merging. auto_merge: false
+# forces all worker PRs to await human approval, even when the target
+# is a non-protected branch that would otherwise allow auto-merge.
+#
+# Use this pattern when the work is sensitive, experimental, or requires
+# sign-off from a specific reviewer before integration.
+#
+# Workflow:
+#   1. Workers create PRs targeting the auto-generated integration branch
+#   2. PRs remain open — no auto-merge
+#   3. Human reviewer inspects each worker PR and approves
+#   4. Human merges worker PRs to the integration branch
+#   5. Human reviews and merges the summary PR from integration to main
+#
+# Usage:
+#   codeflow autorun run --batch .codeflow/config/autorun/examples/manual-review.yaml
+#
+# Task Requirements:
+#   Each task ID must have a corresponding markdown file at:
+#     project-management/epics/{AREA}/{AREA}-EPC-{NNN}/tasks/{task-id}.md
+#   The task markdown MUST contain frontmatter with:
+#     autorun_eligible: true       — marks task as safe for autonomous execution
+#     acceptance: [list]           — at least one acceptance criterion
+#     file_scope: [list]           — file paths this task may modify
+#     scope_policy: soft or hard   — NOT permissive (forbidden for autorun)
+
+name: manual-review
+max_workers: 2
+auto_merge: false
+tasks:
+  - id: AREA-TSK-NNN-001
+  - id: AREA-TSK-NNN-002

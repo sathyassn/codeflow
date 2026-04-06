@@ -7,12 +7,13 @@
 
 pub mod batch;
 pub mod config;
+pub mod epic_update;
 pub mod orchestrator;
 pub mod stale;
 pub mod worker;
 
 pub use batch::{
-    BatchFile, ParsedBatch, TaskSpec, build_resume_batch, resolve_task_path,
+    BatchFile, ParsedBatch, TaskSpec, build_resume_batch, resolve_target, resolve_task_path,
     validate_batch_extended,
 };
 pub use config::{AutorunConfig, ParallelWorkConfig, load_config};

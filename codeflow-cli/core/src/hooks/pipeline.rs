@@ -147,6 +147,7 @@ pub fn infer_work_type_from_branch(branch_name: &str) -> &'static str {
         ("plan/", "PLAN"),
         ("spike/", "SPKE"),
         ("hotfix/", "HTFX"),
+        ("autorun/", "AUTORUN"),
     ];
 
     for &(prefix, work_type) in PREFIX_MAP {
@@ -505,6 +506,10 @@ mod tests {
         assert_eq!(infer_work_type_from_branch("plan/design"), "PLAN");
         assert_eq!(infer_work_type_from_branch("spike/prototype"), "SPKE");
         assert_eq!(infer_work_type_from_branch("hotfix/urgent"), "HTFX");
+        assert_eq!(
+            infer_work_type_from_branch("autorun/batch-abc12345"),
+            "AUTORUN"
+        );
     }
 
     #[test]

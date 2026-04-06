@@ -118,6 +118,9 @@ pub struct InvokeConfig {
     /// This is the ID used for CRDT claims and must match what hooks use.
     #[serde(default)]
     pub worker_session_id: String,
+    /// Who performs epic status updates: "orchestrator" or "none".
+    #[serde(default)]
+    pub epic_update: String,
 }
 
 /// Result of a Claude Code invocation.
@@ -214,6 +217,194 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             store,
         }
     }
+}
+
+/// Outcome of the serialized merge process.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MergeOutcome {
+    /// PR successfully merged via serialized queue.
+    Merged,
+    /// Merge conflict could not be resolved after rebase attempts.
+    MergeConflict { error: String },
+    /// Timed out waiting for queue position 0.
+    QueueTimeout,
+}
+
+/// Execute a serialized merge: enqueue, wait for position 0, rebase, push, merge PR.
+///
+/// This function orchestrates the full merge sequence for autorun workers:
+/// 1. Enqueue in the target-scoped merge queue
+/// 2. Poll until this session reaches position 0 (or timeout)
+/// 3. Fetch the latest target branch
+/// 4. Rebase onto target (with retries)
+/// 5. Force-push with lease
+/// 6. Merge the PR via GitHub CLI
+/// 7. Dequeue from the merge queue
+///
+/// On failure at any step, the session is removed from the queue and cleanup proceeds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn serialized_merge(
+    wt_path: &std::path::Path,
+    target: &str,
+    worker_sid: &crate::types::SessionId,
+    pr_number: i64,
+    task_id: &str,
+    branch_name: &str,
+    state_path: &std::path::Path,
+    merge_config: &crate::autorun::config::MergeConfig,
+    queue_timeout_secs: u64,
+) -> MergeOutcome {
+    // Step 1: Enqueue with target_branch.
+    let entry = crate::coordination::merge_queue::MergeQueueEntry {
+        session_id: worker_sid.clone(),
+        task_id: task_id.to_string(),
+        branch: branch_name.to_string(),
+        target_branch: target.to_string(),
+        pr_ready_at: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = crate::coordination::merge_queue::locked_enqueue(state_path, &entry) {
+        eprintln!("warning: merge queue enqueue failed: {e}");
+    }
+
+    // Step 2: Poll for position 0.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(queue_timeout_secs);
+    loop {
+        match crate::coordination::merge_queue::locked_position_for_target(
+            state_path, worker_sid, target,
+        ) {
+            Ok(Some(0)) => break, // We're at the front.
+            Ok(Some(pos)) => {
+                eprintln!("merge queue: position {pos} for target {target}, waiting...");
+            }
+            Ok(None) => {
+                // Not in queue -- should not happen after enqueue, but re-enqueue.
+                eprintln!("warning: session not found in merge queue, re-enqueueing");
+                let _ = crate::coordination::merge_queue::locked_enqueue(state_path, &entry);
+            }
+            Err(e) => {
+                eprintln!("warning: merge queue position check failed: {e}");
+                break; // Proceed anyway on error.
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            eprintln!("merge queue: timed out waiting for position 0 after {queue_timeout_secs}s");
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::QueueTimeout;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    // Step 3: git fetch origin {target}.
+    let fetch_output = std::process::Command::new("git")
+        .args(["fetch", "origin", target])
+        .current_dir(wt_path)
+        .output();
+    if let Err(e) = &fetch_output {
+        eprintln!("warning: git fetch failed: {e}");
+    }
+
+    // Step 4: Rebase loop.
+    for attempt in 1..=merge_config.max_rebase_attempts {
+        match crate::git::conflict::attempt_rebase(wt_path, &format!("origin/{target}")) {
+            Ok(crate::git::conflict::RebaseResult::Success) => break,
+            Ok(crate::git::conflict::RebaseResult::ConflictAborted { conflicting_files }) => {
+                if attempt == merge_config.max_rebase_attempts {
+                    let error = format!(
+                        "rebase failed after {attempt} attempts, conflicts: {}",
+                        conflicting_files.join(", ")
+                    );
+                    let _ = crate::coordination::merge_queue::locked_remove_by_session(
+                        state_path, worker_sid,
+                    );
+                    return MergeOutcome::MergeConflict { error };
+                }
+                eprintln!(
+                    "rebase attempt {attempt}/{} failed with conflicts, retrying...",
+                    merge_config.max_rebase_attempts
+                );
+                // Brief pause before retry.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(e) => {
+                eprintln!("warning: rebase error on attempt {attempt}: {e}");
+                if attempt == merge_config.max_rebase_attempts {
+                    let _ = crate::coordination::merge_queue::locked_remove_by_session(
+                        state_path, worker_sid,
+                    );
+                    return MergeOutcome::MergeConflict {
+                        error: format!("rebase error: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
+    // Step 5: git push --force-with-lease.
+    let push_output = std::process::Command::new("git")
+        .args(["push", "--force-with-lease"])
+        .current_dir(wt_path)
+        .output();
+    if let Ok(ref output) = push_output {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("warning: git push --force-with-lease failed: {stderr}");
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::MergeConflict {
+                error: format!("push failed: {stderr}"),
+            };
+        }
+    } else if let Err(e) = &push_output {
+        eprintln!("warning: git push failed to execute: {e}");
+        let _ = crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+        return MergeOutcome::MergeConflict {
+            error: format!("push error: {e}"),
+        };
+    }
+
+    // Step 6: Brief pause for GitHub to register the push.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Step 7: gh pr merge.
+    let merge_output = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "merge",
+            &pr_number.to_string(),
+            "--merge",
+            "--delete-branch",
+        ])
+        .current_dir(wt_path)
+        .output();
+    match merge_output {
+        Ok(ref output) if !output.status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            eprintln!("error: gh pr merge failed: {stderr}");
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::MergeConflict {
+                error: format!("gh pr merge failed: {stderr}"),
+            };
+        }
+        Err(ref e) => {
+            eprintln!("error: gh pr merge command failed: {e}");
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::MergeConflict {
+                error: format!("gh pr merge error: {e}"),
+            };
+        }
+        _ => {} // Success.
+    }
+
+    // Step 8: Dequeue.
+    let _ =
+        crate::coordination::merge_queue::locked_dequeue_for_target(state_path, worker_sid, target);
+
+    MergeOutcome::Merged
 }
 
 /// Outcome of merge conflict resolution.
@@ -449,6 +640,9 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             "scope_policy": cfg.scope_policy,
             "file_scope": cfg.file_scope,
             "worktree_path": wt_info.path.to_string_lossy(),
+            "target_branch": cfg.target,
+            "auto_merge": cfg.auto_merge,
+            "epic_update": cfg.epic_update,
         });
         let _ = std::fs::write(&active_task_path, active_task.to_string());
 
@@ -550,6 +744,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     tmux_session: tmux_name.clone(),
                     acceptance_criteria,
                     worker_session_id: worker_sid.as_str().to_owned(),
+                    epic_update: cfg.epic_update.clone(),
                 })
                 .await
         })
@@ -664,23 +859,48 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
-        // Enqueue in merge queue before PR merge.
-        // NOTE: The merge queue is currently advisory/record-keeping only.
-        // Enqueue/dequeue happens AFTER Claude finishes work and creates the PR.
-        // No queue-position checking occurs before PR merge.
-        // GitHub's own conflict detection provides the actual safety net.
-        if let Ok(Ok(ref invoke_result)) = result {
-            if invoke_result.exit_code == 0 {
-                let entry = crate::coordination::merge_queue::MergeQueueEntry {
-                    session_id: worker_sid.clone(),
-                    task_id: cfg.task_id.clone(),
-                    branch: invoke_result.branch_name.clone(),
-                    pr_ready_at: chrono::Utc::now().to_rfc3339(),
-                };
-                if let Err(e) =
-                    crate::coordination::merge_queue::locked_enqueue(&state_path, &entry)
-                {
-                    eprintln!("warning: merge queue enqueue failed: {e}");
+        // Serialized merge: when auto_merge is enabled and Claude succeeded,
+        // use the merge queue to serialize PR merges to the target branch.
+        if cfg.auto_merge {
+            if let Ok(Ok(ref invoke_result)) = result {
+                if invoke_result.exit_code == 0 && invoke_result.pr_number > 0 {
+                    let merge_config = crate::autorun::config::load_config(&self.project_dir)
+                        .unwrap_or_default()
+                        .merge;
+                    if merge_config.queue_enforcing {
+                        let merge_result = serialized_merge(
+                            &wt_info.path,
+                            &cfg.target,
+                            &worker_sid,
+                            invoke_result.pr_number,
+                            &cfg.task_id,
+                            &invoke_result.branch_name,
+                            &state_path,
+                            &merge_config,
+                            cfg.queue_timeout_secs,
+                        )
+                        .await;
+                        match merge_result {
+                            MergeOutcome::Merged => {
+                                eprintln!(
+                                    "serialized merge: PR #{} merged to {}",
+                                    invoke_result.pr_number, cfg.target
+                                );
+                            }
+                            MergeOutcome::MergeConflict { ref error } => {
+                                eprintln!(
+                                    "serialized merge: PR #{} failed: {error}",
+                                    invoke_result.pr_number
+                                );
+                            }
+                            MergeOutcome::QueueTimeout => {
+                                eprintln!(
+                                    "serialized merge: PR #{} timed out in queue",
+                                    invoke_result.pr_number
+                                );
+                            }
+                        }
+                    } // end queue_enforcing
                 }
             }
         }
@@ -717,11 +937,6 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             Err(e) => {
                 eprintln!("warning: claim release failed: {e}");
             }
-        }
-
-        // Dequeue from merge queue after completion (session-verified).
-        if let Err(e) = crate::coordination::merge_queue::locked_dequeue(&state_path, &worker_sid) {
-            eprintln!("warning: merge queue dequeue failed: {e}");
         }
 
         let _ = self.tmux.kill_session(&tmux_name).await;
@@ -1412,6 +1627,8 @@ mod tests {
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
+            epic_update: String::new(),
+            queue_timeout_secs: 600,
         }
     }
 
@@ -1498,6 +1715,7 @@ mod tests {
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["criterion 1".into()],
             worker_session_id: "ses-worker-1".into(),
+            epic_update: String::new(),
         };
         assert_eq!(cfg.task_id, "t-1");
         assert!(cfg.auto_merge);
@@ -1965,6 +2183,7 @@ Read and implement.
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: "ses-worker-1".into(),
+            epic_update: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: InvokeConfig = serde_json::from_str(&json).unwrap();
@@ -2313,6 +2532,8 @@ Read and implement.
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
+            epic_update: String::new(),
+            queue_timeout_secs: 600,
         };
         assert_eq!(cfg.tmux_name, "cf-ar-task-a");
     }
@@ -2332,6 +2553,8 @@ Read and implement.
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
+            epic_update: String::new(),
+            queue_timeout_secs: 600,
         }
     }
 
@@ -2695,5 +2918,71 @@ Read and implement.
             result.pr_number, 0,
             "pr_number should be 0 when no PR created"
         );
+    }
+
+    // -- MergeOutcome enum tests --
+
+    #[test]
+    fn test_merge_outcome_variants() {
+        let merged = MergeOutcome::Merged;
+        assert_eq!(merged, MergeOutcome::Merged);
+
+        let conflict = MergeOutcome::MergeConflict {
+            error: "rebase failed".to_string(),
+        };
+        assert!(matches!(conflict, MergeOutcome::MergeConflict { .. }));
+
+        let timeout = MergeOutcome::QueueTimeout;
+        assert_eq!(timeout, MergeOutcome::QueueTimeout);
+    }
+
+    #[test]
+    fn test_merge_outcome_debug() {
+        let outcome = MergeOutcome::MergeConflict {
+            error: "test error".to_string(),
+        };
+        let debug = format!("{outcome:?}");
+        assert!(debug.contains("MergeConflict"));
+        assert!(debug.contains("test error"));
+    }
+
+    // -- serialized_merge queue timeout test --
+
+    #[tokio::test]
+    async fn test_serialized_merge_queue_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state.loro");
+        let sid = crate::types::SessionId::new_unchecked("ses-timeout-test");
+        let merge_config = crate::autorun::config::MergeConfig {
+            max_rebase_attempts: 1,
+            queue_enforcing: true,
+            queue_timeout_secs: 0, // Immediate timeout after first check.
+            ..Default::default()
+        };
+
+        // Enqueue another session first so our session is NOT at position 0.
+        let blocker = crate::coordination::merge_queue::MergeQueueEntry {
+            session_id: crate::types::SessionId::new_unchecked("ses-blocker"),
+            task_id: "blocker-task".to_string(),
+            branch: "feat/blocker".to_string(),
+            target_branch: "main".to_string(),
+            pr_ready_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        crate::coordination::merge_queue::locked_enqueue(&state_path, &blocker).unwrap();
+
+        let result = serialized_merge(
+            dir.path(),
+            "main",
+            &sid,
+            42,
+            "task-timeout",
+            "feat/timeout-branch",
+            &state_path,
+            &merge_config,
+            1, // 1 second timeout.
+        )
+        .await;
+
+        assert_eq!(result, MergeOutcome::QueueTimeout);
     }
 }

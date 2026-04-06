@@ -41,6 +41,8 @@ pub struct AutorunSessionUpdate {
     pub completed_at: Option<String>,
     pub tmux_session: Option<Option<String>>,
     pub stale_reason: Option<Option<String>>,
+    pub target_branch: Option<String>,
+    pub final_pr_url: Option<String>,
 }
 
 #[derive(Debug, Default)]

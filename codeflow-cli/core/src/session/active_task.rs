@@ -74,6 +74,18 @@ pub struct ActiveTask {
     /// List of file paths this task is allowed to edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_scope: Option<Vec<String>>,
+
+    /// Target branch for PRs (e.g., "main" or "autorun/batch-xxx").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_branch: Option<String>,
+
+    /// Whether auto_merge is enabled for this task's PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_merge: Option<bool>,
+
+    /// Who performs epic status updates: "orchestrator" or "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epic_update: Option<String>,
 }
 
 /// Read the active task from `runtime_dir/active-task.json`.
@@ -275,6 +287,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         }
     }
 
@@ -335,6 +350,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
 
         set_active_task(&nested, &task).unwrap();
@@ -396,6 +414,9 @@ mod tests {
             work_type: None,
             scope_policy: None,
             file_scope: None,
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
         };
 
         let json = serde_json::to_string(&task).unwrap();

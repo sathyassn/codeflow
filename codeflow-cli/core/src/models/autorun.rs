@@ -26,6 +26,12 @@ pub struct AutorunSession {
     pub tmux_session: Option<String>,
     #[serde(default)]
     pub stale_reason: Option<String>,
+    /// Target branch for PRs in this autorun session (e.g., "autorun/batch-xxx").
+    #[serde(default)]
+    pub target_branch: Option<String>,
+    /// URL of the final PR (integration branch -> main) if created.
+    #[serde(default)]
+    pub final_pr_url: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
 }
@@ -112,6 +118,8 @@ mod tests {
             skipped_tasks: 2,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -134,6 +142,8 @@ mod tests {
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -156,6 +166,8 @@ mod tests {
             skipped_tasks: 1,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: Some("2026-03-21T01:00:00Z".into()),
         };
@@ -180,6 +192,8 @@ mod tests {
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };

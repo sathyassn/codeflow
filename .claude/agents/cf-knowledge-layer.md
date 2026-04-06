@@ -249,16 +249,24 @@ Event types:
 3. UPDATE active_work table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{work_id}'`
 4. UPDATE tasks table: `SET status = 'complete', completed_at = '{ISO8601}' WHERE id = '{task_id}'`
 5. Edit task markdown frontmatter: set `status: complete` in `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
-6. Update epic markdown task table: set task row status to `complete` in `project-management/epics/{AREA}/{epic-format_id}/{epic-format_id}.md` — NEVER skip this, even if sibling tasks remain todo
+6. Update epic markdown task table:
+   - Read active-task.json field `epic_update`
+   - If epic_update == "orchestrator": SKIP this step
+     (orchestrator updates epic post-batch to prevent merge conflicts)
+   - Otherwise: set task row status to `complete` in `project-management/epics/{AREA}/{epic-format_id}/{epic-format_id}.md`
+     — NEVER skip this in non-autorun sessions
 7. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{task_id}","old_status":"in_progress","new_status":"complete"}'`
 8. Run: `codeflow ledger append --event-type complete_work --data '{"work_id":"{id}","task_id":"{task_id}"}'`
 9. Run: `codeflow ledger append --event-type milestone --data '{"work_id":"{work_id}","summary":"Task {task_id} complete","deliverables":[...]}'`
 10. Delete `.state/runtime/active-task.json` if present
-11. **CONDITIONAL (all sibling tasks complete):** Epic status rollup — query `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`:
-    a. UPDATE epics table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
-    b. Edit epic markdown frontmatter: set `status: complete`
-    c. Run: `codeflow ledger append --event-type epic_status_changed --data '{"epic_id":"{epic_id}","old_status":"in_progress","new_status":"complete"}'`
-    d. Run `codeflow validate epic {epic_markdown_path}`
+11. **CONDITIONAL (all sibling tasks complete):** Epic status rollup:
+    - If epic_update == "orchestrator" (from active-task.json): SKIP this step entirely
+      (orchestrator updates epic rollup post-batch)
+    - Otherwise: query `SELECT id, status FROM tasks WHERE epic_id = '{epic_id}'`. If ALL sibling tasks have status `complete`:
+      a. UPDATE epics table: `SET status = 'complete', updated_at = '{ISO8601}' WHERE id = '{epic_id}'`
+      b. Edit epic markdown frontmatter: set `status: complete`
+      c. Run: `codeflow ledger append --event-type epic_status_changed --data '{"epic_id":"{epic_id}","old_status":"in_progress","new_status":"complete"}'`
+      d. Run `codeflow validate epic {epic_markdown_path}`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: complete-work - {work_id} finalized"`
 

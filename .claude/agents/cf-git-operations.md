@@ -53,7 +53,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 | Constraint | Rule |
 |-----------|------|
-| 🔒 Branch access | Write: `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `plan/*`, `test/*`, `ci/*`, `chore/*`, `perf/*`, `style/*`, `hotfix/*`, `revert/*`, `experiment/*`, `release/*`, `merge/*`, `build/*`. Read-only: `main`, `master`, all others. |
+| 🔒 Branch access | Write: `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `plan/*`, `test/*`, `ci/*`, `chore/*`, `perf/*`, `style/*`, `hotfix/*`, `revert/*`, `experiment/*`, `release/*`, `merge/*`, `build/*`, `autorun/*`. Read-only: `main`, `master`, all others. |
 | 🔒 Tools | Bash (git/gh commands only), Read, Glob, Grep. |
 | 🔒 Scope | Git operations only. Do NOT implement features, write tests, or edit source files. |
 
@@ -142,6 +142,7 @@ cd "$GIT_DIR"
 | REVERT | `revert/` | -- | `revert/bad-commit-abc123` |
 | RELEASE | `release/` | -- | `release/v1.2.0` |
 | MERGE | `merge/` | -- | `merge/integrate-feature` |
+| AUTORUN | `autorun/` | -- | (orchestrator-managed) |
 
 **Naming rules:** Lowercase, kebab-case, 3-5 words, max 50 chars. Format: `{prefix}{descriptive-slug}`.
 
@@ -150,9 +151,13 @@ cd "$GIT_DIR"
 1. Determine branch prefix from work type using table above
 2. Generate slug: imperative verb + concise description in kebab-case
 3. Verify branch does not already exist: `git branch --list {name}`
-4. Fetch latest main: `git fetch origin main`
-5. Create branch: `git checkout -b {prefix}{slug} origin/main`
-6. Confirm creation to requester: `"Branch created: {name} from {base}"`
+4. Determine base branch:
+   - Read target_branch from active-task.json (at `.state/runtime/active-task.json`)
+   - If target_branch is set and non-empty AND != "main" AND != "master": base = target_branch
+   - Otherwise: base = main
+5. Fetch base: `git fetch origin {base}`
+6. Create branch: `git checkout -b {prefix}{slug} origin/{base}`
+7. Confirm creation to requester: `"Branch created: {name} from {base}"`
 
 ### Step 2: Create Commit
 
@@ -311,10 +316,15 @@ Do NOT include:
 2. If unpushed commits exist: run sync-remote push first
 3. Check for uncommitted changes: warn requester if present (commit-outstanding-changes step should have already handled this)
 4. Compose PR title and body following format above
-5. Execute PR creation:
+5. Determine PR base:
+   - Read target_branch from active-task.json (at `.state/runtime/active-task.json`)
+   - If target_branch is set and non-empty: use `--base {target_branch}`
+   - Otherwise: use `--base main`
+
+5a. Execute PR creation:
 
    ```text
-   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base main
+   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base {base}
    ```
 
 5b. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
@@ -376,22 +386,15 @@ Do NOT include:
 6. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 7. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
 
-#### Mode 2: Autorun + auto_merge=true
+#### Mode 2: Autorun + AUTORUN_AUTO_MERGE=true
 
-1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
-2. If CI passes: merge to integration branch (NOT to protected branches):
+The Rust worker layer handles serialized merging via the CRDT merge queue after this Claude session exits. Do NOT attempt merge here.
 
-   ```text
-   gh pr merge {number} --delete-branch
-   ```
+1. PR has been created (Step 5a above).
+2. Report to team lead: `"GITOPS: PR #{n} created targeting {target_branch}. Merge will be handled by the autorun merge queue."`
+3. Proceed to PF7-END.
 
-3. Pull updated target: `git pull origin {target_branch}`
-   **Worktree mode:** For sync-local, cd to the main project root (not the worktree) before running `git pull`. The worktree will be cleaned up at PF7-END.
-4. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
-5. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
-6. Report: `"GITOPS: verify-pr-and-sync complete -- merged to {target_branch}, branch deleted"`
-
-**Integration branch convention:** Autorun sessions targeting protected branches use `autorun/{batch-name}` as the merge target. These branches are created off `main` and merged via `gh pr merge --delete-branch` (regular merge, not squash). Protected branch merges happen through GitHub UI or admin override only.
+**Integration branch convention:** Autorun batches auto-generate integration branches named `autorun/{batch-name}-{session-suffix}` off main. These are non-protected and support auto-merge. Worker PRs target the integration branch. After all workers complete, the orchestrator creates a final PR from the integration branch to main.
 
 #### Mode 3: Autorun + auto_merge=false
 

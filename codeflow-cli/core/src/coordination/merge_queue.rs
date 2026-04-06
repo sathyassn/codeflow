@@ -30,6 +30,9 @@ pub struct MergeQueueEntry {
     pub task_id: String,
     /// Branch name for the PR.
     pub branch: String,
+    /// Target branch this PR merges into (e.g., "main" or "autorun/batch-xxx").
+    #[serde(default)]
+    pub target_branch: String,
     /// ISO 8601 timestamp of when the session became ready to merge.
     pub pr_ready_at: String,
 }
@@ -240,6 +243,190 @@ pub fn cleanup_stale_entries<S: std::hash::BuildHasher>(
 }
 
 // ---------------------------------------------------------------------------
+// Target-scoped operations
+// ---------------------------------------------------------------------------
+
+/// Get the queue position for a session within entries targeting a specific branch.
+///
+/// Filters entries by `target_branch` first, then finds the session's position
+/// in that filtered list (0-indexed). Returns `None` if the session is not in
+/// the queue for that target.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` if any entry cannot be parsed.
+pub fn position_for_target(
+    coordinator: &LoroCoordinator,
+    session_id: &SessionId,
+    target_branch: &str,
+) -> Result<Option<usize>, CoordinationError> {
+    let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
+    let len = queue.len();
+    let mut target_pos = 0;
+    for i in 0..len {
+        if let Some(entry) = read_entry_at(&queue, i)? {
+            if entry.target_branch == target_branch {
+                if entry.session_id == *session_id {
+                    return Ok(Some(target_pos));
+                }
+                target_pos += 1;
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Dequeue the front entry for a specific target branch if it belongs to the
+/// requesting session.
+///
+/// Scans the queue for the first entry matching `target_branch`, verifies the
+/// `session_id` matches, and removes it. Returns `None` if no matching entry
+/// is found or the front entry for that target belongs to a different session.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` if any entry cannot be parsed.
+pub fn dequeue_for_target(
+    coordinator: &LoroCoordinator,
+    session_id: &SessionId,
+    target_branch: &str,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+    let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
+    let len = queue.len();
+    for i in 0..len {
+        if let Some(entry) = read_entry_at(&queue, i)? {
+            if entry.target_branch == target_branch {
+                if entry.session_id == *session_id {
+                    queue.delete(i, 1)?;
+                    coordinator.doc().commit();
+                    return Ok(Some(entry));
+                }
+                // Front entry for this target belongs to a different session.
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Remove an entry by session_id regardless of queue position.
+///
+/// Scans the entire queue and removes the first entry matching `session_id`.
+/// Useful for cleanup when a session fails or times out.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` if any entry cannot be parsed.
+pub fn remove_by_session(
+    coordinator: &LoroCoordinator,
+    session_id: &SessionId,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+    let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
+    let len = queue.len();
+    for i in 0..len {
+        if let Some(entry) = read_entry_at(&queue, i)? {
+            if entry.session_id == *session_id {
+                queue.delete(i, 1)?;
+                coordinator.doc().commit();
+                return Ok(Some(entry));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `position_for_target` under a file lock.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` on lock or operation failure.
+pub fn locked_position_for_target(
+    state_path: &Path,
+    session_id: &SessionId,
+    target_branch: &str,
+) -> Result<Option<usize>, CoordinationError> {
+    let mut result = None;
+    let sid = session_id.clone();
+    let tb = target_branch.to_string();
+    locked_binary_rmw(
+        state_path,
+        LoroCoordinator::in_memory,
+        |bytes| {
+            LoroCoordinator::from_bytes(bytes, state_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            result = position_for_target(coord, &sid, &tb)
+                .map_err(|e| format!("position_for_target: {e}"))?;
+            Ok(())
+        },
+    )
+    .map_err(|e| CoordinationError::MergeQueue(format!("locked position_for_target: {e}")))?;
+    Ok(result)
+}
+
+/// `dequeue_for_target` under a file lock.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` on lock or operation failure.
+pub fn locked_dequeue_for_target(
+    state_path: &Path,
+    session_id: &SessionId,
+    target_branch: &str,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+    let mut result = None;
+    let sid = session_id.clone();
+    let tb = target_branch.to_string();
+    locked_binary_rmw(
+        state_path,
+        LoroCoordinator::in_memory,
+        |bytes| {
+            LoroCoordinator::from_bytes(bytes, state_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            result = dequeue_for_target(coord, &sid, &tb)
+                .map_err(|e| format!("dequeue_for_target: {e}"))?;
+            Ok(())
+        },
+    )
+    .map_err(|e| CoordinationError::MergeQueue(format!("locked dequeue_for_target: {e}")))?;
+    Ok(result)
+}
+
+/// `remove_by_session` under a file lock.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` on lock or operation failure.
+pub fn locked_remove_by_session(
+    state_path: &Path,
+    session_id: &SessionId,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+    let mut result = None;
+    let sid = session_id.clone();
+    locked_binary_rmw(
+        state_path,
+        LoroCoordinator::in_memory,
+        |bytes| {
+            LoroCoordinator::from_bytes(bytes, state_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            result =
+                remove_by_session(coord, &sid).map_err(|e| format!("remove_by_session: {e}"))?;
+            Ok(())
+        },
+    )
+    .map_err(|e| CoordinationError::MergeQueue(format!("locked remove_by_session: {e}")))?;
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -281,6 +468,23 @@ mod tests {
             session_id: session(sid),
             task_id: task.to_string(),
             branch: branch.to_string(),
+            target_branch: String::new(),
+            pr_ready_at: ts.to_string(),
+        }
+    }
+
+    fn make_entry_with_target(
+        sid: &str,
+        task: &str,
+        branch: &str,
+        target: &str,
+        ts: &str,
+    ) -> MergeQueueEntry {
+        MergeQueueEntry {
+            session_id: session(sid),
+            task_id: task.to_string(),
+            branch: branch.to_string(),
+            target_branch: target.to_string(),
             pr_ready_at: ts.to_string(),
         }
     }
@@ -404,6 +608,7 @@ mod tests {
                         session_id: SessionId::new_unchecked(format!("ses-{i:03}")),
                         task_id: format!("TSK-{i:03}"),
                         branch: format!("feat/{i}"),
+                        target_branch: String::new(),
                         pr_ready_at: format!("2026-03-19T10:{i:02}:00Z"),
                     };
                     enqueue(&coord, &entry).unwrap();
@@ -676,6 +881,139 @@ mod tests {
             ]
         );
     }
+
+    // -- Target-scoped operations --
+
+    #[test]
+    fn test_position_for_target_filters_by_branch() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry_with_target("ses-001", "T1", "feat/a", "main", "ts1");
+        let e2 = make_entry_with_target("ses-002", "T2", "feat/b", "develop", "ts2");
+        let e3 = make_entry_with_target("ses-003", "T3", "feat/c", "main", "ts3");
+
+        enqueue(&coord, &e1).unwrap();
+        enqueue(&coord, &e2).unwrap();
+        enqueue(&coord, &e3).unwrap();
+
+        // ses-001 is position 0 for "main", ses-003 is position 1 for "main".
+        assert_eq!(
+            position_for_target(&coord, &session("ses-001"), "main").unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            position_for_target(&coord, &session("ses-003"), "main").unwrap(),
+            Some(1)
+        );
+        // ses-002 is position 0 for "develop".
+        assert_eq!(
+            position_for_target(&coord, &session("ses-002"), "develop").unwrap(),
+            Some(0)
+        );
+        // ses-001 is not in "develop" queue.
+        assert_eq!(
+            position_for_target(&coord, &session("ses-001"), "develop").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_dequeue_for_target_only_removes_matching() {
+        let coord = LoroCoordinator::in_memory();
+        let e1 = make_entry_with_target("ses-001", "T1", "feat/a", "main", "ts1");
+        let e2 = make_entry_with_target("ses-002", "T2", "feat/b", "develop", "ts2");
+        let e3 = make_entry_with_target("ses-003", "T3", "feat/c", "main", "ts3");
+
+        enqueue(&coord, &e1).unwrap();
+        enqueue(&coord, &e2).unwrap();
+        enqueue(&coord, &e3).unwrap();
+
+        // ses-003 tries to dequeue "main" but ses-001 is first -- should get None.
+        let result = dequeue_for_target(&coord, &session("ses-003"), "main").unwrap();
+        assert!(result.is_none());
+        assert_eq!(queue_len(&coord), 3);
+
+        // ses-001 dequeues "main" -- should succeed.
+        let result = dequeue_for_target(&coord, &session("ses-001"), "main").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id.as_str(), "ses-001");
+        assert_eq!(queue_len(&coord), 2);
+
+        // Now ses-003 is front of "main" queue.
+        let result = dequeue_for_target(&coord, &session("ses-003"), "main").unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_dequeue_for_target_empty_queue() {
+        let coord = LoroCoordinator::in_memory();
+        let result = dequeue_for_target(&coord, &session("ses-001"), "main").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_remove_by_session_finds_at_any_position() {
+        let coord = LoroCoordinator::in_memory();
+        enqueue(
+            &coord,
+            &make_entry_with_target("ses-001", "T1", "b1", "main", "ts1"),
+        )
+        .unwrap();
+        enqueue(
+            &coord,
+            &make_entry_with_target("ses-002", "T2", "b2", "main", "ts2"),
+        )
+        .unwrap();
+        enqueue(
+            &coord,
+            &make_entry_with_target("ses-003", "T3", "b3", "main", "ts3"),
+        )
+        .unwrap();
+
+        // Remove middle entry.
+        let removed = remove_by_session(&coord, &session("ses-002")).unwrap();
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().session_id.as_str(), "ses-002");
+        assert_eq!(queue_len(&coord), 2);
+
+        // Verify remaining entries.
+        let p1 = peek_at(&coord, 0).unwrap().unwrap();
+        assert_eq!(p1.session_id.as_str(), "ses-001");
+        let p2 = peek_at(&coord, 1).unwrap().unwrap();
+        assert_eq!(p2.session_id.as_str(), "ses-003");
+    }
+
+    #[test]
+    fn test_remove_by_session_not_found() {
+        let coord = LoroCoordinator::in_memory();
+        enqueue(&coord, &make_entry("ses-001", "T1", "b1", "ts1")).unwrap();
+        let result = remove_by_session(&coord, &session("ses-999")).unwrap();
+        assert!(result.is_none());
+        assert_eq!(queue_len(&coord), 1);
+    }
+
+    #[test]
+    fn test_target_branch_serde_roundtrip() {
+        let entry = make_entry_with_target(
+            "ses-001",
+            "TSK-001",
+            "feat/test",
+            "autorun/batch-abc",
+            "2026-04-05T10:00:00Z",
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("autorun/batch-abc"));
+        let parsed: MergeQueueEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.target_branch, "autorun/batch-abc");
+    }
+
+    #[test]
+    fn test_target_branch_backward_compat() {
+        // Old entries without target_branch should deserialize with empty string.
+        let json =
+            r#"{"session_id":"ses-001","task_id":"T1","branch":"feat/a","pr_ready_at":"ts1"}"#;
+        let entry: MergeQueueEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.target_branch, "");
+    }
 }
 
 #[cfg(test)]
@@ -706,6 +1044,7 @@ mod proptests {
                     session_id: SessionId::new_unchecked(format!("ses-a-{i:03}")),
                     task_id: format!("TSK-A-{i:03}"),
                     branch: format!("feat/a-{i}"),
+                    target_branch: String::new(),
                     pr_ready_at: format!("2026-03-19T10:{i:02}:00Z"),
                 };
                 enqueue(&coord_a, &entry).unwrap();
@@ -717,6 +1056,7 @@ mod proptests {
                     session_id: SessionId::new_unchecked(format!("ses-b-{i:03}")),
                     task_id: format!("TSK-B-{i:03}"),
                     branch: format!("feat/b-{i}"),
+                    target_branch: String::new(),
                     pr_ready_at: format!("2026-03-19T11:{i:02}:00Z"),
                 };
                 enqueue(&coord_b, &entry).unwrap();
@@ -791,6 +1131,7 @@ mod stale_cleanup_tests {
             session_id: session(sid),
             task_id: task.to_string(),
             branch: branch.to_string(),
+            target_branch: String::new(),
             pr_ready_at: ts.to_string(),
         }
     }

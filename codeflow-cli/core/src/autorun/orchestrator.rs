@@ -51,6 +51,10 @@ pub struct WorkerConfig {
     /// Behavior on claim conflict: "skip_and_continue" or "fail".
     /// Defaults to "skip_and_continue".
     pub blocked_behavior: String,
+    /// Who performs epic status updates: "orchestrator" or "none".
+    pub epic_update: String,
+    /// Timeout in seconds waiting for merge queue position 0.
+    pub queue_timeout_secs: u64,
 }
 
 /// Result of a worker execution.
@@ -171,6 +175,8 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: Some(batch.target.clone()),
+            final_pr_url: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         };
@@ -630,6 +636,16 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     file_scope,
                     scope_policy,
                     blocked_behavior: blocked_behavior.to_string(),
+                    epic_update: {
+                        let cfg =
+                            crate::autorun::config::load_config(project_dir).unwrap_or_default();
+                        cfg.autorun.epic_update
+                    },
+                    queue_timeout_secs: {
+                        let cfg =
+                            crate::autorun::config::load_config(project_dir).unwrap_or_default();
+                        cfg.merge.queue_timeout_secs
+                    },
                 },
                 state.completed.clone(),
                 state.failed.clone(),
@@ -917,6 +933,8 @@ mod tests {
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "hard".into(),
             blocked_behavior: "skip_and_continue".into(),
+            epic_update: "orchestrator".into(),
+            queue_timeout_secs: 600,
         };
         assert_eq!(cfg.task_id, "task-a");
         assert_eq!(cfg.worker_num, 1);
@@ -1633,6 +1651,8 @@ mod tests {
                 file_scope: vec![],
                 scope_policy: "soft".into(),
                 blocked_behavior: "skip_and_continue".into(),
+                epic_update: String::new(),
+                queue_timeout_secs: 600,
             },
             completed.clone(),
             failed.clone(),

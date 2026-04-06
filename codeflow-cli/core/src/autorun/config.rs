@@ -55,6 +55,8 @@ pub struct AutorunConfig {
     /// Seconds without heartbeat before a session is considered stale (default: 90).
     /// Must be >= 2 * heartbeat_interval_secs.
     pub stale_threshold_secs: u64,
+    /// Who performs epic status updates: "orchestrator" or "none". Default: "orchestrator".
+    pub epic_update: String,
 }
 
 impl Default for AutorunConfig {
@@ -66,6 +68,7 @@ impl Default for AutorunConfig {
             max_concurrent_batches: 5,
             heartbeat_interval_secs: 30,
             stale_threshold_secs: 90,
+            epic_update: "orchestrator".to_string(),
         }
     }
 }
@@ -167,6 +170,10 @@ pub struct MergeConfig {
     pub queue_enabled: bool,
     /// Maximum rebase retries before giving up.
     pub max_rebase_attempts: usize,
+    /// Enforce queue ordering (block until position 0). Default: true.
+    pub queue_enforcing: bool,
+    /// Timeout in seconds waiting for queue position 0. Default: 600.
+    pub queue_timeout_secs: u64,
 }
 
 impl Default for MergeConfig {
@@ -175,6 +182,8 @@ impl Default for MergeConfig {
             auto_rebase: true,
             queue_enabled: true,
             max_rebase_attempts: 3,
+            queue_enforcing: true,
+            queue_timeout_secs: 600,
         }
     }
 }

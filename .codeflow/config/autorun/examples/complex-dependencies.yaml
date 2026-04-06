@@ -24,6 +24,11 @@
 #     Round 2: 003 (1 worker, waits for both deps)
 #     Round 3: 004 (1 worker, waits for 003)
 #
+# Autonomous defaults apply: target branch is auto-generated as
+# autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
+# from target — protected branches (main, master, release/*, production)
+# cannot auto-merge; integration branches can.
+#
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/examples/complex-dependencies.yaml
 #
@@ -38,7 +43,6 @@
 
 name: complex-deps
 max_workers: 2
-auto_merge: false
 tasks:
   - id: AREA-TSK-NNN-001
   - id: AREA-TSK-NNN-002

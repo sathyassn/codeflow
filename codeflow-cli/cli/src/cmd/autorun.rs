@@ -239,6 +239,7 @@ fn resolve_repo_root(dir: &Path) -> Result<PathBuf> {
 fn preflight_checks(project_dir: &Path) -> Result<()> {
     check_tmux_available()?;
     check_git_clean(project_dir)?;
+    check_gh_auth()?;
     Ok(())
 }
 
@@ -303,6 +304,120 @@ fn check_target_branch(project_dir: &Path, target: &str) -> Result<()> {
     }
 
     anyhow::bail!("target branch '{target}' does not exist locally or at origin/{target}");
+}
+
+/// Verify GitHub CLI is authenticated. Warns on failure -- the actual
+/// PR merge will fail later with a more specific error if gh is missing.
+#[allow(clippy::unnecessary_wraps)]
+fn check_gh_auth() -> Result<()> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "status"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {}
+        Ok(_) => {
+            eprintln!(
+                "WARNING: GitHub CLI not authenticated. \
+                 PR merge will require 'gh auth login'."
+            );
+        }
+        Err(_) => {
+            eprintln!(
+                "WARNING: GitHub CLI (gh) not found. \
+                 PR merge requires gh: https://cli.github.com/"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Create or verify the integration branch for the batch.
+///
+/// - If target is main/master: skip (workers PR directly to main).
+/// - If target branch already exists: verify no open PRs (for auto-generated targets).
+/// - If target doesn't exist: create from origin/{final_pr_base} and push.
+fn resolve_or_create_integration_branch(
+    project_dir: &Path,
+    batch: &codeflow_core::autorun::ParsedBatch,
+) -> Result<()> {
+    let target = &batch.target;
+
+    // Skip for main/master -- workers PR directly.
+    if target == "main" || target == "master" || target.is_empty() {
+        return Ok(());
+    }
+
+    // Check if target branch exists locally or at origin.
+    let local_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", target])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let remote_ref = format!("origin/{target}");
+    let remote_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", &remote_ref])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if local_exists || remote_exists {
+        // Branch exists -- for auto-generated targets, verify no stale open PRs.
+        if batch.target_is_auto {
+            let check = std::process::Command::new("gh")
+                .args([
+                    "pr", "list", "--head", target, "--state", "open", "--json", "number",
+                ])
+                .current_dir(project_dir)
+                .output();
+            if let Ok(output) = check {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.trim() != "[]" && !stdout.trim().is_empty() {
+                    anyhow::bail!(
+                        "auto-generated target branch '{target}' has open PRs. \
+                         Clean up stale PRs or use a different batch name."
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Branch doesn't exist -- create from origin/{final_pr_base}.
+    let base = &batch.final_pr_base;
+    let base_ref = format!("origin/{base}");
+    eprintln!("creating integration branch '{target}' from '{base_ref}'");
+
+    let create = std::process::Command::new("git")
+        .args(["branch", target, &base_ref])
+        .current_dir(project_dir)
+        .output()
+        .context("failed to create integration branch")?;
+    if !create.status.success() {
+        let stderr = String::from_utf8_lossy(&create.stderr);
+        anyhow::bail!("failed to create branch '{target}': {stderr}");
+    }
+
+    let push = std::process::Command::new("git")
+        .args(["push", "-u", "origin", target])
+        .current_dir(project_dir)
+        .output()
+        .context("failed to push integration branch")?;
+    if !push.status.success() {
+        let stderr = String::from_utf8_lossy(&push.stderr);
+        anyhow::bail!("failed to push branch '{target}' to origin: {stderr}");
+    }
+
+    eprintln!("integration branch '{target}' created and pushed");
+    Ok(())
 }
 
 /// C6: Check batch guard -- reject if too many concurrent batches or same batch already running.
@@ -406,8 +521,14 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
     codeflow_core::autorun::validate_batch_extended(&mut parsed, project_dir)
         .context("extended batch validation")?;
 
-    // Phase 3: Target branch check (after parse, before execution).
-    check_target_branch(project_dir, &parsed.target)?;
+    // Generate a session ID for this autorun run (needed for resolve_target).
+    let session_id = codeflow_core::session::generate_session_id();
+
+    // Phase 2c: Resolve target branch (auto-generate if empty).
+    codeflow_core::autorun::resolve_target(&mut parsed, session_id.as_str());
+
+    // Phase 3: Create or verify integration branch.
+    resolve_or_create_integration_branch(project_dir, &parsed)?;
 
     let config =
         codeflow_core::autorun::load_config(project_dir).context("loading parallel-work config")?;
@@ -418,9 +539,6 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
         config.worktree.max_concurrent.min(parsed.max_workers),
         config.claims.default_scope_policy,
     );
-
-    // Generate a session ID for this autorun run.
-    let session_id = codeflow_core::session::generate_session_id();
 
     // Create the worker runner with real implementations.
     let worktree_provider = codeflow_core::autorun::RealWorktreeProvider::new(project_dir.clone());
@@ -474,6 +592,116 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
         .context("executing autorun batch")?;
 
     let end_time = chrono::Utc::now();
+
+    // Post-batch: Epic status update (orchestrator-level, not per-worker).
+    if parsed.target != "main"
+        && parsed.target != "master"
+        && config.autorun.epic_update == "orchestrator"
+    {
+        let completed_tasks: Vec<_> = results
+            .iter()
+            .filter(|r| r.status == "completed")
+            .map(|r| r.task_id.clone())
+            .collect();
+        if !completed_tasks.is_empty() {
+            eprintln!(
+                "epic update: updating status for {} completed task(s)",
+                completed_tasks.len()
+            );
+            for task_id in &completed_tasks {
+                let epic_path = match codeflow_core::autorun::epic_update::resolve_epic_path(
+                    project_dir,
+                    task_id,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("  warning: could not resolve epic for {task_id}: {e}");
+                        continue;
+                    }
+                };
+                let content = match std::fs::read_to_string(&epic_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!(
+                            "  warning: could not read epic {}: {e}",
+                            epic_path.display()
+                        );
+                        continue;
+                    }
+                };
+                match codeflow_core::autorun::epic_update::update_task_row_status(
+                    &content, task_id, "complete",
+                ) {
+                    Ok(updated) => {
+                        if updated != content {
+                            if let Err(e) = std::fs::write(&epic_path, &updated) {
+                                eprintln!(
+                                    "  warning: could not write epic {}: {e}",
+                                    epic_path.display()
+                                );
+                            } else {
+                                eprintln!("  updated: {task_id}");
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("  warning: epic update for {task_id} failed: {e}"),
+                }
+            }
+        }
+    }
+
+    // Post-batch: Create final PR (integration branch -> final_pr_base).
+    let completed_count = results.iter().filter(|r| r.status == "completed").count();
+    if parsed.final_pr && completed_count > 0 {
+        let task_lines = results
+            .iter()
+            .map(|r| format!("- {} ({})", r.task_id, r.status))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let body = format!(
+            "## Autorun Batch: {}\n\n\
+             **{}/{}** tasks completed.\n\n\
+             ### Tasks\n{}\n\n\
+             Generated by `codeflow autorun`",
+            parsed.name,
+            completed_count,
+            results.len(),
+            task_lines
+        );
+
+        let pr_output = std::process::Command::new("gh")
+            .args([
+                "pr",
+                "create",
+                "--base",
+                &parsed.final_pr_base,
+                "--head",
+                &parsed.target,
+                "--title",
+                &format!("autorun: {}", parsed.name),
+                "--body",
+                &body,
+            ])
+            .current_dir(project_dir)
+            .output();
+
+        match pr_output {
+            Ok(o) if o.status.success() => {
+                let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                eprintln!("final PR created: {url}");
+            }
+            Ok(o) => {
+                eprintln!(
+                    "warning: final PR creation failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                eprintln!("warning: gh pr create failed: {e}");
+            }
+        }
+    }
 
     // Generate batch report (best-effort: log errors but don't block return).
     let report_dir = project_dir.join(&config.autorun.report_dir);
@@ -2398,11 +2626,17 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
              export AUTORUN_BATCH_ID='{batch}'\n\
              export AUTORUN_TASK_ID='{task}'\n\
              export AUTORUN_ACCEPTANCE='{acc}'\n\
+             export AUTORUN_TARGET='{target}'\n\
+             export AUTORUN_AUTO_MERGE='{auto_merge}'\n\
+             export AUTORUN_EPIC_UPDATE='{epic_update}'\n\
              export CODEFLOW_WORKTREE_PATH='{wdir}'\n",
             sid = sq(autorun_sid),
             batch = sq(&cfg.session_id),
             task = sq(&cfg.task_id),
             acc = sq(&acceptance_b64),
+            target = sq(&cfg.target),
+            auto_merge = if cfg.auto_merge { "true" } else { "false" },
+            epic_update = sq(&cfg.epic_update),
             wdir = sq(work_dir),
         );
         std::fs::write(&env_file_path, &env_content).map_err(|e| {
@@ -2987,6 +3221,8 @@ tasks:
             file_scope: vec!["src/main.rs".into()],
             scope_policy: "soft".into(),
             blocked_behavior: "skip_and_continue".into(),
+            epic_update: String::new(),
+            queue_timeout_secs: 600,
         };
         assert_eq!(cfg.task_id, "task-test");
         assert_eq!(cfg.scope_policy, "soft");
@@ -3023,6 +3259,7 @@ tasks:
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["tests pass".into()],
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
         assert_eq!(cfg.task_id, "task-invoke");
         assert_eq!(cfg.acceptance_criteria, vec!["tests pass"]);
@@ -3050,6 +3287,7 @@ tasks:
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: codeflow_core::autorun::InvokeConfig =
@@ -3258,6 +3496,7 @@ tasks:
             tmux_session: "worker-env".into(),
             acceptance_criteria: vec!["crit A".into(), "crit B".into()],
             worker_session_id: "ses-env-worker".into(),
+            epic_update: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3341,6 +3580,7 @@ tasks:
             tmux_session: "w-exit".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3373,6 +3613,7 @@ tasks:
             tmux_session: "w-timeout".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3416,6 +3657,7 @@ tasks:
             tmux_session: "w-esc".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3488,6 +3730,7 @@ tasks:
             tmux_session: "w-sess".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3646,8 +3889,8 @@ tasks:
             Err(e) => {
                 let msg = e.to_string();
                 assert!(
-                    msg.contains("tmux"),
-                    "only acceptable failure is tmux not found, got: {msg}"
+                    msg.contains("tmux") || msg.contains("GitHub CLI"),
+                    "only acceptable failure is tmux/gh not found, got: {msg}"
                 );
             }
         }
@@ -4001,6 +4244,8 @@ tasks:
                 skipped_tasks: 0,
                 tmux_session: None,
                 stale_reason: None,
+                target_branch: None,
+                final_pr_url: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 completed_at: None,
             };
@@ -4068,6 +4313,8 @@ tasks:
                     skipped_tasks: 0,
                     tmux_session: None,
                     stale_reason: None,
+                    target_branch: None,
+                    final_pr_url: None,
                     created_at: now.clone(),
                     completed_at: None,
                 };
@@ -4169,6 +4416,8 @@ tasks:
                     skipped_tasks: 0,
                     tmux_session: None,
                     stale_reason: None,
+                    target_branch: None,
+                    final_pr_url: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -4249,6 +4498,8 @@ tasks:
                     skipped_tasks: 0,
                     tmux_session: None,
                     stale_reason: None,
+                    target_branch: None,
+                    final_pr_url: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -4443,6 +4694,8 @@ tasks:
             skipped_tasks: 0,
             tmux_session: None,
             stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         }
@@ -5783,6 +6036,7 @@ tasks:
             tmux_session: "w-1".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: "ses-worker-123".into(),
+            epic_update: String::new(),
         };
         // worker_session_id should be non-empty and different from session_id.
         assert_ne!(cfg.worker_session_id, cfg.session_id);
@@ -5808,6 +6062,7 @@ tasks:
             tmux_session: "w-1".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
+            epic_update: String::new(),
         };
         let autorun_sid = if cfg.worker_session_id.is_empty() {
             &cfg.session_id

@@ -205,6 +205,7 @@ mod tests {
             session_id: sid,
             task_id: "TSK-001".to_string(),
             branch: "feat/test".to_string(),
+            target_branch: String::new(),
             pr_ready_at: "2026-03-21T12:00:00Z".to_string(),
         };
         merge_queue::enqueue(&coord, &entry).unwrap();
