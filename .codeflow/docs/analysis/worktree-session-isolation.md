@@ -30,13 +30,13 @@ author: cf-documentation
   - [4.5 Session ID Lifecycle](#45-session-id-lifecycle)
 - [5. Hook Audit: What Changes Per Hook](#5-hook-audit-what-changes-per-hook)
   - [5.1 SessionStart (Major Changes)](#51-sessionstart-major-changes)
-  - [5.2 SessionEnd (Remove PID Cleanup)](#52-sessionend-remove-pid-cleanup)
+  - [5.2 SessionEnd (Fix PID Cleanup)](#52-sessionend-remove-pid-cleanup)
   - [5.3 PreToolUse (No Changes)](#53-pretooluse-no-changes)
   - [5.4 PostToolUse (Add Branch Update at pf-3)](#54-posttooluse-add-branch-update-at-pf-3)
   - [5.5 TaskCompleted (Add Branch Update at pf-3)](#55-taskcompleted-add-branch-update-at-pf-3)
   - [5.6 Other Hooks (No Changes)](#56-other-hooks-no-changes)
 - [6. Eliminated Components](#6-eliminated-components)
-  - [6.1 PID-Based Env Files (Removed)](#61-pid-based-env-files-removed)
+  - [6.1 PID-Based Env Files (Fixed, Not Removed)](#61-pid-based-env-files-fixed-not-removed)
   - [6.2 Shared codeflow-env.sh in Worktree Mode (Removed)](#62-shared-codeflow-envsh-in-worktree-mode-removed)
   - [6.3 detect_project_dir() Simplification](#63-detect_project_dir-simplification)
   - [6.4 Teammate Detection via pending_tmux_count (Removed)](#64-teammate-detection-via-pending_tmux_count-removed)
@@ -495,13 +495,14 @@ fn handle_unmanaged_session_start(payload: &SessionStartPayload) -> Result<()> {
 }
 ```
 
-### 5.2 SessionEnd (Remove PID Cleanup)
+### 5.2 SessionEnd (Fix PID Cleanup)
 
 **File:** `codeflow-cli/core/src/hooks/session_end.rs`
 
 **Changes:**
 
-- Remove: cleanup of per-PID env file (`codeflow-env-{pid}.sh`)
+- Keep: `remove_pid_env_file()` call (removes THIS session's PID file at exit — correct behavior)
+- Add: `clean_stale_pid_env_files()` call (sweep other dead sessions' PID files — moved from SessionStart stale cleanup)
 - No other changes
 
 The worktree cleanup for managed sessions is handled by `codeflow interactive cleanup` or the `WorktreeRegistry` TTL, not by the SessionEnd hook.
@@ -1048,7 +1049,7 @@ With teammate detection removed from the managed path, the only remaining use of
 |----------|--------|-------|
 | Teammate detection | PID comparison + tmux count | Removed (use CODEFLOW_MANAGED env var instead) |
 | Stale worktree detection | PID file existence | `session/liveness.rs::is_session_alive(pid)` from `InteractiveSession.pid` + heartbeat at `.state/interactive/heartbeat-{SID}` |
-| SessionEnd PID cleanup | Clean up `codeflow-env-{pid}.sh` | Removed (no PID files) |
+| SessionEnd PID cleanup | Clean up `codeflow-env-{pid}.sh` | Retained: `remove_pid_env_file()` removes own PID file; `clean_stale_pid_env_files()` sweeps dead sessions |
 | Dead worker claim release | Heartbeat TTL + `cleanup_dead_workers()` | Retained (autorun workers) |
 | Interactive session liveness | PID-only | Heartbeat file at `.state/interactive/heartbeat-{SID}` written by SessionStart; enables `codeflow interactive cleanup` to detect stale sessions |
 
@@ -1092,7 +1093,7 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 | `codeflow-cli/cli/src/cmd/mod.rs` | — | Add | Register `interactive` subcommand; add `-i` alias |
 | `codeflow-cli/core/src/worktree/setup.rs` | — | Add fn | Extract `pub fn setup_interactive_worktree()` wrapping 5-step setup chain; called by `interactive.rs` and refactored `autorun.rs` |
 | `codeflow-cli/core/src/hooks/session_start.rs` | — | Major modify | Add `CODEFLOW_MANAGED` branch; split into `handle_managed_session_start()` and `handle_unmanaged_session_start()`; remove PID file writes; remove stale cleanup from managed path; remove `pending_tmux_count` from managed path; managed path reads session ID from env (not stdin) |
-| `codeflow-cli/core/src/hooks/session_end.rs` | — | Modify | Remove per-PID env file cleanup |
+| `codeflow-cli/core/src/hooks/session_end.rs` | — | Modify | Keep `remove_pid_env_file()` (own PID cleanup); add `clean_stale_pid_env_files()` call (sweep dead sessions) |
 | `codeflow-cli/core/src/hooks/post_tool_use.rs` | — | Modify | Add `update_branch_from_current()` + `InteractiveSession.branch` update when `pathflow-pf-3` sentinel created |
 | `codeflow-cli/core/src/hooks/task_completed.rs` | — | Modify | Add same branch update when `pathflow-pf-3` sentinel created via checkpoint-complete |
 | `codeflow-cli/core/src/session/env.rs` | — | Modify | Fix write timing: remove `clean_stale_pid_env_files()`; keep `write_pid_env_file()` and `read_pid_env_file()`; the early (pre-worktree) write call in `session_start.rs` is removed, the deferred write call after worktree creation is kept |
@@ -1144,9 +1145,9 @@ The `heartbeat.rs` module (`codeflow-cli/core/src/session/heartbeat.rs`) is reta
 | P0 | `session_start.rs` CODEFLOW_MANAGED branch | Nothing | Medium — core hook change |
 | P1 | `cli/src/cmd/interactive.rs` new command | `setup_interactive_worktree()`, `InteractiveSession` | Low — new code |
 | P1 | `cli/src/cmd/mod.rs` register subcommand | `interactive.rs` | Low |
-| P2 | Remove PID file functions from `session/env.rs` | Managed path tested and working | Medium — removes existing code |
-| P2 | Simplify `detect_project_dir()` (remove step 4) | PID files removed | Medium |
-| P2 | `session_end.rs` remove PID cleanup | PID files removed | Low |
+| P2 | Fix PID file write timing in `session/env.rs`; move `clean_stale_pid_env_files()` from SessionStart to SessionEnd | Managed path tested and working | Medium — modifies existing code |
+| P2 | Simplify `detect_project_dir()` (remove step 5 only; retain step 4) | Early PID write fixed | Medium |
+| P2 | `session_end.rs` remove `clean_stale_pid_env_files()` call | Function deleted | Low |
 | P3 | Autorun field rename (all files in Section 13.3) | P0 complete | Medium — wide blast radius |
 | P3 | `autorun.rs` refactor to shared `setup_interactive_worktree()` | `setup_interactive_worktree()` | Low |
 | P3 | `post_tool_use.rs` branch update at pf-3 | pf-3 sentinel logic | Low |
