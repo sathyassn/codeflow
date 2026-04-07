@@ -89,7 +89,7 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 4 | INF-TSK-024-004 | Ledger audit: config.jsonl schema documentation and gap analysis | complete | XS | normal |
 | 5 | INF-TSK-024-005 | Log audit: pathflow-events.jsonl and pr-events schema documentation | complete | M | normal |
 | 6 | INF-TSK-024-006 | Log audit: security, network, conversation log schema documentation | complete | M | normal |
-| 7 | INF-TSK-024-007 | Define canonical event schema: required fields, field naming conventions | todo | M | high |
+| 7 | INF-TSK-024-007 | Define canonical event schema: required fields, field naming conventions | complete | M | high |
 | 8 | INF-TSK-024-008 | Fix dual-ID coexistence in work-graph.jsonl writer | todo | M | high |
 | 9 | INF-TSK-024-009 | Standardize memory-events.jsonl: consolidate 3 schema patterns to 1 | todo | L | high |
 | 10 | INF-TSK-024-010 | Add session_id to all JSONL writers (schema enforcement) | todo | M | normal |
