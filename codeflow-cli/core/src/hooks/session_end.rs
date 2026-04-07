@@ -154,6 +154,10 @@ impl SessionEndCleanup {
         // --- Section 12: Project temp directory cleanup ---
         self.clean_project_temp(project_dir);
 
+        // --- Section 13: InteractiveSession status update ---
+        // Mark the InteractiveSession as complete in DB (non-blocking).
+        Self::complete_interactive_session(project_dir, &session_id);
+
         // Note: session_end ledger event is written by SessionEndLogging
         // handler (hooks::logging module), not here.
 
@@ -744,6 +748,43 @@ impl SessionEndCleanup {
             if tmp_dir.exists() {
                 let _ = fs::remove_dir_all(&tmp_dir);
             }
+        }
+    }
+
+    /// Mark InteractiveSession as complete in DB (non-blocking).
+    ///
+    /// Works for both managed (`codeflow -i`) and unmanaged (`claude`) sessions.
+    /// Uses a new tokio runtime because hook handlers run in a sync context.
+    fn complete_interactive_session(project_dir: &Path, session_id: &str) {
+        let db_dir = project_dir.join(".state/db");
+        if !db_dir.exists() {
+            return;
+        }
+        let sid = session_id.to_string();
+        let update = async move {
+            let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let _: Option<serde_json::Value> = store
+                .db()
+                .query(
+                    "UPDATE interactive_session SET status = 'complete', \
+                     completed_at = $now, updated_at = $now \
+                     WHERE session_id = $sid AND status = 'active'",
+                )
+                .bind(("now", now))
+                .bind(("sid", sid))
+                .await
+                .ok()?
+                .take(0)
+                .ok()?;
+            Some(())
+        };
+        // Hooks run as #[tokio::main] processes; use block_in_place to avoid
+        // creating a nested runtime.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _ = tokio::task::block_in_place(|| handle.block_on(update));
+        } else if let Ok(rt) = tokio::runtime::Runtime::new() {
+            let _ = rt.block_on(update);
         }
     }
 }

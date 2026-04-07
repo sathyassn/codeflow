@@ -1,8 +1,8 @@
 # Manual Review Batch
 # ====================
-# Tasks that require human review before merging. auto_merge: false
-# forces all worker PRs to await human approval, even when the target
-# is a non-protected branch that would otherwise allow auto-merge.
+# Tasks that require human review before merging. integration_auto_merge: false
+# forces all worker PRs to await human approval, even when the
+# integration_branch is a non-protected branch that would otherwise allow auto-merge.
 #
 # Use this pattern when the work is sensitive, experimental, or requires
 # sign-off from a specific reviewer before integration.
@@ -15,7 +15,7 @@
 #   5. Human reviews and merges the summary PR from integration to main
 #
 # final_pr behavior:
-#   No target is specified, so the system auto-generates an integration
+#   No integration_branch is specified, so the system auto-generates an integration
 #   branch (autorun/{batch-name}-{session-suffix}). For auto-generated
 #   targets, resolve_target() sets final_pr to true — a summary PR from
 #   the integration branch to main is created after all workers complete.
@@ -35,7 +35,7 @@
 
 name: manual-review
 max_workers: 2
-auto_merge: false
+integration_auto_merge: false
 tasks:
   - id: AREA-TSK-NNN-001
   - id: AREA-TSK-NNN-002

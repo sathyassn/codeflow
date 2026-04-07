@@ -36,9 +36,9 @@ pub use ledger::{Event, JsonlWriter, LedgerWriter};
 pub use store::{CasResult, DataStore, SyncResult};
 pub use types::{
     ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,
-    BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, LedgerEvent,
-    ParseEnumError, ParseIdError, ParseSentinelError, Phase, PipelineType, Sentinel, SessionId,
-    SessionStatus, TaskId, TaskStatus, WorkId, WorkStage, WorkType,
+    BranchName, DecisionTier, DomainType, EpicId, EpicStatus, FormatId, InteractiveSessionStatus,
+    LedgerEvent, ParseEnumError, ParseIdError, ParseSentinelError, Phase, PipelineType, Sentinel,
+    SessionId, SessionStatus, TaskId, TaskStatus, WorkId, WorkStage, WorkType,
 };
 
 /// Test environment isolation: strips CodeFlow env vars before any test runs.

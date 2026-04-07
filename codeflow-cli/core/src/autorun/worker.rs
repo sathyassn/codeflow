@@ -108,8 +108,8 @@ pub struct InvokeConfig {
     pub prompt: String,
     pub session_id: String,
     pub task_id: String,
-    pub auto_merge: bool,
-    pub target: String,
+    pub integration_auto_merge: bool,
+    pub integration_branch: String,
     pub tmux_session: String,
     /// Acceptance criteria extracted from task markdown for base64-encoded env var.
     #[serde(default)]
@@ -683,8 +683,8 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             "scope_policy": cfg.scope_policy,
             "file_scope": cfg.file_scope,
             "worktree_path": wt_info.path.to_string_lossy(),
-            "target_branch": cfg.target,
-            "auto_merge": cfg.auto_merge,
+            "target_branch": cfg.integration_branch,
+            "auto_merge": cfg.integration_auto_merge,
             "epic_update": cfg.epic_update,
         });
         let _ = std::fs::write(&active_task_path, active_task.to_string());
@@ -782,8 +782,8 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     prompt,
                     session_id: cfg.session_id.clone(),
                     task_id: cfg.task_id.clone(),
-                    auto_merge: cfg.auto_merge,
-                    target: cfg.target.clone(),
+                    integration_auto_merge: cfg.integration_auto_merge,
+                    integration_branch: cfg.integration_branch.clone(),
                     tmux_session: tmux_name.clone(),
                     acceptance_criteria,
                     worker_session_id: worker_sid.as_str().to_owned(),
@@ -801,13 +801,13 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
         // Merge conflict detection and remediation.
         if let Ok(Ok(ref invoke_result)) = result {
-            if invoke_result.exit_code == 0 && !cfg.target.is_empty() {
+            if invoke_result.exit_code == 0 && !cfg.integration_branch.is_empty() {
                 let merge_config = crate::autorun::config::load_config(&self.project_dir)
                     .unwrap_or_default()
                     .merge;
 
                 let wt_path = wt_info.path.clone();
-                let target = cfg.target.clone();
+                let target = cfg.integration_branch.clone();
                 let action = resolve_merge_conflicts(
                     &target,
                     &merge_config,
@@ -902,9 +902,9 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
-        // Serialized merge: when auto_merge is enabled and Claude succeeded,
-        // use the merge queue to serialize PR merges to the target branch.
-        if cfg.auto_merge {
+        // Serialized merge: when integration_auto_merge is enabled and Claude succeeded,
+        // use the merge queue to serialize PR merges to the integration branch.
+        if cfg.integration_auto_merge {
             if let Ok(Ok(ref invoke_result)) = result {
                 if invoke_result.exit_code == 0 && invoke_result.pr_number > 0 {
                     let merge_config = crate::autorun::config::load_config(&self.project_dir)
@@ -913,7 +913,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     if merge_config.queue_enforcing {
                         let merge_result = serialized_merge(
                             &wt_info.path,
-                            &cfg.target,
+                            &cfg.integration_branch,
                             &worker_sid,
                             invoke_result.pr_number,
                             &cfg.task_id,
@@ -927,7 +927,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             MergeOutcome::Merged => {
                                 eprintln!(
                                     "serialized merge: PR #{} merged to {}",
-                                    invoke_result.pr_number, cfg.target
+                                    invoke_result.pr_number, cfg.integration_branch
                                 );
                             }
                             MergeOutcome::MergeConflict { ref error } => {
@@ -1664,8 +1664,8 @@ mod tests {
             worker_num: 1,
             task_id: "task-a".into(),
             batch_name: "test-batch".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_name: "cf-ar-task-a".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
@@ -1753,15 +1753,15 @@ mod tests {
             prompt: "do stuff".into(),
             session_id: "ses-1".into(),
             task_id: "t-1".into(),
-            auto_merge: true,
-            target: "develop".into(),
+            integration_auto_merge: true,
+            integration_branch: "develop".into(),
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["criterion 1".into()],
             worker_session_id: "ses-worker-1".into(),
             epic_update: String::new(),
         };
         assert_eq!(cfg.task_id, "t-1");
-        assert!(cfg.auto_merge);
+        assert!(cfg.integration_auto_merge);
         assert_eq!(cfg.acceptance_criteria.len(), 1);
         assert_eq!(cfg.worker_session_id, "ses-worker-1");
     }
@@ -2221,8 +2221,8 @@ Read and implement.
             prompt: "test prompt".into(),
             session_id: "ses-1".into(),
             task_id: "task-1".into(),
-            auto_merge: true,
-            target: "main".into(),
+            integration_auto_merge: true,
+            integration_branch: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: "ses-worker-1".into(),
@@ -2233,7 +2233,10 @@ Read and implement.
         assert_eq!(deserialized.task_id, cfg.task_id);
         assert_eq!(deserialized.work_dir, cfg.work_dir);
         assert_eq!(deserialized.acceptance_criteria, cfg.acceptance_criteria);
-        assert_eq!(deserialized.auto_merge, cfg.auto_merge);
+        assert_eq!(
+            deserialized.integration_auto_merge,
+            cfg.integration_auto_merge
+        );
     }
 
     #[test]
@@ -2243,8 +2246,8 @@ Read and implement.
             "prompt": "test",
             "session_id": "ses",
             "task_id": "t",
-            "auto_merge": false,
-            "target": "main",
+            "integration_auto_merge": false,
+            "integration_branch": "main",
             "tmux_session": "w"
         }"#;
         let cfg: InvokeConfig = serde_json::from_str(json).unwrap();
@@ -2569,8 +2572,8 @@ Read and implement.
             worker_num: 3,
             task_id: "task-a".into(),
             batch_name: "test-batch".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_name: "cf-ar-task-a".into(),
             file_scope: Vec::new(),
             scope_policy: "soft".into(),
@@ -2590,8 +2593,8 @@ Read and implement.
             worker_num: 1,
             task_id: task_id.into(),
             batch_name: "test-batch".into(),
-            auto_merge: false,
-            target: String::new(),
+            integration_auto_merge: false,
+            integration_branch: String::new(),
             tmux_name: "cf-ar-task-test".into(),
             file_scope: vec!["src/**/*.rs".into()],
             scope_policy: "soft".into(),

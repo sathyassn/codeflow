@@ -29,10 +29,9 @@ pub use active_task::{
     set_active_task_worktree_aware,
 };
 pub use env::{
-    EnvFile, SessionPointer, clean_stale_pid_env_files, migrate_runtime_layout, read_env_file,
-    read_pid_env_file, read_session_pointer, remove_env_file, remove_pid_env_file,
-    remove_session_pointer, write_env_file, write_env_file_with_worktree, write_pid_env_file,
-    write_session_pointer,
+    EnvFile, SessionPointer, migrate_runtime_layout, read_env_file, read_pid_env_file,
+    read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,
+    write_env_file, write_env_file_with_worktree, write_pid_env_file, write_session_pointer,
 };
 
 /// Generate a new session ID using ULID format: `ses-{26-char-lowercase-ULID}`.

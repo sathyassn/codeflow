@@ -192,7 +192,7 @@ Parse the `protected_resources` object which contains three arrays:
 - Any path outside `/tmp/claude/$CF_PROJECT_ROOT/managed/protected-edits/`
 
 Only `/tmp/claude/$CF_PROJECT_ROOT/managed/protected-edits/` is the authorized staging area.
-`$CF_PROJECT_ROOT` is set at session start by the init hook (sourced from `.state/runtime/codeflow-env.sh`). It contains the project root folder basename, e.g. `codeflow`.
+`$CF_PROJECT_ROOT` is set at session start by the init hook (available in the process environment when running via `codeflow -i`, or sourced from the per-worktree `.state/runtime/codeflow-env.sh`). It contains the project root folder basename, e.g. `codeflow`. Note: The shared `.state/runtime/codeflow-env.sh` is NOT written when running in a managed worktree session (`CODEFLOW_MANAGED=true`) — use the per-worktree env file or the inherited env var directly.
 
 If the protected file is a settings file: also advise running sync-settings-templates (Step 4).
 

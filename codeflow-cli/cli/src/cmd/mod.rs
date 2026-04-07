@@ -7,6 +7,7 @@ pub mod git;
 pub mod git_hooks;
 pub mod hooks;
 pub mod init;
+pub mod interactive;
 pub mod internal;
 pub mod ledger;
 pub mod normalize;

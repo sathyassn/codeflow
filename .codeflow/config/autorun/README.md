@@ -11,7 +11,7 @@ type: reference
 - [Overview](#overview)
 - [Batch File Schema](#batch-file-schema)
 - [Autonomous Defaults](#autonomous-defaults)
-- [auto_merge Rules](#auto_merge-rules)
+- [integration_auto_merge Rules](#integration_auto_merge-rules)
 - [Final PR](#final-pr)
 - [Task Entry Schema](#task-entry-schema)
 - [Naming Conventions](#naming-conventions)
@@ -31,10 +31,10 @@ The task markdown file at `project-management/epics/{AREA}/{AREA}-EPC-{NNN}/task
 |-------|------|----------|---------|-------------|
 | `name` | string | yes | — | Unique batch identifier; used in auto-generated branch names |
 | `max_workers` | integer | yes | — | Maximum concurrent task workers |
-| `target` | string | no | auto-generated | PR base branch (see [Autonomous Defaults](#autonomous-defaults)) |
-| `auto_merge` | `boolean` | no | inferred | Whether worker PRs auto-merge after CI passes (see [auto_merge Rules](#auto_merge-rules)) |
-| `final_pr` | `boolean` | no | inferred | Whether to create a final PR from the integration branch to `final_pr_base` after all workers complete (see [Final PR](#final-pr)) |
-| `final_pr_base` | string | no | `"main"` | Base branch for the final PR. Only meaningful when `final_pr` is `true`. Must differ from `target`. |
+| `integration_branch` | string | no | auto-generated | PR base branch (see [Autonomous Defaults](#autonomous-defaults)) |
+| `integration_auto_merge` | `boolean` | no | inferred | Whether worker PRs auto-merge after CI passes (see [integration_auto_merge Rules](#integration_auto_merge-rules)) |
+| `final_pr` | `boolean` | no | inferred | Whether to create a final PR from the integration branch to `final_pr_target` after all workers complete (see [Final PR](#final-pr)) |
+| `final_pr_target` | string | no | `"main"` | Base branch for the final PR. Only meaningful when `final_pr` is `true`. Must differ from `integration_branch`. |
 | `tasks` | list | yes | — | Ordered list of task entries (see [Task Entry Schema](#task-entry-schema)) |
 
 ### Minimal Batch File
@@ -49,7 +49,7 @@ tasks:
 
 ## Autonomous Defaults
 
-When `target` is omitted, the system auto-generates an integration branch:
+When `integration_branch` is omitted, the system auto-generates an integration branch:
 
 ```
 autorun/{batch-name}-{session-suffix}
@@ -59,20 +59,20 @@ Where `{session-suffix}` is the last 8 characters of the batch session ID. This 
 
 A final summary PR from the integration branch to `main` is created by default for auto-generated targets (see [Final PR](#final-pr)). To skip it, set `final_pr: false` explicitly.
 
-To override the target: set `target` explicitly.
+To override the target: set `integration_branch` explicitly.
 
-| `target` value | `auto_merge` inference | `final_pr` inference |
+| `integration_branch` value | `integration_auto_merge` inference | `final_pr` inference |
 |----------------|----------------------|---------------------|
-| omitted (auto-generated) | `true` | `true` — `resolve_target()` sets both `auto_merge` and `final_pr` |
+| omitted (auto-generated) | `true` | `true` — `resolve_target()` sets both `integration_auto_merge` and `final_pr` |
 | `autorun/my-branch` (explicit) | `true` | `true` |
 | `main` | `false` (forced — protected) | `false` |
 | `release/v2` | `false` (forced — protected) | `false` |
 
-## auto_merge Rules
+## integration_auto_merge Rules
 
-`auto_merge` is `Option<bool>` — when omitted, the system infers it from the target branch's protection status:
+`integration_auto_merge` is `Option<bool>` — when omitted, the system infers it from the integration branch's protection status:
 
-| Target branch | Inferred auto_merge | Reason |
+| Integration branch | Inferred integration_auto_merge | Reason |
 |---------------|--------------------|----|
 | `main` | `false` (forced) | Protected branch — auto_merge forbidden |
 | `master` | `false` (forced) | Protected branch — auto_merge forbidden |
@@ -81,20 +81,20 @@ To override the target: set `target` explicitly.
 | `autorun/*` | `true` | Integration branch — safe to auto-merge |
 | Any other non-protected | `true` | Assumed integration branch |
 
-Setting `auto_merge: true` with a protected target is a validation error at batch parse time.
+Setting `integration_auto_merge: true` with a protected integration_branch is a validation error at batch parse time.
 
-Setting `auto_merge: false` explicitly overrides the inferred value — useful for requiring human review even on integration branches.
+Setting `integration_auto_merge: false` explicitly overrides the inferred value — useful for requiring human review even on integration branches.
 
 Worker PRs that auto-merge are serialized through the Loro CRDT merge queue (FIFO). Each worker enqueues before merge and dequeues after, preventing concurrent merge conflicts.
 
 ## Final PR
 
-The `final_pr` flag controls whether the orchestrator creates a summary PR from the integration branch to `final_pr_base` after all workers complete.
+The `final_pr` flag controls whether the orchestrator creates a summary PR from the integration branch to `final_pr_target` after all workers complete.
 
 **When `final_pr: true`:**
 
 1. All workers run and merge their PRs to the integration branch (auto-merge if configured).
-2. After all workers complete, the orchestrator creates a single final PR from the integration branch to `final_pr_base`.
+2. After all workers complete, the orchestrator creates a single final PR from the integration branch to `final_pr_target`.
 3. A human reviews and merges the final PR via the GitHub UI.
 
 This is the recommended pattern for named integration branches — it consolidates all worker changes into a single reviewed PR targeting `main` (or another base).
@@ -103,26 +103,26 @@ This is the recommended pattern for named integration branches — it consolidat
 
 | Condition | Inferred `final_pr` | Rationale |
 |-----------|---------------------|-----------|
-| `target` is omitted (auto-generated) | `true` | `resolve_target()` sets `final_pr = true` alongside `auto_merge = true` |
-| `target` is `"main"` or `"master"` | `false` | Workers target main directly — no integration branch to PR from |
-| `target` is any other explicit branch | `true` | Explicit non-main target implies integration branch workflow |
+| `integration_branch` is omitted (auto-generated) | `true` | `resolve_target()` sets `final_pr = true` alongside `integration_auto_merge = true` |
+| `integration_branch` is `"main"` or `"master"` | `false` | Workers target main directly — no integration branch to PR from |
+| `integration_branch` is any other explicit branch | `true` | Explicit non-main target implies integration branch workflow |
 
-**`final_pr_base` field:**
+**`final_pr_target` field:**
 
 - Default: `"main"` when omitted or empty.
-- Must differ from `target` (you cannot PR from a branch to itself).
-- Use `final_pr_base: develop` for teams using a `develop` → `main` workflow.
-- `final_pr_base` is ignored when `final_pr` is `false`.
+- Must differ from `integration_branch` (you cannot PR from a branch to itself).
+- Use `final_pr_target: develop` for teams using a `develop` → `main` workflow.
+- `final_pr_target` is ignored when `final_pr` is `false`.
 
 **Example — explicit integration branch with final PR:**
 
 ```yaml
 name: sprint-42
 max_workers: 3
-target: autorun/sprint-42
-auto_merge: true
+integration_branch: autorun/sprint-42
+integration_auto_merge: true
 final_pr: true
-final_pr_base: main
+final_pr_target: main
 tasks:
   - id: FRT-TSK-001-001
   - id: FRT-TSK-001-002
@@ -182,13 +182,13 @@ scope_policy: soft or hard   # NOT permissive (forbidden for autorun)
 │   ├── inf-epc-024-phase1-audits.yaml
 │   └── inf-epc-024-retention-policies.yaml
 ├── examples/               ← reference examples for batch patterns
-│   ├── minimal-autonomous.yaml         ← recommended default (no target/auto_merge)
+│   ├── minimal-autonomous.yaml         ← recommended default (no integration_branch/integration_auto_merge)
 │   ├── simple-sequential.yaml          ← two tasks, one after the other
 │   ├── complex-dependencies.yaml       ← diamond DAG with scope_policy override
-│   ├── custom-integration.yaml         ← explicit target + final_pr + auto_merge: true
-│   ├── manual-review.yaml              ← explicit auto_merge: false for human review
-│   ├── direct-to-main.yaml             ← target: main for direct PRs
-│   └── final-pr-to-develop.yaml        ← integration branch with final_pr_base: develop
+│   ├── custom-integration.yaml         ← explicit integration_branch + final_pr + integration_auto_merge: true
+│   ├── manual-review.yaml              ← explicit integration_auto_merge: false for human review
+│   ├── direct-to-main.yaml             ← integration_branch: main for direct PRs
+│   └── final-pr-to-develop.yaml        ← integration branch with final_pr_target: develop
 └── local/                  ← gitignored local batch files (developer use)
 ```
 
@@ -196,13 +196,13 @@ scope_policy: soft or hard   # NOT permissive (forbidden for autorun)
 
 | File | Pattern | When to Use |
 |------|---------|-------------|
-| `examples/minimal-autonomous.yaml` | No target, no auto_merge | Most batches — system selects correct defaults |
+| `examples/minimal-autonomous.yaml` | No integration_branch, no integration_auto_merge | Most batches — system selects correct defaults |
 | `examples/simple-sequential.yaml` | Sequential dependency | Task B must run after Task A |
 | `examples/complex-dependencies.yaml` | Diamond DAG + scope override | Multi-level dependencies with policy tightening |
-| `examples/custom-integration.yaml` | Explicit `target` + `final_pr` + `auto_merge: true` | Named integration branch with summary PR to main |
-| `examples/manual-review.yaml` | Explicit `auto_merge: false` | Sensitive work requiring human sign-off on each PR |
-| `examples/direct-to-main.yaml` | `target: main` | Small batches with standalone reviewable PRs |
-| `examples/final-pr-to-develop.yaml` | `final_pr_base: develop` | Teams using develop → main workflow |
+| `examples/custom-integration.yaml` | Explicit `integration_branch` + `final_pr` + `integration_auto_merge: true` | Named integration branch with summary PR to main |
+| `examples/manual-review.yaml` | Explicit `integration_auto_merge: false` | Sensitive work requiring human sign-off on each PR |
+| `examples/direct-to-main.yaml` | `integration_branch: main` | Small batches with standalone reviewable PRs |
+| `examples/final-pr-to-develop.yaml` | `final_pr_target: develop` | Teams using develop → main workflow |
 
 ## Usage
 

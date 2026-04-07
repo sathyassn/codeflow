@@ -14,5 +14,5 @@ pub use sentinel::{ParseSentinelError, Sentinel};
 pub use stage::WorkStage;
 pub use work::{
     ActiveWorkStatus, AreaType, AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus,
-    EpicStatus, SessionStatus, TaskStatus, WorkType,
+    EpicStatus, InteractiveSessionStatus, SessionStatus, TaskStatus, WorkType,
 };

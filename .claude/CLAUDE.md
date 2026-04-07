@@ -135,9 +135,16 @@ Teammates shown in [brackets] on the right
 SESSION START
     |
     v
+codeflow -i invoked (or plain claude)                  [CLI / user]
+codeflow -i: generates session ID, creates worktree (if mode=always),
+    registers InteractiveSession in DB, sets CODEFLOW_MANAGED=true,
+    then exec's claude with env vars pre-set               [CLI]
+    |
+    v
 SessionStart hook fires (auto)                         [auto]
 Loads cf-working-protocol
-Creates worktree via WorktreeManager (if enabled)       [auto]
+When CODEFLOW_MANAGED=true: reads session ID from env, skips worktree
+    creation and shared env write (CLI already did this)   [auto]
 WorktreeRegistry enforces max 5 concurrent
     |
     v
@@ -240,7 +247,7 @@ SESSION END
 - Session status file  (`pathflow-session-status.json`) auto-created by SessionStart hook at `.state/session/{SID}/pathflow/pathflow-session-status.json` with `status:"created"`
 - Spawn cf-security: `"Read .claude/agents/cf-security.md, then verify security posture for this session"`
 - Note: Session DB/JSONL registration is deferred to PF2-CONTEXT when cf-knowledge-layer becomes available
-- Worktree: SessionStart creates a detached worktree via `WorktreeManager::setup_detached()` if worktree mode is enabled. `WorktreeRegistry` enforces max 5 concurrent worktrees (`locked_register_with_limit`). `codeflow-env.sh` exports `CODEFLOW_WORKTREE_PATH` pointing to the worktree root.
+- Worktree: `codeflow -i` creates the worktree via `setup_worktree()` BEFORE exec'ing claude when worktree mode is enabled (`mode=always`). `WorktreeRegistry` enforces max 5 concurrent worktrees (`locked_register_with_limit`). `codeflow-env.sh` (per-worktree) exports `CODEFLOW_WORKTREE_PATH` pointing to the worktree root. SessionStart skips worktree creation and shared env write when `CODEFLOW_MANAGED=true` (the CLI already handled this). Plain `claude` invocations (without `codeflow -i`) also work: SessionStart registers a non-managed `InteractiveSession` for visibility.
 
 6. **Task Tracker (MANDATORY):** TaskCreate for PF1-INIT phase entry; TaskCreate for PF1-TSK-01, PF1-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF1-TSK-02 blocked by PF1-TSK-01); TaskUpdate each to completed as it finishes; TaskUpdate phase entry completed when all done.
 
@@ -353,8 +360,8 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)
 7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
    - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
-   - **Autorun + `AUTORUN_AUTO_MERGE=true`** (non-protected target): PR is enqueued in the CRDT merge queue; the Rust worker layer handles serialized auto-merge after the Claude session exits. Do NOT attempt `gh pr merge` here.
-   - **Autorun + `AUTORUN_AUTO_MERGE=false`** (or protected target): task is already complete from PF6-TSK-01, proceed to PF7
+   - **Autorun + `AUTORUN_INTEGRATION_AUTO_MERGE=true`** (non-protected target): PR is enqueued in the CRDT merge queue; the Rust worker layer handles serialized auto-merge after the Claude session exits. Do NOT attempt `gh pr merge` here.
+   - **Autorun + `AUTORUN_INTEGRATION_AUTO_MERGE=false`** (or protected target): task is already complete from PF6-TSK-01, proceed to PF7
 8. Record PR outcome (PF6-TSK-08, cf-knowledge-layer — `record-pr-outcome`, must run before sync-local)
 9. Sync local (PF6-TSK-09, cf-git-operations — `sync-local`): pull main/target branch
 
@@ -432,8 +439,8 @@ In autorun mode (no human present), phase transitions happen automatically:
 | `AUTORUN_TASK_ID` | Pre-assigned task ID from the batch file | CLI orchestrator |
 | `AUTORUN_ACCEPTANCE` | Base64-encoded acceptance criteria extracted from task markdown | CLI orchestrator |
 | `CODEFLOW_WORKTREE_PATH` | Path to the worker's isolated git worktree | Worker setup (`worker.rs`) |
-| `AUTORUN_TARGET` | PR base branch for this worker (from batch `target` field or auto-generated integration branch) | CLI orchestrator |
-| `AUTORUN_AUTO_MERGE` | Whether to auto-merge after CI passes (`true`/`false`; inferred from target if not explicit) | CLI orchestrator |
+| `AUTORUN_INTEGRATION_BRANCH` | PR base branch for this worker (from batch `integration_branch` field or auto-generated integration branch) | CLI orchestrator |
+| `AUTORUN_INTEGRATION_AUTO_MERGE` | Whether to auto-merge after CI passes (`true`/`false`; inferred from `integration_branch` if not explicit) | CLI orchestrator |
 | `AUTORUN_EPIC_UPDATE` | Epic markdown update strategy (`orchestrator` = skip per-worker update, let orchestrator batch-update post-run) | CLI orchestrator |
 
 **Per-phase autorun behavior diff:**
@@ -445,7 +452,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 | PF3-CLASSIFY | Classify from user request | Classify from task `work_type` in WorkGraph |
 | PF4-EXECUTE | Spawn teammates, wait for user if blocked | Spawn teammates, resolve autonomously or mark `blocked` |
 | PF5-VERIFY | Same | Same |
-| PF6-COMPLETE | Notify user to merge PR via GitHub UI | `AUTORUN_AUTO_MERGE=true` + non-protected target: merge queue handles auto-merge after Claude exits. Otherwise: task complete, no merge wait. |
+| PF6-COMPLETE | Notify user to merge PR via GitHub UI | `AUTORUN_INTEGRATION_AUTO_MERGE=true` + non-protected target: merge queue handles auto-merge after Claude exits. Otherwise: task complete, no merge wait. |
 | PF7-END | Same | Same |
 
 **Tracking decision in autorun:** There is no "wait for user request" step. The task is pre-assigned. The tracking decision is always `tracked` -- autorun does not handle untracked sessions.
@@ -1266,9 +1273,9 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 | Scenario | Behavior |
 |----------|----------|
 | `gh pr merge` targeting protected branch | BLOCKED by `codeflow hooks pre-tool-use gh-pr-guard` hook. PR must be merged via GitHub UI. |
-| `auto_merge:true` + protected target | FORBIDDEN. Validation error at batch parsing time. |
+| `integration_auto_merge:true` + protected target | FORBIDDEN. Validation error at batch parsing time. |
 | Interactive session `/cf-ship` | Verifies CI, notifies user to merge via GitHub UI. Does NOT execute merge. |
-| Autorun `auto_merge:true` + non-protected target | Auto-merges via `gh pr merge --delete-branch` to integration branch. |
+| Autorun `integration_auto_merge:true` + non-protected target | Auto-merges via `gh pr merge --delete-branch` to integration branch. |
 
 ### Decision Tiers
 
@@ -1387,6 +1394,10 @@ codeflow worktree prune                # Remove orphaned worktree entries
 codeflow autorun resume                # Re-run non-completed tasks from a batch
 codeflow autorun batches               # List available batch files
 codeflow autorun status --watch        # Continuously monitor autorun status
+codeflow interactive                   # Launch Claude with worktree isolation (alias: codeflow -i)
+codeflow interactive status            # Show active interactive sessions with liveness
+codeflow interactive list              # Show all interactive sessions (active + complete)
+codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
 ```
 
 The unified `codeflow test` command routes to all test suites (shell/Python, Go, Rust). Use `--mode full --coverage` for WS-QA and pre-commit verification. Coverage enforces 85% per-file threshold on business packages across Go and Rust suites.
@@ -1512,7 +1523,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | File | Purpose |
 |------|---------|
 | `.state/runtime/active-task.json` | Bridge file: current task for hook context (includes `worktree_path` field when in a worktree) |
-| `.state/runtime/codeflow-env.sh` | Single source of truth for current session ID (`CODEFLOW_SESSION_ID`, `CF_PROJECT_ROOT`, `CODEFLOW_WORKTREE_PATH`) |
+| `.state/runtime/codeflow-env.sh` | Per-worktree env file (written by `codeflow -i`, NOT written when worktree mode is ON in SessionStart). Exports `CODEFLOW_SESSION_ID`, `CF_PROJECT_ROOT`, `CODEFLOW_WORKTREE_PATH`. In non-worktree mode (mode=disabled), a shared env file is written. When `CODEFLOW_MANAGED=true`, this file is per-worktree only. |
 | `.state/logs/pathflow-events.jsonl` | Phase and stage transition log |
 | `.state/session/{SID}/pathflow/pathflow-session-status.json` | Session lifecycle state (see below) |
 | `.state/session/{SID}/pathflow/pathflow-team.json` | Team composition and process tracking (see below) |
@@ -1521,6 +1532,9 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | `.state/coordination/sync-daemon.pid` | Sync daemon PID file |
 | `.state/worktrees/worktrees.yaml` | Worktree registry — `WorktreeEntry` records (session_id, path, branch, status) |
 | `.state/runtime/peer-id` | Unique peer identifier for CRDT sync |
+| `.state/interactive/heartbeat-{SID}` | Liveness heartbeat file written by SessionStart when `CODEFLOW_MANAGED=true`. Used by `codeflow interactive status` and `cleanup` for PID liveness detection. |
+
+**`CODEFLOW_MANAGED` env var:** Set to `true` by `codeflow -i` before exec'ing claude. When SessionStart detects this flag, it reads `CODEFLOW_SESSION_ID` from the environment (already generated by the CLI), skips worktree creation, skips shared env write, and skips PID env file early write. `detect_project_dir()` resolves via `CODEFLOW_WORKTREE_PATH` env var (step 1) or per-PID env file (step 4) — the shared `codeflow-env.sh` fallback (formerly step 5) has been removed.
 
 **`pathflow-session-status.json` fields:**
 
@@ -1567,7 +1581,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Lost phase state | Check `.state/logs/pathflow-events.jsonl` for latest `phase_transition` event |
 | Sentinel missing | Sentinels are auto-created by hooks. Verify the correct session ID at `.state/sentinels/pathflow/{session-id}/`. If truly missing, investigate the `codeflow hooks post-tool-use sentinel-write` PostToolUse hook pipeline -- do not create sentinels manually. |
 | pathflow-session-status.json stale |  Check status field; if stuck, manually remove `.state/session/{SID}/pathflow/` directory via PF7 flow |
-| Session record missing | Check `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and query DB via cf-knowledge-layer |
+| Session record missing | Check `CODEFLOW_SESSION_ID` env var (set by `codeflow -i` and inherited in process environment) or the per-worktree `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID`, then query DB via cf-knowledge-layer |
 | Stale worktree | Check `.state/worktrees/worktrees.yaml` for entries with status != active. Run `codeflow worktree cleanup` to remove stale entries and directories. |
 | Orphaned worktree | If `.git-worktrees/worktree-{SID}/` exists but no registry entry, run `codeflow worktree prune` to reconcile. |
 | Max worktrees reached | `WorktreeRegistry` enforces max 5 concurrent. Clean up completed sessions' worktrees first, then retry. |
@@ -1608,7 +1622,7 @@ Context overflow means the lead lost its conversation history -- NOT that teamma
 
 Do NOT assume teammates are dead after context overflow. Verify before respawning.
 
-**Worktree context:** When recovering in a worktree, verify the worktree path from `.state/runtime/codeflow-env.sh` (`CODEFLOW_WORKTREE_PATH`). Check worktree health: `git worktree list` should show the worktree. If missing, check the registry and re-create if needed.
+**Worktree context:** When recovering in a worktree, verify the worktree path from the `CODEFLOW_WORKTREE_PATH` env var (inherited from `codeflow -i`) or the per-worktree `.state/runtime/codeflow-env.sh`. The shared `codeflow-env.sh` is NOT written when worktree mode is active — use the per-worktree copy or the env var directly. Check worktree health: `git worktree list` should show the worktree. If missing, check the registry and re-create if needed.
 
 **Detection signals:**
 
@@ -1640,7 +1654,7 @@ FORBIDDEN:
 
 **Recovery procedure:**
 
-1. **Check pathflow state first** -- Read `.state/runtime/codeflow-env.sh` for the SID (`CODEFLOW_SESSION_ID`), then check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase.
+1. **Check pathflow state first** -- Read the `CODEFLOW_SESSION_ID` env var (inherited from `codeflow -i`) or the per-worktree `.state/runtime/codeflow-env.sh` for the SID (`CODEFLOW_SESSION_ID`). The shared `.state/runtime/codeflow-env.sh` is NOT written when running in a managed worktree session. Then check sentinels at `.state/sentinels/pathflow/{SID}/` and JSONL at `.state/logs/pathflow-events.jsonl` to determine current phase.
 
 2. **Message teammates before assuming dead** -- Send a status message to each expected teammate:
    `SendMessage(type="message", recipient="cf-{role}", content="Context overflow recovery. What is your current state and what were you last working on?")`
@@ -1679,4 +1693,4 @@ FORBIDDEN:
 
    Continue following the mandatory task tracker mirroring rules (Section 7: Task Tracker Mirroring) for all remaining phases.
 
-**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately read `.state/runtime/codeflow-env.sh` for `CODEFLOW_SESSION_ID` and check sentinels before sending any teammate messages. Do NOT assume all teammates are dead.
+**Continuation preamble detection:** When Claude Code reports "continued from previous conversation", immediately check the `CODEFLOW_SESSION_ID` env var (inherited from `codeflow -i` process environment — persists across context overflow) and check sentinels before sending any teammate messages. The per-worktree `.state/runtime/codeflow-env.sh` is also available as a fallback. Do NOT assume all teammates are dead.

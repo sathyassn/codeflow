@@ -1,20 +1,20 @@
 # Minimal Autonomous Batch
 # =========================
-# Three independent tasks running concurrently. No target or auto_merge
-# specified — the system provides autonomous defaults.
+# Three independent tasks running concurrently. No integration_branch or
+# integration_auto_merge specified — the system provides autonomous defaults.
 #
 # Autonomous defaults:
-#   target:     auto-generated as autorun/{batch-name}-{session-suffix} off main
-#   auto_merge: inferred from target — integration branches auto-merge after
-#               CI passes; protected branches (main, master, release/*,
-#               production) are forbidden with auto_merge.
+#   integration_branch: auto-generated as autorun/{batch-name}-{session-suffix} off main
+#   integration_auto_merge: inferred from integration_branch — integration branches
+#               auto-merge after CI passes; protected branches (main, master,
+#               release/*, production) are forbidden with integration_auto_merge.
 #   final_pr:   true — resolve_target() sets final_pr for auto-generated targets.
 #               Set final_pr: false explicitly to skip the summary PR from
 #               the integration branch to main after all workers complete.
 #
 # This is the recommended pattern for most autorun batches. Omitting
-# target and auto_merge keeps the batch file minimal and lets the system
-# apply the correct behavior based on the deployment context.
+# integration_branch and integration_auto_merge keeps the batch file minimal
+# and lets the system apply the correct behavior based on the deployment context.
 #
 # File scope must NOT overlap between concurrent tasks. The Loro CRDT
 # claim system enforces this at runtime: if two workers try to claim

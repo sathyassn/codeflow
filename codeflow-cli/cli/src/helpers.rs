@@ -70,39 +70,15 @@ pub fn detect_project_dir() -> Result<PathBuf> {
 
 /// Read `CODEFLOW_WORKTREE_PATH` from a per-PID env file.
 ///
-/// File at: `{project_root}/.state/runtime/codeflow-env-{claude_code_pid}.sh`
+/// File at: `{project_root}/.state/runtime/shared/codeflow-env-{claude_code_pid}.sh`
 /// Avoids shared-file overwrite: each Claude Code process has its own file.
-/// Falls back to the shared env file for backward compatibility.
+///
+/// Step 5 (shared env fallback) was removed -- the shared `codeflow-env.sh` file
+/// is unreliable with parallel sessions and is the source of race conditions.
 fn read_worktree_path_from_pid_file(project_root: &Path) -> Option<String> {
     let runtime_dir = project_root.join(".state").join("runtime");
     let pid = codeflow_core::session::process::get_claude_code_pid();
-    // Try per-PID file first.
-    if let Some(value) = codeflow_core::session::read_pid_env_file(&runtime_dir, pid) {
-        return Some(value);
-    }
-    // Fallback: read from shared env file for backward compatibility.
-    read_worktree_path_from_shared_env(project_root)
-}
-
-/// Read `CODEFLOW_WORKTREE_PATH` from the shared `codeflow-env.sh` file.
-///
-/// Backward-compatible fallback for sessions that pre-date per-PID files.
-fn read_worktree_path_from_shared_env(project_root: &Path) -> Option<String> {
-    let env_path = project_root
-        .join(".state")
-        .join("runtime")
-        .join("codeflow-env.sh");
-    let content = std::fs::read_to_string(&env_path).ok()?;
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("export CODEFLOW_WORKTREE_PATH=") {
-            let value = rest.trim_matches('\'').trim_matches('"');
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
+    codeflow_core::session::read_pid_env_file(&runtime_dir, pid)
 }
 
 /// Detect the main repository root directory (never a worktree).
@@ -632,7 +608,7 @@ mod tests {
         let wt_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
 
-        // Write env file pointing to the worktree
+        // Write env file pointing to the worktree (shared env -- NOT read since step 5 removed)
         let wt_path_str = wt_dir.path().to_string_lossy().to_string();
         let env_content = format!(
             "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path_str}'\n"
@@ -650,14 +626,14 @@ mod tests {
 
         let result = detect_project_dir();
         assert!(result.is_ok());
-        // With env file fallback, detect_project_dir returns the worktree path
-        // from env file when the worktree exists and has .state/.
-        // Canonicalize both sides because macOS resolves /tmp -> /private/tmp.
-        let expected = wt_dir.path().canonicalize().unwrap();
+        // Step 5 (shared env fallback) was removed. detect_project_dir no longer
+        // reads from the shared codeflow-env.sh file. With env vars unset and no
+        // per-PID file, it should return the CWD project root (step 3).
+        let expected = project_dir.path().canonicalize().unwrap();
         let actual = result.unwrap().canonicalize().unwrap();
         assert_eq!(
             actual, expected,
-            "should return worktree path from env file when valid"
+            "should return CWD project root (step 3), not worktree from shared env file"
         );
 
         std::env::set_current_dir(original_dir).unwrap();
@@ -754,69 +730,92 @@ mod tests {
         assert_eq!(result.unwrap(), sid);
     }
 
-    // ─── read_worktree_path_from_env tests ───────────────────────────────
+    // ─── detect_project_dir step 5 removal verification ─────────────────────
 
     #[test]
-    fn test_read_worktree_path_from_env_valid_single_quoted() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state").join("runtime");
+    fn test_detect_project_dir_does_not_read_shared_env_file() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Create a project root with .claude marker
+        let project_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
+        let runtime_dir = project_dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
-        std::fs::write(
-            runtime_dir.join("codeflow-env.sh"),
-            "export CODEFLOW_WORKTREE_PATH='/path/to/worktree'\n",
-        )
-        .unwrap();
-        let result = read_worktree_path_from_shared_env(dir.path());
-        assert_eq!(result, Some("/path/to/worktree".to_string()));
+
+        // Create a worktree dir that would be reachable via env file
+        let wt_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
+
+        // Write shared env file with worktree path (step 5 -- should NOT be read)
+        let wt_path_str = wt_dir.path().to_string_lossy().to_string();
+        let env_content = format!(
+            "export CODEFLOW_SESSION_ID='ses-test'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path_str}'\n"
+        );
+        std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
+
+        // Clear env vars so only steps 3-4 are possible
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(project_dir.path()).unwrap();
+
+        let result = detect_project_dir();
+        assert!(result.is_ok());
+        let actual = result.unwrap().canonicalize().unwrap();
+        let wt_canonical = wt_dir.path().canonicalize().unwrap();
+        // The worktree path from the shared env file must NOT be returned.
+        // detect_project_dir should return the CWD project root (step 3).
+        assert_ne!(
+            actual, wt_canonical,
+            "step 5 removed: shared env file must NOT be read"
+        );
+
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
-    fn test_read_worktree_path_from_env_valid_double_quoted() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state").join("runtime");
+    fn test_detect_project_dir_step4_pid_file_lookup() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Create a project root with .claude marker
+        let project_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
+        let runtime_dir = project_dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
-        std::fs::write(
-            runtime_dir.join("codeflow-env.sh"),
-            "export CODEFLOW_WORKTREE_PATH=\"/path/to/worktree\"\n",
-        )
-        .unwrap();
-        let result = read_worktree_path_from_shared_env(dir.path());
-        assert_eq!(result, Some("/path/to/worktree".to_string()));
-    }
 
-    #[test]
-    fn test_read_worktree_path_from_env_empty_value() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state").join("runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
-        std::fs::write(
-            runtime_dir.join("codeflow-env.sh"),
-            "export CODEFLOW_WORKTREE_PATH=''\n",
-        )
-        .unwrap();
-        let result = read_worktree_path_from_shared_env(dir.path());
-        assert_eq!(result, None);
-    }
+        // Create a fake worktree dir with .state
+        let wt_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
 
-    #[test]
-    fn test_read_worktree_path_from_env_no_worktree_var() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_dir = dir.path().join(".state").join("runtime");
-        std::fs::create_dir_all(&runtime_dir).unwrap();
-        std::fs::write(
-            runtime_dir.join("codeflow-env.sh"),
-            "export CODEFLOW_SESSION_ID='ses-123'\nexport CF_PROJECT_ROOT='/project'\n",
-        )
-        .unwrap();
-        let result = read_worktree_path_from_shared_env(dir.path());
-        assert_eq!(result, None);
-    }
+        // Write per-PID env file for the current process
+        let wt_path_str = wt_dir.path().to_string_lossy().to_string();
+        let pid = codeflow_core::session::process::get_claude_code_pid();
+        codeflow_core::session::write_pid_env_file(&runtime_dir, pid, &wt_path_str);
 
-    #[test]
-    fn test_read_worktree_path_from_env_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = read_worktree_path_from_shared_env(dir.path());
-        assert_eq!(result, None);
+        // Clear env vars so step 4 (per-PID file) is the only path
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(project_dir.path()).unwrap();
+
+        let result = detect_project_dir();
+        assert!(result.is_ok());
+        let actual = result.unwrap().canonicalize().unwrap();
+        let expected = wt_dir.path().canonicalize().unwrap();
+        assert_eq!(
+            actual, expected,
+            "step 4: per-PID file should return worktree path"
+        );
+
+        // Cleanup
+        codeflow_core::session::remove_pid_env_file(&runtime_dir, pid);
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     // ─── proptest: HookInput JSON roundtrip stability ───────────────────────

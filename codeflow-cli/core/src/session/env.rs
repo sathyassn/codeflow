@@ -185,29 +185,6 @@ pub fn remove_pid_env_file(runtime_dir: &Path, pid: u32) {
     let _ = fs::remove_file(runtime_dir.join(&filename));
 }
 
-/// Remove stale per-PID env files whose PIDs are no longer alive.
-///
-/// Scans `{runtime_dir}/codeflow-env-*.sh` and removes files whose
-/// embedded PID is not a running process.
-pub fn clean_stale_pid_env_files(runtime_dir: &Path) {
-    let Ok(entries) = fs::read_dir(runtime_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(pid_str) = name
-            .strip_prefix(PID_ENV_PREFIX)
-            .and_then(|s| s.strip_suffix(PID_ENV_SUFFIX))
-        {
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                if !crate::session::process::is_process_alive(pid) {
-                    let _ = fs::remove_file(entry.path());
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Runtime layout migration (flat -> shared/local)
 // ---------------------------------------------------------------------------

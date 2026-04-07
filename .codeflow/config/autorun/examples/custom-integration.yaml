@@ -15,20 +15,20 @@
 #           └── feat/task-002         ← worker branch (created off integration)
 #
 # final_pr behavior:
-#   When target is an explicit non-main branch, final_pr is inferred true.
+#   When integration_branch is an explicit non-main branch, final_pr is inferred true.
 #   Setting it explicitly (as below) is recommended for clarity.
 #   After all workers merge to autorun/sprint-42, the orchestrator creates
 #   a single PR from autorun/sprint-42 to main for human review.
 #
-# final_pr_base:
+# final_pr_target:
 #   Defaults to "main" when omitted. Set explicitly for teams using a
-#   develop → main workflow (e.g. final_pr_base: develop).
-#   Must differ from target.
+#   develop → main workflow (e.g. final_pr_target: develop).
+#   Must differ from integration_branch.
 #
 # Protected branch restriction:
-#   auto_merge: true REQUIRES target to be a non-protected branch.
+#   integration_auto_merge: true REQUIRES integration_branch to be a non-protected branch.
 #   Protected branches (main, master, release/*, production) are FORBIDDEN
-#   with auto_merge — validation rejects at batch parse time.
+#   with integration_auto_merge — validation rejects at batch parse time.
 #
 # Merge queue:
 #   Worker PRs are serialized through the Loro CRDT merge queue (FIFO).
@@ -49,10 +49,10 @@
 
 name: sprint-42
 max_workers: 3
-target: autorun/sprint-42
-auto_merge: true
-final_pr: true          # inferred true when target is explicit non-main; set explicitly for clarity
-final_pr_base: main     # optional (main is the default)
+integration_branch: autorun/sprint-42
+integration_auto_merge: true
+final_pr: true          # inferred true when integration_branch is explicit non-main; set explicitly for clarity
+final_pr_target: main     # optional (main is the default)
 tasks:
   - id: FRT-TSK-001-001
   - id: FRT-TSK-001-002

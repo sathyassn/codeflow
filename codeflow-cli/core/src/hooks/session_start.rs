@@ -212,6 +212,95 @@ impl SessionStartInit {
 
         let runtime_dir = project_dir.join(".state").join("runtime");
 
+        // --- Section 0a: CODEFLOW_MANAGED fast path ---
+        // When launched by `codeflow -i`, the CLI already created the worktree,
+        // generated the session ID, and registered the InteractiveSession.
+        // Skip worktree creation, session ID generation, shared env write, and
+        // teammate detection.
+        if std::env::var("CODEFLOW_MANAGED").as_deref() == Ok("true") {
+            if let Ok(sid_str) = std::env::var("CODEFLOW_SESSION_ID") {
+                if let Ok(sid) = SessionId::new(&sid_str) {
+                    result.session_id = sid.clone();
+                    result
+                        .env_vars
+                        .insert("CODEFLOW_SESSION_ID".into(), sid.as_str().to_string());
+                    let project_root_path =
+                        crate::worktree::WorktreeManager::resolve_effective_root(project_dir);
+                    let project_root_str = project_root_path.to_string_lossy().to_string();
+                    result
+                        .env_vars
+                        .insert("CF_PROJECT_ROOT".into(), project_root_str);
+
+                    // Propagate worktree path from env.
+                    if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+                        if !wt_path.is_empty() {
+                            result
+                                .env_vars
+                                .insert("CODEFLOW_WORKTREE_PATH".into(), wt_path.clone());
+                        }
+                    }
+
+                    // Create directories.
+                    if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+                        if !wt_path.is_empty() {
+                            let wp = WorktreePaths::new(&wt_path);
+                            self.create_directories_in_worktree(&wp, sid.as_str());
+                        }
+                    }
+                    self.create_directories(project_dir, sid.as_str());
+
+                    // Write heartbeat file for liveness detection.
+                    let heartbeat_dir = project_dir.join(".state").join("interactive");
+                    let _ = fs::create_dir_all(&heartbeat_dir);
+                    let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", sid.as_str()));
+                    let _ = fs::write(&heartbeat_path, (self.now)());
+
+                    // Create PathFlow flag.
+                    let flag_base = std::env::var("CODEFLOW_WORKTREE_PATH")
+                        .ok()
+                        .filter(|p| !p.is_empty())
+                        .map_or_else(|| project_dir.to_path_buf(), PathBuf::from);
+                    let is_resume = self.create_pathflow_flag(
+                        &flag_base,
+                        sid.as_str(),
+                        source,
+                        false,
+                        &mut result,
+                    );
+                    result.is_resume = is_resume;
+
+                    // Checkpoint pre-initialization.
+                    self.init_checkpoint(&flag_base, sid.as_str(), &mut result);
+
+                    // Write CLAUDE_ENV_FILE for Bash tool env propagation.
+                    if let Ok(claude_env_file) = std::env::var("CLAUDE_ENV_FILE") {
+                        if !claude_env_file.is_empty() {
+                            use std::fmt::Write as _;
+                            let mut exports = String::new();
+                            for (key, value) in &result.env_vars {
+                                let escaped = value.replace('\'', "'\\''");
+                                let _ = writeln!(exports, "export {key}='{escaped}'");
+                            }
+                            let _ = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&claude_env_file)
+                                .and_then(|mut f| {
+                                    std::io::Write::write_all(&mut f, exports.as_bytes())
+                                });
+                        }
+                    }
+
+                    // Output env vars.
+                    write_env_json(writer, &result.env_vars)?;
+                    result
+                        .messages
+                        .push("MANAGED SESSION: worktree and session ID from CLI".into());
+                    return Ok(result);
+                }
+            }
+        }
+
         // --- Section 0: Acquire session lock ---
         // Serialize concurrent session creation across multiple agents.
         // Lock is acquired before stale cleanup and released after env file write.
@@ -349,18 +438,11 @@ impl SessionStartInit {
             .env_vars
             .insert("CF_PROJECT_ROOT".into(), project_root_str.clone());
 
-        // --- Section 2a: EARLY per-PID env file write ---
-        // Write only the per-PID env file early for teammate detection.
-        // The main codeflow-env.sh write is deferred to AFTER worktree
-        // creation succeeds, so we don't clobber the previous session's
-        // env file with an empty worktree path if creation fails.
-        if source == "startup" {
-            session::write_pid_env_file(
-                &runtime_dir,
-                self.lead_pid,
-                "", // No worktree path yet
-            );
-        }
+        // --- Section 2a: EARLY per-PID env file write (REMOVED) ---
+        // Previously wrote an empty-path per-PID env file for teammate detection.
+        // Removed: the deferred write after worktree creation (Section 2d) handles
+        // this with the correct worktree path. The early write produced empty paths
+        // that caused detect_project_dir step 4 to return the wrong directory.
 
         // --- Section 2b: Worktree creation (source-gated + mode-gated) ---
         // On startup: check worktree.mode from parallel-work config, then:
@@ -583,7 +665,8 @@ impl SessionStartInit {
                 use std::fmt::Write as _;
                 let mut exports = String::new();
                 for (key, value) in &result.env_vars {
-                    let _ = writeln!(exports, "export {key}='{value}'");
+                    let escaped = value.replace('\'', "'\\''");
+                    let _ = writeln!(exports, "export {key}='{escaped}'");
                 }
                 let _ = std::fs::OpenOptions::new()
                     .create(true)
@@ -591,6 +674,21 @@ impl SessionStartInit {
                     .open(&claude_env_file)
                     .and_then(|mut f| std::io::Write::write_all(&mut f, exports.as_bytes()));
             }
+        }
+
+        // --- Section 13: Unmanaged InteractiveSession registration ---
+        // For plain `claude` sessions (no CODEFLOW_MANAGED), register an
+        // InteractiveSession with source_cli='claude', managed=false.
+        // Non-blocking: continue if DB is unavailable.
+        if source == "startup" && std::env::var("CODEFLOW_MANAGED").as_deref() != Ok("true") {
+            Self::register_unmanaged_interactive_session(
+                project_dir,
+                result.session_id.as_str(),
+                worktree_paths
+                    .as_ref()
+                    .map(|wp| wp.root().to_string_lossy().to_string())
+                    .as_deref(),
+            );
         }
 
         // Surface collected warnings to stderr so they appear in hook output.
@@ -1181,8 +1279,8 @@ impl SessionStartInit {
         let mut swept = 0u32;
 
         // Clean stale per-PID env files whose PIDs are no longer alive.
-        let main_runtime = project_dir.join(".state").join("runtime");
-        session::clean_stale_pid_env_files(&main_runtime);
+        // Per-PID env file cleanup moved to SessionEnd (removes THIS
+        // session's file at exit via remove_pid_env_file).
 
         // Load worktree registry for heartbeat path resolution.
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
@@ -1590,6 +1688,59 @@ impl SessionStartInit {
             PathBuf::from("/tmp/claude")
                 .join(&project_name)
                 .join("managed")
+        }
+    }
+
+    /// Register an InteractiveSession for unmanaged (plain `claude`) sessions.
+    ///
+    /// Non-blocking: silently continues if DB is unavailable.
+    fn register_unmanaged_interactive_session(
+        project_dir: &Path,
+        session_id: &str,
+        worktree_path: Option<&str>,
+    ) {
+        let db_dir = project_dir.join(".state/db");
+        if !db_dir.exists() {
+            return;
+        }
+        let sid = session_id.to_string();
+        let wt = worktree_path.map(String::from);
+        let pid = i64::from(std::process::id());
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let update = async move {
+            let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+            let _: Option<serde_json::Value> = store
+                .db()
+                .query(
+                    "CREATE interactive_session SET \
+                     session_id = $session_id, \
+                     pid = $pid, \
+                     status = 'active', \
+                     worktree_path = $worktree_path, \
+                     branch = NONE, \
+                     work_type = NONE, \
+                     team_name = NONE, \
+                     source_cli = 'claude', \
+                     managed = false, \
+                     created_at = $created_at, \
+                     updated_at = NONE, \
+                     completed_at = NONE;",
+                )
+                .bind(("session_id", sid))
+                .bind(("pid", pid))
+                .bind(("worktree_path", wt))
+                .bind(("created_at", now))
+                .await
+                .ok()?
+                .take(0)
+                .ok()?;
+            Some(())
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _ = tokio::task::block_in_place(|| handle.block_on(update));
+        } else if let Ok(rt) = tokio::runtime::Runtime::new() {
+            let _ = rt.block_on(update);
         }
     }
 

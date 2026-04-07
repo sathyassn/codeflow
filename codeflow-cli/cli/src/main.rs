@@ -108,6 +108,12 @@ enum Command {
         #[command(subcommand)]
         command: cmd::sync::SyncCommand,
     },
+    /// Interactive session management (alias: codeflow -i)
+    #[command(visible_alias = "-i")]
+    Interactive {
+        #[command(subcommand)]
+        command: Option<cmd::interactive::InteractiveCommand>,
+    },
 }
 
 #[tokio::main]
@@ -146,6 +152,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Normalize => cmd::normalize::run(),
         Command::Test => cmd::test::run(),
         Command::Sync { command } => cmd::sync::run(command),
+        Command::Interactive { command } => cmd::interactive::run(command).await,
     }
 }
 
@@ -193,6 +200,7 @@ mod tests {
             "normalize",
             "test",
             "sync",
+            "interactive",
         ];
         for cmd in &expected_commands {
             assert!(
@@ -200,7 +208,7 @@ mod tests {
                 "help output missing subcommand: {cmd}"
             );
         }
-        assert_eq!(expected_commands.len(), 28);
+        assert_eq!(expected_commands.len(), 29);
     }
 
     #[test]
@@ -232,6 +240,7 @@ mod tests {
             "shadow-test",
             "normalize",
             "test",
+            "interactive",
         ];
         for cmd in &commands {
             let result = Cli::try_parse_from(["codeflow", cmd]);
@@ -487,6 +496,38 @@ mod tests {
         let result = Cli::try_parse_from(["codeflow", "--version"]);
         let err = result.expect_err("--version returns an error");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+
+    // -- Interactive subcommand parsing --
+
+    #[test]
+    fn test_interactive_subcommand_parses() {
+        let result = Cli::try_parse_from(["codeflow", "interactive"]);
+        assert!(result.is_ok(), "interactive should parse");
+    }
+
+    #[test]
+    fn test_interactive_alias_parses() {
+        let result = Cli::try_parse_from(["codeflow", "-i"]);
+        assert!(result.is_ok(), "interactive -i alias should parse");
+    }
+
+    #[test]
+    fn test_interactive_status_parses() {
+        let result = Cli::try_parse_from(["codeflow", "interactive", "status"]);
+        assert!(result.is_ok(), "interactive status should parse");
+    }
+
+    #[test]
+    fn test_interactive_list_parses() {
+        let result = Cli::try_parse_from(["codeflow", "interactive", "list"]);
+        assert!(result.is_ok(), "interactive list should parse");
+    }
+
+    #[test]
+    fn test_interactive_cleanup_parses() {
+        let result = Cli::try_parse_from(["codeflow", "interactive", "cleanup"]);
+        assert!(result.is_ok(), "interactive cleanup should parse");
     }
 
     // -- Autorun subcommand parsing --

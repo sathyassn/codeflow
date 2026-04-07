@@ -4,16 +4,17 @@
 # after the first completes successfully. If the first fails, the second
 # is skipped automatically.
 #
-# Autonomous defaults apply: target branch is auto-generated as
-# autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
-# from target — protected branches (main, master, release/*, production)
-# cannot auto-merge; integration branches can.
+# Autonomous defaults apply: integration_branch is auto-generated as
+# autorun/{batch-name}-{session-suffix} off main. integration_auto_merge
+# is inferred from integration_branch — protected branches (main, master,
+# release/*, production) cannot auto-merge; integration branches can.
 #
 # final_pr behavior:
-#   No target is specified, so the system auto-generates an integration
-#   branch. For auto-generated targets, resolve_target() sets final_pr
-#   to true — a summary PR from the integration branch to main is created
-#   after both tasks complete. Set final_pr: false explicitly to skip it.
+#   No integration_branch is specified, so the system auto-generates an
+#   integration branch. For auto-generated targets, resolve_target() sets
+#   final_pr to true — a summary PR from the integration branch to main
+#   is created after both tasks complete. Set final_pr: false explicitly
+#   to skip it.
 #
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/examples/simple-sequential.yaml

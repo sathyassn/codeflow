@@ -215,6 +215,27 @@ DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_task_run TYPE string
 DEFINE INDEX OVERWRITE idx_taskrun_session ON autorun_task_run FIELDS session_id;
 
 -- =============================================================================
+-- INTERACTIVE SESSION TABLES
+-- =============================================================================
+
+DEFINE TABLE OVERWRITE interactive_session SCHEMAFULL;
+DEFINE FIELD OVERWRITE session_id    ON TABLE interactive_session TYPE string;
+DEFINE FIELD OVERWRITE pid           ON TABLE interactive_session TYPE int;
+DEFINE FIELD OVERWRITE status        ON TABLE interactive_session TYPE string;
+DEFINE FIELD OVERWRITE worktree_path ON TABLE interactive_session TYPE option<string>;
+DEFINE FIELD OVERWRITE branch        ON TABLE interactive_session TYPE option<string>;
+DEFINE FIELD OVERWRITE work_type     ON TABLE interactive_session TYPE option<string>;
+DEFINE FIELD OVERWRITE team_name     ON TABLE interactive_session TYPE option<string>;
+DEFINE FIELD OVERWRITE source_cli    ON TABLE interactive_session TYPE string;
+DEFINE FIELD OVERWRITE managed       ON TABLE interactive_session TYPE bool;
+DEFINE FIELD OVERWRITE created_at    ON TABLE interactive_session TYPE string;
+DEFINE FIELD OVERWRITE updated_at    ON TABLE interactive_session TYPE option<string>;
+DEFINE FIELD OVERWRITE completed_at  ON TABLE interactive_session TYPE option<string>;
+
+DEFINE INDEX OVERWRITE idx_interactive_session_sid    ON interactive_session FIELDS session_id UNIQUE;
+DEFINE INDEX OVERWRITE idx_interactive_session_status ON interactive_session FIELDS status;
+
+-- =============================================================================
 -- COORDINATION TABLES
 -- =============================================================================
 

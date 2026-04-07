@@ -317,7 +317,7 @@ When an Edit or Write call is blocked on a protected file (hook exits 2 with a p
 
 **Staging path pattern:** `/tmp/claude/${CF_PROJECT_ROOT}/managed/protected-edits/{relative-path}`
 
-Where `CF_PROJECT_ROOT` is the repo basename (e.g., `codeflow`). Source `.state/runtime/codeflow-env.sh` first to set `CF_PROJECT_ROOT`.
+Where `CF_PROJECT_ROOT` is the repo basename (e.g., `codeflow`). When running via `codeflow -i`, `CF_PROJECT_ROOT` is available in the inherited process environment. Otherwise, source the per-worktree `.state/runtime/codeflow-env.sh` to set `CF_PROJECT_ROOT`. Note: The shared `.state/runtime/codeflow-env.sh` is NOT written in managed worktree sessions — use the per-worktree copy or the `CODEFLOW_WORKTREE_PATH` env var.
 
 **Procedure:**
 

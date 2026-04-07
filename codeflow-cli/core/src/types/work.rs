@@ -452,6 +452,52 @@ impl FromStr for AutorunTaskRunStatus {
     }
 }
 
+/// Interactive session status values.
+///
+/// Aligned with schema CHECK constraint:
+/// `CHECK(status IN ('active', 'complete', 'stale'))`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractiveSessionStatus {
+    Active,
+    Complete,
+    Stale,
+}
+
+impl InteractiveSessionStatus {
+    /// Returns `true` if the status represents a terminal (final) state.
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::Stale)
+    }
+}
+
+impl fmt::Display for InteractiveSessionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Active => f.write_str("active"),
+            Self::Complete => f.write_str("complete"),
+            Self::Stale => f.write_str("stale"),
+        }
+    }
+}
+
+impl FromStr for InteractiveSessionStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "active" => Ok(Self::Active),
+            "complete" => Ok(Self::Complete),
+            "stale" => Ok(Self::Stale),
+            _ => Err(ParseEnumError {
+                enum_name: "InteractiveSessionStatus",
+                value: s.to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

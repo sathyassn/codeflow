@@ -26,9 +26,7 @@ use crate::session;
 
 fn stage_complete_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"STAGE-COMPLETE:\s+WS-(DEV|REV|QA|TEST|PLAN|DOCS)").expect("valid regex")
-    })
+    RE.get_or_init(|| Regex::new(r"STAGE-COMPLETE:\s+WS-([A-Z]+)").expect("valid regex"))
 }
 
 fn pf_task_id_re() -> &'static Regex {
@@ -893,12 +891,18 @@ mod tests {
     fn test_stage_complete_regex_matches() {
         let re = stage_complete_re();
         assert!(re.is_match("STAGE-COMPLETE: WS-DEV"));
+        assert!(re.is_match("STAGE-COMPLETE: WS-SEC"));
         assert!(re.is_match("STAGE-COMPLETE:  WS-REV"));
         assert!(re.is_match("STAGE-COMPLETE: WS-QA"));
         assert!(re.is_match("STAGE-COMPLETE: WS-TEST"));
         assert!(re.is_match("STAGE-COMPLETE: WS-PLAN"));
         assert!(re.is_match("STAGE-COMPLETE: WS-DOCS"));
-        assert!(!re.is_match("STAGE-COMPLETE: WS-UNKNOWN"));
+        // Dynamic regex accepts any uppercase stage name; ordering validation
+        // in validate_stage_ordering() rejects invalid stages downstream.
+        assert!(re.is_match("STAGE-COMPLETE: WS-UNKNOWN"));
+        assert!(!re.is_match("STAGE-COMPLETE: WS-lowercase"));
+        assert!(!re.is_match("STAGE-COMPLETE: WS-"));
+        assert!(!re.is_match("STAGE-COMPLETE: INVALID"));
     }
 
     #[test]

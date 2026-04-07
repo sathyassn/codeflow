@@ -3,10 +3,10 @@
 # Four independent audit and gap analysis tasks from the INF-EPC-024 epic.
 # These tasks have no interdependencies and can run in parallel.
 #
-# Autonomous defaults apply: target branch is auto-generated as
-# autorun/{batch-name}-{session-suffix} off main. auto_merge is inferred
-# from target — protected branches (main, master, release/*, production)
-# cannot auto-merge; integration branches can.
+# Autonomous defaults apply: integration_branch is auto-generated as
+# autorun/{batch-name}-{session-suffix} off main. integration_auto_merge
+# is inferred from integration_branch — protected branches (main, master,
+# release/*, production) cannot auto-merge; integration branches can.
 #
 # Usage:
 #   codeflow autorun run --batch .codeflow/config/autorun/batches/inf-epc-024-phase1-audits.yaml

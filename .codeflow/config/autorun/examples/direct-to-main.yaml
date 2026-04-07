@@ -4,13 +4,13 @@
 # with PRs. This is the backward-compatible pattern for teams that
 # review individual worker PRs rather than a summary integration PR.
 #
-# Because main is a protected branch, auto_merge is forbidden and PRs
+# Because main is a protected branch, integration_auto_merge is forbidden and PRs
 # must be merged by a human via the GitHub UI.
 #
 # final_pr behavior:
-#   When target is "main", final_pr is inferred false. There is no
+#   When integration_branch is "main", final_pr is inferred false. There is no
 #   integration branch to PR from — each worker PR targets main directly.
-#   Setting final_pr: true with target: main is a validation error.
+#   Setting final_pr: true with integration_branch: main is a validation error.
 #
 # Workflow:
 #   main
@@ -43,7 +43,7 @@
 
 name: direct-to-main
 max_workers: 2
-target: main
+integration_branch: main
 tasks:
   - id: AREA-TSK-NNN-001
   - id: AREA-TSK-NNN-002

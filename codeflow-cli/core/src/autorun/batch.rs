@@ -25,18 +25,18 @@ pub struct BatchFile {
     pub max_workers: usize,
 
     #[serde(default)]
-    pub auto_merge: Option<bool>,
+    pub integration_auto_merge: Option<bool>,
 
     #[serde(default)]
-    pub target: String,
+    pub integration_branch: String,
 
-    /// If true, create a final PR from integration branch to final_pr_base.
+    /// If true, create a final PR from integration branch to final_pr_target.
     #[serde(default)]
     pub final_pr: Option<bool>,
 
     /// Base branch for the final PR (default: "main").
     #[serde(default)]
-    pub final_pr_base: String,
+    pub final_pr_target: String,
 
     #[serde(default)]
     pub tasks: Vec<TaskSpec>,
@@ -69,14 +69,14 @@ pub struct ParsedBatch {
     pub name: String,
     pub file_path: String,
     pub max_workers: usize,
-    pub auto_merge: bool,
-    pub target: String,
-    /// Whether the target branch was auto-generated (empty in YAML).
-    pub target_is_auto: bool,
-    /// Whether to create a final PR from integration branch to final_pr_base.
+    pub integration_auto_merge: bool,
+    pub integration_branch: String,
+    /// Whether the integration branch was auto-generated (empty in YAML).
+    pub integration_branch_is_auto: bool,
+    /// Whether to create a final PR from integration branch to final_pr_target.
     pub final_pr: bool,
     /// Base branch for the final PR (default: "main").
-    pub final_pr_base: String,
+    pub final_pr_target: String,
     pub tasks: Vec<TaskSpec>,
     /// Topologically sorted task IDs (dependencies first).
     pub order: Vec<String>,
@@ -173,19 +173,19 @@ pub fn parse_batch_data_with_project_dir(
             .collect(),
     };
 
-    // Resolve auto_merge: explicit value or inferred from target protection.
-    let target_for_check = if bf.target.is_empty() {
+    // Resolve integration_auto_merge: explicit value or inferred from target protection.
+    let target_for_check = if bf.integration_branch.is_empty() {
         "main"
     } else {
-        &bf.target
+        &bf.integration_branch
     };
     let resolved_auto_merge = bf
-        .auto_merge
+        .integration_auto_merge
         .unwrap_or_else(|| !is_protected_branch(target_for_check, &protected_branches));
 
-    // Temporarily set auto_merge to resolved value for validation.
+    // Temporarily set integration_auto_merge to resolved value for validation.
     let bf_for_validation = BatchFile {
-        auto_merge: Some(resolved_auto_merge),
+        integration_auto_merge: Some(resolved_auto_merge),
         ..bf.clone()
     };
     validate_batch(&bf_for_validation, &protected_branches)?;
@@ -207,17 +207,17 @@ pub fn parse_batch_data_with_project_dir(
         bf.name.clone()
     };
 
-    // Resolve final_pr_base: default to "main" when empty.
-    let final_pr_base = if bf.final_pr_base.is_empty() {
+    // Resolve final_pr_target: default to "main" when empty.
+    let final_pr_target = if bf.final_pr_target.is_empty() {
         "main".to_string()
     } else {
-        bf.final_pr_base
+        bf.final_pr_target
     };
 
-    // Resolve final_pr: default based on whether target differs from main/master.
-    let target_is_auto = bf.target.is_empty();
+    // Resolve final_pr: default based on whether integration_branch differs from main/master.
+    let integration_branch_is_auto = bf.integration_branch.is_empty();
     let final_pr = bf.final_pr.unwrap_or_else(|| {
-        let effective_target = &bf.target;
+        let effective_target = &bf.integration_branch;
         !effective_target.is_empty() && effective_target != "main" && effective_target != "master"
     });
 
@@ -225,11 +225,11 @@ pub fn parse_batch_data_with_project_dir(
         name,
         file_path: file_path.to_string(),
         max_workers,
-        auto_merge: resolved_auto_merge,
-        target: bf.target,
-        target_is_auto,
+        integration_auto_merge: resolved_auto_merge,
+        integration_branch: bf.integration_branch,
+        integration_branch_is_auto,
         final_pr,
-        final_pr_base,
+        final_pr_target,
         tasks: bf.tasks,
         order,
     })
@@ -377,12 +377,12 @@ fn validate_batch(bf: &BatchFile, protected_branches: &[String]) -> Result<(), A
         }
     }
 
-    // Validate auto_merge + protected branch constraint.
-    if bf.auto_merge.unwrap_or(false) {
-        let target = if bf.target.is_empty() {
+    // Validate integration_auto_merge + protected branch constraint.
+    if bf.integration_auto_merge.unwrap_or(false) {
+        let target = if bf.integration_branch.is_empty() {
             "main"
         } else {
-            &bf.target
+            &bf.integration_branch
         };
         if is_protected_branch(target, protected_branches) {
             return Err(AutorunError::ProtectedMerge(format!(
@@ -568,45 +568,47 @@ pub fn validate_batch_extended(
         }
     }
 
-    // Validate target_branch if specified.
-    let target = if batch.target.is_empty() {
+    // Validate integration_branch if specified.
+    let target = if batch.integration_branch.is_empty() {
         "main"
     } else {
-        &batch.target
+        &batch.integration_branch
     };
 
-    // Check target branch exists via git2 (skip for auto-generated targets --
+    // Check integration branch exists via git2 (skip for auto-generated targets --
     // the orchestrator creates them).
-    if !batch.target_is_auto {
+    if !batch.integration_branch_is_auto {
         if let Ok(repo) = git2::Repository::discover(project_dir) {
             // Even explicit targets that don't exist yet are OK -- the orchestrator
             // will create them. Only warn, don't error.
             if crate::git::conflict::find_target_ref(&repo, target).is_err() {
-                eprintln!("WARNING: target_branch {target:?} does not exist yet (will be created)");
+                eprintln!(
+                    "WARNING: integration_branch {target:?} does not exist yet (will be created)"
+                );
             }
         }
     }
 
-    // Validate final_pr_base exists if final_pr is enabled.
+    // Validate final_pr_target exists if final_pr is enabled.
     if batch.final_pr {
-        if batch.final_pr_base == batch.target {
+        if batch.final_pr_target == batch.integration_branch {
             return Err(AutorunError::InvalidBatch(format!(
-                "final_pr_base ({:?}) cannot be the same as target ({:?})",
-                batch.final_pr_base, batch.target
+                "final_pr_target ({:?}) cannot be the same as integration_branch ({:?})",
+                batch.final_pr_target, batch.integration_branch
             )));
         }
         if let Ok(repo) = git2::Repository::discover(project_dir) {
-            if crate::git::conflict::find_target_ref(&repo, &batch.final_pr_base).is_err() {
+            if crate::git::conflict::find_target_ref(&repo, &batch.final_pr_target).is_err() {
                 return Err(AutorunError::InvalidBatch(format!(
-                    "final_pr_base {:?} does not exist",
-                    batch.final_pr_base
+                    "final_pr_target {:?} does not exist",
+                    batch.final_pr_target
                 )));
             }
         }
     }
 
-    // Check protected branch + auto_merge.
-    if batch.auto_merge && is_protected_branch(target, &protected_branches) {
+    // Check protected branch + integration_auto_merge.
+    if batch.integration_auto_merge && is_protected_branch(target, &protected_branches) {
         return Err(AutorunError::ProtectedMerge(format!(
             "cannot auto_merge into {target:?}"
         )));
@@ -676,18 +678,18 @@ fn topological_sort(tasks: &[TaskSpec]) -> Result<Vec<String>, AutorunError> {
     Ok(order)
 }
 
-/// Resolve the target branch for the batch, generating one if empty.
+/// Resolve the integration branch for the batch, generating one if empty.
 ///
-/// If the batch's `target` is empty (auto-mode), generates a branch name from
-/// the batch name and session ID suffix, and sets `target_is_auto = true`.
-/// Otherwise leaves the target as-is.
+/// If the batch's `integration_branch` is empty (auto-mode), generates a branch name from
+/// the batch name and session ID suffix, and sets `integration_branch_is_auto = true`.
+/// Otherwise leaves the integration branch as-is.
 pub fn resolve_target(batch: &mut ParsedBatch, session_id: &str) {
-    if batch.target.is_empty() {
+    if batch.integration_branch.is_empty() {
         let suffix = &session_id[session_id.len().saturating_sub(8)..];
-        batch.target = format!("autorun/{}-{suffix}", batch.name);
-        batch.target_is_auto = true;
-        // Auto-generated targets always get auto_merge and final_pr.
-        batch.auto_merge = true;
+        batch.integration_branch = format!("autorun/{}-{suffix}", batch.name);
+        batch.integration_branch_is_auto = true;
+        // Auto-generated targets always get integration_auto_merge and final_pr.
+        batch.integration_auto_merge = true;
         batch.final_pr = true;
     }
 }
@@ -696,7 +698,7 @@ pub fn resolve_target(batch: &mut ParsedBatch, session_id: &str) {
 ///
 /// Tasks whose IDs are in `completed_task_ids` are removed. Dependencies on
 /// completed tasks are also removed (they are already satisfied).
-/// All other batch settings (auto_merge, target, max_workers) are preserved.
+/// All other batch settings (integration_auto_merge, integration_branch, max_workers) are preserved.
 #[must_use]
 pub fn build_resume_batch<S: ::std::hash::BuildHasher>(
     original: &ParsedBatch,
@@ -721,11 +723,11 @@ pub fn build_resume_batch<S: ::std::hash::BuildHasher>(
         name: format!("{}-resume", original.name),
         file_path: original.file_path.clone(),
         max_workers: original.max_workers,
-        auto_merge: original.auto_merge,
-        target: original.target.clone(),
-        target_is_auto: original.target_is_auto,
+        integration_auto_merge: original.integration_auto_merge,
+        integration_branch: original.integration_branch.clone(),
+        integration_branch_is_auto: original.integration_branch_is_auto,
         final_pr: original.final_pr,
-        final_pr_base: original.final_pr_base.clone(),
+        final_pr_target: original.final_pr_target.clone(),
         tasks: remaining_tasks,
         order,
     }
@@ -813,7 +815,7 @@ tasks:
 
     #[test]
     fn test_validate_protected_branch_main() {
-        let yaml = "auto_merge: true\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_auto_merge: true\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("main"));
@@ -821,7 +823,8 @@ tasks:
 
     #[test]
     fn test_validate_protected_branch_explicit() {
-        let yaml = "auto_merge: true\ntarget: master\ntasks:\n  - id: task-a\n";
+        let yaml =
+            "integration_auto_merge: true\nintegration_branch: master\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("master"));
@@ -829,7 +832,7 @@ tasks:
 
     #[test]
     fn test_validate_protected_branch_release() {
-        let yaml = "auto_merge: true\ntarget: release/v1.0\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_auto_merge: true\nintegration_branch: release/v1.0\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("release/v1.0"));
@@ -837,7 +840,8 @@ tasks:
 
     #[test]
     fn test_validate_auto_merge_non_protected() {
-        let yaml = "auto_merge: true\ntarget: develop\ntasks:\n  - id: task-a\n";
+        let yaml =
+            "integration_auto_merge: true\nintegration_branch: develop\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_ok());
     }
@@ -1492,7 +1496,7 @@ tasks:
         let fields = valid_task_fields("t1", "023", "INF");
         setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
 
-        let yaml = "auto_merge: true\ntarget: develop\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        let yaml = "integration_auto_merge: true\nintegration_branch: develop\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
         let mut batch = parse_batch_data(yaml, "test.yaml").unwrap();
         // Passes because "develop" is not protected.
         let result = validate_batch_extended(&mut batch, dir.path());
@@ -1505,8 +1509,8 @@ tasks:
         let fields = valid_task_fields("t1", "023", "INF");
         setup_project_with_task(dir.path(), "INF-TSK-023-001", &fields);
 
-        // auto_merge=true with "release/v1.0" should be caught by validate_batch.
-        let yaml = "auto_merge: true\ntarget: release/v1.0\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
+        // integration_auto_merge=true with "release/v1.0" should be caught by validate_batch.
+        let yaml = "integration_auto_merge: true\nintegration_branch: release/v1.0\ntasks:\n  - id: INF-TSK-023-001\n    file_scope:\n      - src/foo.rs\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("release/v1.0"));
@@ -1565,8 +1569,8 @@ tasks:
         )
         .unwrap();
 
-        // auto_merge=true targeting custom-protected should fail.
-        let yaml = "auto_merge: true\ntarget: custom-protected\ntasks:\n  - id: task-a\n";
+        // integration_auto_merge=true targeting custom-protected should fail.
+        let yaml = "integration_auto_merge: true\nintegration_branch: custom-protected\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data_with_project_dir(yaml, "test.yaml", Some(dir.path()));
         assert!(result.is_err());
         assert!(
@@ -1715,11 +1719,11 @@ tasks:
             name: "test".into(),
             file_path: "batch.yaml".into(),
             max_workers: 2,
-            auto_merge: false,
-            target: "main".into(),
-            target_is_auto: false,
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
+            integration_branch_is_auto: false,
             final_pr: false,
-            final_pr_base: "main".into(),
+            final_pr_target: "main".into(),
             tasks: vec![
                 TaskSpec {
                     id: "task-a".into(),
@@ -1750,11 +1754,11 @@ tasks:
             name: "test".into(),
             file_path: "batch.yaml".into(),
             max_workers: 2,
-            auto_merge: false,
-            target: "main".into(),
-            target_is_auto: false,
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
+            integration_branch_is_auto: false,
             final_pr: false,
-            final_pr_base: "main".into(),
+            final_pr_target: "main".into(),
             tasks: vec![
                 TaskSpec {
                     id: "task-a".into(),
@@ -1787,11 +1791,11 @@ tasks:
             name: "my-batch".into(),
             file_path: "path/to/batch.yaml".into(),
             max_workers: 5,
-            auto_merge: true,
-            target: "develop".into(),
-            target_is_auto: false,
+            integration_auto_merge: true,
+            integration_branch: "develop".into(),
+            integration_branch_is_auto: false,
             final_pr: true,
-            final_pr_base: "main".into(),
+            final_pr_target: "main".into(),
             tasks: vec![TaskSpec {
                 id: "task-a".into(),
                 depends_on: vec![],
@@ -1804,11 +1808,11 @@ tasks:
         let completed: HashSet<String> = HashSet::new();
         let resume = build_resume_batch(&batch, &completed);
         assert_eq!(resume.max_workers, 5);
-        assert!(resume.auto_merge);
-        assert_eq!(resume.target, "develop");
+        assert!(resume.integration_auto_merge);
+        assert_eq!(resume.integration_branch, "develop");
         assert_eq!(resume.file_path, "path/to/batch.yaml");
         assert!(resume.final_pr);
-        assert_eq!(resume.final_pr_base, "main");
+        assert_eq!(resume.final_pr_target, "main");
     }
 
     // -- resolve_target tests --
@@ -1819,20 +1823,20 @@ tasks:
             name: "my-batch".into(),
             file_path: "b.yaml".into(),
             max_workers: 1,
-            auto_merge: false,
-            target: String::new(),
-            target_is_auto: false,
+            integration_auto_merge: false,
+            integration_branch: String::new(),
+            integration_branch_is_auto: false,
             final_pr: false,
-            final_pr_base: "main".into(),
+            final_pr_target: "main".into(),
             tasks: vec![],
             order: vec![],
         };
 
         resolve_target(&mut batch, "ses-01abc12345678xyz");
-        assert!(batch.target.starts_with("autorun/my-batch-"));
-        assert!(batch.target.ends_with("678xyz"));
-        assert!(batch.target_is_auto);
-        assert!(batch.auto_merge);
+        assert!(batch.integration_branch.starts_with("autorun/my-batch-"));
+        assert!(batch.integration_branch.ends_with("678xyz"));
+        assert!(batch.integration_branch_is_auto);
+        assert!(batch.integration_auto_merge);
         assert!(batch.final_pr);
     }
 
@@ -1842,55 +1846,57 @@ tasks:
             name: "my-batch".into(),
             file_path: "b.yaml".into(),
             max_workers: 1,
-            auto_merge: false,
-            target: "develop".into(),
-            target_is_auto: false,
+            integration_auto_merge: false,
+            integration_branch: "develop".into(),
+            integration_branch_is_auto: false,
             final_pr: true,
-            final_pr_base: "main".into(),
+            final_pr_target: "main".into(),
             tasks: vec![],
             order: vec![],
         };
 
         resolve_target(&mut batch, "ses-01abc12345678xyz");
-        assert_eq!(batch.target, "develop");
-        assert!(!batch.target_is_auto);
-        assert!(!batch.auto_merge); // Not changed for explicit targets.
+        assert_eq!(batch.integration_branch, "develop");
+        assert!(!batch.integration_branch_is_auto);
+        assert!(!batch.integration_auto_merge); // Not changed for explicit targets.
     }
 
-    // -- auto_merge inference tests --
+    // -- integration_auto_merge inference tests --
 
     #[test]
     fn test_auto_merge_inferred_non_protected() {
-        let yaml = "target: develop\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_branch: develop\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert!(
-            batch.auto_merge,
-            "auto_merge should be true for non-protected target when not specified"
+            batch.integration_auto_merge,
+            "integration_auto_merge should be true for non-protected target when not specified"
         );
     }
 
     #[test]
     fn test_auto_merge_inferred_protected() {
-        let yaml = "target: main\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_branch: main\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert!(
-            !batch.auto_merge,
-            "auto_merge should be false for protected target when not specified"
+            !batch.integration_auto_merge,
+            "integration_auto_merge should be false for protected target when not specified"
         );
     }
 
     #[test]
     fn test_auto_merge_explicit_true() {
-        let yaml = "auto_merge: true\ntarget: develop\ntasks:\n  - id: task-a\n";
+        let yaml =
+            "integration_auto_merge: true\nintegration_branch: develop\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
-        assert!(batch.auto_merge);
+        assert!(batch.integration_auto_merge);
     }
 
     #[test]
     fn test_auto_merge_explicit_false() {
-        let yaml = "auto_merge: false\ntarget: develop\ntasks:\n  - id: task-a\n";
+        let yaml =
+            "integration_auto_merge: false\nintegration_branch: develop\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
-        assert!(!batch.auto_merge);
+        assert!(!batch.integration_auto_merge);
     }
 
     // -- backward compatibility --
@@ -1900,39 +1906,39 @@ tasks:
         let yaml = "name: old-batch\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert_eq!(batch.name, "old-batch");
-        // Default: empty target, auto_merge inferred from protection.
-        assert!(batch.target.is_empty());
-        assert!(batch.target_is_auto);
-        // final_pr defaults to false when target is empty (no explicit integration branch).
+        // Default: empty integration_branch, integration_auto_merge inferred from protection.
+        assert!(batch.integration_branch.is_empty());
+        assert!(batch.integration_branch_is_auto);
+        // final_pr defaults to false when integration_branch is empty (no explicit integration branch).
         assert!(!batch.final_pr);
-        assert_eq!(batch.final_pr_base, "main");
+        assert_eq!(batch.final_pr_target, "main");
     }
 
     // -- final_pr defaults --
 
     #[test]
     fn test_final_pr_true_for_non_main_target() {
-        let yaml = "target: develop\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_branch: develop\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert!(
             batch.final_pr,
-            "final_pr should default to true for non-main target"
+            "final_pr should default to true for non-main integration_branch"
         );
     }
 
     #[test]
     fn test_final_pr_false_for_main_target() {
-        let yaml = "target: main\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_branch: main\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert!(
             !batch.final_pr,
-            "final_pr should default to false for main target"
+            "final_pr should default to false for main integration_branch"
         );
     }
 
     #[test]
     fn test_final_pr_explicit_override() {
-        let yaml = "target: develop\nfinal_pr: false\ntasks:\n  - id: task-a\n";
+        let yaml = "integration_branch: develop\nfinal_pr: false\ntasks:\n  - id: task-a\n";
         let batch = parse_batch_data(yaml, "test.yaml").unwrap();
         assert!(
             !batch.final_pr,

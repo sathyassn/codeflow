@@ -218,6 +218,20 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - If active worktrees <= 1 and daemon is running: report as INFO (daemon may auto-stop on next worktree deregistration)
 - With `--repair`: if daemon should be running but is stopped, run `codeflow sync start`; if daemon should be stopped but is running (no active worktrees), run `codeflow sync stop`
 
+**Check 6d: Interactive Session Health**
+
+- Verify `codeflow interactive` subcommand is available: run `codeflow interactive --help` and check it exits 0
+- Run `codeflow interactive status` to list active sessions with PID liveness
+- For each active session returned:
+  - Verify the `CODEFLOW_SESSION_ID` matches a valid session record in the DB
+  - Verify the heartbeat file `.state/interactive/heartbeat-{SID}` exists
+  - Verify the session's worktree path exists (if mode=always was used)
+- Check for stale sessions: sessions with PIDs that are no longer alive
+- Report total session counts: active, complete, stale
+- With `--repair`: run `codeflow interactive cleanup` to mark dead-PID sessions as stale and remove orphaned heartbeat files
+- Verify `CODEFLOW_MANAGED` env var: if set but `CODEFLOW_SESSION_ID` is missing, report as WARNING (env is in inconsistent state)
+- Check env var propagation: if `CODEFLOW_WORKTREE_PATH` is set but the path doesn't exist, report as FAIL
+
 **Check 7: Teammate Responsiveness**
 
 - If a team is active, check team config for registered members

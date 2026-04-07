@@ -337,12 +337,12 @@ fn check_gh_auth() -> Result<()> {
 ///
 /// - If target is main/master: skip (workers PR directly to main).
 /// - If target branch already exists: verify no open PRs (for auto-generated targets).
-/// - If target doesn't exist: create from origin/{final_pr_base} and push.
+/// - If target doesn't exist: create from origin/{final_pr_target} and push.
 fn resolve_or_create_integration_branch(
     project_dir: &Path,
     batch: &codeflow_core::autorun::ParsedBatch,
 ) -> Result<()> {
-    let target = &batch.target;
+    let target = &batch.integration_branch;
 
     // Skip for main/master -- workers PR directly.
     if target == "main" || target == "master" || target.is_empty() {
@@ -371,7 +371,7 @@ fn resolve_or_create_integration_branch(
 
     if local_exists || remote_exists {
         // Branch exists -- for auto-generated targets, verify no stale open PRs.
-        if batch.target_is_auto {
+        if batch.integration_branch_is_auto {
             let check = std::process::Command::new("gh")
                 .args([
                     "pr", "list", "--head", target, "--state", "open", "--json", "number",
@@ -391,8 +391,8 @@ fn resolve_or_create_integration_branch(
         return Ok(());
     }
 
-    // Branch doesn't exist -- create from origin/{final_pr_base}.
-    let base = &batch.final_pr_base;
+    // Branch doesn't exist -- create from origin/{final_pr_target}.
+    let base = &batch.final_pr_target;
     let base_ref = format!("origin/{base}");
     eprintln!("creating integration branch '{target}' from '{base_ref}'");
 
@@ -594,8 +594,8 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
     let end_time = chrono::Utc::now();
 
     // Post-batch: Epic status update (orchestrator-level, not per-worker).
-    if parsed.target != "main"
-        && parsed.target != "master"
+    if parsed.integration_branch != "main"
+        && parsed.integration_branch != "master"
         && config.autorun.epic_update == "orchestrator"
     {
         let completed_tasks: Vec<_> = results
@@ -650,7 +650,7 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
         }
     }
 
-    // Post-batch: Create final PR (integration branch -> final_pr_base).
+    // Post-batch: Create final PR (integration branch -> final_pr_target).
     let completed_count = results.iter().filter(|r| r.status == "completed").count();
     if parsed.final_pr && completed_count > 0 {
         let task_lines = results
@@ -675,9 +675,9 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
                 "pr",
                 "create",
                 "--base",
-                &parsed.final_pr_base,
+                &parsed.final_pr_target,
                 "--head",
-                &parsed.target,
+                &parsed.integration_branch,
                 "--title",
                 &format!("autorun: {}", parsed.name),
                 "--body",
@@ -2297,7 +2297,7 @@ async fn run_resume(
     codeflow_core::autorun::validate_batch_extended(&mut resume_parsed, project_dir)
         .context("extended batch validation for resume")?;
 
-    check_target_branch(project_dir, &resume_parsed.target)?;
+    check_target_branch(project_dir, &resume_parsed.integration_branch)?;
 
     let config =
         codeflow_core::autorun::load_config(project_dir).context("loading parallel-work config")?;
@@ -2385,17 +2385,17 @@ fn run_batches_sync(project_dir: &Path) -> Result<()> {
         let path = entry.path();
         match codeflow_core::autorun::batch::parse_batch_file(&path) {
             Ok(batch) => {
-                let target = if batch.target.is_empty() {
+                let target = if batch.integration_branch.is_empty() {
                     "main"
                 } else {
-                    &batch.target
+                    &batch.integration_branch
                 };
                 println!(
                     "{:<30} {:>5} {:<12} {:<8}",
                     entry.file_name().to_string_lossy(),
                     batch.tasks.len(),
                     target,
-                    batch.auto_merge,
+                    batch.integration_auto_merge,
                 );
             }
             Err(e) => {
@@ -2626,16 +2626,20 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
              export AUTORUN_BATCH_ID='{batch}'\n\
              export AUTORUN_TASK_ID='{task}'\n\
              export AUTORUN_ACCEPTANCE='{acc}'\n\
-             export AUTORUN_TARGET='{target}'\n\
-             export AUTORUN_AUTO_MERGE='{auto_merge}'\n\
+             export AUTORUN_INTEGRATION_BRANCH='{target}'\n\
+             export AUTORUN_INTEGRATION_AUTO_MERGE='{auto_merge}'\n\
              export AUTORUN_EPIC_UPDATE='{epic_update}'\n\
              export CODEFLOW_WORKTREE_PATH='{wdir}'\n",
             sid = sq(autorun_sid),
             batch = sq(&cfg.session_id),
             task = sq(&cfg.task_id),
             acc = sq(&acceptance_b64),
-            target = sq(&cfg.target),
-            auto_merge = if cfg.auto_merge { "true" } else { "false" },
+            target = sq(&cfg.integration_branch),
+            auto_merge = if cfg.integration_auto_merge {
+                "true"
+            } else {
+                "false"
+            },
             epic_update = sq(&cfg.epic_update),
             wdir = sq(work_dir),
         );
@@ -3215,8 +3219,8 @@ tasks:
             worker_num: 1,
             task_id: "task-test".into(),
             batch_name: "test-batch".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_name: "cf-ar-task-test".into(),
             file_scope: vec!["src/main.rs".into()],
             scope_policy: "soft".into(),
@@ -3254,8 +3258,8 @@ tasks:
             work_dir: "/tmp/work".into(),
             prompt: "implement feature X".into(),
             session_id: "ses-test".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "worker-1".into(),
             acceptance_criteria: vec!["tests pass".into()],
             worker_session_id: String::new(),
@@ -3282,8 +3286,8 @@ tasks:
             work_dir: "/tmp/test".into(),
             prompt: "do things".into(),
             session_id: "ses-rt".into(),
-            auto_merge: true,
-            target: "main".into(),
+            integration_auto_merge: true,
+            integration_branch: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: String::new(),
@@ -3296,8 +3300,11 @@ tasks:
         assert_eq!(deserialized.work_dir, cfg.work_dir);
         assert_eq!(deserialized.prompt, cfg.prompt);
         assert_eq!(deserialized.session_id, cfg.session_id);
-        assert_eq!(deserialized.auto_merge, cfg.auto_merge);
-        assert_eq!(deserialized.target, cfg.target);
+        assert_eq!(
+            deserialized.integration_auto_merge,
+            cfg.integration_auto_merge
+        );
+        assert_eq!(deserialized.integration_branch, cfg.integration_branch);
         assert_eq!(deserialized.tmux_session, cfg.tmux_session);
         assert_eq!(deserialized.acceptance_criteria, cfg.acceptance_criteria);
     }
@@ -3491,8 +3498,8 @@ tasks:
             work_dir: dir.path().to_string_lossy().into_owned(),
             prompt: "test prompt".into(),
             session_id: "ses-env".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "worker-env".into(),
             acceptance_criteria: vec!["crit A".into(), "crit B".into()],
             worker_session_id: "ses-env-worker".into(),
@@ -3575,8 +3582,8 @@ tasks:
             work_dir: dir.path().to_string_lossy().into_owned(),
             prompt: "test".into(),
             session_id: "ses-exit".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-exit".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
@@ -3608,8 +3615,8 @@ tasks:
             work_dir: dir.path().to_string_lossy().into_owned(),
             prompt: "test".into(),
             session_id: "ses-timeout".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-timeout".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
@@ -3652,8 +3659,8 @@ tasks:
             work_dir: dir.path().to_string_lossy().into_owned(),
             prompt: "line1\\nline2\\ttab".into(),
             session_id: "ses-esc".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-esc".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
@@ -3725,8 +3732,8 @@ tasks:
             work_dir: dir.path().to_string_lossy().into_owned(),
             prompt: "test".into(),
             session_id: "ses-sess".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-sess".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
@@ -6031,8 +6038,8 @@ tasks:
             work_dir: "/tmp/test".into(),
             prompt: "test".into(),
             session_id: "ses-batch".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: "ses-worker-123".into(),
@@ -6057,8 +6064,8 @@ tasks:
             work_dir: "/tmp/test".into(),
             prompt: "test".into(),
             session_id: "ses-batch".into(),
-            auto_merge: false,
-            target: "main".into(),
+            integration_auto_merge: false,
+            integration_branch: "main".into(),
             tmux_session: "w-1".into(),
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
