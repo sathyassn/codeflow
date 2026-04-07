@@ -95,6 +95,8 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every issue identified during development (linting errors, test gaps, edge cases, inconsistencies) MUST be addressed before requesting commit. Do not defer, dismiss, or classify any issue as "minor" or "non-blocking". Fix everything. No exceptions.
 
+🔒 **ALL REWORK FINDINGS ARE MANDATORY.** When receiving rework requests from cf-review, cf-security, or cf-quality-assurance, every finding MUST be addressed — no exceptions for "minor" or "cosmetic" items. Do NOT push back on findings or classify them as "won't fix" without explicit team lead approval. Provide evidence (file:line) for every fix in your rework response. A rework response that does not address every finding will be rejected.
+
 🔒 **MUST:**
 
 - Write tests alongside implementation code
@@ -306,8 +308,9 @@ When assigned pipeline or deployment tasks (work type CICD):
 | ShellCheck SC1xxx errors | MUST fix before commit. Suppress intentionally with `# shellcheck disable=SCXXXX`. Re-lint until zero errors. |
 | Ruff/flake8 errors | MUST fix before commit. Suppress intentionally with `# noqa: FXXX`. Re-run until clean. |
 | Protected resource blocked | Use the Protected Resource Staging workflow (see below) — handle independently, no cf-security delegation needed |
-| Rework from cf-review | Address EVERY issue in feedback — no skipping, no deferral, no classification as "minor". Re-test, re-request commit. |
-| Rework from cf-qa | Address EVERY failure and finding — no skipping, no deferral. Re-test, re-request commit. |
+| Rework from cf-review | Address EVERY issue in feedback — no skipping, no deferral, no classification as "minor". Re-test, re-request commit. Do NOT push back on findings or mark any as "won't fix" without explicit team lead approval. Provide evidence (file:line) for every fix in your response. |
+| Rework from cf-security | Address EVERY security observation — no skipping, no deferral, no classification as "low risk". Re-test, re-request commit. Do NOT push back on findings or mark any as "acceptable risk" without explicit team lead approval. Provide evidence (file:line) for every fix in your response. |
+| Rework from cf-qa | Address EVERY failure and finding — no skipping, no deferral. Re-test, re-request commit. Do NOT classify any finding as "minor" or "not worth fixing". Provide evidence (file:line) for every fix in your response. |
 | Test regression detected | Fix regression before proceeding. Do not commit with failing tests. |
 | Pre-commit hook rejects | Fix the issue, re-stage, create NEW commit (never amend previous). |
 

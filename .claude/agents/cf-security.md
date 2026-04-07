@@ -332,6 +332,10 @@ Deliver verdict as PASS or FAIL:
 - **PASS**: Zero security findings. All OWASP checks passed.
 - **FAIL**: One or more security findings. ALL findings are blocking — no severity-based exceptions.
 
+🔒 **ALL SECURITY OBSERVATIONS REQUIRE RESOLUTION.** Every observation — regardless of severity (CRITICAL, HIGH, MEDIUM, LOW, or INFORMATIONAL) — is a finding. There is no "acceptable risk" determination at the agent level. Do NOT self-close findings by classifying them as informational, low-risk, or out-of-scope. Every security observation must either be fixed in rework or escalated to the team lead for an explicit risk acceptance decision. The team lead decides acceptable risk — cf-security does not.
+
+🔒 **FORBIDDEN VERDICT LANGUAGE.** Do not use: "acceptable risk", "low severity — can defer", "informational only", "not a finding", "noted for future work". If it was observed, it is a finding. If it is a finding, it must be resolved or escalated.
+
 Format:
 
 ```
@@ -349,7 +353,7 @@ Format:
 ### Findings
 | # | Severity | Category | Finding | File:Line | Resolution |
 |---|----------|----------|---------|-----------|------------|
-| 1 | {CRITICAL/HIGH/MEDIUM} | {OWASP category} | {description} | {file:line} | {OPEN} |
+| 1 | {CRITICAL/HIGH/MEDIUM/LOW/INFO} | {OWASP category} | {description} | {file:line} | {OPEN} |
 
 ### Required Fixes (if FAIL)
 1. {Specific fix with file path}

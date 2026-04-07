@@ -1525,6 +1525,12 @@ impl SessionStartInit {
             .join("worktrees.yaml");
         let _ = crate::worktree::mark_pending_cleanup(&registry_path, sid);
 
+        // Remove interactive heartbeat for swept session.
+        let interactive_hb = project_dir
+            .join(".state/interactive")
+            .join(format!("heartbeat-{sid}"));
+        let _ = fs::remove_file(&interactive_hb);
+
         let _ = fs::remove_dir_all(project_dir.join(".state").join("session").join(sid));
         let _ = fs::remove_dir_all(
             project_dir
@@ -6260,5 +6266,40 @@ mod tests {
             !content.is_empty(),
             "heartbeat file should contain a timestamp"
         );
+    }
+
+    #[test]
+    fn test_remove_stale_session_artifacts_cleans_interactive_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        let sid = "ses-01jq7stalehb1234567890ab";
+
+        // Create interactive heartbeat.
+        let hb_dir = project_dir.join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+        let hb_path = hb_dir.join(format!("heartbeat-{sid}"));
+        std::fs::write(&hb_path, "2026-04-07T00:00:00Z").unwrap();
+        assert!(hb_path.exists());
+
+        // Create session dir (so remove_dir_all has something to do).
+        let session_dir = project_dir.join(".state/session").join(sid);
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        // Create worktree registry directory for mark_pending_cleanup.
+        std::fs::create_dir_all(project_dir.join(".state/worktrees")).unwrap();
+
+        let init = SessionStartInit {
+            lead_pid: 0,
+            home_dir: home.path().to_path_buf(),
+            now: fixed_now,
+        };
+        init.remove_stale_session_artifacts(project_dir, sid, None);
+
+        assert!(
+            !hb_path.exists(),
+            "interactive heartbeat should be removed by stale sweep"
+        );
+        assert!(!session_dir.exists(), "session directory should be removed");
     }
 }

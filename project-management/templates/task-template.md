@@ -202,7 +202,13 @@ Mechanisms available in codebase:
      TEST:                          TEST Report | REV Report | QA Report
      PLAN/SPKE:                     PLAN Report | REV Report
      Replace subsection headings and agent references to match task work_type.
-     Omit QA Report for DOCS and PLAN/SPKE pipelines. -->
+     Omit QA Report for DOCS and PLAN/SPKE pipelines.
+
+     FINDING RESOLUTION POLICY: All stage findings must be resolved before STAGE-COMPLETE.
+     There are no non-blocking observations — every identified issue is a finding that
+     requires resolution or explicit team lead escalation. Severity indicates fix priority,
+     not whether a fix is required. Do not use phrases like "non-blocking observation",
+     "note for future work", "acceptable gap", or "informational only". -->
 
 ### DEV Report
 

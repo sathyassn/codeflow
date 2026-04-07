@@ -188,11 +188,20 @@ async fn register_interactive_session(
 }
 
 /// Show active interactive sessions.
+///
+/// Queries the DB for active sessions AND scans `.state/interactive/heartbeat-*`
+/// as a filesystem fallback so sessions are visible even when the DB is unavailable.
 async fn run_status() -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
     let sessions = query_sessions(&project_dir, Some("active")).await?;
 
-    if sessions.is_empty() {
+    let db_sids: std::collections::HashSet<String> =
+        sessions.iter().map(|s| s.session_id.clone()).collect();
+
+    // Filesystem fallback: scan heartbeat files for sessions not in DB.
+    let fs_only = scan_heartbeat_sessions(&project_dir, &db_sids);
+
+    if sessions.is_empty() && fs_only.is_empty() {
         println!("No active interactive sessions.");
         return Ok(());
     }
@@ -207,6 +216,16 @@ async fn run_status() -> Result<()> {
         println!(
             "{:<32} {:<8} {:<10} {:<10} {wt}",
             s.session_id, pid_display, s.status, s.source_cli
+        );
+    }
+    for (sid, alive) in &fs_only {
+        let liveness = if *alive { "alive" } else { "DEAD" };
+        println!(
+            "{:<32} {:<8} {:<10} {:<10} -",
+            sid,
+            format!("({liveness})"),
+            "(fs-only)",
+            "-"
         );
     }
     Ok(())
@@ -241,7 +260,7 @@ async fn run_list() -> Result<()> {
     Ok(())
 }
 
-/// Remove stale sessions (dead PID).
+/// Remove stale sessions (dead PID) and sweep filesystem artifacts.
 async fn run_cleanup() -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
     let sessions = query_sessions(&project_dir, Some("active")).await?;
@@ -269,10 +288,35 @@ async fn run_cleanup() -> Result<()> {
         }
     }
 
-    if cleaned == 0 {
-        println!("No stale sessions found.");
+    // Filesystem artifact sweeps (independent of DB state).
+    let hb_cleaned = sweep_stale_heartbeats(&project_dir);
+    let env_cleaned = sweep_dead_pid_env_files(&project_dir);
+    let sess_cleaned = sweep_stale_session_dirs(&project_dir);
+    let map_cleaned = clean_session_worktree_map(&project_dir);
+    let wt_cleaned = mark_stale_worktree_entries(&project_dir);
+
+    let total = cleaned + hb_cleaned + env_cleaned + sess_cleaned + map_cleaned + wt_cleaned;
+    if total == 0 {
+        println!("No stale sessions or artifacts found.");
     } else {
-        println!("Cleaned {cleaned} stale session(s).");
+        if cleaned > 0 {
+            println!("Cleaned {cleaned} stale DB session(s).");
+        }
+        if hb_cleaned > 0 {
+            println!("Removed {hb_cleaned} stale heartbeat file(s).");
+        }
+        if env_cleaned > 0 {
+            println!("Removed {env_cleaned} dead-PID env file(s).");
+        }
+        if sess_cleaned > 0 {
+            println!("Removed {sess_cleaned} stale session dir(s).");
+        }
+        if map_cleaned > 0 {
+            println!("Removed {map_cleaned} stale worktree map entry(ies).");
+        }
+        if wt_cleaned > 0 {
+            println!("Marked {wt_cleaned} stale worktree registry entry(ies).");
+        }
     }
     Ok(())
 }
@@ -368,6 +412,280 @@ fn exec_claude(work_dir: &str, env_vars: &[(String, String)]) -> std::io::Error 
         cmd.env(key, value);
     }
     cmd.exec()
+}
+
+// ─── Filesystem sweep helpers ──────────────────────────────────────────
+
+/// Scan `.state/interactive/heartbeat-*` and return sessions found on disk
+/// but NOT in `db_sids`. Each entry is `(session_id, is_alive)`.
+fn scan_heartbeat_sessions(
+    project_dir: &Path,
+    db_sids: &std::collections::HashSet<String>,
+) -> Vec<(String, bool)> {
+    let hb_dir = project_dir.join(".state/interactive");
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&hb_dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(sid) = name.strip_prefix("heartbeat-") else {
+            continue;
+        };
+        if sid.contains("..") {
+            continue;
+        }
+        if db_sids.contains(sid) {
+            continue;
+        }
+        let alive = is_heartbeat_session_alive(project_dir, sid);
+        result.push((sid.to_string(), alive));
+    }
+    result
+}
+
+/// Check if a session is still alive by reading its session pointer.
+fn is_heartbeat_session_alive(project_dir: &Path, sid: &str) -> bool {
+    if sid.contains("..") {
+        return false;
+    }
+    let pointer_path = project_dir
+        .join(".state/session")
+        .join(sid)
+        .join("session-pointer.json");
+    let Ok(content) = std::fs::read_to_string(&pointer_path) else {
+        return false;
+    };
+    let Ok(pointer) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let pid = pointer
+        .get("lead_pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
+    codeflow_core::session::process::is_process_alive(pid)
+}
+
+/// Sweep stale heartbeat files whose sessions are dead.
+///
+/// Returns the number of files removed.
+fn sweep_stale_heartbeats(project_dir: &Path) -> u32 {
+    sweep_stale_heartbeats_inner(project_dir, &project_dir.join(".state/interactive"))
+}
+
+/// Inner implementation for testability.
+fn sweep_stale_heartbeats_inner(project_dir: &Path, hb_dir: &Path) -> u32 {
+    let mut count = 0u32;
+    let Ok(entries) = std::fs::read_dir(hb_dir) else {
+        return count;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(sid) = name.strip_prefix("heartbeat-") else {
+            continue;
+        };
+        if sid.contains("..") {
+            continue;
+        }
+        if !is_heartbeat_session_alive(project_dir, sid) {
+            let _ = std::fs::remove_file(entry.path());
+            eprintln!("removed stale heartbeat: {name}");
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Sweep `.state/runtime/shared/codeflow-env-*.sh` files whose PIDs are dead.
+///
+/// Returns the number of files removed.
+fn sweep_dead_pid_env_files(project_dir: &Path) -> u32 {
+    sweep_dead_pid_env_files_inner(&project_dir.join(".state/runtime/shared"))
+}
+
+/// Inner implementation for testability.
+fn sweep_dead_pid_env_files_inner(shared_dir: &Path) -> u32 {
+    let mut count = 0u32;
+    let Ok(entries) = std::fs::read_dir(shared_dir) else {
+        return count;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("codeflow-env-")
+            || !Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sh"))
+        {
+            continue;
+        }
+        // Extract PID from "codeflow-env-{PID}.sh".
+        let pid_str = name
+            .strip_prefix("codeflow-env-")
+            .and_then(|s| s.strip_suffix(".sh"))
+            .unwrap_or("");
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        if !codeflow_core::session::process::is_process_alive(pid) {
+            let _ = std::fs::remove_file(entry.path());
+            eprintln!("removed dead-PID env file: {name}");
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Sweep stale session directories under `.state/session/ses-*`.
+///
+/// Applies the same logic as `sweep_all_stale_sessions` in session_start.rs:
+/// - Status `pf-complete` or `created` with no team config -> remove
+/// - Status `pf-in-progress`/`pf-started` with dead lead -> remove
+///
+/// Returns the number of directories removed.
+fn sweep_stale_session_dirs(project_dir: &Path) -> u32 {
+    let session_base = project_dir.join(".state/session");
+    let mut count = 0u32;
+    let Ok(entries) = std::fs::read_dir(&session_base) else {
+        return count;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("ses-") {
+            continue;
+        }
+        if name.contains("..") {
+            continue;
+        }
+        let status_path = session_base
+            .join(&name)
+            .join("pathflow/pathflow-session-status.json");
+        let status: serde_json::Value = match std::fs::read_to_string(&status_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            Some(v) => v,
+            None => {
+                // No status file — check session pointer liveness.
+                if !is_heartbeat_session_alive(project_dir, &name) {
+                    remove_session_artifacts(project_dir, &name);
+                    count += 1;
+                }
+                continue;
+            }
+        };
+
+        let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        match session_status {
+            "pf-complete" => {
+                remove_session_artifacts(project_dir, &name);
+                count += 1;
+            }
+            "created" => {
+                // "created" with no team config is stale.
+                let team_name = status
+                    .get("team_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if team_name.is_empty() {
+                    remove_session_artifacts(project_dir, &name);
+                    count += 1;
+                }
+            }
+            "pf-started" | "pf-in-progress" => {
+                let lead_pid = status
+                    .get("lead_pid")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(0);
+                if lead_pid > 0 && !codeflow_core::session::process::is_process_alive(lead_pid) {
+                    remove_session_artifacts(project_dir, &name);
+                    count += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// Remove session directory + sentinel directory + interactive heartbeat.
+fn remove_session_artifacts(project_dir: &Path, sid: &str) {
+    if sid.contains("..") {
+        return;
+    }
+    let _ = std::fs::remove_file(
+        project_dir
+            .join(".state/interactive")
+            .join(format!("heartbeat-{sid}")),
+    );
+    let _ = std::fs::remove_dir_all(project_dir.join(".state/session").join(sid));
+    let _ = std::fs::remove_dir_all(project_dir.join(".state/sentinels/pathflow").join(sid));
+    eprintln!("removed stale session artifacts: {sid}");
+}
+
+/// Clean stale entries from `session-worktree-map.json`.
+///
+/// Checks both the flat layout path (`.state/runtime/session-worktree-map.json`)
+/// and the migrated shared path (`.state/runtime/shared/session-worktree-map.json`).
+/// Returns the total number of entries removed across both copies.
+fn clean_session_worktree_map(project_dir: &Path) -> u32 {
+    let flat_path = project_dir.join(".state/runtime/session-worktree-map.json");
+    let shared_path = project_dir.join(".state/runtime/shared/session-worktree-map.json");
+    clean_session_worktree_map_inner(&flat_path) + clean_session_worktree_map_inner(&shared_path)
+}
+
+/// Inner implementation for testability.
+fn clean_session_worktree_map_inner(map_path: &Path) -> u32 {
+    let Ok(data) = std::fs::read_to_string(map_path) else {
+        return 0;
+    };
+    let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+    else {
+        return 0;
+    };
+    let before = map.len();
+    map.retain(|_sid, wt_path| wt_path.as_str().is_some_and(|p| Path::new(p).exists()));
+    let removed = before - map.len();
+    if removed > 0 {
+        let _ = std::fs::write(
+            map_path,
+            serde_json::to_string_pretty(&map).unwrap_or_default(),
+        );
+    }
+    u32::try_from(removed).unwrap_or(0)
+}
+
+/// Mark stale worktree registry entries as pending_cleanup.
+///
+/// For active entries whose lead_pid is dead, calls `mark_pending_cleanup`.
+/// Returns the number of entries marked.
+fn mark_stale_worktree_entries(project_dir: &Path) -> u32 {
+    let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+    let Ok(registry) = codeflow_core::worktree::read_registry(&registry_path) else {
+        return 0;
+    };
+    let mut count = 0u32;
+    for entry in &registry.worktrees {
+        if entry.status != codeflow_core::worktree::WorktreeStatus::Active {
+            continue;
+        }
+        let lead_pid = entry.lead_pid.unwrap_or(0);
+        if lead_pid > 0 && !codeflow_core::session::process::is_process_alive(lead_pid) {
+            if let Some(ref sid) = entry.session_id {
+                let _ = codeflow_core::worktree::mark_pending_cleanup(&registry_path, sid);
+                eprintln!(
+                    "marked stale worktree: {} (PID {lead_pid} dead)",
+                    entry.name
+                );
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -620,5 +938,312 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].source_cli, "claude");
         assert!(!sessions[0].managed);
+    }
+
+    // ─── Heartbeat sweep ──────────────────────────────────────────────
+
+    #[test]
+    fn test_sweep_stale_heartbeats_removes_dead_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        // Create heartbeat for a session with no pointer (dead).
+        std::fs::write(hb_dir.join("heartbeat-ses-dead1"), "2026-01-01T00:00:00Z").unwrap();
+
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        assert_eq!(removed, 1);
+        assert!(!hb_dir.join("heartbeat-ses-dead1").exists());
+    }
+
+    #[test]
+    fn test_sweep_stale_heartbeats_preserves_alive_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        // Create a session pointer with current process PID (alive).
+        let sid = "ses-alive1";
+        let pointer_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&pointer_dir).unwrap();
+        let pointer = serde_json::json!({
+            "lead_pid": std::process::id(),
+            "worktree_path": "/tmp/test",
+            "session_id": sid,
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        std::fs::write(
+            pointer_dir.join("session-pointer.json"),
+            serde_json::to_string(&pointer).unwrap(),
+        )
+        .unwrap();
+
+        std::fs::write(
+            hb_dir.join(format!("heartbeat-{sid}")),
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        assert_eq!(removed, 0);
+        assert!(hb_dir.join(format!("heartbeat-{sid}")).exists());
+    }
+
+    #[test]
+    fn test_sweep_stale_heartbeats_ignores_non_heartbeat_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        std::fs::write(hb_dir.join("other-file.txt"), "data").unwrap();
+
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        assert_eq!(removed, 0);
+        assert!(hb_dir.join("other-file.txt").exists());
+    }
+
+    #[test]
+    fn test_sweep_stale_heartbeats_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_sweep_stale_heartbeats_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        // Directory does not exist.
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        assert_eq!(removed, 0);
+    }
+
+    // ─── Dead-PID env file sweep ──────────────────────────────────────
+
+    #[test]
+    fn test_sweep_dead_pid_env_files_removes_dead() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        // PID 4000000 is certainly dead.
+        std::fs::write(
+            shared_dir.join("codeflow-env-4000000.sh"),
+            "export CODEFLOW_SESSION_ID=test",
+        )
+        .unwrap();
+
+        let removed = sweep_dead_pid_env_files_inner(&shared_dir);
+        assert_eq!(removed, 1);
+        assert!(!shared_dir.join("codeflow-env-4000000.sh").exists());
+    }
+
+    #[test]
+    fn test_sweep_dead_pid_env_files_preserves_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        // Current process PID is alive.
+        let filename = format!("codeflow-env-{}.sh", std::process::id());
+        std::fs::write(shared_dir.join(&filename), "export X=1").unwrap();
+
+        let removed = sweep_dead_pid_env_files_inner(&shared_dir);
+        assert_eq!(removed, 0);
+        assert!(shared_dir.join(&filename).exists());
+    }
+
+    #[test]
+    fn test_sweep_dead_pid_env_files_ignores_non_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        // Files that don't match the pattern.
+        std::fs::write(shared_dir.join("other-file.sh"), "data").unwrap();
+        std::fs::write(shared_dir.join("codeflow-env-notapid.sh"), "data").unwrap();
+
+        let removed = sweep_dead_pid_env_files_inner(&shared_dir);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_sweep_dead_pid_env_files_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("nonexistent");
+        let removed = sweep_dead_pid_env_files_inner(&shared_dir);
+        assert_eq!(removed, 0);
+    }
+
+    // ─── Session-worktree map cleanup ─────────────────────────────────
+
+    #[test]
+    fn test_clean_session_worktree_map_removes_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let map_path = dir.path().join("map.json");
+
+        // Create a map with one valid and one stale entry.
+        let existing_dir = dir.path().join("existing-wt");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+
+        let map = serde_json::json!({
+            "ses-valid": existing_dir.to_string_lossy().to_string(),
+            "ses-stale": "/tmp/nonexistent-worktree-path-12345"
+        });
+        std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
+
+        let removed = clean_session_worktree_map_inner(&map_path);
+        assert_eq!(removed, 1);
+
+        // Verify the map was rewritten with only the valid entry.
+        let content = std::fs::read_to_string(&map_path).unwrap();
+        let updated: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&content).unwrap();
+        assert_eq!(updated.len(), 1);
+        assert!(updated.contains_key("ses-valid"));
+    }
+
+    #[test]
+    fn test_clean_session_worktree_map_no_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let map_path = dir.path().join("map.json");
+
+        let existing_dir = dir.path().join("wt");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+
+        let map = serde_json::json!({
+            "ses-ok": existing_dir.to_string_lossy().to_string()
+        });
+        std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
+
+        let removed = clean_session_worktree_map_inner(&map_path);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_clean_session_worktree_map_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let map_path = dir.path().join("nonexistent.json");
+        let removed = clean_session_worktree_map_inner(&map_path);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_clean_session_worktree_map_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let map_path = dir.path().join("bad.json");
+        std::fs::write(&map_path, "not valid json").unwrap();
+        let removed = clean_session_worktree_map_inner(&map_path);
+        assert_eq!(removed, 0);
+    }
+
+    // ─── Scan heartbeat sessions ──────────────────────────────────────
+
+    #[test]
+    fn test_scan_heartbeat_sessions_excludes_db_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        std::fs::write(hb_dir.join("heartbeat-ses-known"), "ts").unwrap();
+        std::fs::write(hb_dir.join("heartbeat-ses-unknown"), "ts").unwrap();
+
+        let mut db_sids = std::collections::HashSet::new();
+        db_sids.insert("ses-known".to_string());
+
+        let fs_only = scan_heartbeat_sessions(dir.path(), &db_sids);
+        assert_eq!(fs_only.len(), 1);
+        assert_eq!(fs_only[0].0, "ses-unknown");
+    }
+
+    #[test]
+    fn test_scan_heartbeat_sessions_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_sids = std::collections::HashSet::new();
+        let fs_only = scan_heartbeat_sessions(dir.path(), &db_sids);
+        assert!(fs_only.is_empty());
+    }
+
+    // ─── is_heartbeat_session_alive ───────────────────────────────────
+
+    #[test]
+    fn test_is_heartbeat_session_alive_no_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_heartbeat_session_alive(dir.path(), "ses-nope"));
+    }
+
+    #[test]
+    fn test_is_heartbeat_session_alive_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-deadpid";
+        let pointer_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&pointer_dir).unwrap();
+        let pointer = serde_json::json!({
+            "lead_pid": 4_000_000,
+            "worktree_path": "/tmp/test",
+            "session_id": sid,
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        std::fs::write(
+            pointer_dir.join("session-pointer.json"),
+            serde_json::to_string(&pointer).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_heartbeat_session_alive(dir.path(), sid));
+    }
+
+    #[test]
+    fn test_is_heartbeat_session_alive_current_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-alivepid";
+        let pointer_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&pointer_dir).unwrap();
+        let pointer = serde_json::json!({
+            "lead_pid": std::process::id(),
+            "worktree_path": "/tmp/test",
+            "session_id": sid,
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        std::fs::write(
+            pointer_dir.join("session-pointer.json"),
+            serde_json::to_string(&pointer).unwrap(),
+        )
+        .unwrap();
+        assert!(is_heartbeat_session_alive(dir.path(), sid));
+    }
+
+    // ─── remove_session_artifacts ─────────────────────────────────────
+
+    #[test]
+    fn test_remove_session_artifacts_cleans_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-cleanup1";
+
+        // Create artifacts.
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+        std::fs::write(hb_dir.join(format!("heartbeat-{sid}")), "ts").unwrap();
+
+        let sess_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&sess_dir).unwrap();
+
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        remove_session_artifacts(dir.path(), sid);
+
+        assert!(!hb_dir.join(format!("heartbeat-{sid}")).exists());
+        assert!(!sess_dir.exists());
+        assert!(!sentinel_dir.exists());
+    }
+
+    #[test]
+    fn test_remove_session_artifacts_missing_dirs_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should not panic when nothing exists.
+        remove_session_artifacts(dir.path(), "ses-nonexistent");
     }
 }

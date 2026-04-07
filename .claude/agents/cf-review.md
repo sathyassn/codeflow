@@ -456,6 +456,10 @@ Format findings using the verdict template and send to the team lead. If `CHANGE
 
 🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, MUST result in `CHANGES_REQUESTED` and require a fix before approval. Severity indicates priority (fix order), NOT whether a fix is required. MINOR and NOTE findings are still BLOCKING. There is no "pass with notes" or "informational only" category. No exceptions.
 
+🔒 **ZERO TOLERANCE FOR DEFERRED FINDINGS.** The following phrases are FORBIDDEN in review verdicts: "non-blocking observation", "note for future work", "not a finding", "informational only", "advisory", "low priority — can defer". If something is worth noting, it is worth fixing. Every item observed during review is a finding. Every finding requires resolution.
+
+🔒 **PRE-EXISTING ISSUE EXCEPTION (narrow).** The ONLY exception to the zero-findings-before-approval rule: an issue that (a) is provably NOT introduced by this changeset (verified via `git blame` or `git log`), AND (b) cannot be fixed without scope creep beyond the task definition. Both conditions must be met. When this exception applies, you MUST: (1) document the justification with git evidence in the Findings Log, (2) set Resolution to `PRE-EXISTING: follow-up task required`, and (3) still return `CHANGES_REQUESTED` unless the team lead explicitly approves the exception in writing. Do NOT self-approve exceptions.
+
 **Severity definitions:**
 
 | Severity | Meaning (priority order) | Blocks Approval |

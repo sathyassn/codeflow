@@ -671,6 +671,14 @@ impl SessionEndCleanup {
         // Remove heartbeat file (signals clean exit to stale sweep).
         crate::session::heartbeat::remove(project_dir);
 
+        // Remove interactive heartbeat file for this session.
+        if !result.session_id.is_empty() {
+            let interactive_hb = project_dir
+                .join(".state/interactive")
+                .join(format!("heartbeat-{}", result.session_id));
+            let _ = fs::remove_file(&interactive_hb);
+        }
+
         // Remove session lock file (always in main project).
         let lock_path = runtime_dir.join("session.lock");
         if lock_path.exists() {
@@ -2074,5 +2082,65 @@ mod tests {
             data.contains("pending_cleanup"),
             "worktree should be marked PendingCleanup even when cleanup skipped: {data}"
         );
+    }
+
+    #[test]
+    fn test_clean_runtime_files_removes_interactive_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7hbcleantest12345678";
+
+        // Create runtime env file so clean_runtime_files_inner can resolve session ID.
+        let runtime_dir = dir.path().join(".state/runtime");
+        let sid_typed = SessionId::new_unchecked(sid);
+        session::write_env_file(&runtime_dir, &sid_typed, "codeflow").unwrap();
+
+        // Create interactive heartbeat file.
+        let hb_dir = dir.path().join(".state/interactive");
+        fs::create_dir_all(&hb_dir).unwrap();
+        let hb_path = hb_dir.join(format!("heartbeat-{sid}"));
+        fs::write(&hb_path, "2026-04-07T00:00:00Z").unwrap();
+        assert!(hb_path.exists(), "heartbeat should exist before cleanup");
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
+
+        assert!(
+            !hb_path.exists(),
+            "interactive heartbeat should be removed by clean_runtime_files_inner"
+        );
+    }
+
+    #[test]
+    fn test_clean_runtime_files_no_panic_when_heartbeat_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7nohbtest123456789ab";
+
+        let runtime_dir = dir.path().join(".state/runtime");
+        let sid_typed = SessionId::new_unchecked(sid);
+        session::write_env_file(&runtime_dir, &sid_typed, "codeflow").unwrap();
+
+        let cleaner = make_cleaner(home.path().to_path_buf());
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        // No interactive heartbeat exists — should not panic.
+        cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
     }
 }

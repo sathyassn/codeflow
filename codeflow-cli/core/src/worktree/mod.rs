@@ -192,7 +192,7 @@ const SHARED_STATE_DIRS: &[&str] = &["db", "backups", "coordination", "logs", "w
 /// files, and these must appear in the worktree's git index (not the main
 /// repo's working tree). Cross-session ledger merging happens at compaction
 /// time, not via shared filesystem state.
-const LOCAL_STATE_DIRS: &[&str] = &["runtime", "session", "sentinels", "ledger"];
+const LOCAL_STATE_DIRS: &[&str] = &["runtime", "session", "sentinels", "ledger", "interactive"];
 
 /// Typed worktree health states.
 ///
@@ -1043,11 +1043,12 @@ mod tests {
 
     #[test]
     fn test_local_state_dirs_constant() {
-        assert_eq!(LOCAL_STATE_DIRS.len(), 4);
+        assert_eq!(LOCAL_STATE_DIRS.len(), 5);
         assert!(LOCAL_STATE_DIRS.contains(&"runtime"));
         assert!(LOCAL_STATE_DIRS.contains(&"session"));
         assert!(LOCAL_STATE_DIRS.contains(&"sentinels"));
         assert!(LOCAL_STATE_DIRS.contains(&"ledger"));
+        assert!(LOCAL_STATE_DIRS.contains(&"interactive"));
     }
 
     #[test]

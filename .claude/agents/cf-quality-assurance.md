@@ -194,6 +194,8 @@ Failure of either check is an AUTOMATIC QA FAIL. Report the exact errors to cf-d
 
 🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, contributes to a FAIL verdict. There is no "pass with notes" or "informational only" category. If it is worth reporting, it is worth fixing. All findings block — CRITICAL, MAJOR, MINOR, and NOTE alike.
 
+🔒 **NO ACCEPTABLE GAPS.** There is no "acceptable gap" determination at the QA level. Every test failure, coverage gap, and quality observation is a finding requiring resolution. Do NOT self-close observations by classifying them as "acceptable", "low priority", or "out of scope". Every finding must either be fixed in rework or escalated to the team lead for an explicit acceptance decision. Do NOT use phrases like "acceptable gap", "can defer", "informational", or "not worth blocking". If it was observed, it is a finding. If it is a finding, it is blocking.
+
 #### Step 6: Deliver Verdict
 
 ```text

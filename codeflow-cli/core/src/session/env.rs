@@ -224,7 +224,8 @@ pub fn migrate_runtime_layout(runtime_dir: &Path) {
     }
 
     // Move cross-session files to shared/.
-    for name in ["session-worktree-map.json", "session.lock"] {
+    {
+        let name = "session-worktree-map.json";
         let old = runtime_dir.join(name);
         if old.exists() && !old.is_symlink() {
             let _ = fs::rename(&old, shared.join(name));
@@ -786,6 +787,24 @@ mod tests {
         migrate_runtime_layout(&runtime);
         migrate_runtime_layout(&runtime);
         assert!(runtime.join("shared").is_dir());
+    }
+
+    #[test]
+    fn test_migrate_runtime_layout_does_not_move_session_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join("session.lock"), "lock").unwrap();
+        migrate_runtime_layout(&runtime);
+        // session.lock should remain in place (not moved to shared/).
+        assert!(
+            runtime.join("session.lock").exists(),
+            "session.lock should NOT be migrated"
+        );
+        assert!(
+            !runtime.join("shared").join("session.lock").exists(),
+            "session.lock should NOT appear in shared/"
+        );
     }
 
     #[test]
