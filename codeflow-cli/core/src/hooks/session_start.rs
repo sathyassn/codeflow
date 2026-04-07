@@ -299,6 +299,12 @@ impl SessionStartInit {
                     return Ok(result);
                 }
             }
+            // MANAGED flag set but SESSION_ID missing or invalid — warn and fall through.
+            result.warnings.push(
+                "CODEFLOW_MANAGED=true but CODEFLOW_SESSION_ID is missing or invalid; \
+                 falling back to non-managed session"
+                    .into(),
+            );
         }
 
         // --- Section 0: Acquire session lock ---
@@ -575,6 +581,14 @@ impl SessionStartInit {
             self.create_directories_in_worktree(wp, session_id.as_str());
         } else {
             self.create_directories(project_dir, session_id.as_str());
+        }
+
+        // Write heartbeat file for liveness detection (all sessions, not just managed).
+        if source == "startup" {
+            let heartbeat_dir = project_dir.join(".state").join("interactive");
+            let _ = fs::create_dir_all(&heartbeat_dir);
+            let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", session_id.as_str()));
+            let _ = fs::write(&heartbeat_path, (self.now)());
         }
 
         // --- Section 4+5: Sweep all stale sessions (replaces detect_stale_sessions + sweep_orphan_sentinels) ---
@@ -6156,6 +6170,95 @@ mod tests {
         assert!(
             !within_grace,
             "entry created 2 minutes ago should be outside grace period"
+        );
+    }
+
+    // --- GAP 1: CODEFLOW_MANAGED without SESSION_ID warns ---
+
+    #[test]
+    fn test_managed_without_session_id_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        std::fs::create_dir_all(project_dir.join(".claude")).unwrap();
+        std::fs::create_dir_all(project_dir.join(".state").join("runtime")).unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", &project_dir.to_string_lossy());
+
+        // Set MANAGED=true but do NOT set SESSION_ID.
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::set_var("CODEFLOW_MANAGED", "true") };
+        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, project_dir, &mut buf);
+        assert!(result.is_ok());
+        let init_result = result.unwrap();
+
+        // Should contain the fallback warning.
+        let has_warning = init_result
+            .warnings
+            .iter()
+            .any(|w| w.contains("CODEFLOW_MANAGED=true but CODEFLOW_SESSION_ID is missing"));
+        assert!(
+            has_warning,
+            "should warn about missing SESSION_ID when MANAGED=true"
+        );
+
+        // Should NOT be a managed return — it fell through to normal path.
+        assert!(
+            !init_result
+                .messages
+                .iter()
+                .any(|m| m.contains("MANAGED SESSION")),
+            "should not report managed session when SESSION_ID is missing"
+        );
+
+        // Cleanup.
+        unsafe { std::env::remove_var("CODEFLOW_MANAGED") };
+    }
+
+    // --- GAP 4: Heartbeat file created for unmanaged sessions ---
+
+    #[test]
+    fn test_unmanaged_startup_creates_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+        std::fs::create_dir_all(project_dir.join(".claude")).unwrap();
+        std::fs::create_dir_all(project_dir.join(".state").join("runtime")).unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let init = make_init(home.path().to_path_buf());
+        let input = make_input("startup", &project_dir.to_string_lossy());
+
+        // Ensure NOT managed.
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_MANAGED") };
+        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let mut buf = Vec::new();
+        let result = init.run(&input, project_dir, &mut buf);
+        assert!(result.is_ok());
+        let init_result = result.unwrap();
+
+        // Check heartbeat file exists.
+        let heartbeat_dir = project_dir.join(".state").join("interactive");
+        let heartbeat_path =
+            heartbeat_dir.join(format!("heartbeat-{}", init_result.session_id.as_str()));
+        assert!(
+            heartbeat_path.exists(),
+            "heartbeat file should be created for unmanaged startup sessions: {}",
+            heartbeat_path.display()
+        );
+
+        // Verify content is a timestamp.
+        let content = std::fs::read_to_string(&heartbeat_path).unwrap();
+        assert!(
+            !content.is_empty(),
+            "heartbeat file should contain a timestamp"
         );
     }
 }
