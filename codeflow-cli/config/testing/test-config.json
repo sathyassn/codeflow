@@ -31,6 +31,20 @@
         "reason": "Region coverage limited by platform-conditional code (#[cfg(target_os = \"linux\")] paths unreachable on macOS) and sandbox-blocked /bin/ps (get_process_name_ps, is_process_named success paths unreachable). Line coverage is 85%. 20 tests cover all reachable production paths. Uncovered regions: Linux-only get_parent_of_linux/get_process_name_linux, ps-dependent name resolution, validate_claude_pid success branch (no Claude ancestor in test context).",
         "granularity": "per_file",
         "remove_when": "CI runs tests on both macOS and Linux with ps available, or platform/sandbox-conditional code is refactored into injectable traits"
+      },
+      {
+        "file": "cli/src/cmd/interactive.rs",
+        "threshold": 60,
+        "reason": "CLI command file contains run_launch() which calls exec(2) to replace the process — cannot return to test harness. Also contains run_status/run_list/run_cleanup which require detect_project_root() (depends on CWD state) and real DB for end-to-end testing. 25 tests cover all extracted pure functions (env var construction, worktree naming, PID liveness, work dir resolution, config fallback) and DB integration (register, query, filter). Untestable: exec_claude(), run_launch() worktree creation path (requires git repo), run_status/run_list/run_cleanup output formatting with detect_project_root().",
+        "granularity": "per_file",
+        "remove_when": "exec path is refactored to return a Command (without calling .exec()), or detect_project_root is made injectable"
+      },
+      {
+        "file": "cli/src/cmd/autorun.rs",
+        "threshold": 75,
+        "reason": "Large CLI command file (4600+ lines) with tmux process management, batch orchestration, and interactive terminal output that require real tmux sessions and process infrastructure. Handler-level tests cover all testable paths. Modified in INF-TSK-024-037 for autorun field renames (env vars and struct fields) — all rename-related tests pass.",
+        "granularity": "per_file",
+        "remove_when": "Tmux and process management refactored into injectable traits, or integration test harness with mock tmux is implemented"
       }
     ]
   }
