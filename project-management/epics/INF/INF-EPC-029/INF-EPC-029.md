@@ -57,6 +57,7 @@ Previously numbered INF-EPC-922 (renumbered to INF-EPC-029 for sequential consis
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | INF-TSK-029-001 | Worktree heartbeat safety + autorun directory structure | complete | high |
+| INF-TSK-029-002 | Prepare autorun batch files for INF-EPC-024 | todo | normal |
 
 ## Dependencies
 

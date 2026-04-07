@@ -174,14 +174,15 @@ pub fn parse_batch_data_with_project_dir(
     };
 
     // Resolve integration_auto_merge: explicit value or inferred from target protection.
-    let target_for_check = if bf.integration_branch.is_empty() {
-        "main"
-    } else {
-        &bf.integration_branch
-    };
-    let resolved_auto_merge = bf
-        .integration_auto_merge
-        .unwrap_or_else(|| !is_protected_branch(target_for_check, &protected_branches));
+    // When integration_branch is empty, the orchestrator auto-generates a non-protected
+    // branch (autorun/{name}-{suffix}), so auto_merge defaults to true.
+    let resolved_auto_merge = bf.integration_auto_merge.unwrap_or_else(|| {
+        if bf.integration_branch.is_empty() {
+            true // auto-generated branches are never protected
+        } else {
+            !is_protected_branch(&bf.integration_branch, &protected_branches)
+        }
+    });
 
     // Temporarily set integration_auto_merge to resolved value for validation.
     let bf_for_validation = BatchFile {
@@ -378,17 +379,15 @@ fn validate_batch(bf: &BatchFile, protected_branches: &[String]) -> Result<(), A
     }
 
     // Validate integration_auto_merge + protected branch constraint.
-    if bf.integration_auto_merge.unwrap_or(false) {
-        let target = if bf.integration_branch.is_empty() {
-            "main"
-        } else {
-            &bf.integration_branch
-        };
-        if is_protected_branch(target, protected_branches) {
-            return Err(AutorunError::ProtectedMerge(format!(
-                "cannot auto_merge into {target:?}"
-            )));
-        }
+    // Only check when branch is explicitly set (empty = auto-generated = non-protected).
+    if bf.integration_auto_merge.unwrap_or(false)
+        && !bf.integration_branch.is_empty()
+        && is_protected_branch(&bf.integration_branch, protected_branches)
+    {
+        return Err(AutorunError::ProtectedMerge(format!(
+            "cannot auto_merge into {:?}",
+            bf.integration_branch
+        )));
     }
 
     Ok(())
@@ -608,9 +607,14 @@ pub fn validate_batch_extended(
     }
 
     // Check protected branch + integration_auto_merge.
-    if batch.integration_auto_merge && is_protected_branch(target, &protected_branches) {
+    // Skip for auto-generated branches (never protected).
+    if batch.integration_auto_merge
+        && !batch.integration_branch_is_auto
+        && is_protected_branch(&batch.integration_branch, &protected_branches)
+    {
         return Err(AutorunError::ProtectedMerge(format!(
-            "cannot auto_merge into {target:?}"
+            "cannot auto_merge into {:?}",
+            batch.integration_branch
         )));
     }
 
@@ -814,8 +818,21 @@ tasks:
     }
 
     #[test]
-    fn test_validate_protected_branch_main() {
+    fn test_validate_auto_merge_empty_branch_valid() {
+        // Empty integration_branch means auto-generated (non-protected), so auto_merge is valid.
         let yaml = "integration_auto_merge: true\ntasks:\n  - id: task-a\n";
+        let result = parse_batch_data(yaml, "test.yaml");
+        assert!(
+            result.is_ok(),
+            "auto_merge with empty branch (auto-generated) should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_auto_merge_explicit_main_rejected() {
+        // Explicitly targeting "main" with auto_merge is forbidden.
+        let yaml =
+            "integration_auto_merge: true\nintegration_branch: main\ntasks:\n  - id: task-a\n";
         let result = parse_batch_data(yaml, "test.yaml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("main"));
