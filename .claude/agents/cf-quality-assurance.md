@@ -84,6 +84,13 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 | 🔒 Scope (WS-QA) | Test execution and verification only. Source code is READ-ONLY. You verify work -- you do not fix it. |
 | 🔒 Scope (WS-TEST) | Test files, test infrastructure, test configuration. Source code is read-only for understanding, not modification. |
 
+🔒 **Zero-Tolerance Test Policy:**
+
+- ALL tests must pass. Zero failures across the entire workspace. No "pre-existing" or "flaky" exemptions.
+- Any test failure = QA FAIL. The root cause must be fixed, not exempted.
+- Run `cargo test --workspace --no-fail-fast` to capture ALL failures, not just the first.
+- Run tests at least twice to detect intermittent failures.
+
 🔒 **MUST:**
 
 - Run tests before reporting results -- never assume outcomes
@@ -228,7 +235,7 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 1. **Update `### Criteria Status` table** — in the QA column, mark each criterion as `PASS` (verified passing) or `FAIL` (verified failing). Do not leave `--` in the QA column after QA completes.
 
-2. **Fill in `### QA Report` section** — replace all placeholder text with actual data:
+2. **Fill in `### QA Report` section** — replace all placeholder text with actual data. The QA Report MUST contain all three numbered sections below. A report missing any section is INCOMPLETE and the verdict is automatically FAIL:
 
 ```markdown
 ### QA Report
@@ -238,21 +245,40 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 **Verdict:** {PASS | FAIL}
 **Runner Mode:** {essential | standard | full}
 
-#### Test Execution
+#### 1. Overall Test Pass Status
+
+- Command: `cargo test --workspace --no-fail-fast`
+- Result: {n} passed, 0 failed, 0 skipped
+- New tests added: {n}
+- Runs: {n} consecutive clean runs (minimum 2)
 
 | Suite | Passed | Failed | Skipped | Duration |
 |-------|--------|--------|---------|----------|
 | {suite name} | {n} | {n} | {n} | {time} |
 
-**Coverage:** {n}% (threshold: {n}%)
+#### 2. Overall Coverage
 
-#### Per-File Coverage
+> Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --workspace` to generate.
 
-| File | Lines | Line Cov% | Branches | Branch Cov% | Threshold | Status |
-|------|-------|-----------|----------|-------------|-----------|--------|
-| {path} | {n}/{total} | {pct}% | {n}/{total} | {pct}% | 85% | PASS/FAIL |
+- Workspace: {n}%
+- CLI crate: {n}%
+- Core crate: {n}%
 
-> Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --lib` to generate. Include ALL modified/created Rust files. QA verdict CANNOT be PASS if any row shows FAIL.
+##### Exempted Files (below 85%)
+
+| File | Coverage | Configured Threshold | Reason |
+|------|----------|---------------------|--------|
+| {path} | {n}% | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
+
+#### 3. Modified File Coverage
+
+> Per-file coverage for files modified in this PR only. Each must be >= 85%.
+
+| File | Coverage | Threshold | Status |
+|------|----------|-----------|--------|
+| {path} | {n}% | 85% | PASS/FAIL |
+
+QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 
 #### Acceptance Verification
 
@@ -272,6 +298,12 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 **Confidence Score:** {0-100} -- {brief rationale: what evidence supports this score, what (if any) uncertainty remains}
 ```
+
+🔒 **Mandatory three-part coverage reporting:**
+
+1. **Overall Test Pass Status** — `cargo test --workspace --no-fail-fast` result with suite breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
+2. **Overall Coverage** — workspace-wide coverage for CLI crate and Core crate. Any file below 85% that is not in the configured exception list = QA FAIL. Exempted files must be listed with the reason from `codeflow-cli/config/testing/test-config.json`.
+3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= 85%. Missing coverage data = QA FAIL.
 
 Scoring guide: 95-100 = all acceptance criteria verified by passing tests with per-file coverage at threshold, zero open findings; 80-94 = criteria met but some test paths have thin coverage or one finding required a waiver; below 80 = known gaps, test failures, or coverage deficits remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.
 

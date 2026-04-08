@@ -314,6 +314,15 @@ Check every numbered criterion from the task specification point-by-point. A cri
 
 ### Step 9: Run Tests (CODE_REVIEW and TEST_REVIEW)
 
+🔒 **Zero-Tolerance Test Policy:**
+
+- ALL tests in `cargo test --workspace --no-fail-fast` must pass. Zero failures.
+- "Pre-existing", "flaky", or "not introduced by this changeset" are NOT valid exemptions. If a test fails during review, the developer must fix it as part of rework.
+- The reviewer MUST run the full test suite independently — do not trust the developer's reported test counts.
+- Any test failure = automatic CHANGES_REQUESTED verdict. No exceptions.
+- Verify the QA Report contains all three mandatory coverage sections: (1) Overall Test Pass Status, (2) Overall Coverage (workspace/CLI/Core), (3) Modified File Coverage per-file table. A QA Report missing any section = CHANGES_REQUESTED.
+- Per-file coverage >= 85% for all modified files (unless in configured exception list). Missing coverage data = CHANGES_REQUESTED.
+
 - All suites: `codeflow test`
 
 ### Step 9b: Rust Quality Verification (CODE_REVIEW only)
