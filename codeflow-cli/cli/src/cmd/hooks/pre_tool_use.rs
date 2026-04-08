@@ -159,8 +159,10 @@ fn build_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    /// Mutex to serialize tests that depend on process-wide env vars.
+    /// Mutex for belt-and-suspenders env var serialization within this module.
+    /// Cross-crate serialization is handled by `#[serial(env_vars)]`.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -364,6 +366,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_sentinel_dir_falls_back_to_unknown_subpath() {
         let _lock = ENV_LOCK
             .lock()
@@ -378,6 +381,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_dir_falls_back_to_unknown_subpath() {
         let _lock = ENV_LOCK
             .lock()
@@ -396,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_sentinel_dir_with_session_env_file() {
         let _lock = ENV_LOCK
             .lock()
@@ -418,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_dir_with_session_env_file() {
         let _lock = ENV_LOCK
             .lock()

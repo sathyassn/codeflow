@@ -2461,6 +2461,7 @@ mod tests {
     use super::*;
     use crate::hooks::PathflowTeamInfo;
     use crate::types::SessionId;
+    use serial_test::serial;
 
     fn fixed_now() -> String {
         "2026-03-10T00:00:00Z".to_string()
@@ -3822,6 +3823,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_id_non_startup_with_existing_sid() {
         // Ensure no stale AUTORUN_SESSION_ID from parallel tests.
         // SAFETY: Test-only env var manipulation.
@@ -4710,6 +4712,7 @@ mod tests {
     // --- Autorun SID tests ---
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_id_uses_autorun_env_var() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -6182,6 +6185,7 @@ mod tests {
     // --- GAP 1: CODEFLOW_MANAGED without SESSION_ID warns ---
 
     #[test]
+    #[serial(env_vars)]
     fn test_managed_without_session_id_warns() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path();
@@ -6191,6 +6195,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", &project_dir.to_string_lossy());
+
+        // Save env vars for restore.
+        let prev_managed = std::env::var("CODEFLOW_MANAGED").ok();
+        let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
 
         // Set MANAGED=true but do NOT set SESSION_ID.
         // SAFETY: Test-only env var manipulation.
@@ -6221,13 +6229,22 @@ mod tests {
             "should not report managed session when SESSION_ID is missing"
         );
 
-        // Cleanup.
-        unsafe { std::env::remove_var("CODEFLOW_MANAGED") };
+        // Restore env vars.
+        // SAFETY: Test-only env var manipulation.
+        match prev_managed {
+            Some(v) => unsafe { std::env::set_var("CODEFLOW_MANAGED", v) },
+            None => unsafe { std::env::remove_var("CODEFLOW_MANAGED") },
+        }
+        match prev_sid {
+            Some(v) => unsafe { std::env::set_var("CODEFLOW_SESSION_ID", v) },
+            None => unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") },
+        }
     }
 
     // --- GAP 4: Heartbeat file created for unmanaged sessions ---
 
     #[test]
+    #[serial(env_vars)]
     fn test_unmanaged_startup_creates_heartbeat() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path();
@@ -6237,6 +6254,12 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let init = make_init(home.path().to_path_buf());
         let input = make_input("startup", &project_dir.to_string_lossy());
+
+        // Save env vars for restore after test.
+        let prev_managed = std::env::var("CODEFLOW_MANAGED").ok();
+        let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
+        let prev_wt = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        let prev_cf = std::env::var("CF_PROJECT_ROOT").ok();
 
         // Ensure NOT managed.
         // SAFETY: Test-only env var manipulation.
@@ -6266,6 +6289,21 @@ mod tests {
             !content.is_empty(),
             "heartbeat file should contain a timestamp"
         );
+
+        // Restore env vars.
+        // SAFETY: Test-only env var manipulation.
+        macro_rules! restore_env {
+            ($name:expr, $prev:expr) => {
+                match $prev {
+                    Some(v) => unsafe { std::env::set_var($name, v) },
+                    None => unsafe { std::env::remove_var($name) },
+                }
+            };
+        }
+        restore_env!("CODEFLOW_MANAGED", prev_managed);
+        restore_env!("CODEFLOW_SESSION_ID", prev_sid);
+        restore_env!("CODEFLOW_WORKTREE_PATH", prev_wt);
+        restore_env!("CF_PROJECT_ROOT", prev_cf);
     }
 
     #[test]

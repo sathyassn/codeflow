@@ -229,9 +229,34 @@ fn touch_heartbeat(_input: &HookInput, handler_name: &str) {
 mod tests {
     use super::*;
 
-    /// Mutex to serialize tests that manipulate process-wide env vars.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use codeflow_core::{HookError, HookEvent};
+    use serial_test::serial;
+
+    /// Save and restore env vars around test bodies. Usage:
+    /// `let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);`
+    struct EnvGuard {
+        saved: Vec<(String, Option<String>)>,
+    }
+    impl EnvGuard {
+        fn new(vars: &[&str]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|v| (v.to_string(), std::env::var(v).ok()))
+                .collect();
+            Self { saved }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, prev) in &self.saved {
+                // SAFETY: Test-only env var restoration on drop.
+                match prev {
+                    Some(v) => unsafe { std::env::set_var(name, v) },
+                    None => unsafe { std::env::remove_var(name) },
+                }
+            }
+        }
+    }
 
     struct AllowHandler;
     impl HookHandler for AllowHandler {
@@ -289,10 +314,9 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_returns_path() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Env var serialization handled by #[serial] attribute.
         // Should return a valid path (either from env or cwd).
         let result = detect_project_dir();
         assert!(result.is_ok());
@@ -300,48 +324,37 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_worktree_path_valid() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a temp dir with .state/ to simulate a valid worktree.
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH"]);
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".state")).unwrap();
 
-        // Set the env var, call detect, then unset.
         let wt_str = dir.path().to_string_lossy().to_string();
-        // SAFETY: Test-only env var manipulation. Tests using env vars are
-        // inherently racy but acceptable for single-threaded test runs.
+        // SAFETY: Test-only env var manipulation.
         unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", &wt_str) };
         let result = detect_project_dir();
-        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), dir.path());
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_worktree_path_invalid_falls_through() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Set to a nonexistent path — should fall through to other methods.
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH"]);
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "/nonexistent/worktree/path") };
         let result = detect_project_dir();
-        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
 
         assert!(result.is_ok());
-        // Should NOT be the nonexistent path.
         assert_ne!(result.unwrap(), PathBuf::from("/nonexistent/worktree/path"));
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_worktree_path_not_set() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Ensure the env var is not set.
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH"]);
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
         let result = detect_project_dir();
@@ -594,28 +607,23 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_uses_env_file_worktree_when_valid() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
         let runtime_dir = project_dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
 
-        // Create a fake worktree dir with .state
         let wt_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(wt_dir.path().join(".state")).unwrap();
 
-        // Write env file pointing to the worktree (shared env -- NOT read since step 5 removed)
         let wt_path_str = wt_dir.path().to_string_lossy().to_string();
         let env_content = format!(
             "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='{wt_path_str}'\n"
         );
         std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
 
-        // Ensure CODEFLOW_WORKTREE_PATH env var is NOT set
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
         unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
@@ -637,24 +645,21 @@ mod tests {
         );
 
         std::env::set_current_dir(original_dir).unwrap();
+        // EnvGuard restores on drop.
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_ignores_env_file_when_worktree_missing() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
         let runtime_dir = project_dir.path().join(".state").join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
 
-        // Write env file pointing to a nonexistent worktree
         let env_content = "export CODEFLOW_SESSION_ID='ses-test123'\nexport CF_PROJECT_ROOT='test'\nexport CODEFLOW_WORKTREE_PATH='/nonexistent/worktree'\n";
         std::fs::write(runtime_dir.join("codeflow-env.sh"), env_content).unwrap();
 
-        // Ensure CODEFLOW_WORKTREE_PATH env var is NOT set
         // SAFETY: Test-only env var manipulation.
         unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
         unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
@@ -681,11 +686,9 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_ignores_env_file_without_worktree_var() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a project root with .claude marker and .state/runtime/codeflow-env.sh
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
         let runtime_dir = project_dir.path().join(".state").join("runtime");
@@ -733,11 +736,9 @@ mod tests {
     // ─── detect_project_dir step 5 removal verification ─────────────────────
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_does_not_read_shared_env_file() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a project root with .claude marker
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
         let runtime_dir = project_dir.path().join(".state").join("runtime");
@@ -777,11 +778,9 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_detect_project_dir_step4_pid_file_lookup() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Create a project root with .claude marker
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
         let project_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project_dir.path().join(".claude")).unwrap();
         let runtime_dir = project_dir.path().join(".state").join("runtime");

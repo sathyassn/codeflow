@@ -241,10 +241,10 @@ fn count_lines(path: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    /// Mutex to serialize tests that depend on process-wide env vars.
-    /// Env vars are global mutable state; parallel tests that read/write
-    /// CODEFLOW_SESSION_ID or CODEFLOW_WORKTREE_PATH race without this.
+    /// Mutex for belt-and-suspenders env var serialization within this module.
+    /// Cross-crate serialization is handled by `#[serial(env_vars)]`.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// RAII guard that saves, clears, and restores codeflow env vars.
@@ -523,6 +523,7 @@ mod tests {
     // --- run_append ---
 
     #[test]
+    #[serial(env_vars)]
     fn test_append_writes_to_correct_subdirectory() {
         let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
@@ -618,6 +619,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_append_routes_session_events_correctly() {
         let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
@@ -646,6 +648,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_append_no_session_id_fails() {
         let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
@@ -658,6 +661,7 @@ mod tests {
     // --- resolve_session_context ---
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_context_from_env_file() {
         let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
@@ -676,6 +680,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_resolve_session_context_with_worktree_in_env_file() {
         let _guard = EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();

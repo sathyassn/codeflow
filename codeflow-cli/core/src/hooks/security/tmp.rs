@@ -85,6 +85,7 @@ mod tests {
 
     use super::*;
     use crate::hooks::pre_tool_use::EnforcementPolicy;
+    use serial_test::serial;
 
     fn test_policy() -> &'static EnforcementPolicy {
         static POLICY: OnceLock<EnforcementPolicy> = OnceLock::new();
@@ -114,6 +115,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_rm_managed_folder() {
         assert!(
             TmpModule
@@ -123,6 +125,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_rmdir_managed_folder() {
         assert!(
             TmpModule
@@ -132,6 +135,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_mv_managed_folder() {
         assert!(
             TmpModule
@@ -141,6 +145,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_rm_state_file() {
         assert!(
             TmpModule
@@ -162,6 +167,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_tmp_check_extracts_basename_from_absolute_path() {
         // CF_PROJECT_ROOT may contain an absolute path; TmpModule must extract
         // the basename so that managed tmp folder paths use "codeflow", not

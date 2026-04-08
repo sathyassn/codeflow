@@ -2172,6 +2172,7 @@ fn capitalize_first(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Helper: build a `GateCheck` with a sentinel dir and in-memory coordinator.
     fn make_gate_check(sentinel_dir: PathBuf) -> GateCheck {
@@ -3128,6 +3129,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_read_worktree_name_fallback_to_env_file() {
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state/runtime");
@@ -3148,6 +3150,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_read_worktree_name_fallback_no_env_file() {
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
@@ -3161,6 +3164,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_read_worktree_name_fallback_to_pid_env_file() {
         let dir = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state/runtime");
@@ -5355,6 +5359,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_protection_guard_extracts_basename_from_absolute_cf_project_root() {
         // When CF_PROJECT_ROOT is an absolute path, ProtectionGuard must
         // extract the basename for managed tmp folder paths.
@@ -5375,6 +5380,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_vars)]
     fn test_protection_guard_handles_bare_basename() {
         // When CF_PROJECT_ROOT is already a bare basename, it should remain unchanged.
         // SAFETY: Test-only env var manipulation.
