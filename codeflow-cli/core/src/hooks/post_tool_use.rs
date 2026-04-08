@@ -2382,6 +2382,18 @@ mod tests {
         let db_dir = dir.path().join(".state/db");
         std::fs::create_dir_all(&db_dir).unwrap();
 
+        // Initialize a git repo with a known branch so branch detection works.
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "fix/test-branch"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
         // Write pathflow-session-status.json with work_type.
         let session_dir = dir.path().join(".state/session/ses-wt-test/pathflow");
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -2411,11 +2423,11 @@ mod tests {
         // Call the function under test.
         update_interactive_session_fields(dir.path(), &session_dir, "ses-wt-test");
 
-        // Verify work_type was set via a field-only SELECT.
+        // Verify both work_type and branch were set.
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
-            let mut result = store
+            let mut wt_result = store
                 .db()
                 .query(
                     "SELECT VALUE work_type FROM interactive_session \
@@ -2423,9 +2435,21 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            let values: Vec<String> = result.take(0).unwrap_or_default();
-            assert_eq!(values.len(), 1, "expected 1 session record");
-            assert_eq!(values[0], "FIX");
+            let wt_values: Vec<String> = wt_result.take(0).unwrap_or_default();
+            assert_eq!(wt_values.len(), 1, "expected 1 session record");
+            assert_eq!(wt_values[0], "FIX");
+
+            let mut br_result = store
+                .db()
+                .query(
+                    "SELECT VALUE branch FROM interactive_session \
+                     WHERE session_id = 'ses-wt-test'",
+                )
+                .await
+                .unwrap();
+            let br_values: Vec<String> = br_result.take(0).unwrap_or_default();
+            assert_eq!(br_values.len(), 1, "expected 1 session record");
+            assert_eq!(br_values[0], "fix/test-branch");
         });
     }
 }

@@ -858,33 +858,25 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 if let MergeConflictAction::MergeConflict { error } = action {
                     // Compute elapsed before DB write so duration_seconds is recorded.
                     let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
-                    // Update DB records before early return to avoid orphaned running records.
                     let completed_at = chrono::Utc::now().to_rfc3339();
-                    let _ = self
-                        .store
-                        .update_autorun_worker(
-                            &cfg.worker_id,
-                            crate::models::AutorunWorkerUpdate {
-                                status: Some(crate::types::AutorunWorkerStatus::Failed),
-                                completed_at: Some(completed_at.clone()),
-                                ..Default::default()
-                            },
-                        )
-                        .await;
-                    let _ = self
-                        .store
-                        .update_autorun_task_run(
-                            &task_run_id,
-                            crate::models::AutorunTaskRunUpdate {
-                                status: Some(crate::types::AutorunTaskRunStatus::Failed),
-                                error_message: Some(error.clone()),
-                                merge_conflicts: Some(vec![error.clone()]),
-                                completed_at: Some(completed_at.clone()),
-                                duration_seconds: Some(elapsed),
-                                ..Default::default()
-                            },
-                        )
-                        .await;
+                    self.update_db_records(
+                        &cfg.worker_id,
+                        crate::models::AutorunWorkerUpdate {
+                            status: Some(crate::types::AutorunWorkerStatus::Failed),
+                            completed_at: Some(completed_at.clone()),
+                            ..Default::default()
+                        },
+                        &task_run_id,
+                        crate::models::AutorunTaskRunUpdate {
+                            status: Some(crate::types::AutorunTaskRunStatus::Failed),
+                            error_message: Some(error.clone()),
+                            merge_conflicts: Some(vec![error.clone()]),
+                            completed_at: Some(completed_at.clone()),
+                            duration_seconds: Some(elapsed),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
                     Self::emit_autorun_event(
                         &self.project_dir,
                         &crate::coordination::types::events::AutorunEvent::WorkerFailed {
@@ -1130,9 +1122,12 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     _ => crate::types::AutorunTaskRunStatus::Failed,
                 };
 
-                // Update worker record with 10s timeout.
-                let db_timeout = Duration::from_secs(10);
-                let worker_update_fut = self.store.update_autorun_worker(
+                let verification = match wr.status.as_str() {
+                    "completed" => Some("pass".to_string()),
+                    "timeout" => Some("timeout".to_string()),
+                    _ => Some("fail".to_string()),
+                };
+                self.update_db_records(
                     &cfg.worker_id,
                     crate::models::AutorunWorkerUpdate {
                         status: Some(worker_status),
@@ -1144,27 +1139,6 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         completed_at: Some(completed_at.clone()),
                         ..Default::default()
                     },
-                );
-                match tokio::time::timeout(db_timeout, worker_update_fut).await {
-                    Ok(Err(e)) => {
-                        eprintln!("warning: failed to update autorun_worker: {e}");
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "warning: autorun_worker update timed out after {}s",
-                            db_timeout.as_secs()
-                        );
-                    }
-                    Ok(Ok(())) => {}
-                }
-
-                // Update task_run record with 10s timeout.
-                let verification = match wr.status.as_str() {
-                    "completed" => Some("pass".to_string()),
-                    "timeout" => Some("timeout".to_string()),
-                    _ => Some("fail".to_string()),
-                };
-                let task_run_update_fut = self.store.update_autorun_task_run(
                     &task_run_id,
                     crate::models::AutorunTaskRunUpdate {
                         status: Some(task_run_status),
@@ -1194,19 +1168,8 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         },
                         ..Default::default()
                     },
-                );
-                match tokio::time::timeout(db_timeout, task_run_update_fut).await {
-                    Ok(Err(e)) => {
-                        eprintln!("warning: failed to update autorun_task_run: {e}");
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "warning: autorun_task_run update timed out after {}s",
-                            db_timeout.as_secs()
-                        );
-                    }
-                    Ok(Ok(())) => {}
-                }
+                )
+                .await;
 
                 // Emit completion event.
                 let event = match wr.status.as_str() {
@@ -1250,30 +1213,23 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
             Err(e) => {
                 // Worker errored — update records with failed status.
-                let _ = self
-                    .store
-                    .update_autorun_worker(
-                        &cfg.worker_id,
-                        crate::models::AutorunWorkerUpdate {
-                            status: Some(crate::types::AutorunWorkerStatus::Failed),
-                            completed_at: Some(completed_at.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                let _ = self
-                    .store
-                    .update_autorun_task_run(
-                        &task_run_id,
-                        crate::models::AutorunTaskRunUpdate {
-                            status: Some(crate::types::AutorunTaskRunStatus::Failed),
-                            error_message: Some(e.to_string()),
-                            completed_at: Some(completed_at.clone()),
-                            verification_result: Some("fail".to_string()),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
+                self.update_db_records(
+                    &cfg.worker_id,
+                    crate::models::AutorunWorkerUpdate {
+                        status: Some(crate::types::AutorunWorkerStatus::Failed),
+                        completed_at: Some(completed_at.clone()),
+                        ..Default::default()
+                    },
+                    &task_run_id,
+                    crate::models::AutorunTaskRunUpdate {
+                        status: Some(crate::types::AutorunTaskRunStatus::Failed),
+                        error_message: Some(e.to_string()),
+                        completed_at: Some(completed_at.clone()),
+                        verification_result: Some("fail".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await;
                 Self::emit_autorun_event(
                     &self.project_dir,
                     &crate::coordination::types::events::AutorunEvent::WorkerFailed {
@@ -1300,6 +1256,42 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         event: &crate::coordination::types::events::AutorunEvent,
     ) {
         crate::autorun::emit_autorun_event(project_dir, event);
+    }
+
+    /// Update both `autorun_worker` and `autorun_task_run` DB records with a
+    /// 10-second timeout per call. Logs warnings on timeout or error but does
+    /// not propagate failures — DB updates are best-effort so the worker
+    /// lifecycle can continue.
+    async fn update_db_records(
+        &self,
+        worker_id: &str,
+        worker_update: crate::models::AutorunWorkerUpdate,
+        task_run_id: &str,
+        task_run_update: crate::models::AutorunTaskRunUpdate,
+    ) {
+        let db_timeout = Duration::from_secs(10);
+
+        let worker_fut = self.store.update_autorun_worker(worker_id, worker_update);
+        match tokio::time::timeout(db_timeout, worker_fut).await {
+            Ok(Err(e)) => eprintln!("warning: failed to update autorun_worker: {e}"),
+            Err(_) => eprintln!(
+                "warning: autorun_worker update timed out after {}s",
+                db_timeout.as_secs()
+            ),
+            Ok(Ok(())) => {}
+        }
+
+        let task_run_fut = self
+            .store
+            .update_autorun_task_run(task_run_id, task_run_update);
+        match tokio::time::timeout(db_timeout, task_run_fut).await {
+            Ok(Err(e)) => eprintln!("warning: failed to update autorun_task_run: {e}"),
+            Err(_) => eprintln!(
+                "warning: autorun_task_run update timed out after {}s",
+                db_timeout.as_secs()
+            ),
+            Ok(Ok(())) => {}
+        }
     }
 }
 
@@ -3330,5 +3322,41 @@ Read and implement.
             atr.completed_at.is_some(),
             "task_run completed_at should be set before result returned"
         );
+    }
+
+    /// Verify DB updates use timeout on worker error path (call site C).
+    #[tokio::test]
+    async fn test_db_updates_on_worker_error_path() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = FailingClaude;
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-err-test", "task-err");
+        let result = worker.run(cfg).await;
+        assert!(result.is_err(), "FailingClaude should produce Err");
+
+        // Both DB records should still be updated to Failed via update_db_records.
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-ses-err-test-task-err").unwrap();
+        assert_eq!(aw.status, crate::types::AutorunWorkerStatus::Failed);
+        assert!(aw.completed_at.is_some());
+
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-ses-err-test-task-err").unwrap();
+        assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
+        assert!(atr.completed_at.is_some());
     }
 }

@@ -2698,6 +2698,42 @@ impl<T: codeflow_core::autorun::TmuxRunner> RealClaude<T> {
             .and_then(|s| s.trim().parse::<i32>().ok())
             .unwrap_or(1)
     }
+
+    /// Apply the PR-detected timeout cap.
+    ///
+    /// When a PR is detected (PF6) but the session is still running, cap the
+    /// remaining timeout at `cap`. Only applies when `remaining > cap`; if
+    /// `remaining <= cap`, the outer loop's normal timeout handles termination
+    /// and this returns `false`.
+    ///
+    /// Returns `true` if the outer poll loop should break (cap was applied and
+    /// the inner wait completed or timed out).
+    async fn apply_pr_cap(
+        &self,
+        session: &str,
+        exit_code_file: &Path,
+        remaining: Duration,
+        cap: Duration,
+    ) -> bool {
+        if remaining <= cap {
+            return false;
+        }
+        let cap_start = std::time::Instant::now();
+        loop {
+            if exit_code_file.exists() || cap_start.elapsed() >= cap {
+                break;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        if !exit_code_file.exists() {
+            let _ = self.tmux.send_command(session, "C-c").await;
+            tokio::time::sleep(Duration::from_secs(SIGTERM_GRACE_SECS)).await;
+            if !exit_code_file.exists() {
+                let _ = self.tmux.kill_session(session).await;
+            }
+        }
+        true
+    }
 }
 
 impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoker
@@ -2876,8 +2912,9 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
                         // advise Claude to expedite PF7-END.
                         write_wrap_up_signal(work_dir);
 
-                        // PR created but session still running — cap remaining
-                        // timeout at 120s so we don't wait the full duration.
+                        // Cap remaining timeout at 120s. Only applies when
+                        // remaining > cap; if remaining <= cap, the outer
+                        // loop's normal timeout handles termination.
                         let remaining = timeout.saturating_sub(poll_start.elapsed());
                         let cap = Duration::from_secs(120);
                         if remaining > cap {
@@ -2885,22 +2922,11 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
                                 "PR detected for task {}, capping remaining timeout to 120s",
                                 cfg.task_id
                             );
-                            // Adjust the effective deadline by sleeping until
-                            // exit_code appears or 120s passes.
-                            let cap_start = std::time::Instant::now();
-                            loop {
-                                if exit_code_file.exists() || cap_start.elapsed() >= cap {
-                                    break;
-                                }
-                                tokio::time::sleep(POLL_INTERVAL).await;
-                            }
-                            if !exit_code_file.exists() {
-                                let _ = self.tmux.send_command(session, "C-c").await;
-                                tokio::time::sleep(Duration::from_secs(SIGTERM_GRACE_SECS)).await;
-                                if !exit_code_file.exists() {
-                                    let _ = self.tmux.kill_session(session).await;
-                                }
-                            }
+                        }
+                        if self
+                            .apply_pr_cap(session, &exit_code_file, remaining, cap)
+                            .await
+                        {
                             break;
                         }
                     }
@@ -6397,5 +6423,122 @@ tasks:
             first_content, second_content,
             "idempotent: content unchanged"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_pr_cap tests (GAP 2)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pr_cap_exits_when_exit_code_appears() {
+        // When remaining > cap and exit_code_file already exists,
+        // apply_pr_cap returns true immediately without sending C-c.
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("exit-code");
+        std::fs::write(&exit_file, "0").unwrap();
+
+        let (tmux, commands) = RecordingTmux::new();
+        let claude = RealClaude {
+            tmux,
+            worker_timeout: Duration::from_secs(60),
+        };
+
+        let result = claude
+            .apply_pr_cap(
+                "test-session",
+                &exit_file,
+                Duration::from_secs(300), // remaining > cap
+                Duration::from_millis(100),
+            )
+            .await;
+
+        assert!(result, "should return true (cap applied)");
+        let cmds = commands.lock().await;
+        assert!(
+            cmds.is_empty(),
+            "no send_command calls — exit_code_file existed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pr_cap_sends_sigterm_and_kills() {
+        // When remaining > cap and no exit_code_file, cap expires → C-c sent.
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("exit-code"); // does NOT exist
+
+        let (tmux, commands) = RecordingTmux::new();
+        let claude = RealClaude {
+            tmux,
+            worker_timeout: Duration::from_secs(60),
+        };
+
+        let result = claude
+            .apply_pr_cap(
+                "test-session",
+                &exit_file,
+                Duration::from_secs(300),
+                Duration::from_millis(100), // short cap for fast test
+            )
+            .await;
+
+        assert!(result, "should return true (cap applied)");
+        let cmds = commands.lock().await;
+        assert!(
+            cmds.iter().any(|(_, cmd)| cmd == "C-c"),
+            "should have sent C-c: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pr_cap_skips_when_remaining_under_cap() {
+        // When remaining <= cap, returns false (no cap applied).
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("exit-code");
+
+        let (tmux, commands) = RecordingTmux::new();
+        let claude = RealClaude {
+            tmux,
+            worker_timeout: Duration::from_secs(60),
+        };
+
+        let result = claude
+            .apply_pr_cap(
+                "test-session",
+                &exit_file,
+                Duration::from_secs(60), // remaining <= cap
+                Duration::from_secs(120),
+            )
+            .await;
+
+        assert!(!result, "should return false (no cap applied)");
+        let cmds = commands.lock().await;
+        assert!(cmds.is_empty(), "no tmux calls when cap not applied");
+    }
+
+    // -----------------------------------------------------------------------
+    // wrap-up signal path consistency test (GAP 3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_wrap_up_signal_path_consistency() {
+        // Verify that write_wrap_up_signal and detect_wrap_up_signal use
+        // the same path (.state/runtime/local/wrap-up-signal) so the
+        // writer (autorun.rs) and reader (pre_tool_use.rs) agree.
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().to_str().unwrap();
+
+        // Before write: signal not detected.
+        assert!(
+            !dir.path()
+                .join(".state/runtime/local/wrap-up-signal")
+                .exists(),
+            "signal should not exist before write"
+        );
+
+        write_wrap_up_signal(wt);
+
+        // After write: verify the file exists at the expected path.
+        let signal_path = dir.path().join(".state/runtime/local/wrap-up-signal");
+        assert!(signal_path.exists(), "signal file should exist after write");
     }
 }

@@ -425,8 +425,9 @@ fn derive_session_phase(session: &codeflow_core::models::InteractiveSession) -> 
     if wt.is_empty() {
         return "-".to_string();
     }
-    // Path traversal guard: session_id is user-adjacent data from DB.
-    if session.session_id.contains("..") {
+    // Path traversal guards: both session_id and worktree_path are
+    // user-adjacent data from the DB; reject directory traversal.
+    if session.session_id.contains("..") || wt.contains("..") {
         return "-".to_string();
     }
     let status_path = std::path::Path::new(wt)
@@ -1700,6 +1701,86 @@ mod tests {
             pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some("/tmp/wt".into()),
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "-");
+    }
+
+    #[test]
+    fn test_derive_session_phase_rejects_worktree_traversal() {
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:4".into(),
+            session_id: "ses-clean-id".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: Some("/tmp/../../../etc".into()),
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "-");
+    }
+
+    #[test]
+    fn test_derive_session_phase_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().to_string_lossy().to_string();
+        let status_dir = dir.path().join(".state/session/ses-bad-json/pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            "not valid json {{{",
+        )
+        .unwrap();
+
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:5".into(),
+            session_id: "ses-bad-json".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: Some(wt_path),
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "-");
+    }
+
+    #[test]
+    fn test_derive_session_phase_missing_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().to_string_lossy().to_string();
+        let status_dir = dir.path().join(".state/session/ses-no-phase/pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            r#"{"status": "pf-in-progress", "team_name": "my-team"}"#,
+        )
+        .unwrap();
+
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:6".into(),
+            session_id: "ses-no-phase".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: Some(wt_path),
             branch: None,
             work_type: None,
             team_name: None,
