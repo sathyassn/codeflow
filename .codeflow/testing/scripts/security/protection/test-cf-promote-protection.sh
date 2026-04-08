@@ -88,7 +88,7 @@ echo ""
 echo "--- Argument validation ---"
 
 OUTPUT=$("$SCRIPT" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "error"; then
+if grep -qi "error" <<< "$OUTPUT"; then
     echo "PASS: Errors on missing arguments"
     ((TESTS_PASSED++)) || true
 else
@@ -100,7 +100,7 @@ fi
 # Test 5: Pattern not in adhoc (without --force)
 # ============================================================================
 OUTPUT=$("$SCRIPT" "test-pattern-xyz-123" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "not found\|error"; then
+if grep -qi "not found\|error" <<< "$OUTPUT"; then
     echo "PASS: Errors when pattern not in adhoc"
     ((TESTS_PASSED++)) || true
 else
@@ -115,7 +115,7 @@ echo ""
 echo "--- Promotion functionality ---"
 
 OUTPUT=$("$SCRIPT" --force "test-pattern-force-add" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "added\|extended"; then
+if grep -qi "added\|extended" <<< "$OUTPUT"; then
     echo "PASS: Force add works"
     ((TESTS_PASSED++)) || true
 else
@@ -141,7 +141,7 @@ fi
 echo "test-adhoc-pattern" >> "$ADHOC_LIST"
 
 OUTPUT=$("$SCRIPT" "test-adhoc-pattern" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "added\|extended"; then
+if grep -qi "added\|extended" <<< "$OUTPUT"; then
     echo "PASS: Promote from adhoc works"
     ((TESTS_PASSED++)) || true
 else
@@ -181,7 +181,7 @@ fi
 # Test 11: Already in extended list (duplicate handling)
 # ============================================================================
 OUTPUT=$("$SCRIPT" --force "test-pattern-force-add" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "already"; then
+if grep -qi "already" <<< "$OUTPUT"; then
     echo "PASS: Detects duplicate in extended list"
     ((TESTS_PASSED++)) || true
 else
@@ -193,7 +193,7 @@ fi
 # Test 12: Unknown option rejected
 # ============================================================================
 OUTPUT=$("$SCRIPT" --bogus 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "unknown\|error"; then
+if grep -qi "unknown\|error" <<< "$OUTPUT"; then
     echo "PASS: Unknown option rejected"
     ((TESTS_PASSED++)) || true
 else
@@ -205,8 +205,8 @@ fi
 # Test 13: Help text shows correct paths
 # ============================================================================
 HELP_OUTPUT=$("$SCRIPT" --help 2>&1)
-if echo "$HELP_OUTPUT" | grep -q "config/enforcement/protection/protected-adhoc.list" && \
-   echo "$HELP_OUTPUT" | grep -q "config/enforcement/protection/protected-extended.list"; then
+if grep -q "config/enforcement/protection/protected-adhoc.list" <<< "$HELP_OUTPUT" && \
+   grep -q "config/enforcement/protection/protected-extended.list" <<< "$HELP_OUTPUT"; then
     echo "PASS: Help text shows correct list paths"
     ((TESTS_PASSED++)) || true
 else
@@ -220,7 +220,7 @@ fi
 # Add "foo" to adhoc, then try to promote "foobar" - should fail (not found)
 echo "test-exact-foo" >> "$ADHOC_LIST"
 OUTPUT=$("$SCRIPT" "test-exact-foobar" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "not found\|error"; then
+if grep -qi "not found\|error" <<< "$OUTPUT"; then
     echo "PASS: grep uses exact line match (not substring)"
     ((TESTS_PASSED++)) || true
 else

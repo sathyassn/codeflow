@@ -69,7 +69,7 @@ test_direct_execution_blocked() {
     test_start "Direct execution is blocked"
     local output
     output=$(bash "$LIB_DIR/cf-protection-core.sh" 2>&1 || true)
-    if echo "$output" | grep -qi "must be sourced"; then
+    if grep -qi "must be sourced" <<< "$output"; then
         test_pass
     else
         test_fail "Library allows direct execution"
@@ -133,7 +133,7 @@ test_list_shows_core_section() {
     test_start "List shows Core section"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -qi "Core"; then
+    if grep -qi "Core" <<< "$output"; then
         test_pass
     else
         test_fail "Core section not shown"
@@ -144,7 +144,7 @@ test_list_shows_extended_section() {
     test_start "List shows Extended section"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -qi "Extended"; then
+    if grep -qi "Extended" <<< "$output"; then
         test_pass
     else
         test_fail "Extended section not shown"
@@ -155,7 +155,7 @@ test_list_shows_adhoc_section() {
     test_start "List shows Ad-hoc section"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -qi "Ad-hoc"; then
+    if grep -qi "Ad-hoc" <<< "$output"; then
         test_pass
     else
         test_fail "Ad-hoc section not shown"
@@ -166,7 +166,7 @@ test_core_hooks_listed() {
     test_start "Core hooks path is listed"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -q ".claude/hooks/codeflow"; then
+    if grep -q ".claude/hooks/codeflow" <<< "$output"; then
         test_pass
     else
         test_fail "Hooks path not in list"
@@ -177,7 +177,7 @@ test_core_security_listed() {
     test_start "Core security path is listed"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -q ".codeflow/scripts/security"; then
+    if grep -q ".codeflow/scripts/security" <<< "$output"; then
         test_pass
     else
         test_fail "Security path not in list"
@@ -242,7 +242,7 @@ TESTEOF
     )
     local line_count
     line_count=$(echo "$output" | grep -c . || true)
-    if [[ "$line_count" -eq 2 ]] && echo "$output" | grep -q "path/one" && echo "$output" | grep -q "path/two"; then
+    if [[ "$line_count" -eq 2 ]] && grep -q "path/one" <<< "$output" && grep -q "path/two" <<< "$output"; then
         test_pass
     else
         test_fail "Expected 2 paths, got $line_count: $output"

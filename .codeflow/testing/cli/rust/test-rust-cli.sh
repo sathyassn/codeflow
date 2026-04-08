@@ -82,7 +82,7 @@ run_smoke_tests() {
     # --help
     local help_output
     help_output=$("$test_binary" --help 2>&1) || true
-    if echo "$help_output" | grep -q "Commands:"; then
+    if grep -q "Commands:" <<< "$help_output"; then
         test_pass "codeflow --help shows Commands"
     else
         test_fail "codeflow --help missing 'Commands'"

@@ -75,7 +75,7 @@ test_direct_execution_blocked() {
     test_start "Direct execution is blocked"
     local output
     output=$(bash "$LIB_DIR/cf-protection-ops.sh" 2>&1 || true)
-    if echo "$output" | grep -qi "must be sourced"; then
+    if grep -qi "must be sourced" <<< "$output"; then
         test_pass
     else
         test_fail "Library allows direct execution"
@@ -142,7 +142,7 @@ test_dependency_check_without_project_root() {
         unset PROJECT_ROOT
         source "'"$LIB_DIR/cf-protection-ops.sh"'" 2>&1
     ' 2>&1 || true)
-    if echo "$output" | grep -q "cf-protection-common.sh must be sourced"; then
+    if grep -q "cf-protection-common.sh must be sourced" <<< "$output"; then
         test_pass
     else
         test_fail "Did not detect missing PROJECT_ROOT: $output"
@@ -293,7 +293,7 @@ test_protect_requires_root() {
     fi
     local output
     output=$(bash "$MAIN_SCRIPT" protect all 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo\|privilege"; then
+    if grep -qi "root\|sudo\|privilege" <<< "$output"; then
         test_pass
     else
         test_fail "Did not require root"
@@ -308,7 +308,7 @@ test_unprotect_requires_root() {
     fi
     local output
     output=$(bash "$MAIN_SCRIPT" unprotect all 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo\|privilege"; then
+    if grep -qi "root\|sudo\|privilege" <<< "$output"; then
         test_pass
     else
         test_fail "Did not require root"
@@ -323,7 +323,7 @@ test_extend_requires_root() {
     fi
     local output
     output=$(bash "$MAIN_SCRIPT" extend add test.txt 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo\|privilege"; then
+    if grep -qi "root\|sudo\|privilege" <<< "$output"; then
         test_pass
     else
         test_fail "Did not require root"

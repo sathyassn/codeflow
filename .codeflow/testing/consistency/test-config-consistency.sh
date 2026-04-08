@@ -96,7 +96,7 @@ test_pass "Config has $CONFIG_COMMIT_TYPE_COUNT commit types"
 MISSING_IN_CLI=""
 while IFS= read -r type; do
     [[ -z "$type" ]] && continue
-    if ! echo "$CLI_COMMIT_TYPES" | grep -qx "$type"; then
+    if ! grep -qx "$type" <<< "$CLI_COMMIT_TYPES"; then
         MISSING_IN_CLI="${MISSING_IN_CLI} $type"
     fi
 done <<< "$CONFIG_COMMIT_TYPES"
@@ -111,7 +111,7 @@ fi
 EXTRA_IN_CLI=""
 while IFS= read -r type; do
     [[ -z "$type" ]] && continue
-    if ! echo "$CONFIG_COMMIT_TYPES" | grep -qx "$type"; then
+    if ! grep -qx "$type" <<< "$CONFIG_COMMIT_TYPES"; then
         EXTRA_IN_CLI="${EXTRA_IN_CLI} $type"
     fi
 done <<< "$CLI_COMMIT_TYPES"
@@ -210,7 +210,7 @@ if [[ -f "$GH_PR_HOOK" ]]; then
     MISSING_IN_GH_PR=""
     while IFS= read -r type; do
         [[ -z "$type" ]] && continue
-        if ! echo "$GH_PR_TYPES" | grep -qx "$type"; then
+        if ! grep -qx "$type" <<< "$GH_PR_TYPES"; then
             MISSING_IN_GH_PR="${MISSING_IN_GH_PR} $type"
         fi
     done <<< "$CONFIG_COMMIT_TYPES"
@@ -262,7 +262,7 @@ fi
 COMMIT_ONLY_TYPES=""
 while IFS= read -r type; do
     [[ -z "$type" ]] && continue
-    if ! echo "$CONFIG_BRANCH_TYPES" | grep -qx "$type"; then
+    if ! grep -qx "$type" <<< "$CONFIG_BRANCH_TYPES"; then
         COMMIT_ONLY_TYPES="${COMMIT_ONLY_TYPES} $type"
     fi
 done <<< "$CONFIG_COMMIT_TYPES"

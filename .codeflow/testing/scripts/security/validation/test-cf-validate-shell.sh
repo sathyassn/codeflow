@@ -67,7 +67,7 @@ EOF
 
 # Test valid script
 OUTPUT=$("$SCRIPT" "$TEST_TMPDIR/test-validate-valid.sh" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "PASS"; then
+if grep -qi "PASS" <<< "$OUTPUT"; then
     echo "PASS: Valid script passes"
     ((TESTS_PASSED++)) || true
 else
@@ -109,7 +109,7 @@ fi
 # Test 7: File not found
 # ============================================================================
 OUTPUT=$("$SCRIPT" /nonexistent/file.sh 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "not found\|error"; then
+if grep -qi "not found\|error" <<< "$OUTPUT"; then
     echo "PASS: Errors on nonexistent file"
     ((TESTS_PASSED++)) || true
 else
@@ -143,7 +143,7 @@ fi
 # Test 10: Unknown option handling
 # ============================================================================
 OUTPUT=$("$SCRIPT" --invalid-flag 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "unknown option\|error"; then
+if grep -qi "unknown option\|error" <<< "$OUTPUT"; then
     echo "PASS: Unknown option shows error"
     ((TESTS_PASSED++)) || true
 else
@@ -155,7 +155,7 @@ fi
 # Test 11: Missing arguments
 # ============================================================================
 OUTPUT=$("$SCRIPT" 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "missing\|usage\|error"; then
+if grep -qi "missing\|usage\|error" <<< "$OUTPUT"; then
     echo "PASS: Missing arguments shows error"
     ((TESTS_PASSED++)) || true
 else

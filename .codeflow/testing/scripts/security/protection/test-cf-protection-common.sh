@@ -90,7 +90,7 @@ test_direct_execution_blocked() {
     test_start "Direct execution is blocked"
     local output
     output=$(bash "$LIB_DIR/cf-protection-common.sh" 2>&1 || true)
-    if echo "$output" | grep -qi "must be sourced"; then
+    if grep -qi "must be sourced" <<< "$output"; then
         test_pass
     else
         test_fail "Library allows direct execution (output: $output)"
@@ -147,7 +147,7 @@ test_script_lists_paths() {
     test_start "Script can list protected paths"
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
-    if echo "$output" | grep -q ".claude/hooks/codeflow"; then
+    if grep -q ".claude/hooks/codeflow" <<< "$output"; then
         test_pass
     else
         test_fail "list command failed"
@@ -158,7 +158,7 @@ test_script_shows_status() {
     test_start "Script can show status"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -qi "Protection Status"; then
+    if grep -qi "Protection Status" <<< "$output"; then
         test_pass
     else
         test_fail "status command failed"
@@ -169,7 +169,7 @@ test_os_info_in_output() {
     test_start "OS info appears in output"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -q "OS:"; then
+    if grep -q "OS:" <<< "$output"; then
         test_pass
     else
         test_fail "OS info not in output"
@@ -181,8 +181,8 @@ test_core_paths_in_list() {
     local output
     output=$(bash "$MAIN_SCRIPT" list 2>&1)
     # Check for expected core paths
-    if echo "$output" | grep -q ".claude/settings.json" || \
-       echo "$output" | grep -q ".codeflow/scripts/security"; then
+    if grep -q ".claude/settings.json" <<< "$output" || \
+       grep -q ".codeflow/scripts/security" <<< "$output"; then
         test_pass
     else
         test_fail "Expected core paths not in list"

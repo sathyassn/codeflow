@@ -75,7 +75,7 @@ test_direct_execution_blocked() {
     test_start "Direct execution is blocked"
     local output
     output=$(bash "$LIB_DIR/cf-protection-verify.sh" 2>&1 || true)
-    if echo "$output" | grep -qi "must be sourced"; then
+    if grep -qi "must be sourced" <<< "$output"; then
         test_pass
     else
         test_fail "Library allows direct execution"
@@ -130,7 +130,7 @@ test_status_command_works() {
     test_start "Status command works"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -qi "Protection Status"; then
+    if grep -qi "Protection Status" <<< "$output"; then
         test_pass
     else
         test_fail "Status command failed"
@@ -141,7 +141,7 @@ test_status_shows_os() {
     test_start "Status shows OS info"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -q "OS:"; then
+    if grep -q "OS:" <<< "$output"; then
         test_pass
     else
         test_fail "OS info not shown"
@@ -152,7 +152,7 @@ test_status_shows_core() {
     test_start "Status shows Core section"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -qi "Core"; then
+    if grep -qi "Core" <<< "$output"; then
         test_pass
     else
         test_fail "Core section not shown"
@@ -163,7 +163,7 @@ test_status_shows_extended() {
     test_start "Status shows Extended section"
     local output
     output=$(bash "$MAIN_SCRIPT" status 2>&1)
-    if echo "$output" | grep -qi "Extended"; then
+    if grep -qi "Extended" <<< "$output"; then
         test_pass
     else
         test_fail "Extended section not shown"
@@ -178,7 +178,7 @@ test_verify_requires_root() {
     fi
     local output
     output=$(bash "$MAIN_SCRIPT" verify 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo\|privilege"; then
+    if grep -qi "root\|sudo\|privilege" <<< "$output"; then
         test_pass
     else
         test_fail "Did not require root"

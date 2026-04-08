@@ -60,7 +60,7 @@ echo ""
 echo "--- Functionality ---"
 
 OUTPUT=$("$SCRIPT" --validate 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "pass\|validation\|valid"; then
+if grep -qi "pass\|validation\|valid" <<< "$OUTPUT"; then
     echo "PASS: Validate mode works"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -72,7 +72,7 @@ fi
 # Test 5: List mode
 # ============================================================================
 OUTPUT=$("$SCRIPT" --list 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "protected\|critical\|core\|pattern"; then
+if grep -qi "protected\|critical\|core\|pattern" <<< "$OUTPUT"; then
     echo "PASS: List mode shows protected paths"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -101,7 +101,7 @@ fi
 # Test 7: Invalid option returns error
 # ============================================================================
 OUTPUT=$("$SCRIPT" --invalid 2>&1 || true)
-if echo "$OUTPUT" | grep -qi "error\|unknown"; then
+if grep -qi "error\|unknown" <<< "$OUTPUT"; then
     echo "PASS: Invalid option shows error"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -168,7 +168,7 @@ fi
 # Test 12: Validate reports 0 patterns for comment-only list files
 # ============================================================================
 OUTPUT=$("$SCRIPT" --validate 2>&1 || true)
-if echo "$OUTPUT" | grep -q "(0 patterns)"; then
+if grep -q "(0 patterns)" <<< "$OUTPUT"; then
     echo "PASS: Validate counts only non-comment patterns"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -180,7 +180,7 @@ fi
 # Test 13: List mode shows all three tiers from policy
 # ============================================================================
 OUTPUT=$("$SCRIPT" --list 2>&1 || true)
-if echo "$OUTPUT" | grep -q "Critical" && echo "$OUTPUT" | grep -q "High" && echo "$OUTPUT" | grep -q "Moderate"; then
+if grep -q "Critical" <<< "$OUTPUT" && grep -q "High" <<< "$OUTPUT" && grep -q "Moderate" <<< "$OUTPUT"; then
     echo "PASS: List mode shows all three tiers"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else

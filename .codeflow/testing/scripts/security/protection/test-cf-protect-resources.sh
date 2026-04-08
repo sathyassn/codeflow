@@ -88,7 +88,7 @@ test_help_command() {
     test_start "Help command works"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "usage"; then
+    if grep -qi "usage" <<< "$output"; then
         test_pass
     else
         test_fail "Help output missing usage info"
@@ -99,7 +99,7 @@ test_help_shows_protect() {
     test_start "Help shows protect command"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "protect"; then
+    if grep -qi "protect" <<< "$output"; then
         test_pass
     else
         test_fail "Protect not documented"
@@ -110,7 +110,7 @@ test_help_shows_unprotect() {
     test_start "Help shows unprotect command"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "unprotect"; then
+    if grep -qi "unprotect" <<< "$output"; then
         test_pass
     else
         test_fail "Unprotect not documented"
@@ -121,7 +121,7 @@ test_help_shows_extend() {
     test_start "Help shows extend command"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "extend"; then
+    if grep -qi "extend" <<< "$output"; then
         test_pass
     else
         test_fail "Extend not documented"
@@ -132,7 +132,7 @@ test_help_shows_examples() {
     test_start "Help shows examples"
     local output
     output=$(bash "$SCRIPT_PATH" help 2>&1 || true)
-    if echo "$output" | grep -qi "example"; then
+    if grep -qi "example" <<< "$output"; then
         test_pass
     else
         test_fail "Examples missing"
@@ -143,7 +143,7 @@ test_h_flag() {
     test_start "-h flag works"
     local output
     output=$(bash "$SCRIPT_PATH" -h 2>&1 || true)
-    if echo "$output" | grep -qi "usage"; then
+    if grep -qi "usage" <<< "$output"; then
         test_pass
     else
         test_fail "-h not working"
@@ -158,7 +158,7 @@ test_list_command() {
     test_start "List command works"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Protection Lists"; then
+    if grep -qi "Protection Lists" <<< "$output"; then
         test_pass
     else
         test_fail "List output missing header"
@@ -169,7 +169,7 @@ test_list_shows_core() {
     test_start "List shows Core section"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Core"; then
+    if grep -qi "Core" <<< "$output"; then
         test_pass
     else
         test_fail "Core section missing"
@@ -180,7 +180,7 @@ test_list_shows_extended() {
     test_start "List shows Extended section"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Extended"; then
+    if grep -qi "Extended" <<< "$output"; then
         test_pass
     else
         test_fail "Extended section missing"
@@ -191,7 +191,7 @@ test_list_shows_adhoc() {
     test_start "List shows Ad-hoc section"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Ad-hoc"; then
+    if grep -qi "Ad-hoc" <<< "$output"; then
         test_pass
     else
         test_fail "Ad-hoc section missing"
@@ -202,7 +202,7 @@ test_list_includes_hooks() {
     test_start "List includes hooks path"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -q "hooks/codeflow"; then
+    if grep -q "hooks/codeflow" <<< "$output"; then
         test_pass
     else
         test_fail "Hooks path missing"
@@ -217,7 +217,7 @@ test_status_command() {
     test_start "Status command works"
     local output
     output=$(bash "$SCRIPT_PATH" status 2>&1)
-    if echo "$output" | grep -qi "Protection Status"; then
+    if grep -qi "Protection Status" <<< "$output"; then
         test_pass
     else
         test_fail "Status output missing header"
@@ -228,7 +228,7 @@ test_status_shows_os() {
     test_start "Status shows OS info"
     local output
     output=$(bash "$SCRIPT_PATH" status 2>&1)
-    if echo "$output" | grep -q "OS:"; then
+    if grep -q "OS:" <<< "$output"; then
         test_pass
     else
         test_fail "OS info missing"
@@ -243,7 +243,7 @@ test_invalid_command() {
     test_start "Invalid command shows error"
     local output
     output=$(bash "$SCRIPT_PATH" invalidcmd 2>&1 || true)
-    if echo "$output" | grep -qi "unknown\|error"; then
+    if grep -qi "unknown\|error" <<< "$output"; then
         test_pass
     else
         test_fail "Invalid command not caught"
@@ -264,7 +264,7 @@ test_protect_requires_target() {
     output=$(bash "$SCRIPT_PATH" protect 2>&1 || true)
     # Should show error about missing target (runs as non-root, so may
     # get root error first — either root or missing-target is valid)
-    if echo "$output" | grep -qi "root\|sudo\|missing target"; then
+    if grep -qi "root\|sudo\|missing target" <<< "$output"; then
         test_pass
     else
         test_fail "Protect without target not caught"
@@ -283,7 +283,7 @@ test_protect_requires_root() {
     fi
     local output
     output=$(bash "$SCRIPT_PATH" protect all 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo"; then
+    if grep -qi "root\|sudo" <<< "$output"; then
         test_pass
     else
         test_fail "Protect did not require root"
@@ -298,7 +298,7 @@ test_protect_core_requires_root() {
     fi
     local output
     output=$(bash "$SCRIPT_PATH" protect core 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo"; then
+    if grep -qi "root\|sudo" <<< "$output"; then
         test_pass
     else
         test_fail "Protect core did not require root"
@@ -313,7 +313,7 @@ test_unprotect_requires_root() {
     fi
     local output
     output=$(bash "$SCRIPT_PATH" unprotect all 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo"; then
+    if grep -qi "root\|sudo" <<< "$output"; then
         test_pass
     else
         test_fail "Unprotect did not require root"
@@ -328,7 +328,7 @@ test_extend_requires_root() {
     fi
     local output
     output=$(bash "$SCRIPT_PATH" extend add test.txt 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo"; then
+    if grep -qi "root\|sudo" <<< "$output"; then
         test_pass
     else
         test_fail "Extend did not require root"
@@ -343,7 +343,7 @@ test_verify_requires_root() {
     fi
     local output
     output=$(bash "$SCRIPT_PATH" verify 2>&1 || true)
-    if echo "$output" | grep -qi "root\|sudo"; then
+    if grep -qi "root\|sudo" <<< "$output"; then
         test_pass
     else
         test_fail "Verify did not require root"
@@ -354,7 +354,7 @@ test_status_no_root() {
     test_start "Status does NOT require root"
     local output
     output=$(bash "$SCRIPT_PATH" status 2>&1)
-    if echo "$output" | grep -qi "Protection Status"; then
+    if grep -qi "Protection Status" <<< "$output"; then
         test_pass
     else
         test_fail "Status should work without root"
@@ -365,7 +365,7 @@ test_list_no_root() {
     test_start "List does NOT require root"
     local output
     output=$(bash "$SCRIPT_PATH" list 2>&1)
-    if echo "$output" | grep -qi "Protection Lists"; then
+    if grep -qi "Protection Lists" <<< "$output"; then
         test_pass
     else
         test_fail "List should work without root"

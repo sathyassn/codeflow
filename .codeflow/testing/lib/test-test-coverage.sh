@@ -158,7 +158,7 @@ WARN_EXIT=$?
 assert_equals "0" "$WARN_EXIT" "warn mode returns 0 (does not fail)"
 
 # validate_coverage produces a report header
-if echo "$AUDIT_OUTPUT" | grep -q "TEST COVERAGE REPORT"; then
+if grep -q "TEST COVERAGE REPORT" <<< "$AUDIT_OUTPUT"; then
     test_pass "validate_coverage produces coverage report"
 else
     test_fail "validate_coverage should produce coverage report"
@@ -174,7 +174,7 @@ test_section "find_orphaned_tests()"
 ORPHAN_OUTPUT=$(find_orphaned_tests 2>&1) || true
 
 # Should produce section header
-if echo "$ORPHAN_OUTPUT" | grep -q "Orphaned Test Detection"; then
+if grep -q "Orphaned Test Detection" <<< "$ORPHAN_OUTPUT"; then
     test_pass "find_orphaned_tests produces section header"
 else
     test_fail "find_orphaned_tests should produce section header"
@@ -196,14 +196,14 @@ else
 fi
 
 # Should include hooks
-if echo "$SCRIPT_LIST" | grep -q "\.claude/hooks/"; then
+if grep -q "\.claude/hooks/" <<< "$SCRIPT_LIST"; then
     test_pass "discover_scripts includes claude hooks"
 else
     test_fail "discover_scripts should include claude hooks"
 fi
 
 # Should include codeflow scripts
-if echo "$SCRIPT_LIST" | grep -q "\.codeflow/scripts/"; then
+if grep -q "\.codeflow/scripts/" <<< "$SCRIPT_LIST"; then
     test_pass "discover_scripts includes codeflow scripts"
 else
     test_fail "discover_scripts should include codeflow scripts"
