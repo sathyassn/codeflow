@@ -603,6 +603,44 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                 break;
             };
 
+            // Pre-dispatch DB status check: if the task was cancelled/skipped
+            // (e.g., via `codeflow autorun cancel`) between scheduling and
+            // permit acquisition, drop the permit and skip dispatch.
+            {
+                if let Ok(task_runs) = self.store.list_autorun_task_runs(session_id).await {
+                    let is_cancelled = task_runs.iter().any(|r| {
+                        r.task_id == *task_id
+                            && matches!(
+                                r.status,
+                                crate::types::AutorunTaskRunStatus::Skipped
+                                    | crate::types::AutorunTaskRunStatus::Cancelled
+                            )
+                    });
+                    if is_cancelled {
+                        orchestrator_log(
+                            project_dir,
+                            session_id,
+                            &format!("SKIP task={task_id} (cancelled/skipped in DB)"),
+                        );
+                        state.failed.lock().await.insert(task_id.clone());
+                        state.results.lock().await.push(WorkerResult {
+                            worker_id: String::new(),
+                            task_id: task_id.clone(),
+                            status: "skipped".into(),
+                            exit_code: -1,
+                            pr_number: 0,
+                            pr_url: String::new(),
+                            error: "user_cancelled".into(),
+                            branch_name: String::new(),
+                            duration_sec: 0,
+                        });
+                        drop(permit);
+                        launched_any = true;
+                        continue;
+                    }
+                }
+            }
+
             launched_any = true;
             state.running.lock().await.insert(task_id.clone());
             // C26: Log DISPATCH.
@@ -2272,5 +2310,72 @@ mod tests {
 
         let b_result = results.iter().find(|r| r.task_id == "b").unwrap();
         assert_eq!(b_result.status, "completed");
+    }
+
+    /// Verify that dispatch_ready_tasks skips tasks with a Skipped task_run
+    /// in the DB (from `codeflow autorun cancel` on a pending task).
+    #[tokio::test]
+    async fn test_dispatch_skips_cancelled_task() {
+        let store = mock_store();
+
+        // Pre-seed a Skipped task_run for task "a".
+        {
+            let run = crate::models::AutorunTaskRun {
+                id: "atr-ses-skip-a".into(),
+                worker_id: String::new(),
+                task_id: "a".into(),
+                session_id: "ses-skip".into(),
+                status: crate::types::AutorunTaskRunStatus::Skipped,
+                branch_name: None,
+                worktree_path: None,
+                pr_number: None,
+                pr_url: None,
+                blocked_reason: None,
+                claim_conflicts: None,
+                merge_conflicts: None,
+                started_at: None,
+                completed_at: Some("2026-04-08T00:00:00Z".into()),
+                duration_seconds: Some(0),
+                exit_code: None,
+                error_message: Some("user_cancelled".into()),
+                verification_result: None,
+                created_at: "2026-04-08T00:00:00Z".into(),
+            };
+            store
+                .autorun_task_runs
+                .lock()
+                .unwrap()
+                .insert(run.id.clone(), run);
+        }
+
+        let runner = OrderTracker::new();
+        let order_ref = runner.order.clone();
+        let orch = Orchestrator::new(runner, store);
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("max_workers: 2\ntasks:\n  - id: a\n  - id: b\n");
+
+        let results = orch
+            .execute(
+                "ses-skip",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        // Task "a" should be skipped (from DB), "b" should complete.
+        let a_result = results.iter().find(|r| r.task_id == "a").unwrap();
+        assert_eq!(a_result.status, "skipped");
+        assert_eq!(a_result.error, "user_cancelled");
+
+        let b_result = results.iter().find(|r| r.task_id == "b").unwrap();
+        assert_eq!(b_result.status, "completed");
+
+        // Only "b" should have actually run.
+        let order = order_ref.lock().await;
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0].0, "b");
     }
 }

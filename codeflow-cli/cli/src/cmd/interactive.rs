@@ -212,24 +212,31 @@ async fn run_status() -> Result<()> {
     }
 
     println!(
-        "{:<32} {:<8} {:<10} {:<10} {:<40}",
-        "SESSION ID", "PID", "STATUS", "SOURCE", "WORKTREE"
+        "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {:<30}",
+        "SESSION ID", "PID", "STATUS", "SOURCE", "BRANCH", "TYPE", "PHASE", "WORKTREE"
     );
     for s in &sessions {
         let pid_display = format_pid_with_liveness(s.pid);
         let wt = s.worktree_path.as_deref().unwrap_or("-");
+        let branch = s.branch.as_deref().unwrap_or("-");
+        let work_type = s.work_type.as_deref().unwrap_or("-");
+        // Derive phase from pathflow-session-status.json if available.
+        let phase = derive_session_phase(s);
         println!(
-            "{:<32} {:<8} {:<10} {:<10} {wt}",
-            s.session_id, pid_display, s.status, s.source_cli
+            "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {wt}",
+            s.session_id, pid_display, s.status, s.source_cli, branch, work_type, phase
         );
     }
     for (sid, alive) in &fs_only {
         let liveness = if *alive { "alive" } else { "DEAD" };
         println!(
-            "{:<32} {:<8} {:<10} {:<10} -",
+            "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} -",
             sid,
             format!("({liveness})"),
             "(fs-only)",
+            "-",
+            "-",
+            "-",
             "-"
         );
     }
@@ -406,6 +413,36 @@ fn format_pid_with_liveness(pid: i64) -> String {
         "alive"
     };
     format!("{pid} ({liveness})")
+}
+
+/// Derive the current PathFlow phase from the session's pathflow-session-status.json.
+///
+/// Reads `last_completed_phase` from the session's state directory, falling back
+/// to the session `status` field if the pathflow dir is unavailable.
+fn derive_session_phase(session: &codeflow_core::models::InteractiveSession) -> String {
+    // Try reading pathflow-session-status.json from the worktree or project dir.
+    let wt = session.worktree_path.as_deref().unwrap_or("");
+    if wt.is_empty() {
+        return "-".to_string();
+    }
+    // Path traversal guard: session_id is user-adjacent data from DB.
+    if session.session_id.contains("..") {
+        return "-".to_string();
+    }
+    let status_path = std::path::Path::new(wt)
+        .join(".state/session")
+        .join(&session.session_id)
+        .join("pathflow/pathflow-session-status.json");
+    if let Ok(content) = std::fs::read_to_string(&status_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(phase) = val.get("last_completed_phase").and_then(|v| v.as_str()) {
+                if !phase.is_empty() {
+                    return phase.to_string();
+                }
+            }
+        }
+    }
+    "-".to_string()
 }
 
 /// Exec `claude` replacing the current process.
@@ -1599,5 +1636,79 @@ mod tests {
             hb_dir.join("heartbeat-ses..evil").exists(),
             "traversal heartbeat should be skipped, not removed"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // derive_session_phase tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_derive_session_phase_no_worktree() {
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:1".into(),
+            session_id: "ses-test".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: None,
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "-");
+    }
+
+    #[test]
+    fn test_derive_session_phase_with_status_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().to_string_lossy().to_string();
+        let status_dir = dir.path().join(".state/session/ses-phase-test/pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            r#"{"last_completed_phase": "pf-3", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:2".into(),
+            session_id: "ses-phase-test".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: Some(wt_path),
+            branch: Some("fix/test".into()),
+            work_type: Some("FIX".into()),
+            team_name: Some("team-1".into()),
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "pf-3");
+    }
+
+    #[test]
+    fn test_derive_session_phase_rejects_traversal() {
+        let session = codeflow_core::models::InteractiveSession {
+            id: "test:3".into(),
+            session_id: "ses-../../../etc/passwd".into(),
+            pid: 1234,
+            status: codeflow_core::types::InteractiveSessionStatus::Active,
+            worktree_path: Some("/tmp/wt".into()),
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".into(),
+            managed: true,
+            created_at: "2026-04-08T00:00:00Z".into(),
+            updated_at: None,
+            completed_at: None,
+        };
+        assert_eq!(derive_session_phase(&session), "-");
     }
 }

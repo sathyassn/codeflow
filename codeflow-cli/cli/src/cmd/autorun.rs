@@ -1491,14 +1491,50 @@ async fn run_cancel(project_dir: &Path, task_id: &str, batch: Option<&str>) -> R
 
     let worker = store
         .get_autorun_worker_by_task_id(&session_id, task_id)
-        .await?
-        .with_context(|| {
-            format!("no worker found for task '{task_id}' in session '{session_id}'")
-        })?;
+        .await?;
 
-    if worker.status != AutorunWorkerStatus::Running {
+    // Handle pending tasks (no worker record yet — task hasn't been dispatched).
+    // Create a Skipped task_run record so dispatch_ready_tasks() will skip it.
+    if worker.is_none() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let task_run_id = format!("atr-{session_id}-{task_id}");
+        let task_run = codeflow_core::models::AutorunTaskRun {
+            id: task_run_id,
+            worker_id: String::new(),
+            task_id: task_id.to_string(),
+            session_id: session_id.clone(),
+            status: AutorunTaskRunStatus::Skipped,
+            branch_name: None,
+            worktree_path: None,
+            pr_number: None,
+            pr_url: None,
+            blocked_reason: None,
+            claim_conflicts: None,
+            merge_conflicts: None,
+            started_at: None,
+            completed_at: Some(now.clone()),
+            duration_seconds: Some(0),
+            exit_code: None,
+            error_message: Some("user_cancelled".to_string()),
+            verification_result: None,
+            created_at: now,
+        };
+        store
+            .create_autorun_task_run(&task_run)
+            .await
+            .context("creating skipped task_run for pending task")?;
+        println!("pending task '{task_id}' marked as skipped (user_cancelled).");
+        return Ok(());
+    }
+
+    let worker = worker.unwrap();
+
+    if !matches!(
+        worker.status,
+        AutorunWorkerStatus::Running | AutorunWorkerStatus::Queued
+    ) {
         anyhow::bail!(
-            "worker for task '{task_id}' is not running (status: {})",
+            "worker for task '{task_id}' is not cancellable (status: {})",
             worker.status
         );
     }
@@ -2618,6 +2654,26 @@ fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) ->
     }
 }
 
+/// Write the wrap-up signal file to the worktree's runtime local directory.
+///
+/// The file is written atomically (write to temp + rename) to prevent partial
+/// reads by the PreToolUse hook. Contains the creation timestamp for timeout
+/// calculations by the poll loop.
+fn write_wrap_up_signal(worktree_path: &str) {
+    let signal_dir = std::path::Path::new(worktree_path).join(".state/runtime/local");
+    let signal_path = signal_dir.join("wrap-up-signal");
+    if signal_path.exists() {
+        return; // Already written — idempotent.
+    }
+    let _ = std::fs::create_dir_all(&signal_dir);
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    // Atomic write: temp file + rename.
+    let tmp_path = signal_dir.join("wrap-up-signal.tmp");
+    if std::fs::write(&tmp_path, &timestamp).is_ok() {
+        let _ = std::fs::rename(&tmp_path, &signal_path);
+    }
+}
+
 /// Grace period after SIGTERM before escalating to SIGKILL.
 const SIGTERM_GRACE_SECS: u64 = 10;
 
@@ -2816,6 +2872,10 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
                         break;
                     }
                     PathFlowState::PrCreated => {
+                        // Write wrap-up signal file so PreToolUse hook can
+                        // advise Claude to expedite PF7-END.
+                        write_wrap_up_signal(work_dir);
+
                         // PR created but session still running — cap remaining
                         // timeout at 120s so we don't wait the full duration.
                         let remaining = timeout.saturating_sub(poll_start.elapsed());
@@ -4403,13 +4463,13 @@ tasks:
             };
             store.create_autorun_worker(&worker).await.unwrap();
 
-            // run_cancel should fail because worker is not running.
+            // run_cancel should fail because worker is Completed (not cancellable).
             let result = run_cancel(dir.path(), "task-done", None).await;
             assert!(result.is_err());
             let msg = result.unwrap_err().to_string();
             assert!(
-                msg.contains("not running"),
-                "expected 'not running' error, got: {msg}"
+                msg.contains("not cancellable"),
+                "expected 'not cancellable' error, got: {msg}"
             );
         });
     }
@@ -5531,7 +5591,11 @@ tasks:
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_run_cancel_no_worker_found() {
+    fn test_run_cancel_no_worker_creates_skipped_task_run() {
+        // When no worker exists (pending task), run_cancel creates a Skipped
+        // task_run record so dispatch_ready_tasks() will skip the task.
+        use codeflow_core::store::DataStore;
+
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let dir = tempfile::tempdir().unwrap();
@@ -5548,8 +5612,18 @@ tasks:
             .await;
 
             let result = run_cancel(dir.path(), "task-missing", None).await;
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("no worker found"));
+            assert!(result.is_ok(), "pending cancel should succeed: {result:?}");
+
+            // Verify a Skipped task_run was created.
+            let store = open_store(dir.path()).await.unwrap();
+            let runs = store.list_autorun_task_runs(sid).await.unwrap();
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].task_id, "task-missing");
+            assert_eq!(
+                runs[0].status,
+                codeflow_core::types::AutorunTaskRunStatus::Skipped
+            );
+            assert_eq!(runs[0].error_message.as_deref(), Some("user_cancelled"));
         });
     }
 
@@ -6282,5 +6356,46 @@ tasks:
 
         let state = check_pathflow_progress(dir.path(), "ses-test");
         assert_eq!(state, PathFlowState::Complete);
+    }
+
+    // -----------------------------------------------------------------------
+    // wrap-up signal tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_write_wrap_up_signal_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().to_str().unwrap();
+
+        write_wrap_up_signal(wt);
+
+        let signal_path = dir.path().join(".state/runtime/local/wrap-up-signal");
+        assert!(signal_path.exists(), "wrap-up-signal file should exist");
+        let content = std::fs::read_to_string(&signal_path).unwrap();
+        // Should contain an RFC3339 timestamp.
+        assert!(content.contains('T'), "should be an RFC3339 timestamp");
+    }
+
+    #[test]
+    fn test_write_wrap_up_signal_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().to_str().unwrap();
+
+        write_wrap_up_signal(wt);
+        let first_content =
+            std::fs::read_to_string(dir.path().join(".state/runtime/local/wrap-up-signal"))
+                .unwrap();
+
+        // Writing again should not overwrite.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        write_wrap_up_signal(wt);
+        let second_content =
+            std::fs::read_to_string(dir.path().join(".state/runtime/local/wrap-up-signal"))
+                .unwrap();
+
+        assert_eq!(
+            first_content, second_content,
+            "idempotent: content unchanged"
+        );
     }
 }

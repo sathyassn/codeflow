@@ -59,7 +59,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 
 - [ ] Analysis document at `.codeflow/docs/analysis/tui-terminal-experience.md` covering ratatui capabilities, three TUI use cases, shared module architecture, and design guidelines
 - [ ] INF-TSK-044-002: Post-timeout PR detection, sentinel polling, pre-PR rebase, configurable timeout, panic guard, cleanup retry -- all functional with tests
-- [ ] INF-TSK-044-003: Pending task cancel, wrap-up signal, DB ordering fix, interactive session DB fields -- all functional with tests
+- [x] INF-TSK-044-003: Pending task cancel, wrap-up signal, DB ordering fix, interactive session DB fields -- all functional with tests
 - [ ] INF-TSK-044-004: ratatui dependency added, shared tui/ module (data, theme, widgets) created, `codeflow autorun status --watch` renders interactive TUI dashboard with keyboard navigation
 - [ ] INF-TSK-044-005: `codeflow interactive status --watch` TUI dashboard, `codeflow init` 7-step wizard, `codeflow welcome` formatted display -- all functional
 - [ ] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
@@ -77,7 +77,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 |----|-------|--------|----------|----------|------------|
 | INF-TSK-044-001 | Epic planning and analysis | complete | high | M | -- |
 | INF-TSK-044-002 | Autorun Worker Reliability Fixes | complete | high | L | 001 |
-| INF-TSK-044-003 | Queue Lifecycle and Session Management | todo | high | L | 002 |
+| INF-TSK-044-003 | Queue Lifecycle and Session Management | complete | high | L | 002 |
 | INF-TSK-044-004 | TUI Foundation and Autorun Status Dashboard | todo | high | L | 003 |
 | INF-TSK-044-005 | Interactive Session TUI and Onboarding Wizard | todo | normal | L | 004 |
 

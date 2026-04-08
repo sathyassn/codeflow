@@ -1130,69 +1130,82 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     _ => crate::types::AutorunTaskRunStatus::Failed,
                 };
 
-                // Update worker record.
-                if let Err(e) = self
-                    .store
-                    .update_autorun_worker(
-                        &cfg.worker_id,
-                        crate::models::AutorunWorkerUpdate {
-                            status: Some(worker_status),
-                            pr_number: if wr.pr_number > 0 {
-                                Some(wr.pr_number)
-                            } else {
-                                None
-                            },
-                            completed_at: Some(completed_at.clone()),
-                            ..Default::default()
+                // Update worker record with 10s timeout.
+                let db_timeout = Duration::from_secs(10);
+                let worker_update_fut = self.store.update_autorun_worker(
+                    &cfg.worker_id,
+                    crate::models::AutorunWorkerUpdate {
+                        status: Some(worker_status),
+                        pr_number: if wr.pr_number > 0 {
+                            Some(wr.pr_number)
+                        } else {
+                            None
                         },
-                    )
-                    .await
-                {
-                    eprintln!("warning: failed to update autorun_worker: {e}");
+                        completed_at: Some(completed_at.clone()),
+                        ..Default::default()
+                    },
+                );
+                match tokio::time::timeout(db_timeout, worker_update_fut).await {
+                    Ok(Err(e)) => {
+                        eprintln!("warning: failed to update autorun_worker: {e}");
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "warning: autorun_worker update timed out after {}s",
+                            db_timeout.as_secs()
+                        );
+                    }
+                    Ok(Ok(())) => {}
                 }
 
-                // Update task_run record.
+                // Update task_run record with 10s timeout.
                 let verification = match wr.status.as_str() {
                     "completed" => Some("pass".to_string()),
                     "timeout" => Some("timeout".to_string()),
                     _ => Some("fail".to_string()),
                 };
-                if let Err(e) = self
-                    .store
-                    .update_autorun_task_run(
-                        &task_run_id,
-                        crate::models::AutorunTaskRunUpdate {
-                            status: Some(task_run_status),
-                            pr_number: if wr.pr_number > 0 {
-                                Some(wr.pr_number)
-                            } else {
-                                None
-                            },
-                            pr_url: if wr.pr_url.is_empty() {
-                                None
-                            } else {
-                                Some(wr.pr_url.clone())
-                            },
-                            exit_code: Some(i64::from(wr.exit_code)),
-                            completed_at: Some(completed_at.clone()),
-                            duration_seconds: Some(elapsed),
-                            error_message: if wr.error.is_empty() {
-                                None
-                            } else {
-                                Some(wr.error.clone())
-                            },
-                            verification_result: verification,
-                            branch_name: if wr.branch_name.is_empty() {
-                                None
-                            } else {
-                                Some(wr.branch_name.clone())
-                            },
-                            ..Default::default()
+                let task_run_update_fut = self.store.update_autorun_task_run(
+                    &task_run_id,
+                    crate::models::AutorunTaskRunUpdate {
+                        status: Some(task_run_status),
+                        pr_number: if wr.pr_number > 0 {
+                            Some(wr.pr_number)
+                        } else {
+                            None
                         },
-                    )
-                    .await
-                {
-                    eprintln!("warning: failed to update autorun_task_run: {e}");
+                        pr_url: if wr.pr_url.is_empty() {
+                            None
+                        } else {
+                            Some(wr.pr_url.clone())
+                        },
+                        exit_code: Some(i64::from(wr.exit_code)),
+                        completed_at: Some(completed_at.clone()),
+                        duration_seconds: Some(elapsed),
+                        error_message: if wr.error.is_empty() {
+                            None
+                        } else {
+                            Some(wr.error.clone())
+                        },
+                        verification_result: verification,
+                        branch_name: if wr.branch_name.is_empty() {
+                            None
+                        } else {
+                            Some(wr.branch_name.clone())
+                        },
+                        ..Default::default()
+                    },
+                );
+                match tokio::time::timeout(db_timeout, task_run_update_fut).await {
+                    Ok(Err(e)) => {
+                        eprintln!("warning: failed to update autorun_task_run: {e}");
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "warning: autorun_task_run update timed out after {}s",
+                            db_timeout.as_secs()
+                        );
+                    }
+                    Ok(Ok(())) => {}
                 }
 
                 // Emit completion event.
@@ -3263,5 +3276,59 @@ Read and implement.
         // The result will be "failed" because exit_code != 0.
         assert_eq!(result.exit_code, 124);
         assert_eq!(result.pr_number, 99);
+    }
+
+    /// Verify DB update ordering: both update_autorun_worker and
+    /// update_autorun_task_run complete before WorkerResult is returned.
+    /// After run() returns, both the worker record (Completed status +
+    /// completed_at) and task_run record (Completed status + completed_at)
+    /// must already be in the MockStore.
+    #[tokio::test]
+    async fn test_db_updates_complete_before_result_returned() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(0);
+        let wt = MockWorktree::new(wt_path);
+        let store = Arc::new(crate::store::mock::MockStore::new());
+
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(30),
+            store.clone(),
+        );
+
+        let cfg = make_worker_cfg("ses-order-test", "task-ord");
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "completed");
+
+        // At this point (after run() returns), both DB records must be updated.
+        let workers = store.autorun_workers.lock().unwrap();
+        let aw = workers.get("arw-ses-order-test-task-ord").unwrap();
+        assert_eq!(
+            aw.status,
+            crate::types::AutorunWorkerStatus::Completed,
+            "worker status should be Completed before result returned"
+        );
+        assert!(
+            aw.completed_at.is_some(),
+            "worker completed_at should be set before result returned"
+        );
+
+        let runs = store.autorun_task_runs.lock().unwrap();
+        let atr = runs.get("atr-ses-order-test-task-ord").unwrap();
+        assert_eq!(
+            atr.status,
+            crate::types::AutorunTaskRunStatus::Completed,
+            "task_run status should be Completed before result returned"
+        );
+        assert!(
+            atr.completed_at.is_some(),
+            "task_run completed_at should be set before result returned"
+        );
     }
 }

@@ -132,6 +132,13 @@ impl SentinelWrite {
             eprintln!("sentinel-write: branch update failed: {e}");
         }
 
+        // Update interactive_session DB with branch and work_type from
+        // pathflow-session-status.json. These fields become available after
+        // PF3 (branch creation and work classification).
+        if let Ok((session_dir, sid)) = self.session_pathflow_dir() {
+            update_interactive_session_fields(&self.project_dir, &session_dir, &sid);
+        }
+
         // Release all claims held by the completing session (AC #6).
         self.release_claims_on_stage_complete();
 
@@ -282,12 +289,19 @@ impl HookHandler for SentinelWrite {
                     return Ok(HookOutput::Allow);
                 }
 
-                match self.session_pathflow_dir() {
+                let result = match self.session_pathflow_dir() {
                     Ok((session_dir, session_id)) => {
                         handle_team_create(team_name, &session_dir, &session_id)
                     }
                     Err(_) => Ok(HookOutput::Allow),
+                };
+
+                // Update interactive_session DB with team_name at PF1.
+                if let Ok((_, sid)) = self.session_pathflow_dir() {
+                    update_interactive_session_team_name(&self.project_dir, &sid, team_name);
                 }
+
+                result
             }
             Some("Task") => {
                 let tool_input = input.tool_input.as_ref();
@@ -374,6 +388,108 @@ pub fn update_session_status(session_dir: &Path, updates: &serde_json::Value) {
             );
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Interactive session DB field helpers
+// ---------------------------------------------------------------------------
+
+/// Update interactive_session DB record with team_name.
+///
+/// Called from the TeamCreate handler (PF1). Uses async DB via block_in_place
+/// to avoid nested runtime issues (same pattern as session_end.rs).
+fn update_interactive_session_team_name(project_dir: &Path, session_id: &str, team_name: &str) {
+    let db_dir = project_dir.join(".state/db");
+    if !db_dir.exists() {
+        return;
+    }
+    let sid = session_id.to_string();
+    let tn = team_name.to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let update = async move {
+        let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+        let _: Option<serde_json::Value> = store
+            .db()
+            .query(
+                "UPDATE interactive_session SET team_name = $team_name, updated_at = $now \
+                 WHERE session_id = $sid AND status = 'active'",
+            )
+            .bind(("team_name", tn))
+            .bind(("now", now))
+            .bind(("sid", sid))
+            .await
+            .ok()?
+            .take(0)
+            .ok()?;
+        Some(())
+    };
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _ = tokio::task::block_in_place(|| handle.block_on(update));
+    } else if let Ok(rt) = tokio::runtime::Runtime::new() {
+        let _ = rt.block_on(update);
+    }
+}
+
+/// Update interactive_session DB record with branch and work_type.
+///
+/// Called from the stage sentinel handler (first stage complete, which is
+/// post-PF3). Reads current values from pathflow-session-status.json.
+fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, session_id: &str) {
+    let db_dir = project_dir.join(".state/db");
+    if !db_dir.exists() {
+        return;
+    }
+
+    // Read work_type from session status.
+    let work_type = super::pipeline::read_work_type_from_session_status(session_dir);
+
+    // Read branch from git (current branch in project_dir).
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_dir)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    if work_type.is_empty() && branch.is_empty() {
+        return;
+    }
+
+    let sid = session_id.to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let update = async move {
+        let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+        let _: Option<serde_json::Value> = store
+            .db()
+            .query(
+                "UPDATE interactive_session SET \
+                 branch = $branch, work_type = $work_type, updated_at = $now \
+                 WHERE session_id = $sid AND status = 'active'",
+            )
+            .bind(("branch", branch))
+            .bind(("work_type", work_type))
+            .bind(("now", now))
+            .bind(("sid", sid))
+            .await
+            .ok()?
+            .take(0)
+            .ok()?;
+        Some(())
+    };
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _ = tokio::task::block_in_place(|| handle.block_on(update));
+    } else if let Ok(rt) = tokio::runtime::Runtime::new() {
+        let _ = rt.block_on(update);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2177,5 +2293,139 @@ mod tests {
 
         let bt = resolve_backend_type_with_home(&team_obj, "cf-review", home.path());
         assert_eq!(bt, "unknown");
+    }
+
+    // -----------------------------------------------------------------------
+    // Interactive session DB field population tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_update_interactive_session_team_name_no_db() {
+        // When DB dir doesn't exist, should return silently (no panic).
+        let dir = tempfile::tempdir().unwrap();
+        update_interactive_session_team_name(dir.path(), "ses-test", "my-team");
+    }
+
+    #[test]
+    fn test_update_interactive_session_team_name_with_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            // Create an active interactive_session record.
+            // Use RETURN NONE to avoid deserializing the enum status field.
+            store
+                .db()
+                .query(
+                    "CREATE interactive_session SET \
+                     session_id = 'ses-tn-test', pid = 1234, status = 'active', \
+                     source_cli = 'codeflow', managed = true, \
+                     created_at = '2026-04-08T00:00:00Z' \
+                     RETURN NONE;",
+                )
+                .await
+                .unwrap();
+        });
+
+        // Call the function under test (sync wrapper).
+        update_interactive_session_team_name(dir.path(), "ses-tn-test", "my-team");
+
+        // Verify team_name was set via a field-only SELECT.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            let mut result = store
+                .db()
+                .query(
+                    "SELECT VALUE team_name FROM interactive_session \
+                     WHERE session_id = 'ses-tn-test'",
+                )
+                .await
+                .unwrap();
+            let values: Vec<String> = result.take(0).unwrap_or_default();
+            assert_eq!(values.len(), 1, "expected 1 session record");
+            assert_eq!(values[0], "my-team");
+        });
+    }
+
+    #[test]
+    fn test_update_interactive_session_fields_no_db() {
+        // When DB dir doesn't exist, should return silently (no panic).
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join(".state/session/ses-test/pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        update_interactive_session_fields(dir.path(), &session_dir, "ses-test");
+    }
+
+    #[test]
+    fn test_update_interactive_session_fields_empty_values() {
+        // When session status has empty work_type and no git branch,
+        // the function should return early without DB update.
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join(".state/session/ses-test/pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let status_path = session_dir.join("pathflow-session-status.json");
+        std::fs::write(
+            &status_path,
+            r#"{"work_type": "", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+        update_interactive_session_fields(dir.path(), &session_dir, "ses-test");
+    }
+
+    #[test]
+    fn test_update_interactive_session_fields_with_db_and_work_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Write pathflow-session-status.json with work_type.
+        let session_dir = dir.path().join(".state/session/ses-wt-test/pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"work_type": "FIX", "status": "pf-in-progress"}"#,
+        )
+        .unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            // Use RETURN NONE to avoid deserializing the enum status field.
+            store
+                .db()
+                .query(
+                    "CREATE interactive_session SET \
+                     session_id = 'ses-wt-test', pid = 1234, status = 'active', \
+                     source_cli = 'codeflow', managed = true, \
+                     created_at = '2026-04-08T00:00:00Z' \
+                     RETURN NONE;",
+                )
+                .await
+                .unwrap();
+        });
+
+        // Call the function under test.
+        update_interactive_session_fields(dir.path(), &session_dir, "ses-wt-test");
+
+        // Verify work_type was set via a field-only SELECT.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            let mut result = store
+                .db()
+                .query(
+                    "SELECT VALUE work_type FROM interactive_session \
+                     WHERE session_id = 'ses-wt-test'",
+                )
+                .await
+                .unwrap();
+            let values: Vec<String> = result.take(0).unwrap_or_default();
+            assert_eq!(values.len(), 1, "expected 1 session record");
+            assert_eq!(values[0], "FIX");
+        });
     }
 }

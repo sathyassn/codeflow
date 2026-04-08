@@ -770,6 +770,11 @@ impl GateCheck {
 
 impl HookHandler for GateCheck {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
+        // Wrap-up signal advisory: if the worker's poll loop has detected PF6
+        // completion, print a one-time advisory to stderr so Claude knows to
+        // expedite PF7-END. This is non-blocking — always continues to gate check.
+        check_wrap_up_signal(&self.project_dir);
+
         let tool_name = input.tool_name.as_deref().unwrap_or("");
         let tool_input = input.tool_input.clone().unwrap_or_default();
 
@@ -825,6 +830,40 @@ impl HookHandler for GateCheck {
     fn events(&self) -> &[HookEvent] {
         &[HookEvent::PreToolUse]
     }
+}
+
+/// Check for the wrap-up signal file and print an advisory to stderr.
+///
+/// The wrap-up signal is written by the autorun poll loop when PF6 (PR creation)
+/// is detected. This advisory tells Claude to expedite PF7-END and finish the
+/// session. Uses a thread-local flag to print only once per process.
+fn check_wrap_up_signal(project_dir: &Path) {
+    use std::cell::Cell;
+    thread_local! {
+        static PRINTED: Cell<bool> = const { Cell::new(false) };
+    }
+    PRINTED.with(|printed| {
+        if printed.get() {
+            return;
+        }
+        if detect_wrap_up_signal(project_dir) {
+            eprintln!(
+                "advisory: PathFlow PF6 complete (PR created). \
+                 Please expedite PF7-END to finish the session."
+            );
+            printed.set(true);
+        }
+    });
+}
+
+/// Returns `true` if the wrap-up signal file exists in the project's
+/// runtime local directory. Extracted from `check_wrap_up_signal` for
+/// testability (the thread-local dedup flag makes the outer function
+/// non-deterministic across test runs in the same thread).
+fn detect_wrap_up_signal(project_dir: &Path) -> bool {
+    project_dir
+        .join(".state/runtime/local/wrap-up-signal")
+        .exists()
 }
 
 // ---------------------------------------------------------------------------
@@ -5352,5 +5391,37 @@ mod tests {
             Some(v) => unsafe { std::env::set_var("CF_PROJECT_ROOT", v) },
             None => unsafe { std::env::remove_var("CF_PROJECT_ROOT") },
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Wrap-up signal tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_detect_wrap_up_signal_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !detect_wrap_up_signal(dir.path()),
+            "should return false when signal file absent"
+        );
+    }
+
+    #[test]
+    fn test_detect_wrap_up_signal_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let signal_dir = dir.path().join(".state/runtime/local");
+        std::fs::create_dir_all(&signal_dir).unwrap();
+        std::fs::write(signal_dir.join("wrap-up-signal"), "2026-04-08T00:00:00Z").unwrap();
+        assert!(
+            detect_wrap_up_signal(dir.path()),
+            "should return true when signal file exists"
+        );
+    }
+
+    #[test]
+    fn test_check_wrap_up_signal_no_panic_without_file() {
+        // The outer check_wrap_up_signal should not panic when signal is absent.
+        let dir = tempfile::tempdir().unwrap();
+        check_wrap_up_signal(dir.path());
     }
 }
