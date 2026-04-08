@@ -346,6 +346,11 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - Query cf-knowledge-layer for stage completion records
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 - **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
+- **Test stats gate (BLOCKING):** Read the QA Report and verify all three mandatory sections are present and passing:
+  1. **Overall Test Pass Status** — zero failures in `cargo test --workspace --no-fail-fast`, at least 2 consecutive clean runs
+  2. **Overall Coverage** — workspace-wide coverage for CLI and Core crates; any file below 85% that is not in the configured exception list is a rework trigger; exempted files must list the reason from test-config.json
+  3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
+  A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
 - **Delivery summary:** Read the `## Deliverables` section in the task markdown. Confirm Expected Outcome and Deployment fields are populated (no placeholders). If placeholders remain, request the stage teammate update before proceeding.
 
 4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-07, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
@@ -356,7 +361,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 2. Update project memory (PF6-TSK-02, cf-knowledge-layer — `record-session-summary`)
 3. Commit outstanding changes (PF6-TSK-03, cf-git-operations — workgraph, state files, markdown, per-worktree ledger JSONL fragments)
 4. Squash branch commits (PF6-TSK-04, cf-git-operations — single conventional-commit message)
-5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event). In parallel sessions, merge conflict detection via `check_merge_conflicts()` runs before PR creation. PRs are serialized through the merge queue (`coordination/merge_queue.rs`).
+5. Create PR (PF6-TSK-05, cf-git-operations — `create-pr`, records pr_created event). PR body MUST include a Test Results section with the standardized format from the QA Report. PRs without test stats are incomplete. In parallel sessions, merge conflict detection via `check_merge_conflicts()` runs before PR creation. PRs are serialized through the merge queue (`coordination/merge_queue.rs`).
 6. Verify PR CI (PF6-TSK-06, cf-git-operations — `verify-pr-ci`)
 7. Await PR merge (PF6-TSK-07, cf-git-operations — `await-pr-merge`):
    - **Interactive** (default): notify user to merge via GitHub UI, wait for merge confirmation
@@ -1263,6 +1268,33 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 7. cf-git-operations syncs local repository (PF6-TSK-09)
 8. Lead proceeds to PF7-END
 9. New session for new work
+
+**PR body MUST include test results.** The PR description must contain all three sections below, populated from the QA Report. PRs without test stats are incomplete and must not be created:
+
+```markdown
+## Test Results
+
+### 1. Overall Test Pass Status
+- Suite: `cargo test --workspace --no-fail-fast`
+- Result: {n} passed, 0 failed, 0 skipped
+- New tests added: {n}
+- Runs: {n} consecutive clean
+
+### 2. Overall Coverage
+- Workspace: {n}%
+- CLI crate: {n}%
+- Core crate: {n}%
+
+#### Exempted Files (below 85%)
+| File | Coverage | Configured Threshold | Reason |
+|------|----------|---------------------|--------|
+| {path} | {n}% | {n}% | {reason from test-config.json} |
+
+### 3. Modified File Coverage
+| File | Coverage | Threshold | Status |
+|------|----------|-----------|--------|
+| {path} | {n}% | 85% | PASS/FAIL |
+```
 
 ### Merge Protection
 
