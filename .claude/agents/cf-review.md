@@ -316,12 +316,12 @@ Check every numbered criterion from the task specification point-by-point. A cri
 
 🔒 **Zero-Tolerance Test Policy:**
 
-- ALL tests in `cargo test --workspace --no-fail-fast` must pass. Zero failures.
-- "Pre-existing", "flaky", or "not introduced by this changeset" are NOT valid exemptions. If a test fails during review, the developer must fix it as part of rework.
-- The reviewer MUST run the full test suite independently — do not trust the developer's reported test counts.
-- Any test failure = automatic CHANGES_REQUESTED verdict. No exceptions.
-- Verify the QA Report contains all three mandatory coverage sections: (1) Overall Test Pass Status, (2) Overall Coverage (workspace/CLI/Core), (3) Modified File Coverage per-file table. A QA Report missing any section = CHANGES_REQUESTED.
-- Per-file coverage >= 85% for all modified files (unless in configured exception list). Missing coverage data = CHANGES_REQUESTED.
+- ANY test failure reported in the DEV Report = automatic CHANGES_REQUESTED. No "pre-existing" or "flaky" exemptions.
+- "Pre-existing", "flaky", or "not introduced by this changeset" are NOT valid exemptions. If a test failure appears anywhere, the developer must fix it.
+- **WS-REV does NOT re-run tests.** Instead, verify the DEV Report Test Stats block is fully populated with all three sections. A missing or incomplete Test Stats block = CHANGES_REQUESTED.
+- Verify the DEV Report contains all three draft test stat sections: (1) Pass Status table showing 0 failures, (2) Workspace Coverage table (codeflow-core and codeflow-cli rows), (3) Modified File Coverage table. Any missing section = CHANGES_REQUESTED.
+- Modified file coverage >= 85% for all files not in the configured exception list. Any FAIL row in Modified File Coverage = CHANGES_REQUESTED.
+- WS-QA will re-run independently and produce the authoritative verified stats. WS-REV's role is to confirm the developer ran tests, got clean results, and documented them.
 
 - All suites: `codeflow test`
 

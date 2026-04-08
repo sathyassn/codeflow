@@ -338,10 +338,18 @@ Do NOT include:
      ```
      Then send a message to the team lead: `"REBASE CONFLICT: Cannot rebase {branch} onto origin/{base}. Conflicting files: {file_list}. PR creation blocked."`
 
-5b. Execute PR creation:
+5b. Read the task doc QA Report to extract Test Stats. The PR body MUST include a `## Test Stats` section copied from the QA Report. Do NOT create the PR without it. The section must contain all three parts:
+
+   - **1. Pass Status** — `cargo test --workspace --no-fail-fast` result with suite breakdown
+   - **2. Workspace Coverage** — crate-level percentages (workspace/CLI/Core) plus Exempted Files table
+   - **3. Modified File Coverage** — per-file table for files modified in the PR
+
+   If the QA Report does not contain all three parts, stop and escalate to the team lead before creating the PR.
+
+5c. Execute PR creation:
 
    ```text
-   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base {base}
+   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}\n\n## Test Stats\n{test_stats_from_qa_report}')" --base {base}
    ```
 
 5c. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).

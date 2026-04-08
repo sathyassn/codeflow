@@ -235,9 +235,20 @@ Run the test suite to verify no regressions:
 
 1. `cargo fmt --all` (auto-fix formatting in the `codeflow-cli/` workspace)
 2. `cargo clippy --all-targets --all-features -- -D warnings` (zero warnings required)
-3. `cargo test --workspace` (all tests pass)
+3. `cargo test --workspace --no-fail-fast` (ALL tests must pass — zero failures required before commit)
 
-If any check fails, fix the issue and re-run. Do NOT request a commit with clippy warnings or fmt diffs.
+If any check fails, fix the issue and re-run. Do NOT request a commit with clippy warnings, fmt diffs, or test failures.
+
+### Step 5c: Run Coverage and Write Draft Test Stats
+
+**Before requesting commit**, run coverage and record draft test stats in the DEV Report. This is mandatory — do not skip.
+
+```bash
+# In codeflow-cli/
+cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --workspace
+```
+
+Fill in the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below 85% must be fixed before commit unless it has a configured exception in `codeflow-cli/config/testing/test-config.json`.
 
 ### Step 6: Request Commit
 
@@ -268,11 +279,26 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 |------|--------|-------|-------------|
 | {path} | created/modified | {n} | {what changed} |
 
-**Test Results:**
+**Test Stats (draft — verified by WS-QA)**
 
-- Tests run: {command}
-- Result: {passed}/{total} passed, {failed} failed
-- Coverage: {n}% (threshold: {n}%)
+#### 1. Pass Status
+
+| Suite | Passed | Failed | Skipped |
+|-------|--------|--------|---------|
+| cargo test --workspace | {n} | 0 | 0 |
+
+#### 2. Workspace Coverage
+
+| Crate | Coverage | Threshold | Status |
+|-------|----------|-----------|--------|
+| codeflow-core | {n}% | 85% | PASS/FAIL |
+| codeflow-cli | {n}% | 80% | PASS/FAIL |
+
+#### 3. Modified File Coverage
+
+| File | Coverage | Threshold | Status |
+|------|----------|-----------|--------|
+| {path} | {n}% | 85% | PASS/FAIL |
 
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
