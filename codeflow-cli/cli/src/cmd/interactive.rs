@@ -70,6 +70,11 @@ async fn run_launch() -> Result<()> {
                 &wt_name,
                 std::process::id(),
             );
+            let _ = codeflow_core::worktree::locked_update_source(
+                &registry_path,
+                &wt_name,
+                "interactive",
+            );
 
             let wt_path_str = entry.path.clone();
 
@@ -1245,5 +1250,354 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Should not panic when nothing exists.
         remove_session_artifacts(dir.path(), "ses-nonexistent");
+    }
+
+    // ─── Worktree registry source field ──────────────────────────────
+
+    #[test]
+    fn test_interactive_worktree_registry_sets_source() {
+        // Verify that locked_update_source("interactive") correctly sets the
+        // source field on a worktree registry entry (mirrors the call added
+        // to run_launch after locked_update_lead_pid).
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        // Create a registry with one entry (no source field).
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "worktree-ses-srctest".to_string(),
+            path: "/tmp/wt-srctest".to_string(),
+            branch: Some("feat/test".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: Some("ses-srctest".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Verify source is initially None.
+        let before = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert!(
+            before.worktrees[0].source.is_none(),
+            "source should be None initially"
+        );
+
+        // Call locked_update_source (same call as in run_launch).
+        let result = codeflow_core::worktree::locked_update_source(
+            &registry_path,
+            "worktree-ses-srctest",
+            "interactive",
+        );
+        assert!(result.is_ok(), "locked_update_source should succeed");
+
+        // Verify source is now "interactive".
+        let after = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert_eq!(
+            after.worktrees[0].source.as_deref(),
+            Some("interactive"),
+            "source field should be set to 'interactive'"
+        );
+    }
+
+    #[test]
+    fn test_interactive_worktree_registry_source_not_overwritten_by_pid() {
+        // Verify that locked_update_lead_pid does NOT affect the source field.
+        // This validates that both calls are needed independently.
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "worktree-ses-indep".to_string(),
+            path: "/tmp/wt-indep".to_string(),
+            branch: Some("feat/test".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: Some("ses-indep".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Update lead_pid only.
+        let _ = codeflow_core::worktree::locked_update_lead_pid(
+            &registry_path,
+            "worktree-ses-indep",
+            1234,
+        );
+
+        // Source should still be None after pid update.
+        let after_pid = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert!(
+            after_pid.worktrees[0].source.is_none(),
+            "source should remain None after locked_update_lead_pid"
+        );
+
+        // Now set source.
+        let _ = codeflow_core::worktree::locked_update_source(
+            &registry_path,
+            "worktree-ses-indep",
+            "interactive",
+        );
+
+        let after_both = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert_eq!(
+            after_both.worktrees[0].source.as_deref(),
+            Some("interactive"),
+            "source should be set after locked_update_source"
+        );
+        assert_eq!(
+            after_both.worktrees[0].lead_pid,
+            Some(1234),
+            "lead_pid should still be set"
+        );
+    }
+
+    // ─── sweep_stale_session_dirs ─────────────────────────────────────
+
+    /// Helper: create a session dir with a pathflow-session-status.json.
+    fn create_session_status(project_dir: &Path, sid: &str, status: &serde_json::Value) {
+        let pathflow_dir = project_dir
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&pathflow_dir).unwrap();
+        std::fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string(status).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_sweep_stale_session_dirs_pf_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        create_session_status(
+            dir.path(),
+            "ses-complete1",
+            &serde_json::json!({
+                "status": "pf-complete",
+                "session_id": "ses-complete1",
+            }),
+        );
+
+        let removed = sweep_stale_session_dirs(dir.path());
+        assert_eq!(removed, 1, "pf-complete session should be removed");
+        assert!(
+            !dir.path().join(".state/session/ses-complete1").exists(),
+            "session dir should be deleted"
+        );
+    }
+
+    #[test]
+    fn test_sweep_stale_session_dirs_created_no_team() {
+        let dir = tempfile::tempdir().unwrap();
+        create_session_status(
+            dir.path(),
+            "ses-created1",
+            &serde_json::json!({
+                "status": "created",
+                "session_id": "ses-created1",
+                "team_name": "",
+            }),
+        );
+
+        let removed = sweep_stale_session_dirs(dir.path());
+        assert_eq!(
+            removed, 1,
+            "'created' with empty team_name should be removed"
+        );
+    }
+
+    #[test]
+    fn test_sweep_stale_session_dirs_in_progress_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        create_session_status(
+            dir.path(),
+            "ses-deadpid1",
+            &serde_json::json!({
+                "status": "pf-in-progress",
+                "session_id": "ses-deadpid1",
+                "lead_pid": 4_000_000,
+            }),
+        );
+
+        let removed = sweep_stale_session_dirs(dir.path());
+        assert_eq!(removed, 1, "pf-in-progress with dead PID should be removed");
+    }
+
+    #[test]
+    fn test_sweep_stale_session_dirs_in_progress_alive_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let current_pid = std::process::id();
+        create_session_status(
+            dir.path(),
+            "ses-alive1",
+            &serde_json::json!({
+                "status": "pf-in-progress",
+                "session_id": "ses-alive1",
+                "lead_pid": current_pid,
+            }),
+        );
+
+        let removed = sweep_stale_session_dirs(dir.path());
+        assert_eq!(
+            removed, 0,
+            "pf-in-progress with alive PID should be preserved"
+        );
+        assert!(
+            dir.path().join(".state/session/ses-alive1").exists(),
+            "session dir should still exist"
+        );
+    }
+
+    #[test]
+    fn test_sweep_stale_session_dirs_no_status_dead_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create session dir with NO status file, and NO alive pointer.
+        let sess_dir = dir.path().join(".state/session/ses-nostatus1");
+        std::fs::create_dir_all(&sess_dir).unwrap();
+
+        let removed = sweep_stale_session_dirs(dir.path());
+        assert_eq!(
+            removed, 1,
+            "session with no status file and no alive pointer should be removed"
+        );
+        assert!(!sess_dir.exists(), "session dir should be deleted");
+    }
+
+    // ─── mark_stale_worktree_entries ──────────────────────────────────
+
+    #[test]
+    fn test_mark_stale_worktree_entries_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "worktree-ses-stale1".to_string(),
+            path: "/tmp/wt-stale1".to_string(),
+            branch: Some("feat/test".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: Some("ses-stale1".to_string()),
+            task_id: None,
+            source: Some("interactive".to_string()),
+            lead_pid: Some(4_000_000), // Dead PID.
+        });
+        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let count = mark_stale_worktree_entries(dir.path());
+        assert_eq!(count, 1, "dead PID entry should be marked");
+
+        // Verify it's now pending_cleanup.
+        let updated = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert_eq!(
+            updated.worktrees[0].status,
+            codeflow_core::worktree::WorktreeStatus::PendingCleanup,
+            "entry should be PendingCleanup after mark_stale"
+        );
+    }
+
+    #[test]
+    fn test_mark_stale_worktree_entries_alive_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+
+        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
+        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
+            name: "worktree-ses-alive1".to_string(),
+            path: "/tmp/wt-alive1".to_string(),
+            branch: Some("feat/test".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            status: codeflow_core::worktree::WorktreeStatus::Active,
+            session_id: Some("ses-alive1".to_string()),
+            task_id: None,
+            source: Some("interactive".to_string()),
+            lead_pid: Some(std::process::id()), // Alive PID.
+        });
+        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        let count = mark_stale_worktree_entries(dir.path());
+        assert_eq!(count, 0, "alive PID entry should be preserved");
+
+        // Verify it's still Active.
+        let updated = codeflow_core::worktree::read_registry(&registry_path).unwrap();
+        assert_eq!(
+            updated.worktrees[0].status,
+            codeflow_core::worktree::WorktreeStatus::Active,
+            "entry should remain Active"
+        );
+    }
+
+    // ─── Path traversal guards ───────────────────────────────────────
+
+    #[test]
+    fn test_is_heartbeat_session_alive_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !is_heartbeat_session_alive(dir.path(), "../etc"),
+            "path traversal SID should return false"
+        );
+    }
+
+    #[test]
+    fn test_remove_session_artifacts_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a file that would be hit by traversal.
+        let target = dir.path().join("canary.txt");
+        std::fs::write(&target, "should survive").unwrap();
+
+        remove_session_artifacts(dir.path(), "../evil");
+
+        assert!(
+            target.exists(),
+            "path traversal should be a no-op, canary file must survive"
+        );
+    }
+
+    #[test]
+    fn test_scan_heartbeat_sessions_skips_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        // Create a heartbeat whose SID contains ".." (triggers the guard).
+        // Use "..evil" not "../evil" since "/" is a path separator the OS won't allow.
+        std::fs::write(hb_dir.join("heartbeat-..evil"), "ts").unwrap();
+
+        let db_sids = std::collections::HashSet::new();
+        let result = scan_heartbeat_sessions(dir.path(), &db_sids);
+        assert!(
+            result.is_empty(),
+            "path traversal heartbeat should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_sweep_stale_heartbeats_skips_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        // Create a heartbeat whose SID contains ".." (triggers the guard).
+        std::fs::write(hb_dir.join("heartbeat-ses..evil"), "ts").unwrap();
+        // Also create a normal stale heartbeat for comparison.
+        std::fs::write(hb_dir.join("heartbeat-ses-normalstale"), "ts").unwrap();
+
+        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
+        // Only the normal stale one should be removed (no alive pointer).
+        assert_eq!(
+            removed, 1,
+            "only non-traversal stale heartbeat should be removed"
+        );
+        // The traversal one should still exist (skipped, not removed).
+        assert!(
+            hb_dir.join("heartbeat-ses..evil").exists(),
+            "traversal heartbeat should be skipped, not removed"
+        );
     }
 }

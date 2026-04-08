@@ -99,9 +99,14 @@ impl SessionEndCleanup {
 
         let session_state_dir = project_dir.join(".state").join("session").join(&session_id);
 
+        // Resolve the main repo root for cleanup logs. In worktree mode,
+        // project_dir points to the worktree (which gets deleted during cleanup).
+        // Writing logs there would either lose them or re-create orphaned directories.
+        let log_root = crate::worktree::WorktreeManager::resolve_effective_root(project_dir);
+
         // Log cleanup start.
         write_cleanup_log(
-            project_dir,
+            &log_root,
             &serde_json::json!({
                 "event": "cleanup_started",
                 "session_id": session_id,
@@ -112,7 +117,7 @@ impl SessionEndCleanup {
         // --- Section 3: PathFlow guard ---
         if self.should_skip_cleanup(&session_state_dir, &mut result) {
             write_cleanup_log(
-                project_dir,
+                &log_root,
                 &serde_json::json!({
                     "event": "cleanup_skipped",
                     "session_id": session_id,
@@ -163,7 +168,7 @@ impl SessionEndCleanup {
 
         // Log cleanup completion.
         write_cleanup_log(
-            project_dir,
+            &log_root,
             &serde_json::json!({
                 "event": "cleanup_completed",
                 "session_id": session_id,
@@ -2142,5 +2147,84 @@ mod tests {
         };
         // No interactive heartbeat exists — should not panic.
         cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
+    }
+
+    // -- write_cleanup_log path resolution tests --
+
+    #[test]
+    fn test_write_cleanup_log_uses_main_repo_root_not_worktree() {
+        // Simulate a worktree inside .git-worktrees/ -- resolve_effective_root
+        // should return the parent (main repo), so cleanup logs go there.
+        let main_repo = tempfile::tempdir().unwrap();
+        let wt_dir = main_repo
+            .path()
+            .join(".git-worktrees")
+            .join("worktree-ses-test123");
+        fs::create_dir_all(&wt_dir).unwrap();
+
+        // resolve_effective_root on the worktree path should yield main_repo.
+        let resolved = crate::worktree::WorktreeManager::resolve_effective_root(&wt_dir);
+        assert_eq!(
+            resolved,
+            main_repo.path().to_path_buf(),
+            "resolve_effective_root should return main repo root"
+        );
+
+        // Write a cleanup log using the resolved root.
+        write_cleanup_log(
+            &resolved,
+            &serde_json::json!({
+                "event": "test_cleanup",
+                "session_id": "ses-test123",
+            }),
+        );
+
+        // Log should be in main repo's .state/logs/sessions/, not worktree's.
+        let main_log_dir = main_repo
+            .path()
+            .join(".state")
+            .join("logs")
+            .join("sessions");
+        assert!(
+            main_log_dir.exists(),
+            "cleanup log dir should exist in main repo"
+        );
+
+        let wt_log_dir = wt_dir.join(".state").join("logs").join("sessions");
+        assert!(
+            !wt_log_dir.exists(),
+            "cleanup log dir should NOT exist in worktree"
+        );
+
+        // Verify log content.
+        let entries: Vec<_> = fs::read_dir(&main_log_dir).unwrap().flatten().collect();
+        assert_eq!(entries.len(), 1, "should have one log file");
+        let content = fs::read_to_string(entries[0].path()).unwrap();
+        assert!(content.contains("test_cleanup"));
+    }
+
+    #[test]
+    fn test_write_cleanup_log_non_worktree_uses_project_dir_unchanged() {
+        // When project_dir is NOT a worktree, resolve_effective_root returns
+        // the same path, so cleanup logs go to project_dir as before.
+        let dir = tempfile::tempdir().unwrap();
+
+        let resolved = crate::worktree::WorktreeManager::resolve_effective_root(dir.path());
+        assert_eq!(
+            resolved,
+            dir.path().to_path_buf(),
+            "non-worktree dir should resolve to itself"
+        );
+
+        write_cleanup_log(
+            &resolved,
+            &serde_json::json!({
+                "event": "test_normal",
+                "session_id": "ses-normal",
+            }),
+        );
+
+        let log_dir = dir.path().join(".state").join("logs").join("sessions");
+        assert!(log_dir.exists(), "log dir should exist in project dir");
     }
 }

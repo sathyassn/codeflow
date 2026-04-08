@@ -34,10 +34,10 @@
       },
       {
         "file": "cli/src/cmd/interactive.rs",
-        "threshold": 60,
-        "reason": "CLI command file contains run_launch() which calls exec(2) to replace the process — cannot return to test harness. Also contains run_status/run_list/run_cleanup which require detect_project_root() (depends on CWD state) and real DB for end-to-end testing. 25 tests cover all extracted pure functions (env var construction, worktree naming, PID liveness, work dir resolution, config fallback) and DB integration (register, query, filter). Untestable: exec_claude(), run_launch() worktree creation path (requires git repo), run_status/run_list/run_cleanup output formatting with detect_project_root().",
+        "threshold": 80,
+        "reason": "Line coverage 80%, branch coverage 85%. 68 tests cover all extractable pure functions and inner implementations. Remaining ~200 uncovered lines are structurally untestable: run_launch() calls exec(2) which replaces the process (cannot return to test harness); run_status/run_list/run_cleanup call detect_project_root() which requires real CWD with .git directory. Outer wrapper functions (sweep_stale_session_dirs, clean_session_worktree_map, mark_stale_worktree_entries) delegate to tested inner functions but are themselves uncovered because they construct paths from project_dir.",
         "granularity": "per_file",
-        "remove_when": "exec path is refactored to return a Command (without calling .exec()), or detect_project_root is made injectable"
+        "remove_when": "run_launch refactored to return a Command without calling .exec(), or detect_project_root made injectable"
       },
       {
         "file": "cli/src/cmd/autorun.rs",
