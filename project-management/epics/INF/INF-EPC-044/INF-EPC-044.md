@@ -76,7 +76,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 | ID | Title | Status | Priority | Estimate | Depends On |
 |----|-------|--------|----------|----------|------------|
 | INF-TSK-044-001 | Epic planning and analysis | complete | high | M | -- |
-| INF-TSK-044-002 | Autorun Worker Reliability Fixes | todo | high | L | 001 |
+| INF-TSK-044-002 | Autorun Worker Reliability Fixes | complete | high | L | 001 |
 | INF-TSK-044-003 | Queue Lifecycle and Session Management | todo | high | L | 002 |
 | INF-TSK-044-004 | TUI Foundation and Autorun Status Dashboard | todo | high | L | 003 |
 | INF-TSK-044-005 | Interactive Session TUI and Onboarding Wizard | todo | normal | L | 004 |

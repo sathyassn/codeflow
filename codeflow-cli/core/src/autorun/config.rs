@@ -42,7 +42,7 @@ pub struct ParallelWorkConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AutorunConfig {
-    /// Worker timeout in seconds (default: 3600 = 60 minutes).
+    /// Worker timeout in seconds (default: 7200 = 120 minutes).
     pub worker_timeout_secs: u64,
     /// Behavior when a task is blocked: "skip_and_continue" or "fail".
     pub blocked_behavior: String,
@@ -62,7 +62,7 @@ pub struct AutorunConfig {
 impl Default for AutorunConfig {
     fn default() -> Self {
         Self {
-            worker_timeout_secs: 3600,
+            worker_timeout_secs: 7200,
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
             max_concurrent_batches: 5,
@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(cfg.claims.default_scope_policy, "soft");
         assert_eq!(cfg.claims.ttl_secs, 4200);
         assert!(cfg.claims.capture_events);
-        assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
+        assert_eq!(cfg.autorun.worker_timeout_secs, 7200);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.autorun.report_dir, ".state/autorun/reports");
     }
@@ -603,7 +603,7 @@ mod tests {
             "sync": { "interval_secs": 5, "auto_start": true },
             "merge": { "auto_rebase": true, "queue_enabled": true, "max_rebase_attempts": 3 },
             "claims": { "default_scope_policy": "soft", "ttl_secs": 4200, "capture_events": true },
-            "autorun": { "worker_timeout_secs": 3600, "blocked_behavior": "skip_and_continue", "report_dir": ".state/autorun/reports", "max_concurrent_batches": 5 }
+            "autorun": { "worker_timeout_secs": 7200, "blocked_behavior": "skip_and_continue", "report_dir": ".state/autorun/reports", "max_concurrent_batches": 5 }
         }"#;
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg, ParallelWorkConfig::default());
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn autorun_config_default() {
         let cfg = AutorunConfig::default();
-        assert_eq!(cfg.worker_timeout_secs, 3600);
+        assert_eq!(cfg.worker_timeout_secs, 7200);
         assert_eq!(cfg.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.report_dir, ".state/autorun/reports");
         assert_eq!(cfg.max_concurrent_batches, 5);
@@ -646,7 +646,7 @@ mod tests {
     fn autorun_config_absent_uses_default() {
         let json = r"{}";
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.autorun.worker_timeout_secs, 3600);
+        assert_eq!(cfg.autorun.worker_timeout_secs, 7200);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.autorun.report_dir, ".state/autorun/reports");
     }

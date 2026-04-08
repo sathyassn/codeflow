@@ -321,13 +321,30 @@ Do NOT include:
    - If target_branch is set and non-empty: use `--base {target_branch}`
    - Otherwise: use `--base main`
 
-5a. Execute PR creation:
+5a. **Pre-PR rebase (MANDATORY):** Before creating the PR, rebase onto the latest target branch to minimize merge conflicts:
+
+   ```bash
+   git fetch origin {base}
+   git rebase origin/{base}
+   ```
+
+   - **On rebase success:** Force-push the rebased branch:
+     ```bash
+     git push --force-with-lease origin {branch}
+     ```
+   - **On rebase failure (conflict):** Abort the rebase, report the conflict to the team lead with the list of conflicting files, and do NOT create the PR:
+     ```bash
+     git rebase --abort
+     ```
+     Then send a message to the team lead: `"REBASE CONFLICT: Cannot rebase {branch} onto origin/{base}. Conflicting files: {file_list}. PR creation blocked."`
+
+5b. Execute PR creation:
 
    ```text
    gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}')" --base {base}
    ```
 
-5b. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
+5c. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
 6. Capture PR URL and number from output
 7. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
 8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update `tasks.pr_number` in SQLite

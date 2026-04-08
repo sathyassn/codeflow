@@ -55,6 +55,9 @@ pub struct WorkerConfig {
     pub epic_update: String,
     /// Timeout in seconds waiting for merge queue position 0.
     pub queue_timeout_secs: u64,
+    /// Per-task timeout override in seconds. If `Some`, overrides the global
+    /// `autorun.worker_timeout_secs` for this specific task.
+    pub task_timeout_secs: Option<u64>,
 }
 
 /// Result of a worker execution.
@@ -646,6 +649,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                             crate::autorun::config::load_config(project_dir).unwrap_or_default();
                         cfg.merge.queue_timeout_secs
                     },
+                    task_timeout_secs: task_spec.and_then(|t| t.timeout_secs),
                 },
                 state.completed.clone(),
                 state.failed.clone(),
@@ -663,7 +667,10 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
     /// Spawn a single worker task onto the tokio runtime.
     ///
     /// Returns the `JoinHandle` so the orchestrator can wait for worker
-    /// cleanup during graceful shutdown.
+    /// cleanup during graceful shutdown. The worker is spawned inside an
+    /// inner `tokio::spawn` whose `JoinHandle` is awaited — this catches
+    /// panics (which become `JoinError::is_panic()`) and converts them to
+    /// failed results instead of propagating and leaking resources.
     fn spawn_worker(
         runner: Arc<R>,
         cfg: WorkerConfig,
@@ -677,7 +684,40 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
 
         tokio::spawn(async move {
             let start = std::time::Instant::now();
-            let result = runner.run(cfg).await;
+
+            // Inner spawn catches panics: tokio::spawn wraps panics in
+            // JoinError, so awaiting the handle converts them to Err.
+            let inner_handle = tokio::spawn(async move { runner.run(cfg).await });
+            let result = match inner_handle.await {
+                Ok(r) => r,
+                Err(join_err) => {
+                    // Worker panicked or was cancelled — clean up.
+                    let reason = if join_err.is_panic() {
+                        "worker panicked"
+                    } else {
+                        "worker task cancelled"
+                    };
+                    eprintln!("{reason} for task {task_id}");
+                    running.lock().await.remove(&task_id);
+                    failed.lock().await.insert(task_id.clone());
+                    #[allow(clippy::cast_possible_wrap)]
+                    let duration = start.elapsed().as_secs() as i64;
+                    results.lock().await.push(WorkerResult {
+                        worker_id: String::new(),
+                        task_id,
+                        status: "failed".into(),
+                        exit_code: 1,
+                        pr_number: 0,
+                        pr_url: String::new(),
+                        error: reason.into(),
+                        branch_name: String::new(),
+                        duration_sec: duration,
+                    });
+                    drop(permit);
+                    return;
+                }
+            };
+
             #[allow(clippy::cast_possible_wrap)]
             let duration = start.elapsed().as_secs() as i64;
 
@@ -935,6 +975,7 @@ mod tests {
             blocked_behavior: "skip_and_continue".into(),
             epic_update: "orchestrator".into(),
             queue_timeout_secs: 600,
+            task_timeout_secs: None,
         };
         assert_eq!(cfg.task_id, "task-a");
         assert_eq!(cfg.worker_num, 1);
@@ -1653,6 +1694,7 @@ mod tests {
                 blocked_behavior: "skip_and_continue".into(),
                 epic_update: String::new(),
                 queue_timeout_secs: 600,
+                task_timeout_secs: None,
             },
             completed.clone(),
             failed.clone(),
@@ -2142,5 +2184,93 @@ mod tests {
             session.batch_file, "/path/to/batch.yaml",
             "batch_file should be recorded in the session"
         );
+    }
+
+    // -- Panic guard tests --
+
+    /// A runner that panics on execution, to test panic guard behavior.
+    struct PanickingRunner;
+
+    impl WorkerRunner for PanickingRunner {
+        async fn run(&self, _cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+            panic!("intentional test panic in worker");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_panic_guard_catches_panic() {
+        let orch = Orchestrator::new(PanickingRunner, mock_store());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch = make_batch("max_workers: 1\ntasks:\n  - id: panic-task\n");
+
+        let results = orch
+            .execute(
+                "ses-panic-test",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+        assert_eq!(r.task_id, "panic-task");
+        assert_eq!(r.status, "failed");
+        assert!(
+            r.error.contains("panicked") || r.error.contains("cancelled"),
+            "error should indicate panic or cancellation, got: {}",
+            r.error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_panic_does_not_block_other_tasks() {
+        // A runner where the first task panics but the second succeeds.
+        struct SelectivePanicker;
+
+        impl WorkerRunner for SelectivePanicker {
+            #[allow(clippy::manual_assert)]
+            async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+                if cfg.task_id == "a" {
+                    panic!("task a panics");
+                }
+                Ok(WorkerResult {
+                    worker_id: cfg.worker_id,
+                    task_id: cfg.task_id,
+                    status: "completed".into(),
+                    exit_code: 0,
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    error: String::new(),
+                    branch_name: String::new(),
+                    duration_sec: 0,
+                })
+            }
+        }
+
+        let orch = Orchestrator::new(SelectivePanicker, mock_store());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        // Two independent tasks — a panics, b should still complete.
+        let batch = make_batch("max_workers: 2\ntasks:\n  - id: a\n  - id: b\n");
+
+        let results = orch
+            .execute(
+                "ses-selective-panic",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        let a_result = results.iter().find(|r| r.task_id == "a").unwrap();
+        assert_eq!(a_result.status, "failed");
+
+        let b_result = results.iter().find(|r| r.task_id == "b").unwrap();
+        assert_eq!(b_result.status, "completed");
     }
 }

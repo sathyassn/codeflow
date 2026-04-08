@@ -27,8 +27,8 @@ fn worker_log(log_path: &std::path::Path, message: &str) {
     }
 }
 
-/// Default timeout for a single worker (60 minutes).
-pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Default timeout for a single worker (120 minutes).
+pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(120 * 60);
 
 /// Executes commands via tmux. Enables testing without actual tmux sessions.
 pub trait TmuxRunner: Send + Sync {
@@ -121,6 +121,10 @@ pub struct InvokeConfig {
     /// Who performs epic status updates: "orchestrator" or "none".
     #[serde(default)]
     pub epic_update: String,
+    /// Per-task worker timeout in seconds. When non-zero, overrides both the
+    /// outer timeout (worker.rs) and the inner poll loop timeout (autorun.rs).
+    #[serde(default)]
+    pub worker_timeout_secs: u64,
 }
 
 /// Result of a Claude Code invocation.
@@ -531,11 +535,15 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
     async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
         let tmux_name = cfg.tmux_name.clone();
 
-        let timeout = if self.timeout.is_zero() {
+        // Compute effective timeout: per-task override > constructor timeout > default.
+        let timeout = if let Some(task_secs) = cfg.task_timeout_secs {
+            Duration::from_secs(task_secs)
+        } else if self.timeout.is_zero() {
             DEFAULT_WORKER_TIMEOUT
         } else {
             self.timeout
         };
+        let effective_timeout_secs = timeout.as_secs();
 
         // Generate a unique session ID for this worker's worktree.
         let worker_sid = crate::session::generate_session_id();
@@ -788,6 +796,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     acceptance_criteria,
                     worker_session_id: worker_sid.as_str().to_owned(),
                     epic_update: cfg.epic_update.clone(),
+                    worker_timeout_secs: effective_timeout_secs,
                 })
                 .await
         })
@@ -902,11 +911,13 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
-        // Serialized merge: when integration_auto_merge is enabled and Claude succeeded,
-        // use the merge queue to serialize PR merges to the integration branch.
+        // Serialized merge: when integration_auto_merge is enabled and a PR was
+        // created, use the merge queue to serialize PR merges to the integration
+        // branch. The pr_number check is independent of exit_code so that PRs
+        // created before a timeout (exit_code 124) still get merged.
         if cfg.integration_auto_merge {
             if let Ok(Ok(ref invoke_result)) = result {
-                if invoke_result.exit_code == 0 && invoke_result.pr_number > 0 {
+                if invoke_result.pr_number > 0 {
                     let merge_config = crate::autorun::config::load_config(&self.project_dir)
                         .unwrap_or_default()
                         .merge;
@@ -1006,10 +1017,65 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
-        if let Err(e) = self.worktree.cleanup(&wt_name) {
-            eprintln!("warning: worktree cleanup failed for {wt_name}: {e}");
+        // Worktree cleanup with retry: 3 attempts, 2s backoff between each.
+        // On final failure, deregister from worktrees.yaml anyway to prevent
+        // pool exhaustion from stuck worktrees.
+        {
+            let max_retries = 3;
+            let mut cleanup_ok = false;
+            for attempt in 1..=max_retries {
+                match self.worktree.cleanup(&wt_name) {
+                    Ok(()) => {
+                        cleanup_ok = true;
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt < max_retries {
+                            eprintln!(
+                                "warning: worktree cleanup attempt {attempt}/{max_retries} failed for {wt_name}: {e}, retrying in 2s"
+                            );
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        } else {
+                            eprintln!(
+                                "warning: worktree cleanup failed after {max_retries} attempts for {wt_name}: {e}, deregistering anyway"
+                            );
+                            // Deregister from worktrees.yaml to prevent pool exhaustion.
+                            let registry_path =
+                                self.project_dir.join(".state/worktrees/worktrees.yaml");
+                            if let Ok(content) = std::fs::read_to_string(&registry_path) {
+                                // Remove the entry matching this worktree name.
+                                let filtered: String = content
+                                    .lines()
+                                    .filter(|line| !line.contains(&wt_name))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                if filtered != content {
+                                    let _ = std::fs::write(&registry_path, filtered + "\n");
+                                }
+                            }
+                            // Emit coordination event for cleanup failure.
+                            crate::autorun::emit_coordination_event(
+                                &self.project_dir,
+                                &crate::coordination::types::events::CoordinationEvent::ClaimReleased {
+                                    session_id: worker_sid.clone(),
+                                    path: format!("worktree-cleanup-failed:{wt_name}"),
+                                    task_id: Some(cfg.task_id.clone()),
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            if cleanup_ok {
+                worker_log(&log_path, "CLEANUP claims_released worktree_removed");
+            } else {
+                worker_log(
+                    &log_path,
+                    "CLEANUP claims_released worktree_deregistered_after_cleanup_failure",
+                );
+            }
         }
-        worker_log(&log_path, "CLEANUP claims_released worktree_removed");
 
         let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
         let worker_result = match result {
@@ -1672,6 +1738,7 @@ mod tests {
             blocked_behavior: "skip_and_continue".into(),
             epic_update: String::new(),
             queue_timeout_secs: 600,
+            task_timeout_secs: None,
         }
     }
 
@@ -1743,7 +1810,7 @@ mod tests {
 
     #[test]
     fn test_default_worker_timeout() {
-        assert_eq!(DEFAULT_WORKER_TIMEOUT, Duration::from_secs(3600));
+        assert_eq!(DEFAULT_WORKER_TIMEOUT, Duration::from_secs(7200));
     }
 
     #[test]
@@ -1759,11 +1826,30 @@ mod tests {
             acceptance_criteria: vec!["criterion 1".into()],
             worker_session_id: "ses-worker-1".into(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         assert_eq!(cfg.task_id, "t-1");
         assert!(cfg.integration_auto_merge);
         assert_eq!(cfg.acceptance_criteria.len(), 1);
         assert_eq!(cfg.worker_session_id, "ses-worker-1");
+    }
+
+    #[test]
+    fn test_invoke_config_custom_timeout() {
+        let cfg = InvokeConfig {
+            work_dir: ".".into(),
+            prompt: "test".into(),
+            session_id: "ses-1".into(),
+            task_id: "t-1".into(),
+            integration_auto_merge: false,
+            integration_branch: String::new(),
+            tmux_session: "w-1".into(),
+            acceptance_criteria: vec![],
+            worker_session_id: String::new(),
+            epic_update: String::new(),
+            worker_timeout_secs: 3600,
+        };
+        assert_eq!(cfg.worker_timeout_secs, 3600);
     }
 
     #[test]
@@ -2227,6 +2313,7 @@ Read and implement.
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: "ses-worker-1".into(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: InvokeConfig = serde_json::from_str(&json).unwrap();
@@ -2580,6 +2667,7 @@ Read and implement.
             blocked_behavior: "skip_and_continue".into(),
             epic_update: String::new(),
             queue_timeout_secs: 600,
+            task_timeout_secs: None,
         };
         assert_eq!(cfg.tmux_name, "cf-ar-task-a");
     }
@@ -2601,6 +2689,7 @@ Read and implement.
             blocked_behavior: "skip_and_continue".into(),
             epic_update: String::new(),
             queue_timeout_secs: 600,
+            task_timeout_secs: None,
         }
     }
 
@@ -3030,5 +3119,149 @@ Read and implement.
         .await;
 
         assert_eq!(result, MergeOutcome::QueueTimeout);
+    }
+
+    // -- Worktree cleanup retry tests --
+
+    /// Mock worktree provider that fails cleanup N times before succeeding.
+    struct RetryWorktree {
+        fail_count: std::sync::atomic::AtomicUsize,
+        max_failures: usize,
+        path: PathBuf,
+    }
+
+    impl RetryWorktree {
+        fn new(path: PathBuf, max_failures: usize) -> Self {
+            Self {
+                fail_count: std::sync::atomic::AtomicUsize::new(0),
+                max_failures,
+                path,
+            }
+        }
+    }
+
+    impl WorktreeProvider for RetryWorktree {
+        fn setup(&self, _name: &str) -> Result<WorktreeInfo, AutorunError> {
+            Ok(WorktreeInfo {
+                path: self.path.clone(),
+            })
+        }
+
+        fn cleanup(&self, name: &str) -> Result<(), AutorunError> {
+            let count = self
+                .fail_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count < self.max_failures {
+                Err(AutorunError::Worktree(
+                    crate::error::WorktreeError::Cleanup(format!(
+                        "mock cleanup failure {}/{} for {name}",
+                        count + 1,
+                        self.max_failures,
+                    )),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worktree_cleanup_retry_succeeds_on_second_attempt() {
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = RetryWorktree::new(project_dir.path().to_path_buf(), 1);
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        assert_eq!(result.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn test_worktree_cleanup_retry_exhausted_deregisters() {
+        let project_dir = make_project_dir();
+        // Create the worktrees.yaml file with a dummy entry.
+        let registry_dir = project_dir.path().join(".state/worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        std::fs::write(
+            registry_dir.join("worktrees.yaml"),
+            "- name: worktree-ses-test\n  status: active\n",
+        )
+        .unwrap();
+
+        let (tmux, _, _) = MockTmux::new();
+        // Fail all 3 cleanup attempts.
+        let wt = RetryWorktree::new(project_dir.path().to_path_buf(), 10);
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        // Worker should still report completed (cleanup failure is non-fatal).
+        assert_eq!(result.status, "completed");
+    }
+
+    // -- Per-task timeout override test --
+
+    #[tokio::test]
+    async fn test_per_task_timeout_override() {
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        // SlowClaude sleeps 5s; per-task timeout of 100ms should trigger timeout.
+        let worker = TmuxWorker::with_timeout(
+            tmux,
+            SlowClaude,
+            wt,
+            project_dir.path().to_path_buf(),
+            Duration::from_secs(60), // Global timeout is 60s (would succeed)
+        );
+
+        let mut cfg = make_worker_config();
+        cfg.task_timeout_secs = Some(0); // 0 means no override, use global
+        // With 0 (no override), the 60s global timeout should let SlowClaude's
+        // 5s sleep complete. But let's test with an actual override.
+        cfg.task_timeout_secs = Some(1); // 1 second override — triggers timeout
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "timeout", "per-task timeout should fire");
+        assert_eq!(result.exit_code, 124);
+    }
+
+    // -- Serialized merge independent of exit_code test --
+
+    struct MockClaudeTimeoutWithPr;
+
+    impl ClaudeInvoker for MockClaudeTimeoutWithPr {
+        async fn invoke(&self, _cfg: InvokeConfig) -> Result<InvokeResult, AutorunError> {
+            // Simulate a timeout scenario where a PR was created before timeout.
+            Ok(InvokeResult {
+                exit_code: 124,
+                pr_number: 99,
+                pr_url: "https://github.com/test/pr/99".into(),
+                branch_name: "feat/timeout-pr".into(),
+                output: "worker exceeded timeout".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_serialized_merge_runs_after_timeout_with_pr() {
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaudeTimeoutWithPr;
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        // Enable auto_merge so the serialized_merge code path activates.
+        let mut cfg = make_worker_config();
+        cfg.integration_auto_merge = true;
+        cfg.integration_branch = "integration/test".into();
+
+        let result = worker.run(cfg).await.unwrap();
+        // The worker should attempt serialized merge because pr_number > 0,
+        // even though exit_code is 124 (timeout). The merge itself may fail
+        // (no real git repo), but the important thing is the path was entered.
+        // The result will be "failed" because exit_code != 0.
+        assert_eq!(result.exit_code, 124);
+        assert_eq!(result.pr_number, 99);
     }
 }

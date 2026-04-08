@@ -61,6 +61,12 @@ pub struct TaskSpec {
     /// when markdown says "soft").
     #[serde(default)]
     pub scope_policy: Option<String>,
+
+    /// Optional per-task timeout in seconds. Overrides the global
+    /// `autorun.worker_timeout_secs` config for this task. Useful for tasks
+    /// known to be long-running (e.g., large features) or quick (e.g., docs).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// Validated and resolved batch specification.
@@ -871,18 +877,21 @@ tasks:
                 depends_on: vec!["b".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -897,18 +906,21 @@ tasks:
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "a".into(),
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -924,24 +936,28 @@ tasks:
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "c".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "d".into(),
                 depends_on: vec!["b".into(), "c".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
         ];
         let order = topological_sort(&tasks).unwrap();
@@ -960,12 +976,14 @@ tasks:
                 depends_on: vec!["b".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
             TaskSpec {
                 id: "b".into(),
                 depends_on: vec!["a".into()],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             },
         ];
         let result = topological_sort(&tasks);
@@ -1747,12 +1765,14 @@ tasks:
                     depends_on: vec![],
                     file_scope: vec![],
                     scope_policy: None,
+                    timeout_secs: None,
                 },
                 TaskSpec {
                     id: "task-b".into(),
                     depends_on: vec!["task-a".into()],
                     file_scope: vec![],
                     scope_policy: None,
+                    timeout_secs: None,
                 },
             ],
             order: vec!["task-a".into(), "task-b".into()],
@@ -1782,12 +1802,14 @@ tasks:
                     depends_on: vec![],
                     file_scope: vec![],
                     scope_policy: None,
+                    timeout_secs: None,
                 },
                 TaskSpec {
                     id: "task-b".into(),
                     depends_on: vec!["task-a".into()],
                     file_scope: vec![],
                     scope_policy: None,
+                    timeout_secs: None,
                 },
             ],
             order: vec!["task-a".into(), "task-b".into()],
@@ -1818,6 +1840,7 @@ tasks:
                 depends_on: vec![],
                 file_scope: vec![],
                 scope_policy: None,
+                timeout_secs: None,
             }],
             order: vec!["task-a".into()],
         };
@@ -1960,6 +1983,29 @@ tasks:
         assert!(
             !batch.final_pr,
             "explicit final_pr: false should override default"
+        );
+    }
+
+    // -- Per-task timeout tests --
+
+    #[test]
+    fn test_task_spec_timeout_secs_default_none() {
+        let yaml = "tasks:\n  - id: task-a\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert!(
+            batch.tasks[0].timeout_secs.is_none(),
+            "timeout_secs should default to None"
+        );
+    }
+
+    #[test]
+    fn test_task_spec_timeout_secs_custom() {
+        let yaml = "tasks:\n  - id: task-a\n    timeout_secs: 3600\n";
+        let batch = parse_batch_data(yaml, "test.yaml").unwrap();
+        assert_eq!(
+            batch.tasks[0].timeout_secs,
+            Some(3600),
+            "timeout_secs should be parsed from YAML"
         );
     }
 }

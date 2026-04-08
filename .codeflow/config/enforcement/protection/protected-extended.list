@@ -8,3 +8,4 @@
 # Example entries (uncomment and modify as needed):
 # project/sensitive/**
 # .secrets/**
+test-pattern-force-add

@@ -2563,6 +2563,61 @@ impl codeflow_core::autorun::TmuxRunner for RealTmux {
 /// Default polling interval for file-marker completion detection.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// PathFlow session progress as observed from sentinel files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PathFlowState {
+    /// No sentinel directory found or no recognizable sentinels.
+    Unknown,
+    /// Active session with the latest completed phase name.
+    InProgress(String),
+    /// PF6 sentinel exists and a PR was created (pf-6 implies PR created).
+    PrCreated,
+    /// PF7 sentinel exists — session fully complete.
+    Complete,
+}
+
+/// Check PathFlow progress by reading sentinel files from the worktree.
+///
+/// Sentinel files live at `{worktree}/.state/sentinels/pathflow/{session_id}/`
+/// with names like `pathflow-pf-1`, `pathflow-pf-6`, `pathflow-pf-7`.
+fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) -> PathFlowState {
+    let sentinel_dir = worktree_path
+        .join(".state/sentinels/pathflow")
+        .join(session_id);
+
+    let entries = match std::fs::read_dir(&sentinel_dir) {
+        Ok(e) => e,
+        Err(_) => return PathFlowState::Unknown,
+    };
+
+    let mut has_pf7 = false;
+    let mut has_pf6 = false;
+    let mut latest_phase = String::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "pathflow-pf-7" {
+            has_pf7 = true;
+        } else if name == "pathflow-pf-6" {
+            has_pf6 = true;
+        }
+        // Track latest phase sentinel for InProgress reporting.
+        if name.starts_with("pathflow-pf-") && (latest_phase.is_empty() || name > latest_phase) {
+            latest_phase = name;
+        }
+    }
+
+    if has_pf7 {
+        PathFlowState::Complete
+    } else if has_pf6 {
+        PathFlowState::PrCreated
+    } else if !latest_phase.is_empty() {
+        PathFlowState::InProgress(latest_phase)
+    } else {
+        PathFlowState::Unknown
+    }
+}
+
 /// Grace period after SIGTERM before escalating to SIGKILL.
 const SIGTERM_GRACE_SECS: u64 = 10;
 
@@ -2707,7 +2762,13 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
         // The inner timeout provides Claude-specific shutdown sequencing, while
         // the outer timeout catches hangs in non-Claude phases (worktree setup, etc.).
         let exit_code_file = PathBuf::from(&exit_code_path);
-        let timeout = self.worker_timeout;
+        // Use per-task timeout from InvokeConfig when set, otherwise fall back
+        // to the constructor-level worker_timeout.
+        let timeout = if cfg.worker_timeout_secs > 0 {
+            Duration::from_secs(cfg.worker_timeout_secs)
+        } else {
+            self.worker_timeout
+        };
         let poll_start = std::time::Instant::now();
 
         loop {
@@ -2731,20 +2792,73 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
                     let _ = self.tmux.kill_session(session).await;
                 }
 
-                return Ok(codeflow_core::autorun::InvokeResult {
-                    exit_code: 124,
-                    pr_number: 0,
-                    pr_url: String::new(),
-                    branch_name: String::new(),
-                    output: "worker exceeded timeout".to_string(),
-                });
+                // Fall through to branch/PR detection below instead of
+                // returning immediately. This allows post-timeout PR
+                // recovery: if Claude created a PR before the timeout
+                // fired, we detect it and pass it to serialized_merge.
+                break;
+            }
+
+            // PathFlow sentinel polling: every 30 iterations (~30s at 1s
+            // POLL_INTERVAL), check sentinel files for early completion or
+            // PR creation signals to shorten the remaining timeout.
+            let elapsed_iters = poll_start.elapsed().as_secs();
+            if elapsed_iters > 0 && elapsed_iters % 30 == 0 {
+                let pf_state = check_pathflow_progress(std::path::Path::new(work_dir), autorun_sid);
+                match pf_state {
+                    PathFlowState::Complete => {
+                        // PF7 done — give 10s grace for exit_code_file to appear.
+                        eprintln!(
+                            "PathFlow complete for task {}, waiting 10s for exit code",
+                            cfg.task_id
+                        );
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        break;
+                    }
+                    PathFlowState::PrCreated => {
+                        // PR created but session still running — cap remaining
+                        // timeout at 120s so we don't wait the full duration.
+                        let remaining = timeout.saturating_sub(poll_start.elapsed());
+                        let cap = Duration::from_secs(120);
+                        if remaining > cap {
+                            eprintln!(
+                                "PR detected for task {}, capping remaining timeout to 120s",
+                                cfg.task_id
+                            );
+                            // Adjust the effective deadline by sleeping until
+                            // exit_code appears or 120s passes.
+                            let cap_start = std::time::Instant::now();
+                            loop {
+                                if exit_code_file.exists() || cap_start.elapsed() >= cap {
+                                    break;
+                                }
+                                tokio::time::sleep(POLL_INTERVAL).await;
+                            }
+                            if !exit_code_file.exists() {
+                                let _ = self.tmux.send_command(session, "C-c").await;
+                                tokio::time::sleep(Duration::from_secs(SIGTERM_GRACE_SECS)).await;
+                                if !exit_code_file.exists() {
+                                    let _ = self.tmux.kill_session(session).await;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    PathFlowState::InProgress(_) | PathFlowState::Unknown => {}
+                }
             }
 
             tokio::time::sleep(POLL_INTERVAL).await;
         }
 
-        // Read exit code from marker file.
-        let exit_code = Self::read_exit_code(&exit_code_file);
+        // Read exit code from marker file. If the file doesn't exist
+        // (timeout path where Claude didn't write one), use 124.
+        let timed_out = poll_start.elapsed() >= timeout;
+        let exit_code = if exit_code_file.exists() {
+            Self::read_exit_code(&exit_code_file)
+        } else {
+            124
+        };
 
         // Interactive Claude doesn't write structured JSON output.
         // Get PR info from git branch + gh pr list.
@@ -2768,8 +2882,9 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
             })
             .unwrap_or_default();
 
-        // If PR info not found in output, try gh pr list as fallback.
-        if pr_number == 0 && exit_code == 0 && !branch_name.is_empty() {
+        // Try gh pr list to detect PRs. Run for BOTH normal exits AND
+        // timeouts — a PR may have been created before the timeout fired.
+        if pr_number == 0 && !branch_name.is_empty() {
             if let Ok(gh_output) = tokio::process::Command::new("gh")
                 .args([
                     "pr",
@@ -2810,7 +2925,11 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
             pr_number,
             pr_url,
             branch_name,
-            output: String::new(),
+            output: if timed_out {
+                "worker exceeded timeout".to_string()
+            } else {
+                String::new()
+            },
         })
     }
 }
@@ -3227,6 +3346,7 @@ tasks:
             blocked_behavior: "skip_and_continue".into(),
             epic_update: String::new(),
             queue_timeout_secs: 600,
+            task_timeout_secs: None,
         };
         assert_eq!(cfg.task_id, "task-test");
         assert_eq!(cfg.scope_policy, "soft");
@@ -3264,6 +3384,7 @@ tasks:
             acceptance_criteria: vec!["tests pass".into()],
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         assert_eq!(cfg.task_id, "task-invoke");
         assert_eq!(cfg.acceptance_criteria, vec!["tests pass"]);
@@ -3292,6 +3413,7 @@ tasks:
             acceptance_criteria: vec!["crit 1".into(), "crit 2".into()],
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: codeflow_core::autorun::InvokeConfig =
@@ -3504,6 +3626,7 @@ tasks:
             acceptance_criteria: vec!["crit A".into(), "crit B".into()],
             worker_session_id: "ses-env-worker".into(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3588,6 +3711,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3621,6 +3745,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3665,6 +3790,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3738,6 +3864,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6044,6 +6171,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: "ses-worker-123".into(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         // worker_session_id should be non-empty and different from session_id.
         assert_ne!(cfg.worker_session_id, cfg.session_id);
@@ -6070,6 +6198,7 @@ tasks:
             acceptance_criteria: Vec::new(),
             worker_session_id: String::new(),
             epic_update: String::new(),
+            worker_timeout_secs: 0,
         };
         let autorun_sid = if cfg.worker_session_id.is_empty() {
             &cfg.session_id
@@ -6094,5 +6223,64 @@ tasks:
         let user_input: u64 = 10;
         let interval = Duration::from_secs(user_input.max(1));
         assert_eq!(interval, Duration::from_secs(10));
+    }
+
+    // -- PathFlow sentinel polling tests --
+
+    #[test]
+    fn test_pathflow_state_unknown_no_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = check_pathflow_progress(dir.path(), "ses-nonexistent");
+        assert_eq!(state, PathFlowState::Unknown);
+    }
+
+    #[test]
+    fn test_pathflow_state_unknown_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        let state = check_pathflow_progress(dir.path(), "ses-test");
+        assert_eq!(state, PathFlowState::Unknown);
+    }
+
+    #[test]
+    fn test_pathflow_state_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-2"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-3"), "").unwrap();
+
+        let state = check_pathflow_progress(dir.path(), "ses-test");
+        assert_eq!(
+            state,
+            PathFlowState::InProgress("pathflow-pf-3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pathflow_state_pr_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-3"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
+
+        let state = check_pathflow_progress(dir.path(), "ses-test");
+        assert_eq!(state, PathFlowState::PrCreated);
+    }
+
+    #[test]
+    fn test_pathflow_state_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-7"), "").unwrap();
+
+        let state = check_pathflow_progress(dir.path(), "ses-test");
+        assert_eq!(state, PathFlowState::Complete);
     }
 }
