@@ -89,6 +89,11 @@ fn build_pipeline_line(stages: &[StageInfo]) -> Line<'static> {
         Style::new().fg(theme::BLUE_ACCENT),
     )];
 
+    if stages.is_empty() {
+        spans.push(Span::styled("(none)".to_string(), theme::dim()));
+        return Line::from(spans);
+    }
+
     for (i, stage) in stages.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(format!(" {} ", theme::ARROW), theme::dim()));
@@ -206,6 +211,10 @@ mod tests {
         let line = build_pipeline_line(&[]);
         let content = line.to_string();
         assert!(content.contains("Stages:"));
+        assert!(
+            content.contains("(none)"),
+            "empty stages should show '(none)': {content}"
+        );
     }
 
     #[test]
@@ -234,14 +243,44 @@ mod tests {
     fn test_widget_renders_to_buffer() {
         let task = sample_task();
         let pane = DetailPane::new(Some(&task));
-        let area = Rect::new(0, 0, 80, 6);
+        let area = Rect::new(0, 0, 80, 7);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
-        // Verify the buffer is not all empty (widget rendered something).
-        let has_content = (0..80).any(|x| {
-            let cell = &buf[(x, 1)];
-            cell.symbol() != " "
-        });
-        assert!(has_content, "detail pane should render content");
+
+        // Collect rendered text from each row (inside the border).
+        let row_text =
+            |y: u16| -> String { (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect() };
+
+        // Row 1 (inside top border): should contain branch and PR info.
+        let r1 = row_text(1);
+        assert!(r1.contains("feat/tui"), "row 1 should contain branch: {r1}");
+        assert!(r1.contains("#42"), "row 1 should contain PR number: {r1}");
+
+        // Row 2: should contain stage pipeline info.
+        let r2 = row_text(2);
+        assert!(
+            r2.contains("WS-DEV"),
+            "row 2 should contain stage name: {r2}"
+        );
+
+        // Row 3: should contain worktree path.
+        let r3 = row_text(3);
+        assert!(
+            r3.contains("/tmp/wt"),
+            "row 3 should contain worktree path: {r3}"
+        );
+    }
+
+    #[test]
+    fn test_widget_renders_no_task_to_buffer() {
+        let pane = DetailPane::new(None);
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let r1: String = (0..40).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert!(
+            r1.contains("No task selected"),
+            "should show placeholder: {r1}"
+        );
     }
 }

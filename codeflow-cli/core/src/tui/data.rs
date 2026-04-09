@@ -131,9 +131,9 @@ async fn build_batch_view<S: DataStore>(
 
         let display_status = compute_display_status(run.status, session.status);
 
-        let phase = read_latest_phase(project_dir, run.worktree_path.as_deref());
+        let phase = read_latest_phase(project_dir, run.worktree_path.as_deref(), None);
 
-        let stages = read_stage_pipeline(project_dir, run.worktree_path.as_deref());
+        let stages = read_stage_pipeline(project_dir, run.worktree_path.as_deref(), None);
 
         tasks.push(TaskView {
             task_id: run.task_id.clone(),
@@ -143,13 +143,13 @@ async fn build_batch_view<S: DataStore>(
             branch: run.branch_name.clone(),
             pr_number: run.pr_number,
             tmux_session: tmux,
-            duration_secs: run.duration_seconds.or_else(|| {
-                if matches!(run.status, AutorunTaskRunStatus::Running) {
-                    run.started_at.as_deref().map(compute_elapsed_secs)
-                } else {
-                    None
-                }
-            }),
+            duration_secs: if matches!(run.status, AutorunTaskRunStatus::Running) {
+                // Always recompute for running tasks — stored duration_seconds
+                // may be stale from a previous failed run.
+                run.started_at.as_deref().map(compute_elapsed_secs)
+            } else {
+                run.duration_seconds
+            },
             exit_code: run.exit_code,
             worktree_path: run.worktree_path.clone(),
             error_message: run.error_message.clone(),
@@ -213,12 +213,27 @@ fn compute_display_status(
 }
 
 /// Read the latest PathFlow phase from sentinel files.
-pub fn read_latest_phase(project_dir: &Path, worktree_path: Option<&str>) -> Option<String> {
+///
+/// When `session_id` is provided, only scans that session's sentinel subdir.
+/// Otherwise scans all session subdirs (returns the highest phase across all).
+pub fn read_latest_phase(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+    session_id: Option<&str>,
+) -> Option<String> {
     let base = worktree_path.map_or_else(|| project_dir.to_path_buf(), std::path::PathBuf::from);
 
     let sentinel_dir = base.join(".state/sentinels/pathflow");
-    let Ok(entries) = std::fs::read_dir(&sentinel_dir) else {
-        return None;
+    let entries = match std::fs::read_dir(&sentinel_dir) {
+        Ok(e) => e,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "warn: failed to read sentinel dir {}: {e}",
+                sentinel_dir.display()
+            );
+            return None;
+        }
     };
 
     // Look for session directories, then find the latest pf-N sentinel.
@@ -227,6 +242,14 @@ pub fn read_latest_phase(project_dir: &Path, worktree_path: Option<&str>) -> Opt
         let session_dir = entry.path();
         if !session_dir.is_dir() {
             continue;
+        }
+        // Filter to target session when specified.
+        if let Some(sid) = session_id {
+            if let Some(dir_name) = session_dir.file_name().and_then(|n| n.to_str()) {
+                if dir_name != sid {
+                    continue;
+                }
+            }
         }
         if let Ok(sentinels) = std::fs::read_dir(&session_dir) {
             for sentinel in sentinels.flatten() {
@@ -245,7 +268,13 @@ pub fn read_latest_phase(project_dir: &Path, worktree_path: Option<&str>) -> Opt
 }
 
 /// Read stage pipeline status from sentinel files.
-fn read_stage_pipeline(project_dir: &Path, worktree_path: Option<&str>) -> Vec<StageInfo> {
+///
+/// When `session_id` is provided, only scans that session's sentinel subdir.
+fn read_stage_pipeline(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+    session_id: Option<&str>,
+) -> Vec<StageInfo> {
     let base = worktree_path.map_or_else(|| project_dir.to_path_buf(), std::path::PathBuf::from);
 
     let sentinel_dir = base.join(".state/sentinels/pathflow");
@@ -253,23 +282,40 @@ fn read_stage_pipeline(project_dir: &Path, worktree_path: Option<&str>) -> Vec<S
     let stage_names = ["ws-dev", "ws-sec", "ws-rev", "ws-qa"];
     let mut completed_stages = std::collections::HashSet::new();
 
-    if let Ok(entries) = std::fs::read_dir(&sentinel_dir) {
-        for entry in entries.flatten() {
-            let session_dir = entry.path();
-            if !session_dir.is_dir() {
-                continue;
-            }
-            if let Ok(sentinels) = std::fs::read_dir(&session_dir) {
-                for sentinel in sentinels.flatten() {
-                    let name = sentinel.file_name();
-                    let name = name.to_string_lossy();
-                    for stage in &stage_names {
-                        if name.contains(stage) {
-                            completed_stages.insert((*stage).to_string());
+    match std::fs::read_dir(&sentinel_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let session_dir = entry.path();
+                if !session_dir.is_dir() {
+                    continue;
+                }
+                // Filter to target session when specified.
+                if let Some(sid) = session_id {
+                    if let Some(dir_name) = session_dir.file_name().and_then(|n| n.to_str()) {
+                        if dir_name != sid {
+                            continue;
+                        }
+                    }
+                }
+                if let Ok(sentinels) = std::fs::read_dir(&session_dir) {
+                    for sentinel in sentinels.flatten() {
+                        let name = sentinel.file_name();
+                        let name = name.to_string_lossy();
+                        for stage in &stage_names {
+                            if name.contains(stage) {
+                                completed_stages.insert((*stage).to_string());
+                            }
                         }
                     }
                 }
             }
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!(
+                "warn: failed to read sentinel dir {}: {e}",
+                sentinel_dir.display()
+            );
         }
     }
 
@@ -342,7 +388,7 @@ mod tests {
     #[test]
     fn test_read_latest_phase_no_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = read_latest_phase(tmp.path(), None);
+        let result = read_latest_phase(tmp.path(), None, None);
         assert!(result.is_none());
     }
 
@@ -354,14 +400,14 @@ mod tests {
         std::fs::write(session_dir.join("pathflow-pf-1"), "").unwrap();
         std::fs::write(session_dir.join("pathflow-pf-3"), "").unwrap();
 
-        let result = read_latest_phase(tmp.path(), None);
+        let result = read_latest_phase(tmp.path(), None, None);
         assert_eq!(result, Some("PF3".to_string()));
     }
 
     #[test]
     fn test_read_stage_pipeline_no_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let stages = read_stage_pipeline(tmp.path(), None);
+        let stages = read_stage_pipeline(tmp.path(), None, None);
         assert_eq!(stages.len(), 4);
         assert!(stages.iter().all(|s| !s.completed));
     }
@@ -374,7 +420,7 @@ mod tests {
         std::fs::write(session_dir.join("pathflow-ws-dev"), "").unwrap();
         std::fs::write(session_dir.join("pathflow-ws-rev"), "").unwrap();
 
-        let stages = read_stage_pipeline(tmp.path(), None);
+        let stages = read_stage_pipeline(tmp.path(), None, None);
         assert_eq!(stages.len(), 4);
 
         let dev = stages.iter().find(|s| s.name.contains("DEV")).unwrap();
@@ -494,7 +540,7 @@ mod tests {
         std::fs::write(session_dir.join("pathflow-pf-1"), "").unwrap();
         std::fs::write(session_dir.join("pathflow-pf-4"), "").unwrap();
 
-        let result = read_latest_phase(tmp.path(), Some(wt.to_str().unwrap()));
+        let result = read_latest_phase(tmp.path(), Some(wt.to_str().unwrap()), None);
         assert_eq!(result, Some("PF4".to_string()));
     }
 
@@ -506,7 +552,7 @@ mod tests {
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(session_dir.join("pathflow-ws-dev"), "").unwrap();
 
-        let stages = read_stage_pipeline(tmp.path(), Some(wt.to_str().unwrap()));
+        let stages = read_stage_pipeline(tmp.path(), Some(wt.to_str().unwrap()), None);
         let dev = stages.iter().find(|s| s.name.contains("DEV")).unwrap();
         assert!(dev.completed);
         let rev = stages.iter().find(|s| s.name.contains("REV")).unwrap();
@@ -640,7 +686,12 @@ mod tests {
         assert_eq!(view.tasks[0].branch.as_deref(), Some("feat/task-a"));
         assert_eq!(view.tasks[0].pr_number, Some(42));
         assert_eq!(view.tasks[0].tmux_session.as_deref(), Some("tmux-task-a"));
-        assert_eq!(view.tasks[0].duration_secs, Some(120));
+        // Running task recomputes from started_at (just now), so ~0 seconds.
+        let dur = view.tasks[0].duration_secs.unwrap();
+        assert!(
+            dur <= 5,
+            "running task duration should be recomputed: {dur}"
+        );
         assert_eq!(view.target_branch.as_deref(), Some("main"));
     }
 
@@ -761,5 +812,148 @@ mod tests {
 
         // Fallback: first 20 chars of session_id.
         assert_eq!(view.batch_name, "ar-noname-session");
+    }
+
+    // FIX-2: Running task with stale duration_seconds should recompute from started_at.
+    #[tokio::test]
+    async fn test_running_task_ignores_stale_stored_duration() {
+        let store = crate::store::mock::MockStore::new();
+        let session = make_mock_session("ar-stale", AutorunSessionStatus::Running);
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ar-stale".to_string(), session);
+
+        let mut run = make_mock_task_run("ar-stale", "task-s", AutorunTaskRunStatus::Running);
+        // Stale stored duration from a previous failed run.
+        run.duration_seconds = Some(9999);
+        run.started_at = Some((chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339());
+        store
+            .autorun_task_runs
+            .lock()
+            .unwrap()
+            .insert("atr-task-s".to_string(), run);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ar-stale"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Should be ~10 seconds, NOT the stale 9999.
+        let dur = view.tasks[0].duration_secs.unwrap();
+        assert!(
+            dur < 20,
+            "duration {dur} should be recomputed, not stale 9999"
+        );
+        assert!(dur >= 8, "duration {dur} should be ~10s from started_at");
+    }
+
+    // FIX-2: Completed task uses stored duration_seconds.
+    #[tokio::test]
+    async fn test_completed_task_uses_stored_duration() {
+        let store = crate::store::mock::MockStore::new();
+        let session = make_mock_session("ar-done2", AutorunSessionStatus::Completed);
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ar-done2".to_string(), session);
+
+        let mut run = make_mock_task_run("ar-done2", "task-d", AutorunTaskRunStatus::Completed);
+        run.duration_seconds = Some(300);
+        store
+            .autorun_task_runs
+            .lock()
+            .unwrap()
+            .insert("atr-task-d".to_string(), run);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ar-done2"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(view.tasks[0].duration_secs, Some(300));
+    }
+
+    // FIX-7: Multi-session sentinel isolation — with session_id filter.
+    #[test]
+    fn test_read_latest_phase_session_isolation() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create two session sentinel dirs.
+        let ses1 = tmp.path().join(".state/sentinels/pathflow/ses-AAA");
+        let ses2 = tmp.path().join(".state/sentinels/pathflow/ses-BBB");
+        std::fs::create_dir_all(&ses1).unwrap();
+        std::fs::create_dir_all(&ses2).unwrap();
+        std::fs::write(ses1.join("pathflow-pf-3"), "").unwrap();
+        std::fs::write(ses2.join("pathflow-pf-6"), "").unwrap();
+
+        // Without filter: returns highest across all (PF6).
+        let all = read_latest_phase(tmp.path(), None, None);
+        assert_eq!(all, Some("PF6".to_string()));
+
+        // With filter: returns only target session's data.
+        let ses1_only = read_latest_phase(tmp.path(), None, Some("ses-AAA"));
+        assert_eq!(ses1_only, Some("PF3".to_string()));
+
+        let ses2_only = read_latest_phase(tmp.path(), None, Some("ses-BBB"));
+        assert_eq!(ses2_only, Some("PF6".to_string()));
+
+        // Nonexistent session returns None.
+        let none = read_latest_phase(tmp.path(), None, Some("ses-ZZZ"));
+        assert!(none.is_none());
+    }
+
+    // FIX-7: Stage pipeline session isolation.
+    #[test]
+    fn test_read_stage_pipeline_session_isolation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ses1 = tmp.path().join(".state/sentinels/pathflow/ses-X");
+        let ses2 = tmp.path().join(".state/sentinels/pathflow/ses-Y");
+        std::fs::create_dir_all(&ses1).unwrap();
+        std::fs::create_dir_all(&ses2).unwrap();
+        std::fs::write(ses1.join("pathflow-ws-dev"), "").unwrap();
+        std::fs::write(ses2.join("pathflow-ws-qa"), "").unwrap();
+
+        // Without filter: both stages appear completed.
+        let all = read_stage_pipeline(tmp.path(), None, None);
+        assert!(
+            all.iter()
+                .find(|s| s.name.contains("DEV"))
+                .unwrap()
+                .completed
+        );
+        assert!(
+            all.iter()
+                .find(|s| s.name.contains("QA"))
+                .unwrap()
+                .completed
+        );
+
+        // With ses-X filter: only DEV is completed.
+        let x = read_stage_pipeline(tmp.path(), None, Some("ses-X"));
+        assert!(x.iter().find(|s| s.name.contains("DEV")).unwrap().completed);
+        assert!(!x.iter().find(|s| s.name.contains("QA")).unwrap().completed);
+
+        // With ses-Y filter: only QA is completed.
+        let y = read_stage_pipeline(tmp.path(), None, Some("ses-Y"));
+        assert!(!y.iter().find(|s| s.name.contains("DEV")).unwrap().completed);
+        assert!(y.iter().find(|s| s.name.contains("QA")).unwrap().completed);
+    }
+
+    // FIX-5: Sentinel read with nonexistent dir returns gracefully.
+    #[test]
+    fn test_read_latest_phase_nonexistent_returns_none() {
+        let result = read_latest_phase(std::path::Path::new("/nonexistent/path"), None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_stage_pipeline_nonexistent_returns_empty() {
+        let stages = read_stage_pipeline(std::path::Path::new("/nonexistent/path"), None, None);
+        assert_eq!(stages.len(), 4);
+        assert!(stages.iter().all(|s| !s.completed));
     }
 }

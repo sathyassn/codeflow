@@ -1337,6 +1337,7 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                 let phase = codeflow_core::tui::data::read_latest_phase(
                     project_dir,
                     run.worktree_path.as_deref(),
+                    None,
                 )
                 .unwrap_or_else(|| "--".to_string());
                 let branch = run.branch_name.as_deref().unwrap_or("--");
@@ -1405,10 +1406,14 @@ async fn run_status_watch(
 
     // Fetch initial data before entering the loop.
     let mut last_view: Option<BatchView> =
-        fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref())
-            .await
-            .ok()
-            .flatten();
+        match fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref()).await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warn: initial fetch failed: {e}");
+                None
+            }
+        };
+    let mut status_message: Option<(String, std::time::Instant)> = None;
 
     loop {
         // Preserve selection index across refreshes.
@@ -1447,20 +1452,22 @@ async fn run_status_watch(
             let detail = DetailPane::new(selected_task);
             frame.render_widget(detail, chunks[2]);
 
-            // --- Keybinding bar ---
-            let keys = Line::from(vec![
-                Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(" Attach "),
-                Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(" Abort "),
-                Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(" Retry "),
-                Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(" Navigate "),
-                Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(" Quit"),
-            ]);
-            frame.render_widget(Paragraph::new(keys), chunks[3]);
+            // --- Keybinding bar (with transient status message) ---
+            // Show status message for 3 seconds, then revert to keybindings.
+            let bar_line = if let Some((ref msg, at)) = status_message {
+                if at.elapsed() < Duration::from_secs(3) {
+                    Line::from(Span::styled(
+                        format!(" {msg}"),
+                        Style::new().fg(theme::YELLOW_RUNNING),
+                    ))
+                } else {
+                    status_message = None;
+                    keybinding_line()
+                }
+            } else {
+                keybinding_line()
+            };
+            frame.render_widget(Paragraph::new(bar_line), chunks[3]);
         })?;
 
         // Event handling with user-configurable tick interval.
@@ -1501,21 +1508,34 @@ async fn run_status_watch(
                             }
                         }
                         KeyCode::Enter => {
-                            // Attach to tmux session.
+                            // Attach to tmux session. Exits alternate screen,
+                            // runs tmux attach, then re-enters TUI on detach.
                             if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
                                 if let Some(ref tmux_name) = task.tmux_session {
                                     if tmux_has_session(tmux_name) {
-                                        // Exit alternate screen for tmux attach.
                                         let _ = execute!(std::io::stdout(), DisableMouseCapture);
                                         ratatui::restore();
 
-                                        let _ = std::process::Command::new("tmux")
+                                        // Check exit code: non-zero means session
+                                        // ended or tmux errored.
+                                        match std::process::Command::new("tmux")
                                             .args(["attach-session", "-t", tmux_name])
-                                            .status();
+                                            .status()
+                                        {
+                                            Ok(s) if !s.success() => {
+                                                eprintln!(
+                                                    "tmux attach failed (session may have ended)"
+                                                );
+                                            }
+                                            Err(e) => eprintln!("tmux attach error: {e}"),
+                                            _ => {}
+                                        }
 
-                                        // Re-init terminal after detach.
+                                        // Re-init terminal after detach. Propagate
+                                        // errors — if terminal can't be restored the
+                                        // TUI is unusable.
                                         terminal = ratatui::init();
-                                        let _ = execute!(std::io::stdout(), EnableMouseCapture);
+                                        execute!(std::io::stdout(), EnableMouseCapture)?;
                                     }
                                 }
                             }
@@ -1529,12 +1549,23 @@ async fn run_status_watch(
                                         | codeflow_core::types::AutorunTaskRunStatus::Pending
                                 );
                                 if is_cancellable {
-                                    let _ = run_cancel(
-                                        project_dir,
-                                        &task.task_id,
-                                        batch_owned.as_deref(),
-                                    )
-                                    .await;
+                                    let tid = task.task_id.clone();
+                                    match run_cancel(project_dir, &tid, batch_owned.as_deref())
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            status_message = Some((
+                                                format!("Aborting {tid}..."),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            status_message = Some((
+                                                format!("Abort failed: {e}"),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1548,9 +1579,25 @@ async fn run_status_watch(
                                 );
                                 if is_retryable {
                                     if let Some(ref v) = last_view {
-                                        let _ = std::process::Command::new("codeflow")
+                                        // Spawn retry as subprocess. On error, show
+                                        // transient status message.
+                                        match std::process::Command::new("codeflow")
                                             .args(["autorun", "resume", "--batch", &v.session_id])
-                                            .spawn();
+                                            .spawn()
+                                        {
+                                            Ok(_) => {
+                                                status_message = Some((
+                                                    format!("Retrying {}...", task.task_id),
+                                                    std::time::Instant::now(),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                status_message = Some((
+                                                    format!("Retry failed: {e}"),
+                                                    std::time::Instant::now(),
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1602,14 +1649,33 @@ async fn run_status_watch(
             }
         }
 
-        // Refresh data every tick (2 seconds).
-        last_view = fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref())
-            .await
-            .ok()
-            .flatten();
+        // Refresh data every tick. On error, keep stale data and warn.
+        match fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref()).await {
+            Ok(v) => last_view = v,
+            Err(e) => eprintln!("warn: fetch failed: {e}"),
+        }
     }
 
     Ok(())
+}
+
+fn keybinding_line() -> ratatui::text::Line<'static> {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    ratatui::text::Line::from(vec![
+        Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Attach "),
+        Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Abort "),
+        Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Retry "),
+        Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Navigate "),
+        Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Quit"),
+    ])
 }
 
 fn selected_task<'a>(
