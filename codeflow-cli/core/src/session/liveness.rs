@@ -102,6 +102,62 @@ pub fn check_session_liveness(
     LivenessResult::Dead
 }
 
+/// PID-only liveness for cleanup decisions.
+///
+/// Unlike [`LivenessResult`] which combines 3 signals (PID, heartbeat,
+/// pathflow-active), this checks ONLY process existence. Used by
+/// worktree cleanup where the question is "can this session still do
+/// work?" not "was it recently active?"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidLiveness {
+    /// Process is alive.
+    Alive,
+    /// Process is dead.
+    Dead,
+    /// No PID available (lead_pid was 0 or not recorded).
+    NoPid,
+}
+
+impl PidLiveness {
+    #[must_use]
+    pub fn is_alive(self) -> bool {
+        matches!(self, Self::Alive)
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Alive => "ALIVE",
+            Self::Dead => "DEAD",
+            Self::NoPid => "NO_PID",
+        }
+    }
+}
+
+impl std::fmt::Display for PidLiveness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// PID-only liveness check for cleanup decisions.
+///
+/// Unlike [`check_session_liveness`] which combines PID, heartbeat, and
+/// pathflow-active flag signals, this checks ONLY whether the process is
+/// alive. A dead process means the session cannot do any more work,
+/// regardless of leftover heartbeat files or pathflow-active flags.
+#[must_use]
+pub fn check_pid_liveness(lead_pid: u32) -> PidLiveness {
+    if lead_pid == 0 {
+        return PidLiveness::NoPid;
+    }
+    if process::is_process_alive(lead_pid) {
+        PidLiveness::Alive
+    } else {
+        PidLiveness::Dead
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +277,52 @@ mod tests {
     fn test_display_matches_label() {
         assert_eq!(format!("{}", LivenessResult::Active), "ACTIVE");
         assert_eq!(format!("{}", LivenessResult::Dead), "DEAD");
+    }
+
+    // ---------------------------------------------------------------
+    // PidLiveness tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_pid_liveness_alive_for_current_process() {
+        let pid = std::process::id();
+        let result = check_pid_liveness(pid);
+        assert_eq!(result, PidLiveness::Alive);
+        assert!(result.is_alive());
+    }
+
+    #[test]
+    fn test_pid_liveness_dead_for_nonexistent_pid() {
+        let result = check_pid_liveness(4_000_000);
+        assert_eq!(result, PidLiveness::Dead);
+        assert!(!result.is_alive());
+    }
+
+    #[test]
+    fn test_pid_liveness_no_pid_for_zero() {
+        let result = check_pid_liveness(0);
+        assert_eq!(result, PidLiveness::NoPid);
+        assert!(!result.is_alive());
+    }
+
+    #[test]
+    fn test_pid_liveness_label_values() {
+        assert_eq!(PidLiveness::Alive.label(), "ALIVE");
+        assert_eq!(PidLiveness::Dead.label(), "DEAD");
+        assert_eq!(PidLiveness::NoPid.label(), "NO_PID");
+    }
+
+    #[test]
+    fn test_pid_liveness_display_matches_label() {
+        assert_eq!(format!("{}", PidLiveness::Alive), "ALIVE");
+        assert_eq!(format!("{}", PidLiveness::Dead), "DEAD");
+        assert_eq!(format!("{}", PidLiveness::NoPid), "NO_PID");
+    }
+
+    #[test]
+    fn test_pid_liveness_is_alive_exhaustive() {
+        assert!(PidLiveness::Alive.is_alive());
+        assert!(!PidLiveness::Dead.is_alive());
+        assert!(!PidLiveness::NoPid.is_alive());
     }
 }

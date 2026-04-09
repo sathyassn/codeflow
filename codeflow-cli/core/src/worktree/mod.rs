@@ -48,15 +48,17 @@ pub struct EntryClassification {
 
 /// Classify a single worktree entry for cleanup.
 ///
-/// Evaluates worktree state (via `detect_state`), session liveness, registry
-/// status, and entry age against the given threshold. Returns a classification
-/// that both CLI display and `cleanup_stale` execution can use.
+/// Uses PID-only liveness (not the 3-signal `LivenessResult`) for cleanup
+/// decisions. The question for cleanup is "can this session still do work?"
+/// which is answered solely by whether the process is alive. Stale heartbeat
+/// files or leftover pathflow-active flags should NOT prevent cleanup of a
+/// dead session.
 ///
 /// # Arguments
 ///
-/// * `mgr` - The worktree manager (used for `detect_state` and `liveness_status`).
+/// * `mgr` - The worktree manager (used for `detect_state` and `pid_liveness`).
 /// * `entry` - The registry entry to classify.
-/// * `threshold` - Duration threshold for Unknown liveness classification.
+/// * `threshold` - Duration threshold for NoPid liveness classification.
 #[must_use]
 pub fn classify_entry(
     mgr: &WorktreeManager,
@@ -64,29 +66,27 @@ pub fn classify_entry(
     threshold: std::time::Duration,
 ) -> EntryClassification {
     let state = mgr.detect_state(entry);
-    let liveness = mgr.liveness_status(entry);
+    let pid_liveness = mgr.pid_liveness(entry);
 
     match entry.status {
         registry::WorktreeStatus::PendingCleanup => {
-            // PendingCleanup entries are always cleanable.
-            match liveness {
-                crate::session::liveness::LivenessResult::Active
-                | crate::session::liveness::LivenessResult::Recent => {
+            match pid_liveness {
+                crate::session::liveness::PidLiveness::Alive => {
                     // Session intended to end but process is still alive — force required.
                     EntryClassification {
                         action: CleanupAction::ForceRequired,
-                        reason: "pending cleanup but session still alive".to_string(),
+                        reason: "pending cleanup but process still alive".to_string(),
                     }
                 }
-                crate::session::liveness::LivenessResult::Dead => EntryClassification {
+                crate::session::liveness::PidLiveness::Dead => EntryClassification {
                     action: CleanupAction::Clean,
-                    reason: "pending cleanup, session dead".to_string(),
+                    reason: "pending cleanup, process dead".to_string(),
                 },
-                crate::session::liveness::LivenessResult::Unknown => {
-                    // pending_cleanup + Unknown → Clean (bypass threshold).
+                crate::session::liveness::PidLiveness::NoPid => {
+                    // pending_cleanup + NoPid → Clean (no process to protect).
                     EntryClassification {
                         action: CleanupAction::Clean,
-                        reason: "pending cleanup, liveness unknown".to_string(),
+                        reason: "pending cleanup, no PID recorded".to_string(),
                     }
                 }
             }
@@ -101,31 +101,28 @@ pub fn classify_entry(
                     }
                 }
                 WorktreeState::Active => {
-                    match liveness {
-                        crate::session::liveness::LivenessResult::Dead => EntryClassification {
-                            action: CleanupAction::Clean,
-                            reason: "session dead".to_string(),
-                        },
-                        crate::session::liveness::LivenessResult::Active
-                        | crate::session::liveness::LivenessResult::Recent => EntryClassification {
+                    match pid_liveness {
+                        crate::session::liveness::PidLiveness::Alive => EntryClassification {
                             action: CleanupAction::ForceRequired,
-                            reason: "session alive".to_string(),
+                            reason: "session process alive".to_string(),
                         },
-                        crate::session::liveness::LivenessResult::Unknown => {
-                            // Status-aware Unknown liveness classification.
+                        crate::session::liveness::PidLiveness::Dead => EntryClassification {
+                            action: CleanupAction::Clean,
+                            reason: "session process dead".to_string(),
+                        },
+                        crate::session::liveness::PidLiveness::NoPid => {
+                            // No PID available — backwards compat for legacy entries.
+                            // Use age-based threshold as fallback.
                             let threshold_secs = threshold.as_secs();
                             if WorktreeManager::is_older_than(entry, threshold_secs) {
-                                // active + Unknown + old → Clean.
                                 EntryClassification {
                                     action: CleanupAction::Clean,
-                                    reason: "liveness unknown, entry older than threshold"
-                                        .to_string(),
+                                    reason: "no PID, entry older than threshold".to_string(),
                                 }
                             } else {
-                                // active + Unknown + young → Skip.
                                 EntryClassification {
                                     action: CleanupAction::Skip,
-                                    reason: "liveness unknown, entry too recent".to_string(),
+                                    reason: "no PID, entry too recent".to_string(),
                                 }
                             }
                         }
@@ -479,6 +476,19 @@ impl WorktreeManager {
             }
             _ => crate::session::liveness::LivenessResult::Unknown,
         }
+    }
+
+    /// PID-only liveness check for cleanup classification.
+    ///
+    /// Unlike [`liveness_status`](Self::liveness_status) which combines 3 signals
+    /// (PID, heartbeat, pathflow-active), this checks ONLY whether the process
+    /// is alive. Used by [`classify_entry`] for cleanup decisions where the
+    /// question is "can this session still do work?" — not "was it recently
+    /// active?"
+    #[must_use]
+    pub fn pid_liveness(&self, entry: &WorktreeEntry) -> crate::session::liveness::PidLiveness {
+        let lead_pid = self.read_lead_pid(entry).unwrap_or(0);
+        crate::session::liveness::check_pid_liveness(lead_pid)
     }
 
     /// List all worktrees from the registry, optionally filtered by status.
@@ -1774,8 +1784,8 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_entry_unknown_pending_cleanup() {
-        // pending_cleanup + Unknown liveness → Clean (bypass threshold).
+    fn test_classify_entry_pending_cleanup_no_pid() {
+        // pending_cleanup + NoPid → Clean (no process to protect).
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
         let entry = WorktreeEntry {
@@ -1797,11 +1807,135 @@ mod tests {
             "reason: {}",
             result.reason
         );
+        assert!(
+            result.reason.contains("no PID"),
+            "reason: {}",
+            result.reason
+        );
     }
 
     #[test]
-    fn test_classify_entry_unknown_active_old() {
-        // active + Unknown liveness + age > threshold → Clean.
+    fn test_classify_entry_pending_cleanup_dead_pid() {
+        // pending_cleanup + dead PID → Clean (regardless of heartbeat/flag state).
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "pending-dead-wt".to_string(),
+            path: "/nonexistent/pending-dead-wt".to_string(),
+            branch: Some("feat/pending-dead".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::PendingCleanup,
+            session_id: Some("ses-test-dead".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(4_000_000), // Dead PID
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Clean);
+        assert!(
+            result.reason.contains("process dead"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_pending_cleanup_alive_pid() {
+        // pending_cleanup + alive PID → ForceRequired.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let current_pid = std::process::id();
+        let entry = WorktreeEntry {
+            name: "pending-alive-wt".to_string(),
+            path: "/nonexistent/pending-alive-wt".to_string(),
+            branch: Some("feat/pending-alive".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::PendingCleanup,
+            session_id: Some("ses-test-alive".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(current_pid), // Current process = alive
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::ForceRequired);
+        assert!(
+            result.reason.contains("process still alive"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_active_dead_pid() {
+        // active + dead PID → Clean (even with heartbeat/flag leftovers).
+        let dir = tempfile::tempdir().unwrap();
+        let wt_dir = dir.path().join("dead-pid-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        // Create leftover pathflow-active flag and heartbeat — should NOT matter.
+        let session_dir = wt_dir.join(".state/session");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("pathflow-active"), "").unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "dead-pid-wt".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/dead-pid".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-test-dead-pid".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(4_000_000), // Dead PID
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::Clean);
+        assert!(
+            result.reason.contains("process dead"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_active_alive_pid() {
+        // active + alive PID → ForceRequired.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_dir = dir.path().join("alive-pid-wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
+
+        let mgr = WorktreeManager::new(dir.path());
+        let current_pid = std::process::id();
+        let entry = WorktreeEntry {
+            name: "alive-pid-wt".to_string(),
+            path: wt_dir.to_string_lossy().to_string(),
+            branch: Some("feat/alive-pid".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-test-alive-pid".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(current_pid), // Current process = alive
+        };
+        let threshold = std::time::Duration::from_secs(3600);
+        let result = classify_entry(&mgr, &entry, threshold);
+        assert_eq!(result.action, CleanupAction::ForceRequired);
+        assert!(
+            result.reason.contains("process alive"),
+            "reason: {}",
+            result.reason
+        );
+    }
+
+    #[test]
+    fn test_classify_entry_no_pid_active_old() {
+        // active + NoPid + age > threshold → Clean.
         let dir = tempfile::tempdir().unwrap();
         let wt_dir = dir.path().join("old-wt");
         std::fs::create_dir_all(&wt_dir).unwrap();
@@ -1814,7 +1948,7 @@ mod tests {
             branch: Some("feat/old".to_string()),
             created_at: "2024-01-01T00:00:00Z".to_string(), // Very old
             status: registry::WorktreeStatus::Active,
-            session_id: None, // No session → Unknown liveness
+            session_id: None, // No session → NoPid
             task_id: None,
             source: None,
             lead_pid: None,
@@ -1830,8 +1964,8 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_entry_unknown_active_young() {
-        // active + Unknown liveness + age ≤ threshold → Skip.
+    fn test_classify_entry_no_pid_active_young() {
+        // active + NoPid + age ≤ threshold → Skip.
         let dir = tempfile::tempdir().unwrap();
         let wt_dir = dir.path().join("young-wt");
         std::fs::create_dir_all(&wt_dir).unwrap();
@@ -1846,7 +1980,7 @@ mod tests {
             branch: Some("feat/young".to_string()),
             created_at: recent_ts,
             status: registry::WorktreeStatus::Active,
-            session_id: None, // No session → Unknown liveness
+            session_id: None, // No session → NoPid
             task_id: None,
             source: None,
             lead_pid: None,
@@ -1859,6 +1993,67 @@ mod tests {
             "reason: {}",
             result.reason
         );
+    }
+
+    #[test]
+    fn test_pid_liveness_method_no_pid() {
+        // Entry without session or lead_pid → NoPid.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "no-pid-wt".to_string(),
+            path: "/nonexistent/no-pid-wt".to_string(),
+            branch: Some("feat/no-pid".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: None,
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        };
+        let result = mgr.pid_liveness(&entry);
+        assert_eq!(result, crate::session::liveness::PidLiveness::NoPid);
+    }
+
+    #[test]
+    fn test_pid_liveness_method_dead_pid() {
+        // Entry with a dead PID → Dead.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let entry = WorktreeEntry {
+            name: "dead-pid-wt".to_string(),
+            path: "/nonexistent/dead-pid-wt".to_string(),
+            branch: Some("feat/dead".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-dead".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(4_000_000),
+        };
+        let result = mgr.pid_liveness(&entry);
+        assert_eq!(result, crate::session::liveness::PidLiveness::Dead);
+    }
+
+    #[test]
+    fn test_pid_liveness_method_alive_pid() {
+        // Entry with current process PID → Alive.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::new(dir.path());
+        let current_pid = std::process::id();
+        let entry = WorktreeEntry {
+            name: "alive-pid-wt".to_string(),
+            path: "/nonexistent/alive-pid-wt".to_string(),
+            branch: Some("feat/alive".to_string()),
+            created_at: "2026-04-04T00:00:00Z".to_string(),
+            status: registry::WorktreeStatus::Active,
+            session_id: Some("ses-alive".to_string()),
+            task_id: None,
+            source: None,
+            lead_pid: Some(current_pid),
+        };
+        let result = mgr.pid_liveness(&entry);
+        assert_eq!(result, crate::session::liveness::PidLiveness::Alive);
     }
 
     #[test]

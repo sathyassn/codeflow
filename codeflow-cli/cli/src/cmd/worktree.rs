@@ -138,22 +138,43 @@ fn run_cleanup(
     let entries = mgr.list(None).context("listing worktrees")?;
     let threshold = codeflow_core::worktree::unknown_liveness_threshold(project_dir);
 
-    let mut clean_entries: Vec<(String, String, WorktreeState, EntryClassification, String)> =
-        Vec::new();
-    let mut skip_entries: Vec<(String, String, WorktreeState, EntryClassification, String)> =
-        Vec::new();
+    // (name, branch, state, classification, liveness_label, branch_safety_msg)
+    let mut clean_entries: Vec<(
+        String,
+        String,
+        WorktreeState,
+        EntryClassification,
+        String,
+        String,
+    )> = Vec::new();
+    let mut skip_entries: Vec<(
+        String,
+        String,
+        WorktreeState,
+        EntryClassification,
+        String,
+        String,
+    )> = Vec::new();
 
     for entry in &entries {
         let state = mgr.detect_state(entry);
         let classification = codeflow_core::worktree::classify_entry(&mgr, entry, threshold);
         let branch = entry.branch.as_deref().unwrap_or("(detached)").to_string();
-        let liveness = mgr.liveness_status(entry);
-        let liveness_label = liveness.label().to_string();
+        let pid_liveness = mgr.pid_liveness(entry);
+        let liveness_label = pid_liveness.label().to_string();
 
-        // Check branch safety for Clean entries to potentially upgrade to skip.
-        let effective_classification =
-            if classification.action == CleanupAction::Clean && Path::new(&entry.path).exists() {
-                let safety = codeflow_core::worktree::check_branch_safety(Path::new(&entry.path));
+        // Check branch safety for entries with existing directories.
+        let branch_safety = if Path::new(&entry.path).exists() {
+            Some(codeflow_core::worktree::check_branch_safety(Path::new(
+                &entry.path,
+            )))
+        } else {
+            None
+        };
+
+        // Check branch safety for Clean entries to potentially upgrade to ForceRequired.
+        let effective_classification = if classification.action == CleanupAction::Clean {
+            if let Some(ref safety) = branch_safety {
                 if safety.risk >= codeflow_core::worktree::BranchRisk::High {
                     EntryClassification {
                         action: CleanupAction::ForceRequired,
@@ -170,7 +191,15 @@ fn run_cleanup(
                 }
             } else {
                 classification
-            };
+            }
+        } else {
+            classification
+        };
+
+        let branch_safety_msg = branch_safety
+            .as_ref()
+            .map(|s| format!("branch: {}", s.message))
+            .unwrap_or_default();
 
         let info = (
             entry.name.clone(),
@@ -178,6 +207,7 @@ fn run_cleanup(
             state,
             effective_classification,
             liveness_label,
+            branch_safety_msg,
         );
 
         match info.3.action {
@@ -192,7 +222,7 @@ fn run_cleanup(
     // Phase 2: Display analysis.
     if !clean_entries.is_empty() {
         println!("CLEAN ({}):", clean_entries.len());
-        for (name, branch, state, classification, liveness_label) in &clean_entries {
+        for (name, branch, state, classification, liveness_label, _) in &clean_entries {
             println!(
                 "  {} ({}) [{}] {} -- {}",
                 name, branch, state, liveness_label, classification.reason
@@ -201,14 +231,47 @@ fn run_cleanup(
     }
 
     if !skip_entries.is_empty() {
-        println!("SKIP ({}):", skip_entries.len());
-        for (name, branch, state, classification, liveness_label) in &skip_entries {
-            println!(
-                "  {} ({}) [{}] {} -- {}",
-                name, branch, state, liveness_label, classification.reason
-            );
-            if verbose {
-                println!("    --force-id {name}");
+        // Separate ForceRequired from Skip for clearer display.
+        let force_required: Vec<_> = skip_entries
+            .iter()
+            .filter(|(_, _, _, c, _, _)| c.action == CleanupAction::ForceRequired)
+            .collect();
+        let skipped: Vec<_> = skip_entries
+            .iter()
+            .filter(|(_, _, _, c, _, _)| c.action == CleanupAction::Skip)
+            .collect();
+
+        if !force_required.is_empty() {
+            println!("FORCE REQUIRED ({}):", force_required.len());
+            for (name, branch, state, classification, liveness_label, branch_safety) in
+                &force_required
+            {
+                println!(
+                    "  {} ({}) [{}] PID:{} -- {}",
+                    name, branch, state, liveness_label, classification.reason
+                );
+                if verbose && !branch_safety.is_empty() {
+                    println!("    {branch_safety}");
+                }
+                if verbose {
+                    println!("    --force-id {name}");
+                }
+            }
+        }
+
+        if !skipped.is_empty() {
+            println!("SKIP ({}):", skipped.len());
+            for (name, branch, state, classification, liveness_label, branch_safety) in &skipped {
+                println!(
+                    "  {} ({}) [{}] PID:{} -- {}",
+                    name, branch, state, liveness_label, classification.reason
+                );
+                if verbose && !branch_safety.is_empty() {
+                    println!("    {branch_safety}");
+                }
+                if verbose {
+                    println!("    --force-id {name}");
+                }
             }
         }
     }
@@ -293,7 +356,29 @@ fn run_cleanup(
 
     // Phase 3b: Confirm (unless --yes).
     if !yes {
-        eprint!("\n{total_to_clean} worktree(s) will be removed. Proceed? [y/N] ");
+        // Count how many force-removed entries have alive PIDs.
+        let alive_force_count = if force_flag {
+            force_additions
+                .iter()
+                .filter(|name| {
+                    skip_entries
+                        .iter()
+                        .any(|(n, _, _, _, liveness, _)| n == *name && liveness == "ALIVE")
+                })
+                .count()
+        } else {
+            0
+        };
+
+        if alive_force_count > 0 {
+            eprintln!(
+                "\nWARNING: {alive_force_count} worktree(s) have ALIVE processes. \
+                 Force-removing may interrupt active sessions."
+            );
+            eprint!("{total_to_clean} worktree(s) will be FORCE-REMOVED. Proceed? [y/N] ");
+        } else {
+            eprint!("\n{total_to_clean} worktree(s) will be removed. Proceed? [y/N] ");
+        }
         std::io::stderr().flush().ok();
         let mut answer = String::new();
         std::io::stdin()
