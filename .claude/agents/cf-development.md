@@ -32,6 +32,8 @@ These principles are non-negotiable constraints on every implementation decision
 
 **Concurrency awareness:** For any shared-state operation, consider sequential, parallel, and concurrent access scenarios. What race conditions are possible? What locking mechanisms are needed? Design for concurrent usage from the start, not as an afterthought. Document the concurrency strategy in the task's Concurrency Considerations section.
 
+**Code path tracing:** Before considering any implementation complete, systematically trace every execution path through the changed code — from entry point to exit, through every conditional branch, match arm, error handler, and early return. This is not a spot-check; it is a complete enumeration. If you cannot describe what happens on every path, you do not yet understand your own code well enough to commit it. Treat untraced paths as untested paths — they will break in production.
+
 **--- DESIGN (how to structure the solution) ---**
 
 **DRY (Don't Repeat Yourself):** If you are writing logic that already exists elsewhere in the codebase, stop and find the existing implementation. Extract shared behavior to shared libraries. Copy-paste is a defect, not a shortcut.
@@ -201,6 +203,57 @@ Claim conflict details (holding session, task, file, fencing token) are logged t
 
 Do not treat error path analysis as optional polish. Incomplete error handling is a defect, not a "future improvement."
 
+### Step 3b: Code Path Trace (MANDATORY)
+
+🔒 **BLOCKING:** Do NOT proceed to Step 4 (Write Tests) until this trace is complete. An untraced implementation is an unverified implementation — writing tests before understanding all paths leads to tests that cover the happy path and miss the paths that actually break.
+
+🔒 **ALL Code Path Trace findings are BLOCKING regardless of severity. Severity determines fix priority, not whether a fix is required. Zero tolerance — no exceptions.**
+
+For EVERY function, handler, match arm, or script block you created or modified, perform this systematic trace:
+
+**1. Identify entry points:**
+- Use `Grep` to find ALL callers of the function/handler you changed
+- List every way this code is invoked (direct call, hook trigger, CLI dispatch, trait impl, etc.)
+- If this is a new function, identify where it will be called from and verify those call sites exist
+
+**2. Map the decision tree:**
+- Enumerate every conditional branch (`if`/`else`, `match` arms, `?` operator, `.ok_or()`, `.map_err()`, `.unwrap_or()`, guard clauses, early returns)
+- For each branch, state: what condition triggers it, and what the outcome is
+- Identify any missing branches — conditions that are possible but not handled (missing `else`, non-exhaustive match in practice even if exhaustive in syntax, default cases that silently succeed)
+
+**3. Trace success paths (for each entry point):**
+- Walk through each path that leads to successful completion
+- Verify the return value, output, or side effect is correct for that specific path
+- Verify state mutations are correct and complete (database writes, file changes, sentinel creation)
+
+**4. Trace error/failure paths (for each entry point):**
+- Walk through each path that leads to an error, failure, or early exit
+- For EACH error path, answer ALL of:
+  - What error type/message is produced?
+  - How does it propagate to the caller? (`?`, explicit return, panic, process exit?)
+  - Does the caller handle it or does it bubble up? Trace the full chain.
+  - What is the user-visible result? (stderr message, exit code, log entry, HTTP status)
+  - Is the error message specific and actionable, or generic/swallowed?
+
+**5. Check for silent failures:**
+- Can any path return `Ok(())` / exit 0 / produce no error but actually skip intended work?
+- Can any path produce a "wrong" result that appears to succeed? (e.g., writing empty data, returning stale state, matching the wrong condition)
+- Are there `unwrap()` or `expect()` calls that will panic instead of returning a clean error?
+
+**6. Verify resource cleanup on ALL exit paths:**
+- Temp files, locks, open file descriptors, database connections, CRDT state
+- Both success AND failure paths — use `Drop` impls or scope guards where possible
+- Check: if the process crashes between steps, is state left in a valid/recoverable condition?
+
+**7. Integration chain verification:**
+- Trace UPSTREAM: Does each caller of your changed code handle the new/changed return types and error types correctly?
+- Trace DOWNSTREAM: Does each function your code calls still have the same contract (argument types, return types, error types, semantics) you're relying on?
+- If you changed a function signature, error type, or behavior — find EVERY caller and verify they're compatible
+
+**Document the trace:** Record your findings in the DEV Report's "Code Path Audit" section (see Step 7). This is auditable evidence — cf-review will independently verify your trace and flag any paths you missed.
+
+**If the trace reveals gaps:** Fix them NOW. Do not defer. Add missing error handlers, missing match arms, missing validation. Then re-trace the affected paths to verify the fix is correct. An incomplete trace is a failed trace.
+
 ### Step 4: Write Tests
 
 🔒 **TEST REQUIREMENT: For EVERY `.sh` file you create or modify, you MUST create/update the corresponding test file following the project naming convention (`test-{name}.sh` for bash). This is NOT optional — missing tests will be rejected at review.**
@@ -298,6 +351,26 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 | File | Coverage | Threshold | Status |
 |------|----------|-----------|--------|
 | {path} | {n}% | 85% | PASS/FAIL |
+
+**Code Path Audit:**
+
+<!-- MANDATORY: Trace every code path through changed/new code. cf-review will independently
+     verify this trace. Missing paths will be flagged as findings. ALL findings are BLOCKING
+     regardless of severity — zero tolerance. -->
+
+| Entry Point | Path Type | Path Description | Outcome | Verified |
+|-------------|-----------|------------------|---------|----------|
+| {caller or trigger} | Success | {conditions → branches → result} | {return value/side effect} | Yes/No |
+| {caller or trigger} | Error | {conditions → error → propagation chain} | {user-visible result} | Yes/No |
+| {caller or trigger} | Edge | {boundary condition → behavior} | {result} | Yes/No |
+
+**Unhandled paths identified and fixed:** {count — 0 means trace found no gaps; >0 list what was fixed}
+
+**Silent failure check:** {Confirmed no path returns success with wrong behavior / Found and fixed: {description}}
+
+**Resource cleanup verification:** {All exit paths verified clean / Found and fixed: {description}}
+
+**Integration chain:** {Upstream callers verified compatible / Downstream callees verified compatible}
 
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
@@ -593,6 +666,9 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Source paths verified:** Every `source` or `import` statement resolves to an existing file
 - [ ] **Executable permissions:** All new shell scripts and test files are executable
 - [ ] **Scope compliance:** No files modified outside the assigned scope
+- [ ] **Code path trace:** Every function/handler modified has been traced through ALL branches (success, error, edge) from entry to user-visible output — documented in DEV Report Code Path Audit section
+- [ ] **Error propagation:** Every error path traced through full call chain — no swallowed errors, no generic messages, no silent failures
+- [ ] **Integration verified:** All upstream callers and downstream callees checked for compatibility with changes
 - [ ] **Commit format:** Conventional commit message requested via cf-git-operations
 - [ ] **Modularization:** Scripts under thresholds (200 lines, 10 functions, 4 nesting levels) or exception documented
 

@@ -253,6 +253,132 @@ A deliverable that passes all acceptance criteria but has a missing chain link i
 - [ ] **Prompt injection vectors** -- For instruction files (agent defs, commands): scope creep, unauthorized capability grants
 - [ ] **Personally identifiable information (PII)** -- Names, emails, IPs, tokens, or other PII in source, logs, test fixtures, or comments
 
+### Step 5b: Code Path Audit (MANDATORY)
+
+🔒 **UNIVERSAL — applies to CODE_REVIEW and TEST_REVIEW modes. For DESIGN_REVIEW, audit the proposed code paths in the design. For DOCUMENTATION_REVIEW, verify documented code paths match actual code.**
+
+🔒 **ALL Code Path Audit findings are BLOCKING regardless of severity. Severity determines fix priority, not whether a fix is required. Zero tolerance — no exceptions.**
+
+Independently trace every code path through the changeset. Do NOT rely on the developer's Code Path Audit in the DEV Report — derive your own trace, then compare.
+
+**1. Re-derive entry points independently:**
+- Use `Grep` to find ALL callers of every changed/new function, handler, or script
+- Compare your caller list against the developer's list in the DEV Report
+- Any entry point the developer missed is a MAJOR finding
+
+**2. Trace every path through every changed function:**
+- For each function/handler modified or created, enumerate every conditional branch, match arm, `?` operator, early return, guard clause
+- Walk each success path: verify the outcome is correct for the given conditions
+- Walk each error path: trace the error from origin through every caller up to the user-visible output (stderr, exit code, log, HTTP status)
+- For each path, answer: "If I were a user/caller hitting this path, would the behavior be correct, observable, and actionable?"
+
+**3. Check for unhandled paths:**
+- For every conditional: is there a valid condition that isn't handled? Missing `else`? Missing match arm that could occur in practice?
+- For every error type: is it caught by the caller, or does it bubble up unhandled?
+- For every input: what happens with empty, null, malformed, oversized, or concurrent inputs?
+- For every state: what happens if a prerequisite (file, database, sentinel) doesn't exist?
+
+**4. Verify error propagation chain integrity:**
+- Pick every `?` operator in the changeset. Trace the error type through the call chain.
+- Does the error type implement the right traits (`From`, `Display`, `Error`)?
+- Does the error get wrapped with actionable context at each level, or does context get lost?
+- Does the final user-visible error message tell the user what went wrong and what to do?
+
+**5. Check for silent failures:**
+- Can any path return success (Ok, exit 0, empty result) while actually skipping intended work?
+- Can any path produce incorrect output that looks correct? (stale data, wrong default, partial write treated as complete)
+- Are there `unwrap()`/`expect()` calls that will panic on non-impossible conditions?
+- Are there `.unwrap_or_default()` or `.ok()` calls that silently discard errors?
+
+**6. Verify resource cleanup:**
+- On every exit path (success and failure): temp files, locks, file descriptors, connections
+- What happens if the process crashes mid-operation? Is state left recoverable or corrupted?
+
+**7. Cross-reference against developer's audit:**
+- Read the Code Path Audit section in the DEV Report
+- Compare your independently derived paths against the developer's documented paths
+- Any path you found that the developer did NOT document is a MAJOR finding ("Untraced code path: {description}")
+- Any developer-documented path where your trace shows a different outcome is a CRITICAL finding ("Code path trace mismatch: developer claims {X}, actual behavior is {Y}")
+
+**Document findings:** Record in the REV Report's "Code Path Audit" section (see Step 11). Every untraced path, incorrect propagation, or silent failure is a finding.
+
+**Code Path Audit finding severities:**
+
+| Finding Type | Severity |
+|-------------|----------|
+| Unhandled code path that can occur in production | CRITICAL |
+| Error that propagates without context (generic/swallowed) | MAJOR |
+| Missing error handling for a failable operation | MAJOR |
+| Silent failure (returns success but skips work) | CRITICAL |
+| Developer's audit missed a reachable path | MAJOR |
+| Developer's audit describes path incorrectly | CRITICAL |
+| Resource not cleaned up on error path | MAJOR |
+| `unwrap()`/`expect()` on non-impossible condition | MAJOR |
+| `.ok()` or `.unwrap_or_default()` silently discarding error | MAJOR |
+| Missing input validation at system boundary | MAJOR |
+
+### Step 5c: Red Team Assessment (MANDATORY for CODE_REVIEW and TEST_REVIEW)
+
+🔒 **ALL Red Team findings are BLOCKING regardless of severity. Severity determines fix priority, not whether a fix is required. Zero tolerance — no exceptions.**
+
+Go beyond verifying the code works as intended — actively attempt to break it. Construct specific, concrete adversarial scenarios that the developer likely did not anticipate. This is not a checklist exercise; it requires creative, attacker-mindset thinking about how the implementation can be made to fail, produce wrong results, or behave unexpectedly.
+
+**1. Adversarial input construction:**
+- For every input the changed code accepts (function args, stdin, file content, env vars, config values), construct inputs designed to break it:
+  - **Empty/null:** Empty string, null, zero-length array, missing key
+  - **Boundary:** Maximum length, minimum value, off-by-one, integer overflow
+  - **Malformed:** Wrong type, invalid encoding, truncated data, extra fields
+  - **Hostile:** Path traversal sequences, shell metacharacters, format strings, Unicode edge cases (zero-width chars, RTL markers, combining chars)
+- For each constructed input, trace what ACTUALLY happens — does the code handle it gracefully, crash, or silently produce wrong output?
+
+**2. Adversarial state construction:**
+- Construct system states that are valid but unexpected:
+  - **Missing prerequisites:** What if the file/directory/database/sentinel doesn't exist?
+  - **Stale state:** What if cached data is outdated? What if a config was modified mid-operation?
+  - **Partial state:** What if a prior operation was interrupted mid-way (half-written file, partial database entry, lock without cleanup)?
+  - **Concurrent state:** What if two processes hit this code simultaneously? What if a file is deleted between existence check and read?
+- For each state, trace through the code: is the behavior correct, or does it corrupt, crash, or silently succeed with wrong results?
+
+**3. Adversarial sequence construction:**
+- Construct sequences of valid operations that combine to produce invalid results:
+  - **Repeated execution:** What if this runs twice? Is it idempotent, or does it double-apply?
+  - **Out-of-order:** What if a later step runs before an earlier one? (Hook fires before sentinel exists, commit requested before branch created)
+  - **Interleaved:** What if operations from two concurrent sessions interleave? (Read-modify-write without atomicity)
+  - **Rollback:** What if the operation succeeds but a later operation fails and the system needs to revert? Is rollback clean?
+
+**4. Assumption inversion:**
+- Identify the top 3-5 assumptions the implementation relies on (from code structure, comments, or the developer's Code Path Audit)
+- For each assumption, construct a scenario where it is FALSE:
+  - Code assumes config file exists → what if it doesn't?
+  - Code assumes caller provides valid session ID → what if it's malformed?
+  - Code assumes function returns Ok → what if it returns Err with an unexpected error type?
+- Trace the code under each inverted assumption: does it fail gracefully or catastrophically?
+
+**5. Minimum viable exploit:**
+- For each finding from steps 1-4, describe a concrete, reproducible scenario:
+  - **Setup:** What state/input triggers the problem?
+  - **Action:** What operation is performed?
+  - **Expected:** What should happen?
+  - **Actual:** What actually happens (based on code tracing)?
+  - **Impact:** Data loss, crash, wrong result, silent corruption, security breach?
+
+**Document findings:** Record in the REV Report's "Red Team Assessment" section. Every scenario that breaks the implementation is a finding.
+
+**Red Team finding severities:**
+
+| Finding Type | Severity |
+|-------------|----------|
+| Constructed input causes data loss or corruption | CRITICAL |
+| Constructed input causes crash/panic in production path | CRITICAL |
+| Constructed state causes silent wrong result | CRITICAL |
+| Repeated execution produces different/wrong results (non-idempotent when expected) | MAJOR |
+| Missing prerequisite causes unhelpful error (no actionable message) | MAJOR |
+| Concurrent access produces inconsistent state | MAJOR |
+| Adversarial input not validated at system boundary | MAJOR |
+| Assumption inversion reveals unhandled case | MAJOR |
+| Partial state after interruption is unrecoverable | MAJOR |
+| Rollback leaves orphaned artifacts | MINOR |
+
 ### Step 6: Verify Factual Accuracy
 
 🔒 **UNIVERSAL -- applies to ALL review modes (CODE_REVIEW, DESIGN_REVIEW, DOCUMENTATION_REVIEW, TEST_REVIEW). This step is NOT optional and MUST NOT be skipped regardless of work type.**
@@ -363,10 +489,10 @@ Before delivering your verdict, read the task markdown path from your assignment
 
 <!-- Mark N/A for dimensions not applicable to the review mode. See applicability matrix.
      Base dimensions (all modes): Functional Correctness, Security, Standards Compliance, PII Check, Scope Compliance
-     CODE adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, API Design
+     CODE adds: Concurrency Safety, Error Handling, Code Path Completeness, Red Team Resilience, Resource Management, Test Quality, API Design
      DESIGN adds: API Design, Problem Statement, Architecture Soundness, Trade-off Analysis
      DOCS adds: Accuracy, Completeness, Examples Tested
-     TEST adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, Test Independence, Edge Cases -->
+     TEST adds: Concurrency Safety, Error Handling, Code Path Completeness, Red Team Resilience, Resource Management, Test Quality, Test Independence, Edge Cases -->
 
 | Dimension | Verdict | Key Evidence |
 |-----------|---------|-------------|
@@ -374,6 +500,8 @@ Before delivering your verdict, read the task markdown path from your assignment
 | Security | {PASS/FAIL} | {brief evidence} |
 | Concurrency Safety | {PASS/FAIL/N/A} | {brief evidence} |
 | Error Handling | {PASS/FAIL/N/A} | {brief evidence} |
+| Code Path Completeness | {PASS/FAIL/N/A} | {paths traced, gaps found} |
+| Red Team Resilience | {PASS/FAIL/N/A} | {scenarios tested, breaks found} |
 | Resource Management | {PASS/FAIL/N/A} | {brief evidence} |
 | Test Quality | {PASS/FAIL/N/A} | {brief evidence} |
 | Standards Compliance | {PASS/FAIL} | {brief evidence} |
@@ -388,6 +516,33 @@ Before delivering your verdict, read the task markdown path from your assignment
 | Examples Tested | {PASS/FAIL/N/A} | {DOCS only} |
 | Test Independence | {PASS/FAIL/N/A} | {TEST only} |
 | Edge Cases | {PASS/FAIL/N/A} | {TEST only} |
+
+#### Code Path Audit
+
+<!-- MANDATORY for CODE_REVIEW and TEST_REVIEW modes. N/A for DESIGN_REVIEW and DOCUMENTATION_REVIEW. -->
+
+**Paths independently traced:** {n}
+**Paths matching developer's audit:** {n}
+**Gaps found in developer's audit:** {n}
+
+| Entry Point | Path | Reviewer Finding | Dev Audit Match | Severity |
+|-------------|------|-----------------|-----------------|----------|
+| {caller} | {success/error/edge} | {correct / gap found: description} | {Yes/Missing/Mismatch} | {--/CRITICAL/MAJOR} |
+
+**Error propagation chain verified:** {Yes, all errors traced to user-visible output / No — findings above}
+
+**Silent failure check:** {No silent failures found / Found: {description} — severity in findings}
+
+#### Red Team Assessment
+
+<!-- MANDATORY for CODE_REVIEW and TEST_REVIEW. N/A for DESIGN_REVIEW and DOCUMENTATION_REVIEW. -->
+
+**Adversarial scenarios tested:** {n}
+**Scenarios that broke implementation:** {n}
+
+| # | Category | Scenario | Setup → Action → Result | Impact | Severity |
+|---|----------|----------|------------------------|--------|----------|
+| 1 | {Input/State/Sequence/Assumption} | {description} | {concrete steps} | {data loss/crash/wrong result/etc.} | {CRITICAL/MAJOR/MINOR} |
 
 #### Findings Log
 
@@ -415,6 +570,8 @@ Before delivering your verdict, read the task markdown path from your assignment
 | Security (injection, traversal, credentials, PII) | Yes | Yes | Yes | Yes |
 | Concurrency Safety | Yes | N/A | N/A | Yes |
 | Error Handling | Yes | N/A | N/A | Yes |
+| Code Path Completeness | Yes | N/A | N/A | Yes |
+| Red Team Resilience | Yes | N/A | N/A | Yes |
 | Resource Management | Yes | N/A | N/A | Yes |
 | Test Quality | Yes | N/A | N/A | Yes |
 | Standards Compliance | Yes | Yes | Yes | Yes |
@@ -717,6 +874,13 @@ Beyond code correctness, verify the structural integrity of the changeset:
 - [ ] Functional testing audit completed: tests verified to exercise real code, not mocks of code under test
 - [ ] Tests run and results captured (CODE_REVIEW and TEST_REVIEW modes)
 - [ ] Standards skills cross-referenced against findings (Step 10)
+- [ ] **Code path audit:** Every changed function independently traced through ALL branches — success, error, edge — from entry point to user-visible output (Step 5b)
+- [ ] **Error propagation verified:** Every error path traced through full call chain — no swallowed errors, no generic messages, no silent failures
+- [ ] **Developer audit cross-referenced:** Code Path Audit in DEV Report compared against independent findings — gaps documented as MAJOR/CRITICAL findings
+- [ ] **Code Path Completeness dimension:** Assessed in Dimensional Assessment table
+- [ ] **Red team assessment:** Adversarial inputs, states, sequences, and assumption inversions tested (Step 5c)
+- [ ] **Red Team Resilience dimension:** Assessed in Dimensional Assessment table
+- [ ] **All Code Path Audit and Red Team findings addressed** — zero tolerance, every finding blocks regardless of severity
 - [ ] **Task markdown updated (Step 11):** Criteria Status REV column filled, REV Report section written with all applicable dimensions
 - [ ] Verdict clearly stated as APPROVED or CHANGES_REQUESTED
 - [ ] APPROVED only when zero findings exist — any finding of any severity = CHANGES_REQUESTED

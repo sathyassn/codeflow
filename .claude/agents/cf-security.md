@@ -352,6 +352,106 @@ When spawned at the WS-SEC pipeline stage (after WS-DEV, before WS-REV), perform
 - Shared state mutations without proper locking
 - File operations without atomic write patterns
 
+### Security Code Path Audit (MANDATORY)
+
+🔒 **ALL Security Code Path Audit findings are BLOCKING regardless of severity. Severity determines fix priority, not whether a fix is required. Zero tolerance — no exceptions.**
+
+Beyond pattern-matching for OWASP categories, systematically trace security-relevant code paths to verify that security controls are effective on ALL execution paths — not just the happy path.
+
+**1. Identify security-relevant paths:**
+- Any code that handles authentication, authorization, or access control
+- Any code that processes external input (user input, hook stdin, file content, env vars)
+- Any code that constructs shell commands, file paths, or database queries from variable data
+- Any code that reads/writes sensitive data (credentials, tokens, PII, session state)
+- Any code that modifies protected resources or enforcement state (sentinels, claims, policies)
+
+**2. Trace each security-relevant path through ALL branches:**
+- For each security control (validation, sanitization, access check): trace every code path through the function. Is the control applied on ALL paths, or can it be bypassed?
+- Check error paths: does an error/failure path skip validation or access checks that the success path applies?
+- Check alternate entry points: can the same operation be reached via a different caller that skips the security control?
+- Check early returns: does any guard clause or early return bypass a security-critical check that happens later in the function?
+
+**3. Verify error handling doesn't create security holes:**
+- Do error messages expose internal paths, stack traces, or sensitive state?
+- Does error handling leave the system in a state that bypasses security (unlocked resources, elevated permissions, open sessions)?
+- Are errors from security-critical operations (auth, validation) handled differently from application errors? (They should be — security errors should not be swallowed)
+
+**4. Check for TOCTOU and race conditions in security controls:**
+- Is there a gap between checking permission and using the resource?
+- Can concurrent access bypass a sequential check-then-act pattern?
+- Are security-relevant file operations atomic or guarded against race conditions?
+
+**5. Verify defense-in-depth on critical paths:**
+- For security-critical operations, are there multiple independent layers of protection?
+- If one layer fails (hook doesn't fire, sentinel missing, claim not acquired), does another layer catch the violation?
+- Is the system fail-secure (denies access by default) or fail-open (allows access on error)?
+
+**Security Code Path Audit finding severities:**
+
+| Finding Type | Severity |
+|-------------|----------|
+| Security control bypassable via alternate code path | CRITICAL |
+| Error path skips validation/access check | CRITICAL |
+| Security error swallowed or returns success | CRITICAL |
+| TOCTOU in access control or permission check | HIGH |
+| Error message leaks sensitive internal state | MEDIUM |
+| Missing defense-in-depth layer on critical path | MEDIUM |
+| Security control applied but not on all entry points | HIGH |
+| Fail-open behavior on security error | CRITICAL |
+
+### Security Red Team Assessment (MANDATORY)
+
+🔒 **ALL Security Red Team findings are BLOCKING regardless of severity. Severity determines fix priority, not whether a fix is required. Zero tolerance — no exceptions.**
+
+Go beyond pattern-matching for known vulnerability categories — actively attempt to construct attack chains that exploit the changed code. Think like an attacker with knowledge of the codebase, not a scanner running through a checklist.
+
+**1. Attack surface enumeration:**
+- List every point where external data enters the changed code (stdin, file reads, env vars, network responses, config files, database queries)
+- For each entry point: what is the trust level of the data source? Is it validated before use?
+- Which entry points are NOT at a trust boundary but SHOULD be? (e.g., reading a file that another process could have modified)
+
+**2. Exploit chain construction:**
+- For each entry point, attempt to construct an input that:
+  - Achieves command injection (shell metacharacters reaching `Command::new()` or `Bash` calls)
+  - Achieves path traversal (relative paths, symlinks, `..` sequences reaching file operations)
+  - Bypasses access controls (alternate code path that skips permission checks)
+  - Leaks sensitive data (crafted input that causes error messages to expose internals)
+  - Escalates privileges (reaching admin/protected operations from unprivileged context)
+- For each attempt, trace through the code: does the security control stop it, or can it reach the sensitive operation?
+
+**3. Security control bypass attempts:**
+- For each security control in the changeset (validation, sanitization, access check, hook gate):
+  - Can it be bypassed by using a different entry point that reaches the same resource?
+  - Can it be bypassed by triggering an error path that skips the check?
+  - Can it be bypassed by racing (TOCTOU — check passes, then state changes before use)?
+  - Can it be bypassed by encoding tricks (URL encoding, Unicode normalization, null bytes)?
+
+**4. Privilege and trust boundary analysis:**
+- Map the trust boundaries the changed code crosses (user input → validated → internal use)
+- For each crossing: is the trust transition explicit (validation at boundary) or implicit (assuming data is safe because it came from "internal" source)?
+- Can an attacker control data on the "trusted" side of any boundary?
+
+**5. Blast radius assessment:**
+- If the most likely exploit succeeds, what is the worst-case impact?
+  - Can it modify files outside the scope? (sentinel injection, state corruption)
+  - Can it affect other sessions? (shared state corruption, claim manipulation)
+  - Can it persist beyond the current session? (poisoned config, modified hooks)
+- Document the blast radius in findings
+
+**Security Red Team finding severities:**
+
+| Finding Type | Severity |
+|-------------|----------|
+| Exploitable injection (command, path, query) | CRITICAL |
+| Security control bypassable via constructed input | CRITICAL |
+| Trust boundary crossable with attacker-controlled data | CRITICAL |
+| Privilege escalation path exploitable | CRITICAL |
+| Information leakage via crafted error trigger | HIGH |
+| TOCTOU exploitable in security check | HIGH |
+| Missing validation at trust boundary entry point | HIGH |
+| Blast radius extends beyond session scope | CRITICAL |
+| Encoding-based bypass possible | HIGH |
+
 #### Security Verdict
 
 Deliver verdict as PASS or FAIL:
@@ -380,6 +480,27 @@ Format:
 | # | Severity | Category | Finding | File:Line | Resolution |
 |---|----------|----------|---------|-----------|------------|
 | 1 | {CRITICAL/HIGH/MEDIUM/LOW/INFO} | {OWASP category} | {description} | {file:line} | {OPEN} |
+
+### Security Code Path Audit
+
+| Security Control | Paths Traced | Bypass Found | Finding |
+|-----------------|-------------|-------------|---------|
+| {validation/access check/etc.} | {n} | {Yes: description / No} | {--/finding ref #} |
+
+**Error path security:** {All error paths maintain security controls / Gaps found: {description}}
+**TOCTOU check:** {No race conditions found / Found: {description}}
+**Defense-in-depth:** {Multiple layers verified / Gaps: {description}}
+
+### Security Red Team Assessment
+
+**Attack chains attempted:** {n}
+**Exploitable chains found:** {n}
+
+| # | Entry Point | Attack Type | Exploit Chain | Blocked By | Bypass Found | Severity |
+|---|------------|-------------|--------------|-----------|-------------|----------|
+| 1 | {input source} | {injection/traversal/bypass/etc.} | {step → step → target} | {control or "NONE"} | {Yes: detail / No} | {CRITICAL/HIGH/MEDIUM} |
+
+**Blast radius:** {contained to function / extends to session / extends to system}
 
 ### Required Fixes (if FAIL)
 1. {Specific fix with file path}

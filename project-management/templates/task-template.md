@@ -245,6 +245,23 @@ Mechanisms available in codebase:
 |------|----------|-----------|--------|
 | {path} | {n}% | 85% | PASS/FAIL |
 
+#### Code Path Audit
+
+<!-- MANDATORY: Trace every code path through changed/new code. cf-review will independently
+     verify this trace. Missing paths → findings at review. ALL findings are BLOCKING
+     regardless of severity — zero tolerance. -->
+
+| Entry Point | Path Type | Path Description | Outcome | Verified |
+|-------------|-----------|------------------|---------|----------|
+| {caller or trigger} | Success | {conditions → branches → result} | {return value/side effect} | Yes |
+| {caller or trigger} | Error | {conditions → error → propagation} | {user-visible result} | Yes |
+| {caller or trigger} | Edge | {boundary condition → behavior} | {result} | Yes |
+
+**Unhandled paths identified and fixed:** {count}
+**Silent failure check:** {result}
+**Resource cleanup verification:** {result}
+**Integration chain:** {upstream/downstream verification result}
+
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
 
@@ -276,6 +293,27 @@ Mechanisms available in codebase:
 |---|----------|----------|---------|-----------|------------|
 | 1 | {CRITICAL/HIGH/MEDIUM} | {category} | {description} | {file:line} | {OPEN/RESOLVED} |
 
+#### Security Code Path Audit
+
+| Security Control | Paths Traced | Bypass Found | Finding |
+|-----------------|-------------|-------------|---------|
+| {validation/access check/etc.} | {n} | {Yes: description / No} | {--/finding ref #} |
+
+**Error path security:** {All error paths maintain security controls / Gaps found: {description}}
+**TOCTOU check:** {No race conditions found / Found: {description}}
+**Defense-in-depth:** {Multiple layers verified / Gaps: {description}}
+
+#### Security Red Team Assessment
+
+**Attack chains attempted:** {n}
+**Exploitable chains found:** {n}
+
+| # | Entry Point | Attack Type | Exploit Chain | Blocked By | Bypass Found | Severity |
+|---|------------|-------------|--------------|-----------|-------------|----------|
+| 1 | {input source} | {injection/traversal/bypass/etc.} | {step → step → target} | {control or "NONE"} | {Yes: detail / No} | {CRITICAL/HIGH/MEDIUM} |
+
+**Blast radius:** {contained to function / extends to session / extends to system}
+
 **Confidence Score:** {0-100} -- {brief rationale}
 
 ### REV Report
@@ -290,10 +328,10 @@ Mechanisms available in codebase:
 
 <!-- Mark N/A for dimensions not applicable to the review mode. See applicability matrix.
      Base dimensions (all modes): Functional Correctness, Security, Standards Compliance, PII Check, Scope Compliance
-     CODE adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, API Design
+     CODE adds: Concurrency Safety, Error Handling, Code Path Completeness, Red Team Resilience, Resource Management, Test Quality, API Design
      DESIGN adds: API Design, Problem Statement, Architecture Soundness, Trade-off Analysis
      DOCS adds: Accuracy, Completeness, Examples Tested
-     TEST adds: Concurrency Safety, Error Handling, Resource Management, Test Quality, Test Independence, Edge Cases -->
+     TEST adds: Concurrency Safety, Error Handling, Code Path Completeness, Red Team Resilience, Resource Management, Test Quality, Test Independence, Edge Cases -->
 
 | Dimension | Verdict | Key Evidence |
 |-----------|---------|-------------|
@@ -301,6 +339,8 @@ Mechanisms available in codebase:
 | Security | {PASS/FAIL} | {brief evidence} |
 | Concurrency Safety | {PASS/FAIL/N/A} | {brief evidence} |
 | Error Handling | {PASS/FAIL/N/A} | {brief evidence} |
+| Code Path Completeness | {PASS/FAIL/N/A} | {paths traced, gaps found} |
+| Red Team Resilience | {PASS/FAIL/N/A} | {scenarios tested, breaks found} |
 | Resource Management | {PASS/FAIL/N/A} | {brief evidence} |
 | Test Quality | {PASS/FAIL/N/A} | {brief evidence} |
 | Standards Compliance | {PASS/FAIL} | {brief evidence} |
@@ -315,6 +355,34 @@ Mechanisms available in codebase:
 | Examples Tested | {PASS/FAIL/N/A} | {DOCS only} |
 | Test Independence | {PASS/FAIL/N/A} | {TEST only} |
 | Edge Cases | {PASS/FAIL/N/A} | {TEST only} |
+
+#### Code Path Audit
+
+<!-- MANDATORY for CODE_REVIEW and TEST_REVIEW. Independently trace all paths;
+     cross-reference against DEV audit. Gaps → findings. ALL findings BLOCKING — zero tolerance. -->
+
+**Paths independently traced:** {n}
+**Paths matching developer's audit:** {n}
+**Gaps found in developer's audit:** {n}
+
+| Entry Point | Path | Reviewer Finding | Dev Audit Match | Severity |
+|-------------|------|-----------------|-----------------|----------|
+| {caller} | {success/error/edge} | {correct / gap: description} | {Yes/Missing/Mismatch} | {--/CRITICAL/MAJOR} |
+
+**Error propagation chain verified:** {Yes/No — details}
+**Silent failure check:** {result}
+
+#### Red Team Assessment
+
+<!-- MANDATORY for CODE_REVIEW and TEST_REVIEW. N/A for DESIGN_REVIEW and DOCUMENTATION_REVIEW.
+     ALL findings BLOCKING regardless of severity — zero tolerance. -->
+
+**Adversarial scenarios tested:** {n}
+**Scenarios that broke implementation:** {n}
+
+| # | Category | Scenario | Setup → Action → Result | Impact | Severity |
+|---|----------|----------|------------------------|--------|----------|
+| 1 | {Input/State/Sequence/Assumption} | {description} | {concrete steps} | {data loss/crash/wrong result/etc.} | {CRITICAL/MAJOR/MINOR} |
 
 #### Findings Log
 
