@@ -33,12 +33,15 @@ pub enum AutorunCommand {
         /// Filter to specific batch session ID
         #[arg(long)]
         batch: Option<String>,
-        /// Watch mode: refresh status on interval
+        /// Watch mode: interactive TUI dashboard
         #[arg(long, short = 'w')]
         watch: bool,
         /// Refresh interval in seconds (default: 5, requires --watch)
         #[arg(long, default_value = "5")]
         interval: u64,
+        /// Output JSON to stdout (non-watch mode only)
+        #[arg(long)]
+        json: bool,
     },
     /// Attach to a running worker's tmux session
     Attach {
@@ -153,9 +156,12 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             batch,
             watch,
             interval,
+            json,
         }) => {
             if watch {
                 run_status_watch(&project_dir, batch.as_deref(), interval).await
+            } else if json {
+                run_status_json(&project_dir, batch.as_deref()).await
             } else {
                 run_status(&project_dir, batch.as_deref()).await
             }
@@ -1290,13 +1296,13 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             elapsed,
         );
 
-        // Per-worker detail.
+        // Per-worker detail with branch, PR#, and phase columns.
         let task_runs = store.list_autorun_task_runs(&session.id).await?;
         if !task_runs.is_empty() {
             println!();
             println!(
-                "  {:<24} {:<12} {:<28} {:>9}",
-                "TASK", "STATUS", "TMUX", "DURATION"
+                "  {:<24} {:<12} {:<5} {:<20} {:>5} {:>9}",
+                "TASK", "STATUS", "PHASE", "BRANCH", "PR", "DURATION"
             );
             for run in &task_runs {
                 let duration = run.duration_seconds.map_or_else(
@@ -1312,20 +1318,11 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                     },
                     format_duration_secs,
                 );
-                let tmux = workers
-                    .iter()
-                    .find(|w| w.task_id == run.task_id)
-                    .and_then(|w| w.tmux_session.clone())
-                    .unwrap_or_else(|| "--".to_string());
-                // C24: Show "Waiting" for pending tasks when session is active
-                // (deps met, waiting for pool slot) vs "Pending" (deps not met).
+                // C24: Show "Waiting" for pending tasks when session is active.
                 let display_status = if matches!(
                     run.status,
                     codeflow_core::types::AutorunTaskRunStatus::Pending
                 ) {
-                    // Check if all dependency task_runs are completed.
-                    // If we can't determine (no dep info in DB), use heuristic:
-                    // session is Running + task is Pending = Waiting for pool.
                     if matches!(
                         session.status,
                         codeflow_core::types::AutorunSessionStatus::Running
@@ -1337,9 +1334,18 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                 } else {
                     run.status.to_string()
                 };
+                let phase = codeflow_core::tui::data::read_latest_phase(
+                    project_dir,
+                    run.worktree_path.as_deref(),
+                )
+                .unwrap_or_else(|| "--".to_string());
+                let branch = run.branch_name.as_deref().unwrap_or("--");
+                let pr = run
+                    .pr_number
+                    .map_or_else(|| "--".to_string(), |n| format!("#{n}"));
                 println!(
-                    "  {:<24} {:<12} {:<28} {:>9}",
-                    run.task_id, display_status, tmux, duration
+                    "  {:<24} {:<12} {:<5} {:<20} {:>5} {:>9}",
+                    run.task_id, display_status, phase, branch, pr, duration
                 );
             }
         }
@@ -1366,13 +1372,394 @@ async fn run_status_watch(
     batch: Option<&str>,
     interval_secs: u64,
 ) -> Result<()> {
-    let interval = Duration::from_secs(interval_secs.max(1));
-    loop {
-        // Clear terminal.
-        print!("\x1b[2J\x1b[H");
-        run_status(project_dir, batch).await?;
-        tokio::time::sleep(interval).await;
+    use codeflow_core::tui::data::{BatchView, fetch_batch_view};
+    use codeflow_core::tui::theme;
+    use codeflow_core::tui::widgets::DetailPane;
+    use ratatui::crossterm::event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    };
+    use ratatui::crossterm::execute;
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Paragraph, TableState};
+
+    let store = open_store(project_dir).await?;
+    let batch_owned = batch.map(ToString::to_string);
+
+    // Terminal setup with mouse support.
+    let mut terminal = ratatui::init();
+    execute!(std::io::stdout(), EnableMouseCapture)?;
+
+    // Cleanup guard: ensure terminal is restored on any exit path.
+    struct TermGuard;
+    impl Drop for TermGuard {
+        fn drop(&mut self) {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            ratatui::restore();
+        }
     }
+    let _guard = TermGuard;
+
+    let mut table_state = TableState::default();
+
+    // Fetch initial data before entering the loop.
+    let mut last_view: Option<BatchView> =
+        fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref())
+            .await
+            .ok()
+            .flatten();
+
+    loop {
+        // Preserve selection index across refreshes.
+        if let Some(ref v) = last_view {
+            if !v.tasks.is_empty() && table_state.selected().is_none() {
+                table_state.select(Some(0));
+            }
+            if let Some(sel) = table_state.selected() {
+                if sel >= v.tasks.len() {
+                    table_state.select(Some(v.tasks.len().saturating_sub(1)));
+                }
+            }
+        }
+
+        // Draw UI.
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let chunks = Layout::vertical([
+                Constraint::Length(2), // header
+                Constraint::Min(5),    // table
+                Constraint::Length(6), // detail
+                Constraint::Length(1), // keys
+            ])
+            .split(area);
+
+            // --- Header ---
+            render_header(frame, chunks[0], last_view.as_ref());
+
+            // --- Task table ---
+            render_table(frame, chunks[1], &mut table_state, last_view.as_ref());
+
+            // --- Detail pane ---
+            let selected_task = last_view
+                .as_ref()
+                .and_then(|v| table_state.selected().and_then(|i| v.tasks.get(i)));
+            let detail = DetailPane::new(selected_task);
+            frame.render_widget(detail, chunks[2]);
+
+            // --- Keybinding bar ---
+            let keys = Line::from(vec![
+                Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Attach "),
+                Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Abort "),
+                Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Retry "),
+                Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Navigate "),
+                Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Quit"),
+            ]);
+            frame.render_widget(Paragraph::new(keys), chunks[3]);
+        })?;
+
+        // Event handling with user-configurable tick interval.
+        let tick = Duration::from_secs(interval_secs.max(1));
+        if event::poll(tick)? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // Ctrl+C: in raw mode SIGINT is not delivered; handle explicitly.
+                    if key.code == KeyCode::Char('c')
+                        && key
+                            .modifiers
+                            .contains(ratatui::crossterm::event::KeyModifiers::CONTROL)
+                    {
+                        break;
+                    }
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Up => {
+                            if let Some(ref v) = last_view {
+                                let i = table_state.selected().unwrap_or(0);
+                                let prev = if i == 0 {
+                                    v.tasks.len().saturating_sub(1)
+                                } else {
+                                    i - 1
+                                };
+                                table_state.select(Some(prev));
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(ref v) = last_view {
+                                let i = table_state.selected().unwrap_or(0);
+                                let next = if v.tasks.is_empty() {
+                                    0
+                                } else {
+                                    (i + 1) % v.tasks.len()
+                                };
+                                table_state.select(Some(next));
+                            }
+                        }
+                        KeyCode::Enter => {
+                            // Attach to tmux session.
+                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
+                                if let Some(ref tmux_name) = task.tmux_session {
+                                    if tmux_has_session(tmux_name) {
+                                        // Exit alternate screen for tmux attach.
+                                        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+                                        ratatui::restore();
+
+                                        let _ = std::process::Command::new("tmux")
+                                            .args(["attach-session", "-t", tmux_name])
+                                            .status();
+
+                                        // Re-init terminal after detach.
+                                        terminal = ratatui::init();
+                                        let _ = execute!(std::io::stdout(), EnableMouseCapture);
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            // Abort selected task.
+                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
+                                let is_cancellable = matches!(
+                                    task.status,
+                                    codeflow_core::types::AutorunTaskRunStatus::Running
+                                        | codeflow_core::types::AutorunTaskRunStatus::Pending
+                                );
+                                if is_cancellable {
+                                    let _ = run_cancel(
+                                        project_dir,
+                                        &task.task_id,
+                                        batch_owned.as_deref(),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                        KeyCode::Char('r') => {
+                            // Retry failed/timed-out task.
+                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
+                                let is_retryable = matches!(
+                                    task.status,
+                                    codeflow_core::types::AutorunTaskRunStatus::Failed
+                                        | codeflow_core::types::AutorunTaskRunStatus::Timeout
+                                );
+                                if is_retryable {
+                                    if let Some(ref v) = last_view {
+                                        let _ = std::process::Command::new("codeflow")
+                                            .args(["autorun", "resume", "--batch", &v.session_id])
+                                            .spawn();
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(_) => {
+                        // Click to select row. The table header takes 2 rows (header + margin).
+                        // Offset: header chunk is rows 0-1, table starts at row 2.
+                        // Within the table, the header row is row 0 in the block, data starts below.
+                        // This is approximate; precise row mapping is complex. Use offset.
+                        if let Some(ref v) = last_view {
+                            let table_top: u16 = 2 + 1 + 1; // header chunk + block border + table header
+                            if mouse.row >= table_top {
+                                let idx = (mouse.row - table_top) as usize;
+                                if idx < v.tasks.len() {
+                                    table_state.select(Some(idx));
+                                }
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if let Some(ref v) = last_view {
+                            let i = table_state.selected().unwrap_or(0);
+                            let prev = if i == 0 {
+                                v.tasks.len().saturating_sub(1)
+                            } else {
+                                i - 1
+                            };
+                            table_state.select(Some(prev));
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if let Some(ref v) = last_view {
+                            let i = table_state.selected().unwrap_or(0);
+                            let next = if v.tasks.is_empty() {
+                                0
+                            } else {
+                                (i + 1) % v.tasks.len()
+                            };
+                            table_state.select(Some(next));
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        // Refresh data every tick (2 seconds).
+        last_view = fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref())
+            .await
+            .ok()
+            .flatten();
+    }
+
+    Ok(())
+}
+
+fn selected_task<'a>(
+    view: Option<&'a codeflow_core::tui::data::BatchView>,
+    state: &ratatui::widgets::TableState,
+) -> Option<&'a codeflow_core::tui::data::TaskView> {
+    view.and_then(|v| state.selected().and_then(|i| v.tasks.get(i)))
+}
+
+fn render_header(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    view: Option<&codeflow_core::tui::data::BatchView>,
+) {
+    use codeflow_core::tui::theme;
+    use codeflow_core::tui::widgets::duration_cell::format_duration;
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::Paragraph;
+
+    let line = if let Some(v) = view {
+        let status_color = match v.status {
+            codeflow_core::types::AutorunSessionStatus::Running => theme::YELLOW_RUNNING,
+            codeflow_core::types::AutorunSessionStatus::Completed => theme::GREEN_SUCCESS,
+            codeflow_core::types::AutorunSessionStatus::Failed => theme::RED_FAILURE,
+            _ => theme::WHITE_TEXT,
+        };
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", theme::TRIANGLE),
+                Style::new().fg(theme::BLUE_ACCENT),
+            ),
+            Span::styled(&v.batch_name, theme::header()),
+            Span::raw("  "),
+            Span::styled(v.status.to_string(), Style::new().fg(status_color)),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} workers", v.running_count),
+                Style::new().fg(theme::WHITE_TEXT),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format_duration(v.elapsed_secs),
+                Style::new().fg(theme::DIM_PENDING),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("target: {}", v.target_branch.as_deref().unwrap_or("--")),
+                Style::new().fg(theme::DIM_PENDING),
+            ),
+        ])
+    } else {
+        Line::styled(
+            "No active autorun batches",
+            Style::new().fg(theme::DIM_PENDING),
+        )
+    };
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_table(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    state: &mut ratatui::widgets::TableState,
+    view: Option<&codeflow_core::tui::data::BatchView>,
+) {
+    use codeflow_core::tui::theme;
+    use codeflow_core::tui::widgets::{DurationCell, PhaseBadge, StatusBadge};
+    use ratatui::layout::Constraint;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+
+    let header = Row::new(vec!["TASK", "STATUS", "PHASE", "BRANCH", "PR", "DURATION"])
+        .style(theme::header())
+        .bottom_margin(1);
+
+    let rows: Vec<Row> = view
+        .map(|v| {
+            v.tasks
+                .iter()
+                .map(|task| {
+                    let status_badge =
+                        StatusBadge::new(task.status).with_display(task.display_status.clone());
+                    let phase_badge = PhaseBadge::new(task.phase.as_deref());
+                    let duration = DurationCell::new(task.duration_secs);
+                    let pr_text = task
+                        .pr_number
+                        .map_or_else(|| "--".to_string(), |n| format!("#{n}"));
+
+                    Row::new(vec![
+                        Cell::from(task.task_id.clone()),
+                        Cell::from(status_badge.to_span()),
+                        Cell::from(phase_badge.to_span()),
+                        Cell::from(task.branch.as_deref().unwrap_or("--")),
+                        Cell::from(pr_text),
+                        Cell::from(duration.to_span()),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let widths = [
+        Constraint::Length(26),
+        Constraint::Length(14),
+        Constraint::Length(6),
+        Constraint::Length(24),
+        Constraint::Length(8),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(theme::BORDER_TYPE)
+                .title(" Tasks "),
+        )
+        .column_spacing(1)
+        .row_highlight_style(
+            Style::new()
+                .bg(theme::BLUE_ACCENT)
+                .fg(ratatui::style::Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(format!("{} ", theme::TRIANGLE));
+
+    frame.render_stateful_widget(table, area, state);
+}
+
+/// JSON output for `codeflow autorun status --json`.
+async fn run_status_json(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+    use codeflow_core::tui::data::fetch_batch_view;
+
+    let store = open_store(project_dir).await?;
+    let view = fetch_batch_view(store.as_ref(), project_dir, batch)
+        .await
+        .context("fetching batch view")?;
+
+    match view {
+        Some(v) => {
+            let json = serde_json::to_string_pretty(&v)?;
+            println!("{json}");
+        }
+        None => {
+            println!("{{}}");
+        }
+    }
+    Ok(())
 }
 
 async fn run_attach(project_dir: &Path, task_id: &str, batch: Option<&str>) -> Result<()> {
@@ -6164,9 +6551,11 @@ tasks:
             batch,
             watch,
             interval,
+            json,
         } = cli.cmd
         {
             assert!(watch);
+            assert!(!json);
             assert!(batch.is_none());
             assert_eq!(interval, 5); // default
         } else {

@@ -26,6 +26,9 @@ pub mod validate;
 pub mod workgraph;
 pub mod worktree;
 
+#[cfg(feature = "tui")]
+pub mod tui;
+
 // Re-export commonly used items at crate root.
 pub use error::{
     AutorunError, ConfigError, CoordinationError, DbError, DoctorError, GitError, HookError,

@@ -27,6 +27,10 @@ base64 = { workspace = true }
 which = "7"
 signal-hook = "0.3"
 libc = { workspace = true }
+ratatui = { version = "0.29", optional = true }
+
+[features]
+tui = ["ratatui"]
 
 [dev-dependencies]
 proptest = { workspace = true }

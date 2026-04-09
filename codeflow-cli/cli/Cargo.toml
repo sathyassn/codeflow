@@ -9,7 +9,8 @@ name = "codeflow"
 path = "src/main.rs"
 
 [dependencies]
-codeflow-core = { path = "../core" }
+codeflow-core = { path = "../core", features = ["tui"] }
+ratatui = "0.29"
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
