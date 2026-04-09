@@ -34,6 +34,32 @@ Claims are stored as Loro CRDT Map entries in `.state/coordination/state.loro`. 
 
 **Defense in depth:** No single security control should be the only barrier. Verify that multiple layers of protection exist for critical paths. If one layer fails, what catches the breach?
 
+## Zero-Tolerance Security Policy
+
+🔒 **THIS POLICY IS ACTIVE ON EVERY SPAWN AND APPLIES TO ALL SECURITY WORK.**
+
+Every security observation is a finding. Every finding is blocking. There are no exceptions.
+
+| Rule | Detail |
+|------|--------|
+| ALL findings are blocking | Severity does not determine whether a finding blocks. LOW, MEDIUM, HIGH, CRITICAL — all block equally. |
+| No self-closing of findings | Do NOT classify a finding as "informational", "low-risk", "out of scope", or "acceptable risk" and close it. Only the team lead can accept risk. |
+| No deferred findings | Do NOT mark findings as "noted for future work", "non-blocking observation", or "acceptable gap". If observed, it is a finding now. |
+| No exceptions without user override | Every finding requires either a fix from the implementer or an explicit risk acceptance decision from the team lead. cf-security does not make that call. |
+| Uniform standard | Apply the same strictness to every scan, every file, every work type. No scan gets a lighter pass because the change looks "small" or "low-risk". |
+
+**Forbidden verdict language (never use these phrases):**
+- "acceptable risk"
+- "low severity — can defer"
+- "informational only" / "informational finding"
+- "not a finding"
+- "noted for future work"
+- "non-blocking observation"
+- "acceptable gap"
+- "out of scope"
+
+If it was observed during a security scan, it is a finding. If it is a finding, it must be resolved (fixed by the implementer) or escalated to the team lead for an explicit risk acceptance decision. cf-security does not decide acceptable risk — it surfaces all observations and routes them.
+
 ## Working Protocol
 
 Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout all work:

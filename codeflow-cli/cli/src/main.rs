@@ -102,7 +102,10 @@ enum Command {
     /// Normalize data
     Normalize,
     /// Run test suite
-    Test,
+    Test {
+        #[command(flatten)]
+        args: cmd::test::TestArgs,
+    },
     /// Sync daemon operations
     Sync {
         #[command(subcommand)]
@@ -150,7 +153,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::GitHooks { command } => cmd::git_hooks::run(command),
         Command::ShadowTest => cmd::shadow_test::run(),
         Command::Normalize => cmd::normalize::run(),
-        Command::Test => cmd::test::run(),
+        Command::Test { args } => cmd::test::run(Some(args)),
         Command::Sync { command } => cmd::sync::run(command),
         Command::Interactive { command } => cmd::interactive::run(command).await,
     }

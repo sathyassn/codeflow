@@ -347,7 +347,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 - **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
 - **Test stats gate (BLOCKING):** Read the QA Report and verify all three mandatory sections are present and passing:
-  1. **Overall Test Pass Status** — zero failures in `cargo test --workspace --no-fail-fast`, at least 2 consecutive clean runs
+  1. **Overall Test Pass Status** — zero failures (produced by `codeflow test --mode full --coverage`), at least 2 consecutive clean runs
   2. **Overall Coverage** — workspace-wide coverage for CLI and Core crates; any file below 85% that is not in the configured exception list is a rework trigger; exempted files must list the reason from test-config.json
   3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
   A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
@@ -1254,7 +1254,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test` (2,400+ tests across shell/Python and Rust; WS-QA uses `--mode full --coverage` for coverage enforcement)
+- Test suite: run via `codeflow test --mode full --coverage` (2,400+ tests across shell/Python and Rust; the single authoritative command for all pipeline stages)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1275,7 +1275,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 ## Test Results
 
 ### 1. Overall Test Pass Status
-- Suite: `cargo test --workspace --no-fail-fast`
+- Suite: `codeflow test --mode full --coverage`
 - Result: {n} passed, 0 failed, 0 skipped
 - New tests added: {n}
 - Runs: {n} consecutive clean
@@ -1417,8 +1417,8 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ### CLI
 
 ```text
-codeflow test                          # Run test suite (default: essential mode)
-codeflow test --mode full --coverage   # Run all suites with coverage enforcement
+codeflow test --mode full --coverage   # Run all suites with coverage enforcement (authoritative for all pipeline stages)
+codeflow test                          # Run test suite (default: essential mode, for quick checks only)
 codeflow doctor                        # Diagnose infrastructure
 codeflow worktree list                 # List active worktrees
 codeflow worktree cleanup              # Clean up stale worktrees
@@ -1432,7 +1432,7 @@ codeflow interactive list              # Show all interactive sessions (active +
 codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
 ```
 
-The unified `codeflow test` command routes to all test suites (shell/Python, Go, Rust). Use `--mode full --coverage` for WS-QA and pre-commit verification. Coverage enforces 85% per-file threshold on business packages across Go and Rust suites.
+The unified `codeflow test --mode full --coverage` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). No raw `cargo test`, `cargo llvm-cov`, or shell scripts. It routes to all test suites (shell/Python, Rust) and enforces 85% per-file coverage threshold on business packages.
 
 → See Section 9 for project file layout and Section 10 for data model
 

@@ -227,7 +227,7 @@ Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": 
 
 Run the test suite to verify no regressions:
 
-- `codeflow test`
+- `codeflow test --mode full --coverage`
 
 ### Step 5b: Rust Quality Gate
 
@@ -235,20 +235,19 @@ Run the test suite to verify no regressions:
 
 1. `cargo fmt --all` (auto-fix formatting in the `codeflow-cli/` workspace)
 2. `cargo clippy --all-targets --all-features -- -D warnings` (zero warnings required)
-3. `cargo test --workspace --no-fail-fast` (ALL tests must pass — zero failures required before commit)
+3. `codeflow test --mode full --coverage` (ALL tests must pass — zero failures required before commit)
 
 If any check fails, fix the issue and re-run. Do NOT request a commit with clippy warnings, fmt diffs, or test failures.
 
-### Step 5c: Run Coverage and Write Draft Test Stats
+### Step 5c: Run Tests and Write Draft Test Stats
 
-**Before requesting commit**, run coverage and record draft test stats in the DEV Report. This is mandatory — do not skip.
+**Before requesting commit**, run the unified test command and record draft test stats in the DEV Report. This is mandatory — do not skip.
 
 ```bash
-# In codeflow-cli/
-cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --workspace
+codeflow test --mode full --coverage
 ```
 
-Fill in the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below 85% must be fixed before commit unless it has a configured exception in `codeflow-cli/config/testing/test-config.json`.
+This single command runs all suites (shell/Python, Rust) with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below 85% must be fixed before commit unless it has a configured exception in `codeflow-cli/config/testing/test-config.json`.
 
 ### Step 6: Request Commit
 
@@ -587,7 +586,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
 - [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
-- [ ] **Tests pass:** `codeflow test` passes with zero failures (actual output captured)
+- [ ] **Tests pass:** `codeflow test --mode full --coverage` passes with zero failures (actual output captured)
 - [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; cargo clippy zero errors on all `.rs` files
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
 - [ ] **Shared lib usage:** Used existing shared utilities where applicable (check `.codeflow/scripts/security/protection/lib/` for protection-related functions)
@@ -606,7 +605,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |
-| Test Runner | `codeflow test` | Unified test execution (default mode) |
+| Test Runner | `codeflow test --mode full --coverage` | Unified test execution — all suites, full coverage |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell test assertion library (40+ `assert_*` functions) |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |
 | Protection Lib | `.codeflow/scripts/security/protection/lib/` | Reusable shell protection functions |

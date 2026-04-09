@@ -88,7 +88,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 - ALL tests must pass. Zero failures across the entire workspace. No "pre-existing" or "flaky" exemptions.
 - Any test failure = QA FAIL. The root cause must be fixed, not exempted.
-- Run `cargo test --workspace --no-fail-fast` to capture ALL failures, not just the first.
+- Run `codeflow test --mode full --coverage` to capture ALL failures across all suites.
 - Run tests at least twice to detect intermittent failures.
 
 🔒 **MUST:**
@@ -143,23 +143,20 @@ This is the unified CLI entry point. It routes to all test suites (shell/Python,
 
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
 
-**Internal suite details** (what `codeflow test --mode full --coverage` invokes):
+🔒 **ONE COMMAND — no raw test runners, no shell scripts directly:**
 
-| Suite | Bridge Script | Coverage | Config |
-|-------|--------------|----------|--------|
-| Shell/Python | `bash .codeflow/testing/run-all-tests.sh --mode full` | Structural coverage via `test-coverage.sh` | `.codeflow/testing/test-config.json` |
-| Rust | `bash .codeflow/testing/cli/rust/test-rust-cli.sh` | 85% per-file via `cargo llvm-cov` on business packages | `codeflow-cli/config/testing/test-config.json` |
+`codeflow test --mode full --coverage` is the sole entry point. It routes internally to all suites (shell/Python, Rust) with coverage enforcement. Do NOT invoke `run-all-tests.sh`, `test-rust-cli.sh`, or `cargo llvm-cov` directly — the unified command handles all of this.
 
-Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% for any file is a build failure — treat as a FAIL finding. Exception lists are in the Rust test-config.json.
+Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% per file is a build failure — treat as a FAIL finding. Exception lists are in `codeflow-cli/config/testing/test-config.json`.
 
-🔒 **MANDATORY Rust per-file coverage (BLOCKING GATE):** Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --lib` and include a per-file coverage table in the QA Report for ALL modified/created Rust files. Any file below 85% line coverage is an AUTOMATIC QA FAIL — you MUST set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Do NOT skip coverage, defer to CI, or claim macOS SIP blocks it — `cargo llvm-cov` works on the development machine. If `cargo llvm-cov` is not installed, install it with `cargo install cargo-llvm-cov`. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
+🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full --coverage` output includes per-file coverage for all modified/created Rust files. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
 
 #### Step 3: Run Targeted Tests
 
-If changes are scoped to specific components, run those tests directly:
+If changes are scoped to specific components, pass the category flag through the unified command:
 
 ```text
-bash .codeflow/testing/run-all-tests.sh --category {category}
+codeflow test --mode full --coverage --category {category}
 ```
 
 #### Step 4: Verify Acceptance Criteria
@@ -258,7 +255,7 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 #### 2. Overall Coverage
 
-> Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --workspace` to generate.
+> Coverage data is produced by `codeflow test --mode full --coverage`. Do not run coverage commands directly.
 
 - Workspace: {n}%
 - CLI crate: {n}%
@@ -514,7 +511,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 **Verify the test infrastructure itself is sound:**
 
-1. **Test runner availability:** Verify `run-all-tests.sh` exists at `.codeflow/testing/run-all-tests.sh`.
+1. **Test runner availability:** Verify `codeflow` binary is available in PATH (`which codeflow`).
 2. **Test helper availability:** Verify `test-helpers.sh` exists at `.codeflow/testing/lib/test-helpers.sh`.
 3. **Test isolation availability:** Verify `test-isolation.sh` exists at `.codeflow/testing/lib/test-isolation.sh`.
 4. **Test count verification:** After running the suite, check the total test count. If 3 test files were added but only 0-2 tests reported, investigate why — some tests may be silently skipped or not discovered.
@@ -625,7 +622,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | ShellCheck rules for test scripts |
 | Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | ruff/flake8 for test scripts |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, QA retry limits |
-| Test Runner | `.codeflow/testing/run-all-tests.sh` | Test execution (essential/standard/full) |
+| Test Runner | `codeflow test --mode full --coverage` | Unified test execution — all suites, full coverage |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell assertion library (40+ functions) |
 | Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Isolated repo root for tests |
 | Test Config | `.codeflow/testing/test-config.json` | Test registration |

@@ -112,7 +112,7 @@ This command takes no positional arguments. Test scope is determined from the cu
 |-----------|---------|
 | cf-quality-assurance | Test execution and verdict delivery |
 | cf-knowledge-layer | Acceptance criteria lookup, verdict recording |
-| Test runner | `.codeflow/testing/run-all-tests.sh` |
+| Test runner | `codeflow test --mode full --coverage` |
 
 ---
 
@@ -212,7 +212,7 @@ Next: /cf-ship       Next: /cf-develop
     - Changed files list (for targeted testing)
     - Test runner mode: `standard` / `essential` / `full`
     - Coverage flag: include coverage report if requested
-    - `"Run tests using: bash .codeflow/testing/run-all-tests.sh --mode {mode}"`
+    - `"Run tests using: codeflow test --mode full --coverage"`
     - `"Deliver verdict using standard QA verdict format. If FAIL, send specific failure details to cf-development."`
 - Wait for teammate completion message
 
@@ -315,7 +315,7 @@ Next: /cf-ship       Next: /cf-develop
 |-------|-------|----------|
 | WS-REV not approved | Review stage not completed or verdict was CHANGES_REQUESTED | Complete `/cf-review` first |
 | No acceptance criteria | Task missing testable criteria | Query cf-knowledge-layer for task details; escalate if missing |
-| Test runner not found | `.codeflow/testing/run-all-tests.sh` missing | Check project setup; run `/cf-doctor` |
+| codeflow binary not found | `codeflow` not in PATH | Check project setup; run `/cf-doctor` |
 | Test infrastructure broken | Test helpers or fixtures unavailable | cf-quality-assurance escalates to team lead |
 | QA retry limit exceeded | 2 FAIL cycles without achieving PASS | Escalate to team lead for decision |
 | cf-quality-assurance not available | Teammate spawn failure | Retry spawn with fresh context |
@@ -448,7 +448,7 @@ Next: Fix issues, then re-run /cf-test (retry 1/2)
 - [cf-development agent](../agents/cf-development.md)
 - [cf-working-protocol skill](../skills/cf-working-protocol/SKILL.md)
 - [PathFlow configuration](../../.codeflow/config/pathflow/pathflow-config.json)
-- [Test runner](../../.codeflow/testing/run-all-tests.sh)
+- [Test runner](codeflow test --mode full --coverage) — unified CLI entry point for all suites
 - [cf-develop command](cf-develop.md)
 - [cf-review command](cf-review.md)
 - [cf-ship command](cf-ship.md)

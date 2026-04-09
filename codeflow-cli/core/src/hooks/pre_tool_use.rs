@@ -718,6 +718,12 @@ impl GateCheck {
             }
         }
 
+        // Test validation gate: run `codeflow test --mode full --coverage`
+        // and block push if tests fail or coverage thresholds are not met.
+        if let Some(block) = self.check_test_validation_gate() {
+            return block;
+        }
+
         // Dirty worktree guard: block push if uncommitted changes exist.
         // This catches PF6-TSK-03 (commit outstanding changes) being skipped.
         if let Some(dirty_files) = self.get_dirty_files() {
@@ -746,6 +752,59 @@ impl GateCheck {
         }
 
         HookOutput::Allow
+    }
+
+    /// Run `codeflow test --mode full --coverage` as a subprocess.
+    /// Returns `Some(Block)` if tests fail; `None` if they pass.
+    /// Gracefully skips if the codeflow binary cannot be located.
+    fn check_test_validation_gate(&self) -> Option<HookOutput> {
+        let exe = std::env::current_exe().ok()?;
+
+        // Only run when the current executable is the codeflow CLI binary.
+        // During tests, current_exe() returns e.g. "codeflow_core-{hash}" —
+        // skip gracefully. The real binary is named exactly "codeflow".
+        let exe_name = exe.file_name()?.to_string_lossy();
+        if exe_name != "codeflow" {
+            return None;
+        }
+
+        let output = std::process::Command::new(&exe)
+            .args(["test", "--mode", "full", "--coverage"])
+            .current_dir(&self.project_dir)
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        const MAX_OUTPUT_LEN: usize = 2000;
+        let truncate = |s: &str| -> String {
+            if s.len() <= MAX_OUTPUT_LEN {
+                s.to_string()
+            } else {
+                format!("{}... (truncated)", &s[..MAX_OUTPUT_LEN])
+            }
+        };
+        let stdout_capped = truncate(&stdout);
+        let stderr_capped = truncate(&stderr);
+
+        Some(HookOutput::Block {
+            reason: format!(
+                "BLOCKED: Test validation failed — all tests must pass and coverage \
+                 thresholds must be met before push.\n\
+                 \n\
+                 {stdout_capped}\n\
+                 {stderr_capped}\n\
+                 \n\
+                 Action: Fix test failures and/or improve coverage, then retry push.\n\
+                 Gate: test_validation"
+            ),
+            category: Some(BlockCategory::Gate),
+        })
     }
 
     /// Returns a list of uncommitted files in the working tree, or `None` if clean.

@@ -323,7 +323,7 @@ Check every numbered criterion from the task specification point-by-point. A cri
 - Modified file coverage >= 85% for all files not in the configured exception list. Any FAIL row in Modified File Coverage = CHANGES_REQUESTED.
 - WS-QA will re-run independently and produce the authoritative verified stats. WS-REV's role is to confirm the developer ran tests, got clean results, and documented them.
 
-- All suites: `codeflow test`
+- Read existing test artifact: `codeflow test --report` (reviewer reads the artifact — do NOT re-execute the full suite)
 
 ### Step 9b: Rust Quality Verification (CODE_REVIEW only)
 
@@ -735,4 +735,4 @@ Beyond code correctness, verify the structural integrity of the changeset:
 | Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | ruff/flake8 rules for CODE_REVIEW |
 | Markdown Standards | `.claude/skills/cf-markdown-standards/SKILL.md` | Doc structure for DOCUMENTATION_REVIEW |
 | CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, rework limits |
-| Test Runner | `codeflow test` | Unified test execution for verification |
+| Test Runner | `codeflow test --report` | Read existing test artifact (reviewer does not re-execute) |

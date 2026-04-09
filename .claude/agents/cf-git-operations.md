@@ -338,9 +338,9 @@ Do NOT include:
      ```
      Then send a message to the team lead: `"REBASE CONFLICT: Cannot rebase {branch} onto origin/{base}. Conflicting files: {file_list}. PR creation blocked."`
 
-5b. Read the task doc QA Report to extract Test Stats. The PR body MUST include a `## Test Stats` section copied from the QA Report. Do NOT create the PR without it. The section must contain all three parts:
+5b. Read the task doc QA Report to extract Test Stats. The PR body MUST include a `## Test Stats` section copied from the QA Report. Do NOT create the PR without it. The section must contain all three parts (format produced by `codeflow test --report` from the QA artifact):
 
-   - **1. Pass Status** — `cargo test --workspace --no-fail-fast` result with suite breakdown
+   - **1. Pass Status** — overall test pass result with suite breakdown
    - **2. Workspace Coverage** — crate-level percentages (workspace/CLI/Core) plus Exempted Files table
    - **3. Modified File Coverage** — per-file table for files modified in the PR
 
