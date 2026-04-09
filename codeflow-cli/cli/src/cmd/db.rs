@@ -49,8 +49,10 @@ async fn verify_database(store: &SurrealStore) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial(env_vars)]
     async fn test_db_run() {
         let dir = tempfile::tempdir().unwrap();
         // Create `.claude/` marker so detect_project_dir() finds this dir.

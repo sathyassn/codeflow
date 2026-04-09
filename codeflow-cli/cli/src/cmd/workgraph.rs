@@ -47,8 +47,10 @@ fn verify_workgraph(store: SurrealStore, ledger: JsonlWriter) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial(env_vars)]
     async fn test_workgraph_run() {
         let dir = tempfile::tempdir().unwrap();
         // Create markers so detect_project_dir() + run_with_dir() succeed.

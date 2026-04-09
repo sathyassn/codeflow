@@ -348,7 +348,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
 - **Test stats gate (BLOCKING):** Read the QA Report and verify all three mandatory sections are present and passing:
   1. **Overall Test Pass Status** — zero failures (produced by `codeflow test --mode full --coverage`), at least 2 consecutive clean runs
-  2. **Overall Coverage** — workspace-wide coverage for CLI and Core crates; any file below 85% that is not in the configured exception list is a rework trigger; exempted files must list the reason from test-config.json
+  2. **Overall Coverage** — workspace-wide coverage for CLI and Core crates; any file below 85% that is not in the configured exception list is a rework trigger; the Exempted Files table must include ALL entries from test-config.json conventions.exceptions[], not just files modified in this session, with coverage %, configured threshold, and reason
   3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
   A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
 - **Delivery summary:** Read the `## Deliverables` section in the task markdown. Confirm Expected Outcome and Deployment fields are populated (no placeholders). If placeholders remain, request the stage teammate update before proceeding.
@@ -1286,6 +1286,8 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 - Core crate: {n}%
 
 #### Exempted Files (below 85%)
+All project-wide coverage exceptions from test-config.json conventions.exceptions[].
+
 | File | Coverage | Configured Threshold | Reason |
 |------|----------|---------------------|--------|
 | {path} | {n}% | {n}% | {reason from test-config.json} |

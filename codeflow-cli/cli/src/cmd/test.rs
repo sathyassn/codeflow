@@ -246,6 +246,7 @@ mod tests {
             exempted_files: Vec::new(),
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings: Vec::new(),
         };
 
         TestValidator::write_artifact(dir.path(), &artifact).unwrap();
@@ -281,6 +282,7 @@ mod tests {
             exempted_files: Vec::new(),
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings: Vec::new(),
         };
 
         TestValidator::write_artifact(dir.path(), &artifact).unwrap();

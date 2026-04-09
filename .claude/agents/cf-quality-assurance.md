@@ -263,9 +263,11 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 ##### Exempted Files (below 85%)
 
+All project-wide coverage exceptions from `codeflow-cli/config/testing/test-config.json` `conventions.exceptions[]`. List ALL entries, not just files modified in this session. Use "N/A" for coverage if the file did not appear in coverage data.
+
 | File | Coverage | Configured Threshold | Reason |
 |------|----------|---------------------|--------|
-| {path} | {n}% | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
+| {path} | {n}% or N/A | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
 
 #### 3. Modified File Coverage
 
@@ -299,7 +301,7 @@ QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 🔒 **Mandatory three-part coverage reporting:**
 
 1. **Overall Test Pass Status** — `cargo test --workspace --no-fail-fast` result with suite breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
-2. **Overall Coverage** — workspace-wide coverage for CLI crate and Core crate. Any file below 85% that is not in the configured exception list = QA FAIL. Exempted files must be listed with the reason from `codeflow-cli/config/testing/test-config.json`.
+2. **Overall Coverage** — workspace-wide coverage for CLI crate and Core crate. Any file below 85% that is not in the configured exception list = QA FAIL. The Exempted Files table must list ALL entries from `codeflow-cli/config/testing/test-config.json` `conventions.exceptions[]` — not just files modified in this session — with coverage %, configured threshold, and reason.
 3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= 85%. Missing coverage data = QA FAIL.
 
 Scoring guide: 95-100 = all acceptance criteria verified by passing tests with per-file coverage at threshold, zero open findings; 80-94 = criteria met but some test paths have thin coverage or one finding required a waiver; below 80 = known gaps, test failures, or coverage deficits remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.

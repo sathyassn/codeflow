@@ -119,6 +119,9 @@ pub struct TestValidationResult {
     /// Number of consecutive clean test runs. Default 1; WS-QA fills actual value.
     #[serde(default = "default_consecutive_runs")]
     pub consecutive_clean_runs: u32,
+    /// Validation warnings (non-fatal issues detected during validation).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 fn default_consecutive_runs() -> u32 {
@@ -387,8 +390,8 @@ impl TestValidator {
         config: &TestConfig,
     ) -> TestValidationResult {
         let mut modified_file_results = Vec::new();
-        let mut exempted_files = Vec::new();
         let mut all_modified_pass = true;
+        let warnings = Vec::new();
 
         // Build exception lookup by file path suffix.
         let exceptions: HashMap<&str, &FileException> = config
@@ -407,33 +410,25 @@ impl TestValidator {
                 fc.filename == *modified || fc.filename.ends_with(&format!("/{modified}"))
             });
 
-            let coverage = file_cov.map_or(0.0, |fc| fc.percent);
+            // -1.0 sentinel means file not found in coverage data (rendered as "N/A").
+            let coverage = file_cov.map_or(-1.0, |fc| fc.percent);
 
             // Determine threshold: exception > business_package > default.
-            let (threshold, is_exempted, exemption_reason) =
-                if let Some(exc) = exceptions.get(modified.as_str()) {
-                    (exc.threshold, true, exc.reason.clone())
-                } else if config
-                    .coverage
-                    .business_packages
-                    .iter()
-                    .any(|pkg| Self::file_in_package(modified, pkg))
-                {
-                    (config.coverage.threshold, false, String::new())
-                } else {
-                    (80, false, String::new())
-                };
+            let threshold = if let Some(exc) = exceptions.get(modified.as_str()) {
+                exc.threshold
+            } else if config
+                .coverage
+                .business_packages
+                .iter()
+                .any(|pkg| Self::file_in_package(modified, pkg))
+            {
+                config.coverage.threshold
+            } else {
+                80
+            };
 
-            let pass = coverage >= f64::from(threshold);
-
-            if is_exempted {
-                exempted_files.push(ExemptedFile {
-                    file: modified.clone(),
-                    coverage,
-                    configured_threshold: threshold,
-                    reason: exemption_reason,
-                });
-            }
+            // Missing coverage (sentinel -1.0) always fails.
+            let pass = coverage >= 0.0 && coverage >= f64::from(threshold);
 
             if !pass {
                 all_modified_pass = false;
@@ -446,6 +441,28 @@ impl TestValidator {
                 pass,
             });
         }
+
+        // Build exempted_files from ALL config exceptions, not just modified files.
+        let exempted_files: Vec<ExemptedFile> = config
+            .conventions
+            .exceptions
+            .iter()
+            .map(|exc| {
+                let coverage = all_coverage
+                    .iter()
+                    .find(|fc| {
+                        fc.filename == exc.file || fc.filename.ends_with(&format!("/{}", exc.file))
+                    })
+                    .map_or(-1.0, |fc| fc.percent);
+
+                ExemptedFile {
+                    file: exc.file.clone(),
+                    coverage,
+                    configured_threshold: exc.threshold,
+                    reason: exc.reason.clone(),
+                }
+            })
+            .collect();
 
         // Check workspace coverage.
         let workspace_pass = workspace_coverage >= f64::from(config.coverage.threshold);
@@ -483,6 +500,7 @@ impl TestValidator {
             exempted_files,
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings,
         }
     }
 
@@ -621,17 +639,27 @@ impl TestValidator {
             result.workspace_coverage, ws_status
         );
 
-        // Exempted files sub-table.
-        if !result.exempted_files.is_empty() {
-            out.push('\n');
-            out.push_str("#### Exempted Files\n");
+        // Exempted files sub-table: always render all project-wide exceptions
+        // from test-config.json, regardless of whether they appeared in coverage data.
+        out.push('\n');
+        out.push_str("#### Exempted Files (below 85%)\n");
+        out.push_str("All project-wide coverage exceptions from test-config.json conventions.exceptions[].\n\n");
+        if result.exempted_files.is_empty() {
+            out.push_str("No exceptions configured.\n");
+        } else {
             out.push_str("| File | Coverage | Configured Threshold | Reason |\n");
             out.push_str("|------|----------|---------------------|--------|\n");
             for ef in &result.exempted_files {
+                // coverage < 0 means the file was not found in coverage data.
+                let coverage_str = if ef.coverage < 0.0 {
+                    "N/A".to_string()
+                } else {
+                    format!("{:.1}%", ef.coverage)
+                };
                 let _ = writeln!(
                     out,
-                    "| {} | {:.1}% | {}% | {} |",
-                    ef.file, ef.coverage, ef.configured_threshold, ef.reason
+                    "| {} | {} | {}% | {} |",
+                    ef.file, coverage_str, ef.configured_threshold, ef.reason
                 );
             }
         }
@@ -645,10 +673,15 @@ impl TestValidator {
 
         for mfr in &result.modified_file_results {
             let status = if mfr.pass { "PASS" } else { "FAIL" };
+            let coverage_str = if mfr.coverage < 0.0 {
+                "N/A".to_string()
+            } else {
+                format!("{:.1}%", mfr.coverage)
+            };
             let _ = writeln!(
                 out,
-                "| {} | {:.1}% | {}% | {} |",
-                mfr.file, mfr.coverage, mfr.threshold, status
+                "| {} | {} | {}% | {} |",
+                mfr.file, coverage_str, mfr.threshold, status
             );
         }
 
@@ -1007,6 +1040,7 @@ test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
             exempted_files: Vec::new(),
             new_tests_added: 5,
             consecutive_clean_runs: 2,
+            warnings: Vec::new(),
         };
 
         let md = TestValidator::format_markdown(&result);
@@ -1032,6 +1066,15 @@ test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
         assert!(md.contains("**Workspace**"));
         // Section 3 file entry.
         assert!(md.contains("core/src/testing/validation.rs"));
+        // Exempted files section always present, even when empty.
+        assert!(
+            md.contains("#### Exempted Files (below 85%)"),
+            "missing exempted files header"
+        );
+        assert!(
+            md.contains("No exceptions configured."),
+            "missing empty exceptions message"
+        );
     }
 
     #[test]
@@ -1056,11 +1099,12 @@ test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
             }],
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings: Vec::new(),
         };
 
         let md = TestValidator::format_markdown(&result);
         assert!(
-            md.contains("#### Exempted Files"),
+            md.contains("#### Exempted Files (below 85%)"),
             "missing exempted files header"
         );
         assert!(md.contains("async process spawning"));
@@ -1081,6 +1125,7 @@ test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
             exempted_files: Vec::new(),
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings: Vec::new(),
         };
 
         TestValidator::write_artifact(dir.path(), &result).unwrap();
@@ -1118,6 +1163,7 @@ test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
             exempted_files: Vec::new(),
             new_tests_added: 0,
             consecutive_clean_runs: 1,
+            warnings: Vec::new(),
         };
 
         TestValidator::write_artifact(dir.path(), &result).unwrap();
@@ -1310,6 +1356,236 @@ codeflow-cli/core/src/lib.rs
             updated.conventions.exceptions.len(),
             1,
             "valid exception should be kept"
+        );
+    }
+
+    #[test]
+    fn test_validate_exempted_files_all_config_exceptions() {
+        // Verify that ALL config exceptions appear in exempted_files,
+        // even when none of them are in the modified files list.
+        let mut config = make_default_config();
+        config.conventions.exceptions = vec![
+            FileException {
+                file: "core/src/autorun/worker.rs".to_string(),
+                threshold: 80,
+                reason: "async process spawning".to_string(),
+                granularity: "per_file".to_string(),
+                remove_when: "refactored".to_string(),
+            },
+            FileException {
+                file: "cli/src/cmd/interactive.rs".to_string(),
+                threshold: 80,
+                reason: "exec(2) replaces process".to_string(),
+                granularity: "per_file".to_string(),
+                remove_when: "injectable exec".to_string(),
+            },
+            FileException {
+                file: "core/src/tui/mod.rs".to_string(),
+                threshold: 0,
+                reason: "pure module declaration".to_string(),
+                granularity: "per_file".to_string(),
+                remove_when: "gains code".to_string(),
+            },
+        ];
+
+        let test_run = make_passing_run(10);
+        // Only one exception file appears in coverage data.
+        let all_cov = vec![
+            make_file_cov("core/src/autorun/worker.rs", 82.0),
+            make_file_cov("core/src/lib.rs", 95.0),
+        ];
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        // No modified files at all — exempted_files should still list ALL 3 exceptions.
+        let modified: Vec<String> = vec![];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+        assert_eq!(
+            result.exempted_files.len(),
+            3,
+            "all 3 config exceptions should appear in exempted_files"
+        );
+        assert_eq!(result.exempted_files[0].file, "core/src/autorun/worker.rs");
+        assert!((result.exempted_files[0].coverage - 82.0).abs() < 0.01);
+        assert_eq!(result.exempted_files[1].file, "cli/src/cmd/interactive.rs");
+        assert!(
+            result.exempted_files[1].coverage < 0.0,
+            "file not in coverage data should have coverage < 0 (N/A)"
+        );
+        assert_eq!(result.exempted_files[2].file, "core/src/tui/mod.rs");
+        assert!(
+            result.exempted_files[2].coverage < 0.0,
+            "file not in coverage data should have coverage < 0 (N/A)"
+        );
+    }
+
+    #[test]
+    fn test_format_markdown_all_exceptions_including_na() {
+        // Verify format_markdown renders all exceptions including N/A coverage.
+        let result = TestValidationResult {
+            overall_pass: true,
+            test_run: make_passing_run(50),
+            file_coverages: Vec::new(),
+            crate_coverages: vec![make_crate_cov("codeflow-core", 90.0)],
+            workspace_coverage: 90.0,
+            modified_file_results: Vec::new(),
+            exempted_files: vec![
+                ExemptedFile {
+                    file: "core/src/autorun/worker.rs".to_string(),
+                    coverage: 82.0,
+                    configured_threshold: 80,
+                    reason: "async process spawning".to_string(),
+                },
+                ExemptedFile {
+                    file: "core/src/tui/mod.rs".to_string(),
+                    coverage: -1.0, // Not in coverage data.
+                    configured_threshold: 0,
+                    reason: "pure module declaration".to_string(),
+                },
+            ],
+            new_tests_added: 0,
+            consecutive_clean_runs: 1,
+            warnings: Vec::new(),
+        };
+
+        let md = TestValidator::format_markdown(&result);
+        assert!(
+            md.contains("#### Exempted Files (below 85%)"),
+            "missing exempted files header"
+        );
+        assert!(
+            md.contains("All project-wide coverage exceptions"),
+            "missing description text"
+        );
+        assert!(md.contains("82.0%"), "should show actual coverage");
+        assert!(md.contains("N/A"), "should show N/A for missing coverage");
+        assert!(md.contains("pure module declaration"));
+        assert!(md.contains("async process spawning"));
+    }
+
+    #[test]
+    fn test_validate_warnings_reserved_field_empty() {
+        // Warnings field is reserved for future validation warnings; currently always empty.
+        let mut config = make_default_config();
+        config.conventions.exceptions = vec![FileException {
+            file: "core/src/autorun/worker.rs".to_string(),
+            threshold: 80,
+            reason: "async".to_string(),
+            granularity: "per_file".to_string(),
+            remove_when: "later".to_string(),
+        }];
+
+        let test_run = make_passing_run(10);
+        let all_cov = vec![make_file_cov("core/src/autorun/worker.rs", 82.0)];
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        let modified: Vec<String> = vec![];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_empty_exceptions_empty_exempted() {
+        // Empty exceptions list → empty exempted files, no warning.
+        let config = make_default_config();
+        let test_run = make_passing_run(10);
+        let all_cov = vec![make_file_cov("core/src/lib.rs", 90.0)];
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        let modified = vec!["core/src/lib.rs".to_string()];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+        assert!(
+            result.exempted_files.is_empty(),
+            "no exceptions = no exempted files"
+        );
+        assert!(result.warnings.is_empty(), "no warnings for empty config");
+    }
+
+    #[test]
+    fn test_format_markdown_empty_exceptions() {
+        // When no exceptions configured, show "No exceptions configured."
+        let result = TestValidationResult {
+            overall_pass: true,
+            test_run: make_passing_run(10),
+            file_coverages: Vec::new(),
+            crate_coverages: vec![make_crate_cov("codeflow-core", 90.0)],
+            workspace_coverage: 90.0,
+            modified_file_results: Vec::new(),
+            exempted_files: Vec::new(),
+            new_tests_added: 0,
+            consecutive_clean_runs: 1,
+            warnings: Vec::new(),
+        };
+
+        let md = TestValidator::format_markdown(&result);
+        assert!(
+            md.contains("#### Exempted Files (below 85%)"),
+            "header always present"
+        );
+        assert!(
+            md.contains("No exceptions configured."),
+            "empty state message"
+        );
+        // The exempted files section should not contain its own table header.
+        // (Modified File Coverage section has its own "| File | Coverage |" table.)
+        assert!(
+            !md.contains("| File | Coverage | Configured Threshold | Reason |"),
+            "no exempted files table when empty"
+        );
+    }
+
+    #[test]
+    fn test_validate_missing_coverage_consistent_sentinel() {
+        // A file in both modified_files AND exceptions but NOT in coverage data
+        // should get consistent -1.0 sentinel in both tables, rendered as "N/A".
+        let mut config = make_default_config();
+        config.conventions.exceptions = vec![FileException {
+            file: "core/src/tui/mod.rs".to_string(),
+            threshold: 0,
+            reason: "pure module declaration".to_string(),
+            granularity: "per_file".to_string(),
+            remove_when: "gains code".to_string(),
+        }];
+
+        let test_run = make_passing_run(10);
+        let all_cov = vec![]; // No coverage data at all.
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        let modified = vec!["core/src/tui/mod.rs".to_string()];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+
+        // Modified file should have -1.0 sentinel.
+        assert_eq!(result.modified_file_results.len(), 1);
+        assert!(
+            result.modified_file_results[0].coverage < 0.0,
+            "modified file missing from coverage should be -1.0, got {}",
+            result.modified_file_results[0].coverage
+        );
+
+        // Exempted file should also have -1.0 sentinel.
+        assert_eq!(result.exempted_files.len(), 1);
+        assert!(
+            result.exempted_files[0].coverage < 0.0,
+            "exempted file missing from coverage should be -1.0, got {}",
+            result.exempted_files[0].coverage
+        );
+
+        // Both sentinels are the same value.
+        assert!(
+            (result.modified_file_results[0].coverage - result.exempted_files[0].coverage).abs()
+                < f64::EPSILON,
+            "sentinel values must be consistent"
+        );
+
+        // format_markdown should render "N/A" in both tables.
+        let md = TestValidator::format_markdown(&result);
+        let na_count = md.matches("N/A").count();
+        assert!(
+            na_count >= 2,
+            "expected N/A in both modified and exempted tables, found {na_count} occurrences"
         );
     }
 

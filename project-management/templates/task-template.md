@@ -357,6 +357,8 @@ Mechanisms available in codebase:
 
 ##### Exempted Files (below 85%)
 
+All project-wide coverage exceptions from test-config.json conventions.exceptions[].
+
 | File | Coverage | Configured Threshold | Reason |
 |------|----------|---------------------|--------|
 | {path} | {n}% | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
