@@ -292,6 +292,31 @@ pub(crate) async fn serialized_merge(
         }
 
         if std::time::Instant::now() >= deadline {
+            // Before giving up, attempt to clean stale entries at position 0.
+            let max_stale_retries = 3;
+            let mut cleaned = false;
+            for stale_attempt in 1..=max_stale_retries {
+                match try_remove_stale_head(state_path, target) {
+                    Ok(true) => {
+                        eprintln!(
+                            "merge queue: removed stale head entry (attempt {stale_attempt}/{max_stale_retries})"
+                        );
+                        cleaned = true;
+                        break;
+                    }
+                    Ok(false) => break, // Head entry is alive, no stale cleanup possible.
+                    Err(e) => {
+                        eprintln!(
+                            "warning: stale head check failed (attempt {stale_attempt}/{max_stale_retries}): {e}"
+                        );
+                        // Retry on error (transient filesystem/lock contention).
+                    }
+                }
+            }
+            if cleaned {
+                // Reset deadline and retry: stale entry was removed, we may now be at position 0.
+                continue;
+            }
             eprintln!("merge queue: timed out waiting for position 0 after {queue_timeout_secs}s");
             let _ =
                 crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
@@ -454,6 +479,111 @@ pub(crate) async fn serialized_merge(
     MergeOutcome::Merged
 }
 
+/// Check if the head entry in the merge queue for a target branch belongs to a dead session.
+///
+/// Uses `kill(pid, 0)` to test liveness of the session's lead PID. If dead, removes the
+/// entry from the queue. Returns `Ok(true)` if a stale entry was removed, `Ok(false)` if
+/// the head is alive or the queue is empty.
+fn try_remove_stale_head(
+    state_path: &std::path::Path,
+    target_branch: &str,
+) -> Result<bool, String> {
+    // Peek at the head entry for this target.
+    let mut head_entry: Option<crate::coordination::merge_queue::MergeQueueEntry> = None;
+    crate::file_lock::locked_binary_rmw(
+        state_path,
+        crate::coordination::loro::LoroCoordinator::in_memory,
+        |bytes| {
+            crate::coordination::loro::LoroCoordinator::from_bytes(bytes, state_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            // Find the first entry targeting this branch.
+            let queue = coord.doc().get_list("merge_queue");
+            let len = queue.len();
+            for i in 0..len {
+                if let Some(loro::ValueOrContainer::Value(loro::LoroValue::String(s))) =
+                    queue.get(i)
+                {
+                    if let Ok(entry) = serde_json::from_str::<
+                        crate::coordination::merge_queue::MergeQueueEntry,
+                    >(&s)
+                    {
+                        if entry.target_branch == target_branch {
+                            head_entry = Some(entry);
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| format!("peek head: {e}"))?;
+
+    let Some(entry) = head_entry else {
+        return Ok(false); // Queue empty for this target.
+    };
+
+    // Check if the session's heartbeat file exists and if the PID is alive.
+    let project_dir = state_path
+        .ancestors()
+        .find(|p| p.join(".codeflow").is_dir())
+        .unwrap_or(state_path);
+    let heartbeat_dir = project_dir.join(".state/interactive");
+    let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", entry.session_id));
+
+    let is_dead = if heartbeat_path.exists() {
+        // Read PID from heartbeat and check liveness.
+        match std::fs::read_to_string(&heartbeat_path) {
+            Ok(content) => {
+                let pid_str = content.trim();
+                match pid_str.parse::<u32>() {
+                    Ok(pid) if pid > 0 => {
+                        let alive = crate::session::process::is_process_alive(pid);
+                        !alive
+                    }
+                    // PID 0/invalid or unparseable -- treat as dead.
+                    Ok(_) | Err(_) => true,
+                }
+            }
+            Err(_) => true, // Can't read, treat as dead.
+        }
+    } else {
+        // No heartbeat file -- check session age. If older than 1 hour, treat as dead.
+        let age_secs = chrono::DateTime::parse_from_rfc3339(&entry.pr_ready_at)
+            .map(|dt| (chrono::Utc::now() - dt.to_utc()).num_seconds())
+            .unwrap_or(0);
+        age_secs > 3600
+    };
+
+    if !is_dead {
+        return Ok(false);
+    }
+
+    // Remove the stale entry.
+    let sid = entry.session_id.clone();
+    crate::file_lock::locked_binary_rmw(
+        state_path,
+        crate::coordination::loro::LoroCoordinator::in_memory,
+        |bytes| {
+            crate::coordination::loro::LoroCoordinator::from_bytes(bytes, state_path)
+                .map_err(|e| format!("load coordinator: {e}"))
+        },
+        |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+        |coord| {
+            crate::coordination::merge_queue::remove_by_session(coord, &sid)
+                .map_err(|e| format!("remove stale: {e}"))?;
+            Ok(())
+        },
+    )
+    .map_err(|e| format!("remove stale entry: {e}"))?;
+
+    eprintln!("merge queue: removed stale entry for dead session {sid}");
+    Ok(true)
+}
+
 /// Outcome of merge conflict resolution.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MergeConflictAction {
@@ -591,6 +721,15 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 cfg.session_id,
             ),
         );
+
+        // Write heartbeat file for liveness detection by try_remove_stale_head().
+        // Autorun workers are Rust processes (not via codeflow -i), so they don't
+        // get heartbeat files from SessionStart. Writing one here ensures the stale
+        // entry detector can check PID liveness for crashed workers.
+        let heartbeat_dir = self.project_dir.join(".state/interactive");
+        let _ = std::fs::create_dir_all(&heartbeat_dir);
+        let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{worker_sid}"));
+        let _ = std::fs::write(&heartbeat_path, format!("{}", std::process::id()));
 
         // Write codeflow-env.sh into the worktree's runtime directory so
         // the SessionStart hook inside the worker detects the pre-created
@@ -951,7 +1090,9 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
-        // Always cleanup: release claims, kill tmux, remove worktree.
+        // Always cleanup: remove heartbeat, release claims, kill tmux, remove worktree.
+        let _ = std::fs::remove_file(&heartbeat_path);
+
         // Release claims via release_all().
         match crate::file_lock::locked_binary_rmw(
             &state_path,
@@ -1034,17 +1175,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             // Deregister from worktrees.yaml to prevent pool exhaustion.
                             let registry_path =
                                 self.project_dir.join(".state/worktrees/worktrees.yaml");
-                            if let Ok(content) = std::fs::read_to_string(&registry_path) {
-                                // Remove the entry matching this worktree name.
-                                let filtered: String = content
-                                    .lines()
-                                    .filter(|line| !line.contains(&wt_name))
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                if filtered != content {
-                                    let _ = std::fs::write(&registry_path, filtered + "\n");
-                                }
-                            }
+                            let _ = crate::worktree::locked_deregister_by_name(
+                                &registry_path,
+                                &wt_name,
+                            );
                             // Emit coordination event for cleanup failure.
                             crate::autorun::emit_coordination_event(
                                 &self.project_dir,
@@ -1055,6 +1189,19 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                                     timestamp: chrono::Utc::now().to_rfc3339(),
                                 },
                             );
+                            // Record orphaned path for `codeflow worktree prune`.
+                            let orphan_path =
+                                self.project_dir.join(".git-worktrees").join(&wt_name);
+                            let cleanup_file = self.project_dir.join(".state/cleanup-needed.txt");
+                            let line = format!("{}\n", orphan_path.display());
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&cleanup_file)
+                            {
+                                use std::io::Write;
+                                let _ = f.write_all(line.as_bytes());
+                            }
                         }
                     }
                 }
@@ -1072,10 +1219,27 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
         let worker_result = match result {
             Ok(Ok(invoke_result)) => {
-                let status = if invoke_result.exit_code == 0 {
-                    "completed"
+                // Determine status: check for PR creation failure when auto_merge expects a PR.
+                let (status, error_msg) = if invoke_result.exit_code != 0 {
+                    ("failed", String::new())
+                } else if cfg.integration_auto_merge && invoke_result.pr_number == 0 {
+                    // PR was expected (auto_merge=true) but not created.
+                    Self::emit_autorun_event(
+                        &self.project_dir,
+                        &crate::coordination::types::events::AutorunEvent::WorkerFailed {
+                            session_id: cfg.session_id.clone(),
+                            worker_id: cfg.worker_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            error: "PR expected (auto_merge=true) but pr_number=0".into(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        },
+                    );
+                    (
+                        "pr_creation_failed",
+                        "PR expected but not created".to_string(),
+                    )
                 } else {
-                    "failed"
+                    ("completed", String::new())
                 };
                 Ok(WorkerResult {
                     worker_id: cfg.worker_id.clone(),
@@ -1085,7 +1249,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     pr_number: invoke_result.pr_number,
                     pr_url: invoke_result.pr_url.clone(),
                     branch_name: invoke_result.branch_name,
-                    error: String::new(),
+                    error: error_msg,
                     duration_sec: elapsed,
                 })
             }
@@ -3101,14 +3265,26 @@ Read and implement.
         };
 
         // Enqueue another session first so our session is NOT at position 0.
+        // Use a recent timestamp so stale detection does NOT remove it.
         let blocker = crate::coordination::merge_queue::MergeQueueEntry {
             session_id: crate::types::SessionId::new_unchecked("ses-blocker"),
             task_id: "blocker-task".to_string(),
             branch: "feat/blocker".to_string(),
             target_branch: "main".to_string(),
-            pr_ready_at: "2026-01-01T00:00:00Z".to_string(),
+            pr_ready_at: chrono::Utc::now().to_rfc3339(),
         };
         crate::coordination::merge_queue::locked_enqueue(&state_path, &blocker).unwrap();
+        // Create a .codeflow dir so the project_dir ancestor search finds it.
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        // Create a fake heartbeat for the blocker with the current process PID
+        // so liveness check passes (process is alive).
+        let hb_dir = dir.path().join(".state/interactive");
+        std::fs::create_dir_all(&hb_dir).unwrap();
+        std::fs::write(
+            hb_dir.join("heartbeat-ses-blocker"),
+            format!("{}", std::process::id()),
+        )
+        .unwrap();
 
         let result = serialized_merge(
             dir.path(),

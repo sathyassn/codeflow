@@ -57,14 +57,28 @@ pub struct StageInfo {
     pub completed: bool,
 }
 
-/// View of an interactive session (for future INF-TSK-044-005).
+/// View of an interactive session for the TUI dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
     pub session_id: String,
     pub status: String,
     pub branch: Option<String>,
     pub phase: Option<String>,
+    pub work_type: Option<String>,
+    pub team_name: Option<String>,
+    pub pid: i64,
+    pub worktree_path: Option<String>,
+    pub duration_secs: i64,
+    pub managed: bool,
     pub created_at: String,
+}
+
+/// Aggregated counts for the interactive session dashboard header.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SessionSummary {
+    pub active: usize,
+    pub stale: usize,
+    pub complete: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -175,13 +189,107 @@ async fn build_batch_view<S: DataStore>(
     })
 }
 
-/// Fetch interactive session views (stub for INF-TSK-044-005).
+/// Fetch interactive session views from the database.
 ///
-/// Returns an empty list. Will be implemented when the interactive session
-/// dashboard task is active.
-#[must_use]
-pub fn fetch_session_views() -> Vec<SessionView> {
-    Vec::new()
+/// Queries all interactive sessions, enriches each with PathFlow phase
+/// data from sentinel files, and computes duration from `created_at`.
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried.
+pub async fn fetch_session_views(
+    store: &crate::store::SurrealStore,
+    project_dir: &Path,
+) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
+    let sessions: Vec<crate::models::InteractiveSession> = store
+        .db()
+        .query("SELECT * FROM interactive_session ORDER BY created_at DESC")
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .take(0)
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+    let mut views = Vec::with_capacity(sessions.len());
+    let mut summary = SessionSummary::default();
+
+    for s in &sessions {
+        match s.status.to_string().as_str() {
+            "active" => summary.active += 1,
+            "stale" => summary.stale += 1,
+            "complete" => summary.complete += 1,
+            _ => {}
+        }
+
+        let raw_phase = derive_phase_from_session(project_dir, s);
+        // Provide contextual fallback when phase is unknown.
+        let phase = raw_phase.or_else(|| {
+            let is_active = s.status.to_string() == "active";
+            let has_worktree = s.worktree_path.as_ref().is_some_and(|p| !p.is_empty());
+            if is_active && has_worktree {
+                Some("Starting...".to_string())
+            } else if is_active {
+                Some("N/A".to_string())
+            } else {
+                None
+            }
+        });
+        let elapsed = compute_elapsed_secs(&s.created_at);
+
+        views.push(SessionView {
+            session_id: s.session_id.clone(),
+            status: s.status.to_string(),
+            branch: s.branch.clone(),
+            phase,
+            work_type: s.work_type.clone(),
+            team_name: s.team_name.clone(),
+            pid: s.pid,
+            worktree_path: s.worktree_path.clone(),
+            duration_secs: elapsed,
+            managed: s.managed,
+            created_at: s.created_at.clone(),
+        });
+    }
+
+    Ok((views, summary))
+}
+
+/// Derive the PathFlow phase for an interactive session.
+///
+/// Reads sentinel files from the session's worktree (if available), or
+/// the project dir, scoped to the session ID.
+fn derive_phase_from_session(
+    project_dir: &Path,
+    session: &crate::models::InteractiveSession,
+) -> Option<String> {
+    // Guard against path traversal.
+    if session.session_id.contains("..") {
+        return None;
+    }
+    let wt = session.worktree_path.as_deref();
+    if let Some(w) = wt {
+        if w.contains("..") {
+            return None;
+        }
+    }
+    // Try reading from pathflow-session-status.json first (authoritative).
+    let base = wt.unwrap_or("");
+    if !base.is_empty() {
+        let status_path = std::path::Path::new(base)
+            .join(".state/session")
+            .join(&session.session_id)
+            .join("pathflow/pathflow-session-status.json");
+        if let Ok(content) = std::fs::read_to_string(&status_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(phase) = val.get("last_completed_phase").and_then(|v| v.as_str()) {
+                    if !phase.is_empty() {
+                        return Some(phase.to_string());
+                    }
+                }
+            }
+        }
+    }
+    // Fallback: scan sentinel files.
+    read_latest_phase(project_dir, wt, Some(&session.session_id))
 }
 
 // ---------------------------------------------------------------------------
@@ -485,11 +593,20 @@ mod tests {
             status: "active".to_string(),
             branch: Some("feat/test".to_string()),
             phase: Some("PF4".to_string()),
+            work_type: Some("FEAT".to_string()),
+            team_name: Some("team-1".to_string()),
+            pid: 12345,
+            worktree_path: Some("/tmp/wt".to_string()),
+            duration_secs: 60,
+            managed: true,
             created_at: "2026-04-01T00:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains("\"session_id\":\"ses-001\""));
         assert!(json.contains("\"branch\":\"feat/test\""));
+        assert!(json.contains("\"work_type\":\"FEAT\""));
+        assert!(json.contains("\"pid\":12345"));
+        assert!(json.contains("\"managed\":true"));
     }
 
     #[test]
@@ -525,10 +642,149 @@ mod tests {
         assert!(view.stages.is_empty());
     }
 
-    #[test]
-    fn test_fetch_session_views_returns_empty() {
-        let views = fetch_session_views();
+    #[tokio::test]
+    async fn test_fetch_session_views_empty_store() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, summary) = fetch_session_views(&store, tmp.path()).await.unwrap();
         assert!(views.is_empty());
+        assert_eq!(summary.active, 0);
+        assert_eq!(summary.stale, 0);
+        assert_eq!(summary.complete, 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_session_views_with_sessions() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        // Insert an interactive session via raw query.
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-test-tui', \
+                 pid = 999, \
+                 status = 'active', \
+                 worktree_path = NONE, \
+                 branch = 'feat/tui', \
+                 work_type = 'FEAT', \
+                 team_name = 'test-team', \
+                 source_cli = 'codeflow', \
+                 managed = true, \
+                 created_at = $now, \
+                 updated_at = NONE, \
+                 completed_at = NONE;",
+            )
+            .bind(("now", now.clone()))
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, summary) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        assert_eq!(views.len(), 1);
+        assert_eq!(summary.active, 1);
+        assert_eq!(summary.stale, 0);
+
+        let v = &views[0];
+        assert_eq!(v.session_id, "ses-test-tui");
+        assert_eq!(v.status, "active");
+        assert_eq!(v.branch.as_deref(), Some("feat/tui"));
+        assert_eq!(v.work_type.as_deref(), Some("FEAT"));
+        assert_eq!(v.team_name.as_deref(), Some("test-team"));
+        assert_eq!(v.pid, 999);
+        assert!(v.managed);
+    }
+
+    #[test]
+    fn test_derive_phase_from_session_with_status_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("worktree");
+        let sid = "ses-phase-test";
+        let status_dir = wt.join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            r#"{"last_completed_phase": "pf-4"}"#,
+        )
+        .unwrap();
+
+        let session = crate::models::InteractiveSession {
+            id: "test".to_string(),
+            session_id: sid.to_string(),
+            pid: 1,
+            status: crate::types::InteractiveSessionStatus::Active,
+            worktree_path: Some(wt.to_string_lossy().to_string()),
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".to_string(),
+            managed: true,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: None,
+            completed_at: None,
+        };
+
+        let phase = derive_phase_from_session(tmp.path(), &session);
+        assert_eq!(phase, Some("pf-4".to_string()));
+    }
+
+    #[test]
+    fn test_derive_phase_from_session_fallback_sentinels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sid = "ses-sentinel-test";
+        let sentinel_dir = tmp.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
+        std::fs::write(sentinel_dir.join("pathflow-pf-3"), "").unwrap();
+
+        let session = crate::models::InteractiveSession {
+            id: "test".to_string(),
+            session_id: sid.to_string(),
+            pid: 1,
+            status: crate::types::InteractiveSessionStatus::Active,
+            worktree_path: None,
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".to_string(),
+            managed: true,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: None,
+            completed_at: None,
+        };
+
+        let phase = derive_phase_from_session(tmp.path(), &session);
+        assert_eq!(phase, Some("PF3".to_string()));
+    }
+
+    #[test]
+    fn test_derive_phase_path_traversal_guard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = crate::models::InteractiveSession {
+            id: "test".to_string(),
+            session_id: "../etc/passwd".to_string(),
+            pid: 1,
+            status: crate::types::InteractiveSessionStatus::Active,
+            worktree_path: None,
+            branch: None,
+            work_type: None,
+            team_name: None,
+            source_cli: "codeflow".to_string(),
+            managed: true,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: None,
+            completed_at: None,
+        };
+
+        let phase = derive_phase_from_session(tmp.path(), &session);
+        assert!(phase.is_none());
+    }
+
+    #[test]
+    fn test_session_summary_default() {
+        let summary = SessionSummary::default();
+        assert_eq!(summary.active, 0);
+        assert_eq!(summary.stale, 0);
+        assert_eq!(summary.complete, 0);
     }
 
     #[test]

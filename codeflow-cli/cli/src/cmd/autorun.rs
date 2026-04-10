@@ -574,6 +574,7 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
         store.clone(),
     );
 
+    let store_for_final_pr = store.clone();
     let orchestrator = codeflow_core::autorun::Orchestrator::new(worker, store);
 
     // Start sync daemon once (not per-worker) before orchestrator execution.
@@ -696,6 +697,21 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
             Ok(o) if o.status.success() => {
                 let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 eprintln!("final PR created: {url}");
+                // Persist final PR URL to the autorun session record.
+                if !url.is_empty() {
+                    if let Err(e) = store_for_final_pr
+                        .update_autorun_session(
+                            session_id.as_str(),
+                            codeflow_core::models::AutorunSessionUpdate {
+                                final_pr_url: Some(url.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        eprintln!("warning: failed to persist final_pr_url: {e}");
+                    }
+                }
             }
             Ok(o) => {
                 eprintln!(
@@ -1462,10 +1478,10 @@ async fn run_status_watch(
                     ))
                 } else {
                     status_message = None;
-                    keybinding_line()
+                    context_keybinding_line(selected_task)
                 }
             } else {
-                keybinding_line()
+                context_keybinding_line(selected_task)
             };
             frame.render_widget(Paragraph::new(bar_line), chunks[3]);
         })?;
@@ -1512,7 +1528,14 @@ async fn run_status_watch(
                             // runs tmux attach, then re-enters TUI on detach.
                             if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
                                 if let Some(ref tmux_name) = task.tmux_session {
-                                    if tmux_has_session(tmux_name) {
+                                    // Validate DB-sourced tmux session name before
+                                    // passing as a command argument (defense-in-depth).
+                                    if !is_safe_tmux_name(tmux_name) {
+                                        status_message = Some((
+                                            "Invalid tmux session name".to_string(),
+                                            std::time::Instant::now(),
+                                        ));
+                                    } else if tmux_has_session(tmux_name) {
                                         let _ = execute!(std::io::stdout(), DisableMouseCapture);
                                         ratatui::restore();
 
@@ -1659,23 +1682,54 @@ async fn run_status_watch(
     Ok(())
 }
 
-fn keybinding_line() -> ratatui::text::Line<'static> {
+fn context_keybinding_line(
+    task: Option<&codeflow_core::tui::data::TaskView>,
+) -> ratatui::text::Line<'static> {
     use codeflow_core::tui::theme;
     use ratatui::style::Style;
     use ratatui::text::Span;
 
-    ratatui::text::Line::from(vec![
+    let mut spans = vec![
         Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Attach "),
-        Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
-        Span::raw(" Abort "),
+    ];
+
+    // Context-aware abort hint.
+    let abort_hint = task.map_or(("[a]", " Abort ", false), |t| {
+        let is_cancellable = matches!(
+            t.status,
+            codeflow_core::types::AutorunTaskRunStatus::Running
+                | codeflow_core::types::AutorunTaskRunStatus::Pending
+        );
+        if t.display_status == "Waiting" {
+            ("[a]", " Abort (waiting...) ", true)
+        } else if is_cancellable {
+            ("[a]", " Abort ", false)
+        } else {
+            ("[a]", " Abort (N/A) ", true)
+        }
+    });
+    if abort_hint.2 {
+        spans.push(Span::styled(abort_hint.0.to_string(), theme::dim()));
+        spans.push(Span::styled(abort_hint.1.to_string(), theme::dim()));
+    } else {
+        spans.push(Span::styled(
+            abort_hint.0.to_string(),
+            Style::new().fg(theme::BLUE_ACCENT),
+        ));
+        spans.push(Span::raw(abort_hint.1.to_string()));
+    }
+
+    spans.extend([
         Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Retry "),
         Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Navigate "),
         Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Quit"),
-    ])
+    ]);
+
+    ratatui::text::Line::from(spans)
 }
 
 fn selected_task<'a>(
@@ -1724,6 +1778,11 @@ fn render_header(
             Span::raw("  "),
             Span::styled(
                 format!("target: {}", v.target_branch.as_deref().unwrap_or("--")),
+                Style::new().fg(theme::DIM_PENDING),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                compute_eta(v.elapsed_secs, v.completed_tasks, v.total_tasks),
                 Style::new().fg(theme::DIM_PENDING),
             ),
         ])
@@ -2905,6 +2964,40 @@ fn run_batches_sync(project_dir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Compute a simple ETA string from elapsed time and task progress.
+///
+/// Returns "ETA: --" when no tasks have completed, "ETA: <1m" when close,
+/// or "ETA: ~Xm" based on `(elapsed / completed) * remaining`.
+fn compute_eta(elapsed_secs: i64, completed: i32, total: i32) -> String {
+    if completed <= 0 || total <= 0 {
+        return "ETA: --".to_string();
+    }
+    let remaining = total - completed;
+    if remaining <= 0 {
+        return "ETA: done".to_string();
+    }
+    let secs_per_task = elapsed_secs / i64::from(completed);
+    let eta_secs = secs_per_task * i64::from(remaining);
+    let eta_mins = eta_secs / 60;
+    if eta_mins < 1 {
+        "ETA: <1m".to_string()
+    } else {
+        format!("ETA: ~{eta_mins}m")
+    }
+}
+
+/// Validate a tmux session name contains only safe characters.
+///
+/// Rejects names with shell metacharacters, path separators, or traversal
+/// sequences that could be dangerous when passed as a command argument.
+fn is_safe_tmux_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
 
 /// Check if a tmux session exists.
 fn tmux_has_session(name: &str) -> bool {

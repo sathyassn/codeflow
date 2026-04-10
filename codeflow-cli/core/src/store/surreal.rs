@@ -604,6 +604,8 @@ impl DataStore for SurrealStore {
             "completed_at" => update.completed_at,
             "tmux_session" => update.tmux_session,
             "stale_reason" => update.stale_reason,
+            "final_pr_url" => update.final_pr_url,
+            "target_branch" => update.target_branch,
         };
 
         let Some(data) = data else {
@@ -633,6 +635,8 @@ impl DataStore for SurrealStore {
             "completed_at" => update.completed_at,
             "tmux_session" => update.tmux_session,
             "stale_reason" => update.stale_reason,
+            "final_pr_url" => update.final_pr_url,
+            "target_branch" => update.target_branch,
         };
 
         let Some(data) = data else {

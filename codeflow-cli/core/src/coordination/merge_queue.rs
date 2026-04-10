@@ -63,6 +63,9 @@ pub fn enqueue(
 /// `None` if the queue is empty or the front entry belongs to a different
 /// session (preventing cross-session dequeue in concurrent batches).
 ///
+/// For target-scoped operations, prefer [`dequeue_for_target`] which also
+/// validates the `target_branch` field.
+///
 /// # Errors
 ///
 /// Returns `CoordinationError::MergeQueue` if the entry cannot be parsed.
@@ -83,6 +86,45 @@ pub fn dequeue(
             queue.delete(0, 1)?;
             coordinator.doc().commit();
             Ok(entry)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Dequeue the front entry only if it belongs to the requesting session
+/// AND targets the specified branch.
+///
+/// This is a stricter variant of [`dequeue`] that validates the entry's
+/// `target_branch` matches the worker's expected target, preventing
+/// cross-target dequeue in shared queues.
+///
+/// # Errors
+///
+/// Returns `CoordinationError::MergeQueue` if the entry cannot be parsed.
+pub fn dequeue_validated(
+    coordinator: &LoroCoordinator,
+    session_id: &SessionId,
+    expected_target: &str,
+) -> Result<Option<MergeQueueEntry>, CoordinationError> {
+    let queue = coordinator.doc().get_list(MERGE_QUEUE_CONTAINER);
+    if queue.is_empty() {
+        return Ok(None);
+    }
+
+    let entry = read_entry_at(&queue, 0)?;
+    match &entry {
+        Some(e) if e.session_id == *session_id && e.target_branch == expected_target => {
+            queue.delete(0, 1)?;
+            coordinator.doc().commit();
+            Ok(entry)
+        }
+        Some(e) if e.session_id == *session_id && e.target_branch != expected_target => {
+            // Session matches but target doesn't -- skip, entry belongs to a different target.
+            eprintln!(
+                "warning: merge queue entry for {} targets '{}' but expected '{}', skipping",
+                e.session_id, e.target_branch, expected_target
+            );
+            Ok(None)
         }
         _ => Ok(None),
     }

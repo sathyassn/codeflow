@@ -16,7 +16,14 @@ use crate::helpers;
 #[derive(Debug, Subcommand)]
 pub enum InteractiveCommand {
     /// Show active interactive sessions with PID liveness
-    Status,
+    Status {
+        /// Watch mode: interactive TUI dashboard
+        #[arg(long, short = 'w')]
+        watch: bool,
+        /// Refresh interval in seconds (default: 2, requires --watch)
+        #[arg(long, default_value = "2")]
+        interval: u64,
+    },
     /// List all interactive sessions (active, complete, stale)
     List,
     /// Remove stale sessions (dead PID detection)
@@ -27,7 +34,14 @@ pub enum InteractiveCommand {
 pub async fn run(command: Option<InteractiveCommand>) -> Result<()> {
     match command {
         None => run_launch().await,
-        Some(InteractiveCommand::Status) => run_status().await,
+        Some(InteractiveCommand::Status { watch, interval }) => {
+            if watch {
+                let project_dir = helpers::detect_project_root()?;
+                run_status_tui(&project_dir, interval).await
+            } else {
+                run_status().await
+            }
+        }
         Some(InteractiveCommand::List) => run_list().await,
         Some(InteractiveCommand::Cleanup) => run_cleanup().await,
     }
@@ -729,6 +743,485 @@ fn mark_stale_worktree_entries(project_dir: &Path) -> u32 {
         }
     }
     count
+}
+
+// ---------------------------------------------------------------------------
+// TUI dashboard (--watch mode)
+// ---------------------------------------------------------------------------
+
+/// Interactive TUI dashboard for session monitoring.
+///
+/// Displays a live-updating table of interactive sessions with status badges,
+/// phase indicators, and a detail pane. Supports keyboard navigation and
+/// session management actions.
+async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
+    use std::time::Duration;
+
+    use codeflow_core::tui::data::fetch_session_views;
+    use codeflow_core::tui::theme;
+    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Paragraph, TableState};
+
+    let store = open_store(project_dir).await?;
+
+    // Terminal setup.
+    let mut terminal = ratatui::init();
+
+    // Cleanup guard: restore terminal on any exit path.
+    struct TermGuard;
+    impl Drop for TermGuard {
+        fn drop(&mut self) {
+            ratatui::restore();
+        }
+    }
+    let _guard = TermGuard;
+
+    let mut table_state = TableState::default();
+    let mut status_message: Option<(String, std::time::Instant)> = None;
+
+    // Fetch initial data.
+    let mut last_data = match fetch_session_views(&store, project_dir).await {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("warn: initial fetch failed: {e}");
+            None
+        }
+    };
+
+    loop {
+        // Preserve selection index across refreshes.
+        if let Some((ref views, _)) = last_data {
+            if !views.is_empty() && table_state.selected().is_none() {
+                table_state.select(Some(0));
+            }
+            if let Some(sel) = table_state.selected() {
+                if sel >= views.len() {
+                    table_state.select(Some(views.len().saturating_sub(1)));
+                }
+            }
+        }
+
+        // Draw UI.
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let chunks = Layout::vertical([
+                Constraint::Length(2), // header
+                Constraint::Min(5),    // table
+                Constraint::Length(6), // detail
+                Constraint::Length(1), // keybinding bar
+            ])
+            .split(area);
+
+            // --- Header ---
+            render_session_header(frame, chunks[0], last_data.as_ref().map(|(_, s)| s));
+
+            // --- Session table ---
+            render_session_table(frame, chunks[1], &mut table_state, last_data.as_ref());
+
+            // --- Detail pane ---
+            let selected_session = last_data
+                .as_ref()
+                .and_then(|(views, _)| table_state.selected().and_then(|i| views.get(i)));
+            render_session_detail(frame, chunks[2], selected_session);
+
+            // --- Keybinding bar ---
+            let bar_line = if let Some((ref msg, at)) = status_message {
+                if at.elapsed() < Duration::from_secs(3) {
+                    Line::from(Span::styled(
+                        format!(" {msg}"),
+                        Style::new().fg(theme::YELLOW_RUNNING),
+                    ))
+                } else {
+                    status_message = None;
+                    session_keybinding_line()
+                }
+            } else {
+                session_keybinding_line()
+            };
+            frame.render_widget(Paragraph::new(bar_line), chunks[3]);
+        })?;
+
+        // Event handling.
+        let tick = Duration::from_secs(interval_secs.max(1));
+        if event::poll(tick)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // Ctrl+C: in raw mode SIGINT is not delivered; handle explicitly.
+                if key.code == KeyCode::Char('c')
+                    && key
+                        .modifiers
+                        .contains(ratatui::crossterm::event::KeyModifiers::CONTROL)
+                {
+                    break;
+                }
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Up => {
+                        if let Some((ref views, _)) = last_data {
+                            let i = table_state.selected().unwrap_or(0);
+                            let prev = if i == 0 {
+                                views.len().saturating_sub(1)
+                            } else {
+                                i - 1
+                            };
+                            table_state.select(Some(prev));
+                        }
+                    }
+                    KeyCode::Down => {
+                        if let Some((ref views, _)) = last_data {
+                            let i = table_state.selected().unwrap_or(0);
+                            let next = if views.is_empty() {
+                                0
+                            } else {
+                                (i + 1) % views.len()
+                            };
+                            table_state.select(Some(next));
+                        }
+                    }
+                    KeyCode::Enter => {
+                        // Attach to session's tmux (if in a worktree session).
+                        if let Some(session) =
+                            get_selected_session(last_data.as_ref(), &table_state)
+                        {
+                            // Validate DB-sourced session_id before using as tmux argument.
+                            if codeflow_core::session::is_valid_session_id(&session.session_id) {
+                                let tmux_name = format!("codeflow-{}", &session.session_id);
+                                if tmux_has_session(&tmux_name) {
+                                    ratatui::restore();
+                                    match std::process::Command::new("tmux")
+                                        .args(["attach-session", "-t", &tmux_name])
+                                        .status()
+                                    {
+                                        Ok(s) if !s.success() => {
+                                            eprintln!(
+                                                "tmux attach failed (session may have ended)"
+                                            );
+                                        }
+                                        Err(e) => eprintln!("tmux attach error: {e}"),
+                                        _ => {}
+                                    }
+                                    terminal = ratatui::init();
+                                } else {
+                                    status_message = Some((
+                                        format!("No tmux session for {}", session.session_id),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            } else {
+                                status_message = Some((
+                                    "Invalid session ID format".to_string(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        // Cleanup selected stale session.
+                        if let Some(session) =
+                            get_selected_session(last_data.as_ref(), &table_state)
+                        {
+                            // Validate DB-sourced session_id before filesystem operations.
+                            if codeflow_core::session::is_valid_session_id(&session.session_id) {
+                                if session.status == "stale" || is_session_stale(session.pid) {
+                                    let sid = session.session_id.clone();
+                                    // Mark stale in DB.
+                                    let now = chrono::Utc::now().to_rfc3339();
+                                    let _ = store
+                                        .db()
+                                        .query(
+                                            "UPDATE interactive_session SET status = 'stale', updated_at = $now \
+                                             WHERE session_id = $sid AND status = 'active'",
+                                        )
+                                        .bind(("now", now))
+                                        .bind(("sid", sid.clone()))
+                                        .await;
+                                    remove_session_artifacts(project_dir, &sid);
+                                    status_message = Some((
+                                        format!("Cleaned up {sid}"),
+                                        std::time::Instant::now(),
+                                    ));
+                                } else {
+                                    status_message = Some((
+                                        "Session is not stale".to_string(),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            } else {
+                                status_message = Some((
+                                    "Invalid session ID format".to_string(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Refresh data every tick.
+        match fetch_session_views(&store, project_dir).await {
+            Ok(d) => last_data = Some(d),
+            Err(e) => eprintln!("warn: fetch failed: {e}"),
+        }
+    }
+
+    Ok(())
+}
+
+fn session_keybinding_line() -> ratatui::text::Line<'static> {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    ratatui::text::Line::from(vec![
+        Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Attach "),
+        Span::styled("[c]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Cleanup "),
+        Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Navigate "),
+        Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Quit"),
+    ])
+}
+
+fn render_session_header(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    summary: Option<&codeflow_core::tui::data::SessionSummary>,
+) {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::Paragraph;
+
+    let line = if let Some(s) = summary {
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", theme::TRIANGLE),
+                Style::new().fg(theme::BLUE_ACCENT),
+            ),
+            Span::styled("Interactive Sessions", theme::header()),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} Active", s.active),
+                Style::new().fg(theme::GREEN_SUCCESS),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} Stale", s.stale),
+                if s.stale > 0 {
+                    Style::new().fg(theme::RED_FAILURE)
+                } else {
+                    Style::new().fg(theme::DIM_PENDING)
+                },
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} Complete", s.complete),
+                Style::new().fg(theme::DIM_PENDING),
+            ),
+        ])
+    } else {
+        Line::styled("Loading sessions...", Style::new().fg(theme::DIM_PENDING))
+    };
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_session_table(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    state: &mut ratatui::widgets::TableState,
+    data: Option<&(
+        Vec<codeflow_core::tui::data::SessionView>,
+        codeflow_core::tui::data::SessionSummary,
+    )>,
+) {
+    use codeflow_core::tui::theme;
+    use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
+    use ratatui::layout::Constraint;
+    use ratatui::style::Style;
+    use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+
+    let header = Row::new(vec![
+        "SESSION", "STATUS", "PHASE", "BRANCH", "TYPE", "DURATION",
+    ])
+    .style(theme::header())
+    .bottom_margin(1);
+
+    let rows: Vec<Row> = data
+        .map(|(views, _)| {
+            views
+                .iter()
+                .map(|s| {
+                    // Truncate session_id to last 12 chars for display.
+                    let sid_display = if s.session_id.len() > 16 {
+                        format!("..{}", &s.session_id[s.session_id.len() - 14..])
+                    } else {
+                        s.session_id.clone()
+                    };
+
+                    let status_badge = session_status_badge(&s.status);
+                    let phase_badge = PhaseBadge::new(s.phase.as_deref());
+                    let duration = DurationCell::new(Some(s.duration_secs));
+                    let branch = s.branch.as_deref().unwrap_or("--");
+                    let work_type = s.work_type.as_deref().unwrap_or("--");
+
+                    Row::new(vec![
+                        Cell::from(sid_display),
+                        Cell::from(status_badge),
+                        Cell::from(phase_badge.to_span()),
+                        Cell::from(branch.to_string()),
+                        Cell::from(work_type.to_string()),
+                        Cell::from(duration.to_span()),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(18),    // SESSION
+            Constraint::Length(12), // STATUS
+            Constraint::Length(8),  // PHASE
+            Constraint::Min(16),    // BRANCH
+            Constraint::Length(8),  // TYPE
+            Constraint::Length(10), // DURATION
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(theme::BORDER_TYPE)
+            .title(" Sessions ")
+            .style(Style::new().fg(theme::WHITE_TEXT)),
+    )
+    .row_highlight_style(theme::selected())
+    .highlight_symbol(format!("{} ", theme::TRIANGLE));
+
+    frame.render_stateful_widget(table, area, state);
+}
+
+/// Map an interactive session status string to a styled Span.
+fn session_status_badge(status: &str) -> ratatui::text::Span<'static> {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    let (symbol, label, style) = match status {
+        "active" => (
+            theme::BULLET,
+            "Active",
+            Style::new().fg(theme::GREEN_SUCCESS),
+        ),
+        "stale" => (theme::CROSS, "Stale", Style::new().fg(theme::RED_FAILURE)),
+        "complete" => (
+            theme::CHECKMARK,
+            "Complete",
+            Style::new().fg(theme::DIM_PENDING),
+        ),
+        _ => (
+            theme::CIRCLE,
+            "Unknown",
+            Style::new().fg(theme::DIM_PENDING),
+        ),
+    };
+
+    Span::styled(format!("{symbol} {label}"), style)
+}
+
+fn render_session_detail(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    session: Option<&codeflow_core::tui::data::SessionView>,
+) {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Paragraph};
+
+    let lines = if let Some(s) = session {
+        let pid_liveness = if is_session_stale(s.pid) {
+            "DEAD"
+        } else {
+            "alive"
+        };
+
+        vec![
+            Line::from(vec![
+                Span::styled("Session: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(s.session_id.clone()),
+                Span::raw("  "),
+                Span::styled("PID: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(format!("{}", s.pid)),
+                Span::styled(
+                    format!(" ({pid_liveness})"),
+                    if pid_liveness == "alive" {
+                        Style::new().fg(theme::GREEN_SUCCESS)
+                    } else {
+                        Style::new().fg(theme::RED_FAILURE)
+                    },
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Worktree: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::styled(
+                    s.worktree_path.as_deref().unwrap_or("--").to_string(),
+                    theme::dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Team: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(s.team_name.as_deref().unwrap_or("--").to_string()),
+                Span::raw("  "),
+                Span::styled("Branch: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(s.branch.as_deref().unwrap_or("--").to_string()),
+                Span::raw("  "),
+                Span::styled("Type: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(s.work_type.as_deref().unwrap_or("--").to_string()),
+            ]),
+        ]
+    } else {
+        vec![Line::styled("No session selected", theme::dim())]
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::BORDER_TYPE)
+        .title(" Details ")
+        .style(Style::new().fg(theme::WHITE_TEXT));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn get_selected_session<'a>(
+    data: Option<&'a (
+        Vec<codeflow_core::tui::data::SessionView>,
+        codeflow_core::tui::data::SessionSummary,
+    )>,
+    state: &ratatui::widgets::TableState,
+) -> Option<&'a codeflow_core::tui::data::SessionView> {
+    data.and_then(|(views, _)| state.selected().and_then(|i| views.get(i)))
+}
+
+/// Check if a tmux session exists.
+fn tmux_has_session(name: &str) -> bool {
+    std::process::Command::new("tmux")
+        .args(["has-session", "-t", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 #[cfg(test)]
@@ -1791,5 +2284,188 @@ mod tests {
             completed_at: None,
         };
         assert_eq!(derive_session_phase(&session), "-");
+    }
+
+    // ─── TUI badge and keybinding tests ──────────────────────────────────
+
+    #[test]
+    fn test_session_status_badge_active() {
+        let span = session_status_badge("active");
+        let content = span.content.to_string();
+        assert!(
+            content.contains("Active"),
+            "badge should say Active: {content}"
+        );
+        assert_eq!(
+            span.style.fg,
+            Some(codeflow_core::tui::theme::GREEN_SUCCESS)
+        );
+    }
+
+    #[test]
+    fn test_session_status_badge_stale() {
+        let span = session_status_badge("stale");
+        let content = span.content.to_string();
+        assert!(
+            content.contains("Stale"),
+            "badge should say Stale: {content}"
+        );
+        assert_eq!(span.style.fg, Some(codeflow_core::tui::theme::RED_FAILURE));
+    }
+
+    #[test]
+    fn test_session_status_badge_complete() {
+        let span = session_status_badge("complete");
+        let content = span.content.to_string();
+        assert!(
+            content.contains("Complete"),
+            "badge should say Complete: {content}"
+        );
+        assert_eq!(span.style.fg, Some(codeflow_core::tui::theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_session_status_badge_unknown() {
+        let span = session_status_badge("something-else");
+        let content = span.content.to_string();
+        assert!(
+            content.contains("Unknown"),
+            "badge should say Unknown: {content}"
+        );
+    }
+
+    #[test]
+    fn test_session_keybinding_line_contents() {
+        let line = session_keybinding_line();
+        let text = line.to_string();
+        assert!(text.contains("[Enter]"), "should contain Enter: {text}");
+        assert!(text.contains("Attach"), "should contain Attach: {text}");
+        assert!(text.contains("[c]"), "should contain c: {text}");
+        assert!(text.contains("Cleanup"), "should contain Cleanup: {text}");
+        assert!(text.contains("[Up/Down]"), "should contain Up/Down: {text}");
+        assert!(text.contains("[q]"), "should contain q: {text}");
+        assert!(text.contains("Quit"), "should contain Quit: {text}");
+    }
+
+    #[test]
+    fn test_get_selected_session_none_data() {
+        let state = ratatui::widgets::TableState::default();
+        let result = get_selected_session(None, &state);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_selected_session_no_selection() {
+        let views = vec![codeflow_core::tui::data::SessionView {
+            session_id: "ses-001".into(),
+            status: "active".into(),
+            branch: None,
+            phase: None,
+            work_type: None,
+            team_name: None,
+            pid: 1,
+            worktree_path: None,
+            duration_secs: 0,
+            managed: true,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }];
+        let summary = codeflow_core::tui::data::SessionSummary::default();
+        let data = Some((views, summary));
+        let state = ratatui::widgets::TableState::default();
+        let result = get_selected_session(data.as_ref(), &state);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_selected_session_valid_selection() {
+        let views = vec![codeflow_core::tui::data::SessionView {
+            session_id: "ses-001".into(),
+            status: "active".into(),
+            branch: Some("feat/test".into()),
+            phase: Some("PF4".into()),
+            work_type: Some("FEAT".into()),
+            team_name: Some("team-1".into()),
+            pid: 42,
+            worktree_path: None,
+            duration_secs: 120,
+            managed: true,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }];
+        let summary = codeflow_core::tui::data::SessionSummary::default();
+        let data = Some((views, summary));
+        let mut state = ratatui::widgets::TableState::default();
+        state.select(Some(0));
+        let result = get_selected_session(data.as_ref(), &state);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id, "ses-001");
+    }
+
+    #[test]
+    fn test_keybinding_and_badge_do_not_panic() {
+        // Verify rendering helper paths don't panic.
+        let _line = session_keybinding_line();
+        let _active = session_status_badge("active");
+        let _stale = session_status_badge("stale");
+        let _complete = session_status_badge("complete");
+        let _unknown = session_status_badge("other");
+    }
+
+    // ─── Clap parsing: Status --watch ────────────────────────────────────
+
+    #[test]
+    fn test_interactive_status_watch_flag_parsing() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: InteractiveCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "status", "--watch"]).unwrap();
+        if let InteractiveCommand::Status { watch, interval } = cli.cmd {
+            assert!(watch);
+            assert_eq!(interval, 2); // default
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    #[test]
+    fn test_interactive_status_watch_with_interval() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: InteractiveCommand,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "status", "--watch", "--interval", "5"]).unwrap();
+        if let InteractiveCommand::Status { watch, interval } = cli.cmd {
+            assert!(watch);
+            assert_eq!(interval, 5);
+        } else {
+            panic!("expected Status variant");
+        }
+    }
+
+    #[test]
+    fn test_interactive_status_no_watch_default() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: InteractiveCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "status"]).unwrap();
+        if let InteractiveCommand::Status { watch, .. } = cli.cmd {
+            assert!(!watch);
+        } else {
+            panic!("expected Status variant");
+        }
     }
 }

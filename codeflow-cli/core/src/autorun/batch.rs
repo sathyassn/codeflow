@@ -490,6 +490,20 @@ pub fn validate_batch_extended(
             )));
         }
 
+        // Validate work_type against auto_merge. PLAN, SPKE, DOCS should not auto-merge.
+        if batch.integration_auto_merge {
+            let work_type = crate::validate::get_string_field(&data, "work_type");
+            let non_auto_merge_types = ["PLAN", "SPKE", "DOCS"];
+            if non_auto_merge_types.contains(&work_type.as_str()) {
+                eprintln!(
+                    "WARNING: task {} has work_type={work_type} with auto_merge=true; \
+                     overriding auto_merge to false for this batch",
+                    task.id
+                );
+                batch.integration_auto_merge = false;
+            }
+        }
+
         // Read file_scope from task markdown (source of truth).
         // Batch TaskSpec file_scope is an optional override.
         let md_file_scope: Vec<String> = data

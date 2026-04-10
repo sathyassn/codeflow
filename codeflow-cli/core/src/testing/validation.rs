@@ -438,8 +438,10 @@ impl TestValidator {
                 config.coverage.file_threshold
             };
 
-            // Missing coverage (sentinel -1.0) always fails.
-            let pass = coverage >= 0.0 && coverage >= f64::from(threshold);
+            // Threshold 0 means the file is exempt (e.g. pure module declarations
+            // with no executable code). Missing coverage (sentinel -1.0) fails for
+            // all other thresholds.
+            let pass = threshold == 0 || (coverage >= 0.0 && coverage >= f64::from(threshold));
 
             if !pass {
                 all_modified_pass = false;

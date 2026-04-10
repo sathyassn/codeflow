@@ -21,7 +21,20 @@ enum Command {
     /// Session management
     Session,
     /// Initialize `CodeFlow` project
-    Init,
+    Init {
+        /// Skip location detection, assume existing project
+        #[arg(long)]
+        existing: bool,
+        /// Join an existing CodeFlow project (cloned repo)
+        #[arg(long)]
+        join: bool,
+        /// Skip authentication steps (Claude Code and Git provider)
+        #[arg(long)]
+        skip_auth: bool,
+        /// Non-interactive mode, accept all defaults
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Diagnose infrastructure issues
     Doctor,
     /// Configuration management
@@ -130,7 +143,17 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Uninstall => cmd::uninstall::run(),
         Command::Db => cmd::db::run().await,
         Command::Session => cmd::session::run(),
-        Command::Init => cmd::init::run(),
+        Command::Init {
+            existing,
+            join,
+            skip_auth,
+            yes,
+        } => cmd::init::run(cmd::init::InitFlags {
+            existing,
+            join,
+            skip_auth,
+            yes,
+        }),
         Command::Doctor => cmd::doctor::run().await,
         Command::Config { command } => cmd::config::run(command),
         Command::Update => cmd::update::run(),
@@ -341,7 +364,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_init() {
-        let result = dispatch(Command::Init).await;
+        let result = dispatch(Command::Init {
+            existing: false,
+            join: false,
+            skip_auth: false,
+            yes: false,
+        })
+        .await;
         assert!(result.is_ok());
     }
 

@@ -233,6 +233,11 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         };
         Self::emit_autorun_event(project_dir, &batch_started);
 
+        // Ensure integration branch exists on origin before workers start.
+        if !batch.integration_branch.is_empty() {
+            ensure_integration_branch(project_dir, &batch.integration_branch);
+        }
+
         let dep_map: HashMap<&str, Vec<&str>> = batch
             .tasks
             .iter()
@@ -354,8 +359,16 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             .iter()
             .filter(|r| r.status == "skipped")
             .count();
+        let pr_failed_count = final_results
+            .iter()
+            .filter(|r| r.status == "pr_creation_failed")
+            .count();
+        if pr_failed_count > 0 {
+            eprintln!("WARNING: {pr_failed_count} task(s) completed but PR creation failed");
+        }
 
-        let final_status = Self::determine_final_status(aborted, timed_out, failed_count);
+        let final_status =
+            Self::determine_final_status(aborted, timed_out, failed_count + pr_failed_count);
 
         // Update autorun_session at batch end.
         // CAS: expect Running — prevents overwriting a status set by another process
@@ -400,6 +413,11 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             failed_count + timeout_count,
             skipped_count,
         );
+
+        // Cleanup auto-generated integration branches after all workers finish.
+        if batch.integration_branch_is_auto && !batch.integration_branch.is_empty() {
+            cleanup_auto_integration_branch(project_dir, &batch.integration_branch);
+        }
 
         Ok(final_results)
     }
@@ -794,6 +812,87 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
 
             drop(permit);
         })
+    }
+}
+
+/// Ensure the integration branch exists on origin before workers start.
+///
+/// Checks if the branch exists via `git ls-remote`. If not, creates it from
+/// `origin/main` and pushes. Workers need this branch to exist for rebase.
+fn ensure_integration_branch(project_dir: &std::path::Path, branch: &str) {
+    let ls_output = std::process::Command::new("git")
+        .args(["ls-remote", "--heads", "origin", branch])
+        .current_dir(project_dir)
+        .output();
+
+    let exists = match ls_output {
+        Ok(ref output) if output.status.success() => !output.stdout.is_empty(),
+        _ => {
+            eprintln!("warning: git ls-remote failed, assuming integration branch exists");
+            return;
+        }
+    };
+
+    if exists {
+        return;
+    }
+
+    eprintln!("creating integration branch: {branch}");
+    let create = std::process::Command::new("git")
+        .args(["branch", branch, "origin/main"])
+        .current_dir(project_dir)
+        .status();
+    if let Err(e) = create {
+        eprintln!("warning: failed to create integration branch {branch}: {e}");
+        return;
+    }
+
+    let push = std::process::Command::new("git")
+        .args(["push", "origin", branch])
+        .current_dir(project_dir)
+        .status();
+    match push {
+        Ok(s) if s.success() => {
+            eprintln!("pushed integration branch: {branch}");
+        }
+        Ok(s) => {
+            eprintln!("warning: git push for integration branch {branch} exited {s}");
+        }
+        Err(e) => {
+            eprintln!("warning: git push for integration branch {branch} failed: {e}");
+        }
+    }
+}
+
+/// Delete an auto-generated integration branch from the remote after batch completion.
+///
+/// Only acts on branches matching `autorun/*/` pattern (auto-generated).
+/// Logs and continues on failure (branch may already be deleted by another process).
+fn cleanup_auto_integration_branch(project_dir: &std::path::Path, branch: &str) {
+    if !branch.starts_with("autorun/") {
+        return; // Only clean up auto-generated branches.
+    }
+    eprintln!("cleaning up auto-generated integration branch: {branch}");
+    match std::process::Command::new("git")
+        .args(["push", "origin", "--delete", branch])
+        .current_dir(project_dir)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            eprintln!("deleted remote branch: {branch}");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Branch may already be deleted -- not an error.
+            if stderr.contains("remote ref does not exist") {
+                eprintln!("remote branch already deleted: {branch}");
+            } else {
+                eprintln!("warning: failed to delete remote branch {branch}: {stderr}");
+            }
+        }
+        Err(e) => {
+            eprintln!("warning: git push --delete failed for {branch}: {e}");
+        }
     }
 }
 
