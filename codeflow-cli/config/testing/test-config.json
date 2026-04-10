@@ -1,10 +1,15 @@
 {
   "coverage": {
-    "threshold": 85,
+    "file_threshold": 85,
+    "crate_threshold": 85,
+    "crate_overrides": {
+      "codeflow-cli": 80
+    },
     "enforcement": "per_file",
     "tool": "cargo-llvm-cov",
     "business_packages": [
-      "codeflow-core"
+      "codeflow-core",
+      "codeflow-cli"
     ]
   },
   "conventions": {

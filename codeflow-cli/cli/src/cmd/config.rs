@@ -195,6 +195,8 @@ pub(crate) struct GitFormat {
     pub subject: SubjectConfig,
     #[serde(default)]
     pub body: BodyConfig,
+    #[serde(default)]
+    pub pr: PrConfig,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -248,6 +250,40 @@ fn default_max_bullets() -> usize {
 
 fn default_line_max_length() -> usize {
     72
+}
+
+/// PR body validation configuration.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct PrConfig {
+    #[serde(default = "default_pr_required_sections")]
+    pub required_sections: Vec<String>,
+    #[serde(default = "default_true")]
+    pub require_body_flag: bool,
+    #[serde(default = "default_true")]
+    pub forbid_emoji: bool,
+}
+
+impl Default for PrConfig {
+    fn default() -> Self {
+        Self {
+            required_sections: default_pr_required_sections(),
+            require_body_flag: true,
+            forbid_emoji: true,
+        }
+    }
+}
+
+fn default_pr_required_sections() -> Vec<String> {
+    vec![
+        "## Summary".to_string(),
+        "## Testing".to_string(),
+        "## Test Stats".to_string(),
+    ]
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Default enforcement policy (matches Go's `DefaultPolicy()`).
@@ -331,6 +367,7 @@ pub(crate) fn default_policy() -> EnforcementPolicy {
             ai_attribution_patterns: Vec::new(),
             subject: SubjectConfig::default(),
             body: BodyConfig::default(),
+            pr: PrConfig::default(),
         },
     }
 }

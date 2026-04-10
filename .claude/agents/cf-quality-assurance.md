@@ -257,9 +257,10 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 > Coverage data is produced by `codeflow test --mode full --coverage`. Do not run coverage commands directly.
 
-- Workspace: {n}%
-- CLI crate: {n}%
-- Core crate: {n}%
+| Crate | Coverage | Threshold | Status |
+|-------|----------|-----------|--------|
+| codeflow-core | {n}% | {n}% | PASS/FAIL |
+| codeflow-cli | {n}% | {n}% | PASS/FAIL |
 
 ##### Exempted Files (below 85%)
 

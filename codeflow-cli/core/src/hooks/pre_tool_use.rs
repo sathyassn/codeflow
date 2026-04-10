@@ -59,9 +59,34 @@ fn pr_number_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"gh\s+pr\s+merge\s+(\d+)").expect("valid regex"))
 }
 
+fn gh_pr_create_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+create(?:\s|$)").expect("valid regex"))
+}
+
 // ---------------------------------------------------------------------------
 // Shared enforcement policy loading
 // ---------------------------------------------------------------------------
+
+/// PR body validation configuration (subset of `git_format` for `pre_tool_use`).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct PrBodyConfig {
+    #[serde(default)]
+    pub required_sections: Vec<String>,
+    #[serde(default)]
+    pub require_body_flag: bool,
+    #[serde(default)]
+    pub forbid_emoji: bool,
+}
+
+/// Git format configuration (subset for `pre_tool_use` hooks).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct GitFormatConfig {
+    #[serde(default)]
+    pub ai_attribution_patterns: Vec<String>,
+    #[serde(default)]
+    pub pr: PrBodyConfig,
+}
 
 /// Parsed enforcement policy for hook handlers.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -82,6 +107,8 @@ pub struct EnforcementPolicy {
     pub network_operations: NetworkOperations,
     #[serde(default)]
     pub worktree_protection: WorktreeProtection,
+    #[serde(default)]
+    pub git_format: GitFormatConfig,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -323,6 +350,7 @@ impl EnforcementPolicy {
             managed_tmp: ManagedTmpConfig::default(),
             network_operations: NetworkOperations::default(),
             worktree_protection: WorktreeProtection::default(),
+            git_format: GitFormatConfig::default(),
         }
     }
 }
@@ -1287,28 +1315,80 @@ impl PRResolver for OsPRResolver {
     }
 }
 
-/// GitHub PR merge guard: blocks `gh pr merge` on protected branches.
+/// Strips zero-width Unicode characters that could be used to bypass pattern matching.
+fn strip_zero_width(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c as u32, 0x200B | 0x200C | 0x200D | 0xFEFF | 0x2060))
+        .collect()
+}
+
+/// Returns true if the character is in a common emoji Unicode range.
+fn is_emoji(c: char) -> bool {
+    matches!(c as u32,
+        0x00A9              // Copyright
+        | 0x00AE            // Registered
+        | 0x203C            // Double exclamation
+        | 0x2049            // Exclamation question
+        | 0x2122            // Trademark
+        | 0x2194..=0x2199   // Arrows
+        | 0x21A9..=0x21AA   // Curved arrows
+        | 0x231A..=0x231B   // Watch/hourglass
+        | 0x23E9..=0x23F3   // Media controls
+        | 0x24C2            // Circled M
+        | 0x25AA..=0x25FE   // Geometric shapes (includes play 0x25B6, reverse 0x25C0)
+        | 0x2600..=0x26FF   // Misc symbols
+        | 0x2700..=0x27BF   // Dingbats
+        | 0xFE00..=0xFE0F   // Variation selectors
+        | 0x1F000..=0x1F02F // Mahjong
+        | 0x1F0A0..=0x1F0FF // Playing cards
+        | 0x1F1E0..=0x1F1FF // Flags
+        | 0x1F300..=0x1F5FF // Misc symbols & pictographs
+        | 0x1F600..=0x1F64F // Emoticons
+        | 0x1F680..=0x1F6FF // Transport & map
+        | 0x1F900..=0x1F9FF // Supplemental symbols
+        | 0x1FA00..=0x1FA6F // Chess symbols
+        | 0x1FA70..=0x1FAFF // Symbols extended
+    )
+}
+
+/// GitHub PR guard: blocks `gh pr merge` on protected branches
+/// and validates `gh pr create` body content.
 pub struct GhPrGuard<R: PRResolver = OsPRResolver> {
     protected_branches: Vec<String>,
     resolver: R,
+    pr_config: PrBodyConfig,
+    ai_patterns: Vec<String>,
 }
 
 impl GhPrGuard<OsPRResolver> {
     #[must_use]
-    pub fn new(protected_branches: Vec<String>) -> Self {
+    pub fn new(
+        protected_branches: Vec<String>,
+        pr_config: PrBodyConfig,
+        ai_patterns: Vec<String>,
+    ) -> Self {
         Self {
             protected_branches,
             resolver: OsPRResolver,
+            pr_config,
+            ai_patterns,
         }
     }
 }
 
 impl<R: PRResolver> GhPrGuard<R> {
     #[must_use]
-    pub fn with_resolver(protected_branches: Vec<String>, resolver: R) -> Self {
+    pub fn with_resolver(
+        protected_branches: Vec<String>,
+        resolver: R,
+        pr_config: PrBodyConfig,
+        ai_patterns: Vec<String>,
+    ) -> Self {
         Self {
             protected_branches,
             resolver,
+            pr_config,
+            ai_patterns,
         }
     }
 }
@@ -1329,30 +1409,83 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if command.is_empty() || !gh_pr_merge_re().is_match(command) {
+        if command.is_empty() {
             return Ok(HookOutput::Allow);
         }
 
-        // Extract PR number.
-        let Some(caps) = pr_number_re().captures(command) else {
-            return Ok(HookOutput::Allow); // No PR number, allow through.
-        };
-        let pr_number = &caps[1];
+        // --- PR merge guard: block `gh pr merge` on protected branches ---
+        if gh_pr_merge_re().is_match(command) {
+            if let Some(caps) = pr_number_re().captures(command) {
+                let pr_number = &caps[1];
+                if let Some(target_branch) = self.resolver.resolve_target_branch(pr_number) {
+                    for protected in &self.protected_branches {
+                        if match_branch_pattern(&target_branch, protected) {
+                            return Ok(HookOutput::Block {
+                                reason: format!(
+                                    "BLOCKED: Cannot merge PR #{pr_number} into protected branch '{target_branch}'.\n\
+                                     Protected branches require manual merge via GitHub UI or admin override.\n\
+                                     Matched protection pattern: {protected}\n\n\
+                                     MUST: Do not attempt to merge into protected branches via CLI.\n"
+                                ),
+                                category: Some(BlockCategory::GhPrGuard),
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
-        // Resolve target branch.
-        let Some(target_branch) = self.resolver.resolve_target_branch(pr_number) else {
-            return Ok(HookOutput::Allow); // Cannot resolve, allow through.
-        };
+        // --- PR body validation: validate `gh pr create` body content ---
+        if gh_pr_create_re().is_match(command) {
+            let mut errors: Vec<String> = Vec::new();
 
-        // Check if target branch matches any protected pattern.
-        for protected in &self.protected_branches {
-            if match_branch_pattern(&target_branch, protected) {
+            // Check --body flag is present (when require_body_flag is true).
+            if self.pr_config.require_body_flag && !command.contains("--body") {
+                errors.push("Missing --body flag: PR body is required".to_string());
+            }
+
+            // Check required sections in the command text.
+            for section in &self.pr_config.required_sections {
+                if !command.contains(section.as_str()) {
+                    errors.push(format!("Missing required PR section: '{section}'"));
+                }
+            }
+
+            // Check AI attribution patterns (case-insensitive).
+            // Strip zero-width Unicode chars to prevent bypass via invisible insertions.
+            let lower_cmd = strip_zero_width(&command.to_lowercase());
+            for pattern in &self.ai_patterns {
+                if lower_cmd.contains(&pattern.to_lowercase()) {
+                    errors.push(format!(
+                        "AI attribution detected in PR body: pattern '{pattern}'"
+                    ));
+                    break;
+                }
+            }
+
+            // Check emoji characters (if configured).
+            if self.pr_config.forbid_emoji {
+                for ch in command.chars() {
+                    if is_emoji(ch) {
+                        errors.push(format!("Emoji character detected in PR body: '{ch}'"));
+                        break;
+                    }
+                }
+            }
+
+            if !errors.is_empty() {
                 return Ok(HookOutput::Block {
                     reason: format!(
-                        "BLOCKED: Cannot merge PR #{pr_number} into protected branch '{target_branch}'.\n\
-                         Protected branches require manual merge via GitHub UI or admin override.\n\
-                         Matched protection pattern: {protected}\n\n\
-                         MUST: Do not attempt to merge into protected branches via CLI.\n"
+                        "BLOCKED: PR body validation failed with {} error(s):\n{}\n\n\
+                         Required sections: {}\n\
+                         MUST: Fix the PR body and retry.\n",
+                        errors.len(),
+                        errors
+                            .iter()
+                            .map(|e| format!("  - {e}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        self.pr_config.required_sections.join(", "),
                     ),
                     category: Some(BlockCategory::GhPrGuard),
                 });
@@ -3421,7 +3554,12 @@ mod tests {
         let resolver = MockResolver {
             branch: Some("main".into()),
         };
-        let handler = GhPrGuard::with_resolver(vec!["main".into(), "master".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into(), "master".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "gh pr merge 123"})),
@@ -3441,7 +3579,12 @@ mod tests {
         let resolver = MockResolver {
             branch: Some("feat/test".into()),
         };
-        let handler = GhPrGuard::with_resolver(vec!["main".into(), "master".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into(), "master".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "gh pr merge 123"})),
@@ -3461,7 +3604,12 @@ mod tests {
         let resolver = MockResolver {
             branch: Some("main".into()),
         };
-        let handler = GhPrGuard::with_resolver(vec!["main".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Edit".into()),
             tool_input: Some(serde_json::json!({})),
@@ -3481,7 +3629,12 @@ mod tests {
         let resolver = MockResolver {
             branch: Some("release/v1.0".into()),
         };
-        let handler = GhPrGuard::with_resolver(vec!["release/*".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["release/*".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "gh pr merge 42"})),
@@ -3494,6 +3647,281 @@ mod tests {
         };
         let result = handler.handle(input).unwrap();
         assert_eq!(result.exit_code(), 2);
+    }
+
+    // -- GhPrGuard: PR body validation tests --
+
+    fn make_pr_guard_with_config(
+        pr_config: PrBodyConfig,
+        ai_patterns: Vec<String>,
+    ) -> GhPrGuard<MockResolver> {
+        let resolver = MockResolver { branch: None };
+        GhPrGuard::with_resolver(Vec::new(), resolver, pr_config, ai_patterns)
+    }
+
+    #[test]
+    fn test_gh_pr_create_blocks_missing_sections() {
+        let config = PrBodyConfig {
+            required_sections: vec!["## Summary".into(), "## Testing".into()],
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"## Summary\nsome text\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "should block when ## Testing is missing"
+        );
+    }
+
+    #[test]
+    fn test_gh_pr_create_allows_all_sections_present() {
+        let config = PrBodyConfig {
+            required_sections: vec!["## Summary".into(), "## Testing".into()],
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"## Summary\nfoo\n## Testing\nbar\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_gh_pr_create_blocks_ai_attribution() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let patterns = vec!["Generated with".into(), "Claude".into()];
+        let handler = make_pr_guard_with_config(config, patterns);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"generated with AI tools\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2, "should block AI attribution");
+    }
+
+    #[test]
+    fn test_gh_pr_create_allows_no_ai_attribution() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let patterns = vec!["Generated with".into(), "Claude".into()];
+        let handler = make_pr_guard_with_config(config, patterns);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"clean PR body\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_gh_pr_create_blocks_emoji() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: false,
+            forbid_emoji: true,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"fix bug \u{1F600}\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2, "should block emoji");
+    }
+
+    #[test]
+    fn test_gh_pr_create_allows_no_emoji() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: false,
+            forbid_emoji: true,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"clean body no emoji\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_gh_pr_create_blocks_missing_body_flag() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: true,
+            forbid_emoji: false,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2, "should block when --body is missing");
+    }
+
+    #[test]
+    fn test_gh_pr_create_merge_still_works() {
+        // Verify merge blocking is not regressed by the create validation.
+        let resolver = MockResolver {
+            branch: Some("main".into()),
+        };
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "gh pr merge 123"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "merge into protected branch should still block"
+        );
+    }
+
+    #[test]
+    fn test_gh_pr_create_empty_body() {
+        let config = PrBodyConfig {
+            required_sections: vec!["## Summary".into()],
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "empty body should block due to missing sections"
+        );
+    }
+
+    #[test]
+    fn test_is_emoji_detects_common_emoji() {
+        assert!(is_emoji('\u{1F600}')); // 😀
+        assert!(is_emoji('\u{2764}')); // ❤ (in misc symbols range)
+        assert!(is_emoji('\u{1F680}')); // 🚀
+    }
+
+    #[test]
+    fn test_is_emoji_allows_normal_chars() {
+        assert!(!is_emoji('A'));
+        assert!(!is_emoji('z'));
+        assert!(!is_emoji('0'));
+        assert!(!is_emoji(' '));
+        assert!(!is_emoji('#'));
+    }
+
+    #[test]
+    fn test_is_emoji_detects_presentable_codepoints() {
+        assert!(is_emoji('\u{00A9}')); // Copyright ©
+        assert!(is_emoji('\u{00AE}')); // Registered ®
+        assert!(is_emoji('\u{2122}')); // Trademark ™
+        assert!(is_emoji('\u{203C}')); // Double exclamation ‼
+        assert!(is_emoji('\u{25B6}')); // Play button ▶
+    }
+
+    #[test]
+    fn test_strip_zero_width_removes_invisible_chars() {
+        assert_eq!(strip_zero_width("Cla\u{200B}ude"), "Claude");
+        assert_eq!(strip_zero_width("no\u{200C}thing"), "nothing");
+        assert_eq!(strip_zero_width("\u{FEFF}start"), "start");
+        assert_eq!(strip_zero_width("clean"), "clean");
+    }
+
+    #[test]
+    fn test_gh_pr_create_blocks_ai_attribution_with_zero_width_bypass() {
+        let config = PrBodyConfig {
+            required_sections: Vec::new(),
+            require_body_flag: false,
+            forbid_emoji: false,
+        };
+        let patterns = vec!["Claude".into()];
+        let handler = make_pr_guard_with_config(config, patterns);
+        // Insert zero-width space between 'Cla' and 'ude' to try bypassing.
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({
+                "command": "gh pr create --title \"test\" --body \"made by Cla\u{200B}ude\""
+            })),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "zero-width bypass must still be caught"
+        );
     }
 
     // -- ProtectionGuard tests --
@@ -4021,7 +4449,12 @@ mod tests {
     #[test]
     fn test_gh_pr_guard_resolver_returns_none() {
         let resolver = MockResolver { branch: None };
-        let handler = GhPrGuard::with_resolver(vec!["main".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "gh pr merge 999"})),
@@ -4042,7 +4475,12 @@ mod tests {
         let resolver = MockResolver {
             branch: Some("main".into()),
         };
-        let handler = GhPrGuard::with_resolver(vec!["main".into()], resolver);
+        let handler = GhPrGuard::with_resolver(
+            vec!["main".into()],
+            resolver,
+            PrBodyConfig::default(),
+            Vec::new(),
+        );
         let input = HookInput {
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "gh pr list"})),
@@ -4059,7 +4497,7 @@ mod tests {
 
     #[test]
     fn test_gh_pr_guard_name_and_events() {
-        let handler = GhPrGuard::new(vec!["main".into()]);
+        let handler = GhPrGuard::new(vec!["main".into()], PrBodyConfig::default(), Vec::new());
         assert_eq!(handler.name(), "gh-pr-guard");
         assert_eq!(handler.events(), &[HookEvent::PreToolUse]);
     }

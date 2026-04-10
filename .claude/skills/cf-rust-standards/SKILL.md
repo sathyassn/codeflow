@@ -846,10 +846,11 @@ Coverage:
     cargo llvm-cov --workspace --lcov --output-path lcov.info
     cargo llvm-cov nextest --workspace  # Coverage + nextest in one step
 
-  Target thresholds:
-    - codeflow-core: 85% line coverage for business modules
-    - codeflow-cli: 85% line coverage for business modules
-    - Pure computation modules: 90%+ expected
+  Coverage thresholds configured in `codeflow-cli/config/testing/test-config.json`:
+    - `file_threshold`: per-file default (85%)
+    - `crate_threshold`: per-crate default (85%)
+    - `crate_overrides`: per-crate exceptions (e.g., codeflow-cli: 80%)
+    - `conventions.exceptions`: per-file exceptions with documented justification
 
 Anti-Patterns (DO NOT):
 

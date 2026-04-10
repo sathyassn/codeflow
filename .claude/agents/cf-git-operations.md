@@ -360,6 +360,34 @@ Do NOT include:
 
 **On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry.
 
+### PR Body Lifecycle Management
+
+**On PR creation (PF6-TSK-05):**
+
+1. Run `codeflow test --mode full --coverage` and capture the FULL structured output
+2. Compose `## Summary` and `## Testing` sections using LLM judgment — describe what changed and how it was tested
+3. Embed the command's structured output VERBATIM as the `## Test Stats` section — do NOT manually type coverage numbers, thresholds, or exempted files. The command produces all three numbered subsections, the Exempted Files table, and the Modified File Coverage table.
+4. Add `## Test plan` with verification checklist
+5. Validate before submission: no emoji, no AI attribution, all required sections present (`## Summary`, `## Testing`, `## Test Stats`, `### 1. Overall Test Pass Status`, `### 2. Overall Coverage`, `#### Exempted Files`, `### 3. Modified File Coverage`)
+
+**On subsequent pushes (rework, fixes) when PR exists:**
+
+1. Before pushing, check if a PR exists: `gh pr list --head <branch> --json number`
+2. If PR exists:
+   a. Push the changes
+   b. Re-run `codeflow test --mode full --coverage` to get fresh stats
+   c. Update the `## Test Stats` section of the PR body via `gh api PATCH` with the fresh command output
+   d. Preserve `## Summary`, `## Testing`, `## Test plan` sections unchanged unless the scope of work changed
+3. If no PR exists: push only — PR body will be composed at PF6-TSK-05
+
+**Forbidden:**
+
+- Manually typing coverage percentages — always use `codeflow test --mode full --coverage` output
+- Leaving PR body stale after pushing new commits to a branch with an open PR
+- Omitting the Exempted Files table (must include ALL entries from test-config.json conventions.exceptions[])
+- Using thresholds that differ from the command output
+- Adding emoji or AI attribution text to PR body
+
 ### Step 6: Sync Remote
 
 **When:** After commits (push) or before starting work (pull/fetch).

@@ -177,7 +177,7 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 - All files: Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check` after editing. Fix all issues before commit.
 - Error handling: Use `thiserror` for library errors, `anyhow` for application errors. Wrap errors with context.
 - Testing: `#[cfg(test)]` modules with `#[test]` functions. Use `tempfile` for temp dirs, `proptest` for property tests, `insta` for snapshots.
-- Coverage: 85% per-file threshold on business packages (`codeflow-core`, `codeflow-cli`). Config in `codeflow-cli/config/testing/test-config.json`.
+- Coverage: Per-file threshold (`file_threshold`) and per-crate threshold (`crate_threshold`) configured in `codeflow-cli/config/testing/test-config.json`. Per-crate overrides via `crate_overrides` map. Defaults: 85% file, 85% crate (CLI crate overridden to 80%).
 
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
@@ -343,8 +343,8 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 | Crate | Coverage | Threshold | Status |
 |-------|----------|-----------|--------|
-| codeflow-core | {n}% | 85% | PASS/FAIL |
-| codeflow-cli | {n}% | 80% | PASS/FAIL |
+| codeflow-core | {n}% | {n}% | PASS/FAIL |
+| codeflow-cli | {n}% | {n}% | PASS/FAIL |
 
 #### 3. Modified File Coverage
 

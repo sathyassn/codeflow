@@ -125,8 +125,16 @@ fn build_handler(
         PreToolUseHandler::GhPrGuard => {
             let policy = EnforcementPolicy::load(&project_dir);
             let protected = policy.protected_branch_list();
+            let pr_config = codeflow_core::hooks::pre_tool_use::PrBodyConfig {
+                required_sections: policy.git_format.pr.required_sections.clone(),
+                require_body_flag: policy.git_format.pr.require_body_flag,
+                forbid_emoji: policy.git_format.pr.forbid_emoji,
+            };
+            let ai_patterns = policy.git_format.ai_attribution_patterns.clone();
             Box::new(codeflow_core::hooks::pre_tool_use::GhPrGuard::new(
                 protected,
+                pr_config,
+                ai_patterns,
             ))
         }
         PreToolUseHandler::ProtectionGuard => {

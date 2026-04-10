@@ -43,10 +43,26 @@ pub struct TestConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoverageConfig {
-    pub threshold: u32,
+    #[serde(default = "default_file_threshold", alias = "threshold")]
+    pub file_threshold: u32,
+    #[serde(default = "default_crate_threshold")]
+    pub crate_threshold: u32,
+    #[serde(default)]
+    pub crate_overrides: HashMap<String, u32>,
+    #[serde(default)]
     pub enforcement: String,
+    #[serde(default)]
     pub tool: String,
+    #[serde(default)]
     pub business_packages: Vec<String>,
+}
+
+fn default_file_threshold() -> u32 {
+    85
+}
+
+fn default_crate_threshold() -> u32 {
+    85
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +184,9 @@ impl TestValidator {
         // Defaults when config is missing or unparseable.
         TestConfig {
             coverage: CoverageConfig {
-                threshold: 85,
+                file_threshold: 85,
+                crate_threshold: 85,
+                crate_overrides: HashMap::new(),
                 enforcement: "per_file".to_string(),
                 tool: "cargo-llvm-cov".to_string(),
                 business_packages: vec!["codeflow-core".to_string()],
@@ -413,18 +431,11 @@ impl TestValidator {
             // -1.0 sentinel means file not found in coverage data (rendered as "N/A").
             let coverage = file_cov.map_or(-1.0, |fc| fc.percent);
 
-            // Determine threshold: exception > business_package > default.
+            // Determine threshold: per-file exception overrides, otherwise use configured file threshold.
             let threshold = if let Some(exc) = exceptions.get(modified.as_str()) {
                 exc.threshold
-            } else if config
-                .coverage
-                .business_packages
-                .iter()
-                .any(|pkg| Self::file_in_package(modified, pkg))
-            {
-                config.coverage.threshold
             } else {
-                80
+                config.coverage.file_threshold
             };
 
             // Missing coverage (sentinel -1.0) always fails.
@@ -465,16 +476,16 @@ impl TestValidator {
             .collect();
 
         // Check workspace coverage.
-        let workspace_pass = workspace_coverage >= f64::from(config.coverage.threshold);
+        let workspace_pass = workspace_coverage >= f64::from(config.coverage.file_threshold);
 
         // Populate per-crate thresholds and check crate coverages.
         let enriched_crates: Vec<CrateCoverage> = crate_coverage
             .iter()
             .map(|c| {
-                let thresh = if config.coverage.business_packages.contains(&c.name) {
-                    config.coverage.threshold
+                let thresh = if let Some(&t) = config.coverage.crate_overrides.get(&c.name) {
+                    t
                 } else {
-                    80
+                    config.coverage.crate_threshold
                 };
                 CrateCoverage {
                     threshold: thresh,
@@ -722,15 +733,6 @@ impl TestValidator {
         Ok(files)
     }
 
-    /// Check if a file path belongs to a named package (crate).
-    fn file_in_package(file: &str, package: &str) -> bool {
-        match package {
-            "codeflow-core" => file.starts_with("core/src/"),
-            "codeflow-cli" => file.starts_with("cli/src/"),
-            _ => false,
-        }
-    }
-
     /// Determine the artifact path for the test stats file.
     #[must_use]
     pub fn artifact_path(project_dir: &Path) -> PathBuf {
@@ -759,7 +761,7 @@ impl TestValidator {
         mut config: TestConfig,
         file_coverages: &[FileCoverage],
     ) -> TestConfig {
-        let global_threshold = f64::from(config.coverage.threshold);
+        let global_threshold = f64::from(config.coverage.file_threshold);
         let original_count = config.conventions.exceptions.len();
 
         config.conventions.exceptions.retain(|exc| {
@@ -806,7 +808,8 @@ mod tests {
             config_dir.join("test-config.json"),
             r#"{
                 "coverage": {
-                    "threshold": 90,
+                    "file_threshold": 90,
+                    "crate_threshold": 90,
                     "enforcement": "per_file",
                     "tool": "cargo-llvm-cov",
                     "business_packages": ["codeflow-core", "codeflow-cli"]
@@ -823,7 +826,7 @@ mod tests {
         .unwrap();
 
         let config = TestValidator::load_config(dir.path());
-        assert_eq!(config.coverage.threshold, 90);
+        assert_eq!(config.coverage.file_threshold, 90);
         assert_eq!(config.coverage.business_packages.len(), 2);
     }
 
@@ -831,7 +834,7 @@ mod tests {
     fn test_load_config_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let config = TestValidator::load_config(dir.path());
-        assert_eq!(config.coverage.threshold, 85);
+        assert_eq!(config.coverage.file_threshold, 85);
         assert_eq!(config.coverage.business_packages, vec!["codeflow-core"]);
     }
 
@@ -1259,7 +1262,9 @@ codeflow-cli/core/src/lib.rs
         // Config with one exception at 80% threshold.
         let config = TestConfig {
             coverage: CoverageConfig {
-                threshold: 85,
+                file_threshold: 85,
+                crate_threshold: 85,
+                crate_overrides: HashMap::new(),
                 enforcement: "per_file".to_string(),
                 tool: "cargo-llvm-cov".to_string(),
                 business_packages: vec!["codeflow-core".to_string()],
@@ -1320,7 +1325,9 @@ codeflow-cli/core/src/lib.rs
 
         let config = TestConfig {
             coverage: CoverageConfig {
-                threshold: 85,
+                file_threshold: 85,
+                crate_threshold: 85,
+                crate_overrides: HashMap::new(),
                 enforcement: "per_file".to_string(),
                 tool: "cargo-llvm-cov".to_string(),
                 business_packages: vec!["codeflow-core".to_string()],
@@ -1589,12 +1596,106 @@ codeflow-cli/core/src/lib.rs
         );
     }
 
+    #[test]
+    fn test_validate_crate_override_lowers_threshold() {
+        let mut config = make_default_config();
+        config
+            .coverage
+            .business_packages
+            .push("codeflow-cli".to_string());
+        config
+            .coverage
+            .crate_overrides
+            .insert("codeflow-cli".to_string(), 80);
+
+        let test_run = make_passing_run(10);
+        let all_cov = vec![make_file_cov("cli/src/main.rs", 90.0)];
+        // CLI crate at 82% — below crate_threshold (85) but above override (80).
+        let crate_cov = vec![
+            make_crate_cov("codeflow-core", 90.0),
+            make_crate_cov("codeflow-cli", 82.0),
+        ];
+        let modified = vec!["cli/src/main.rs".to_string()];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+
+        let cli_crate = result
+            .crate_coverages
+            .iter()
+            .find(|c| c.name == "codeflow-cli")
+            .expect("should have codeflow-cli crate");
+        assert_eq!(
+            cli_crate.threshold, 80,
+            "crate override should set threshold to 80"
+        );
+        assert!(
+            cli_crate.percent >= f64::from(cli_crate.threshold),
+            "82% should pass 80% override threshold"
+        );
+        assert!(
+            result.overall_pass,
+            "overall should pass with crate override"
+        );
+    }
+
+    #[test]
+    fn test_validate_crate_override_does_not_affect_other_crates() {
+        let mut config = make_default_config();
+        config
+            .coverage
+            .crate_overrides
+            .insert("codeflow-cli".to_string(), 80);
+
+        let test_run = make_passing_run(10);
+        let all_cov = vec![make_file_cov("core/src/lib.rs", 90.0)];
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        let modified = vec!["core/src/lib.rs".to_string()];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+
+        let core_crate = result
+            .crate_coverages
+            .iter()
+            .find(|c| c.name == "codeflow-core")
+            .expect("should have codeflow-core crate");
+        assert_eq!(
+            core_crate.threshold, 85,
+            "core should use crate_threshold, not cli override"
+        );
+    }
+
+    #[test]
+    fn test_validate_no_crate_override_uses_crate_threshold() {
+        let config = make_default_config();
+        let test_run = make_passing_run(10);
+        let all_cov = vec![make_file_cov("core/src/lib.rs", 90.0)];
+        let crate_cov = vec![make_crate_cov("codeflow-core", 90.0)];
+        let modified = vec!["core/src/lib.rs".to_string()];
+
+        let result =
+            TestValidator::validate(&test_run, &all_cov, &crate_cov, 90.0, &modified, &config);
+
+        let core_crate = result
+            .crate_coverages
+            .iter()
+            .find(|c| c.name == "codeflow-core")
+            .expect("should have codeflow-core crate");
+        assert_eq!(
+            core_crate.threshold, 85,
+            "no override should use crate_threshold from config"
+        );
+    }
+
     // ── Test helpers ───────────────────────────────────────────────────────
 
     fn make_default_config() -> TestConfig {
         TestConfig {
             coverage: CoverageConfig {
-                threshold: 85,
+                file_threshold: 85,
+                crate_threshold: 85,
+                crate_overrides: HashMap::new(),
                 enforcement: "per_file".to_string(),
                 tool: "cargo-llvm-cov".to_string(),
                 business_packages: vec!["codeflow-core".to_string()],
@@ -1635,7 +1736,7 @@ codeflow-cli/core/src/lib.rs
         let lines_count: u64 = 100;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let lines_covered = (percent * lines_count as f64 / 100.0) as u64;
-        let threshold = if name == "codeflow-core" { 85 } else { 80 };
+        let threshold = 85; // matches CoverageConfig.crate_threshold default
         CrateCoverage {
             name: name.to_string(),
             lines_count,

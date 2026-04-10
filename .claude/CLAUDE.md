@@ -1118,6 +1118,7 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 | Role teammate spawn before PF3 | `pf-3` | Task tool for cf-development, cf-planning, cf-documentation, cf-review, cf-quality-assurance | `codeflow hooks pre-tool-use gate-check` |
 | Stage ordering within PF4 | Primary stage sentinel (`ws-dev`/`ws-docs`/`ws-plan`/`ws-test`) must exist before WS-REV can complete and `ws-rev` before WS-QA can ship | `Bash(git push)`, `Bash(gh pr)` (via dual gate requiring `pf-5` + `ws-rev`) | `codeflow hooks pre-tool-use gate-check` |
 | TeamDelete during active session | pathflow-active flag + `pf-6` | TeamDelete tool (allows through if `pf-6` exists; flag removed by PostToolUse sentinel hook after TeamDelete succeeds) | `codeflow hooks pre-tool-use team-guard` |
+| PR body validation | Valid body content | `Bash(gh pr create)` missing required sections, containing AI attribution, or containing emoji | `codeflow hooks pre-tool-use gh-pr-guard` |
 | Claim enforcement (scope_policy) | File claims via CRDT | Edit/Write (scope_policy=soft: claim-coordinated, scope_policy=hard: scope-restricted, scope_policy=permissive: unrestricted) | `codeflow hooks pre-tool-use gate-check` |
 
 **Scope policy enforcement modes** (enforced by `try_acquire_claim()` in `pre_tool_use.rs`):
@@ -1270,6 +1271,8 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 9. New session for new work
 
 **PR body MUST include test results.** The PR description must contain all three sections below, populated from the QA Report. PRs without test stats are incomplete and must not be created:
+
+The `## Test Stats` section MUST be populated by running `codeflow test --mode full --coverage` and embedding its structured output verbatim. Do NOT manually compose coverage numbers, thresholds, or exempted files — the command produces the authoritative data including all three numbered subsections and the Exempted Files table. On subsequent pushes to an open PR, cf-git-operations MUST re-run the command and update the PR body's `## Test Stats` section to reflect current state.
 
 ```markdown
 ## Test Results

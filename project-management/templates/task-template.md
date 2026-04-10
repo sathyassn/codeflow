@@ -236,8 +236,8 @@ Mechanisms available in codebase:
 
 | Crate | Coverage | Threshold | Status |
 |-------|----------|-----------|--------|
-| codeflow-core | {n}% | 85% | PASS/FAIL |
-| codeflow-cli | {n}% | 80% | PASS/FAIL |
+| codeflow-core | {n}% | {n}% | PASS/FAIL |
+| codeflow-cli | {n}% | {n}% | PASS/FAIL |
 
 #### 3. Modified File Coverage
 
