@@ -169,9 +169,9 @@ Mechanisms available in codebase:
 
 | # | Criterion | DEV | SEC | REV | QA | Notes |
 |---|-----------|-----|-----|-----|-----|-------|
-| 1 | {criterion text} | -- | -- | -- | -- | |
-| 2 | {criterion text} | -- | -- | -- | -- | |
-| 3 | {criterion text} | -- | -- | -- | -- | |
+| 1 | {criterion text -- copy VERBATIM from YAML frontmatter acceptance array, do NOT paraphrase} | -- | -- | -- | -- | |
+| 2 | {criterion text -- copy VERBATIM from YAML frontmatter acceptance array, do NOT paraphrase} | -- | -- | -- | -- | |
+| 3 | {criterion text -- copy VERBATIM from YAML frontmatter acceptance array, do NOT paraphrase} | -- | -- | -- | -- | |
 
 ## Dependencies
 

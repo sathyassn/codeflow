@@ -38,5 +38,10 @@
     "heartbeat_interval_secs": 30,
     "stale_threshold_secs": 90,
     "epic_update": "orchestrator"
+  },
+  "retention": {
+    "days": 30,
+    "keep_last": 10,
+    "purge_on_cleanup": true
   }
 }

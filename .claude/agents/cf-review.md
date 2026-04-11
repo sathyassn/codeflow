@@ -135,6 +135,22 @@ Read the review request from the team lead's SendMessage. Note the review mode, 
 
 Locate the original task/spawn prompt to extract the numbered acceptance criteria. These criteria are the primary verification target.
 
+### Step 2a: Verify Criteria Integrity
+
+Compare the acceptance criteria in the task markdown against the criteria provided in the team lead's spawn prompt (your initial assignment message). Specifically:
+
+1. Read the `acceptance:` array in the task markdown YAML frontmatter
+2. Read the criterion descriptions in the `### Criteria Status` table
+3. Compare both against the numbered acceptance criteria in your spawn prompt
+
+If ANY criterion was modified, simplified, rephrased, or removed after implementation:
+- **Finding type:** "Acceptance criteria tampered — criterion N modified post-implementation"
+- **Severity:** CRITICAL (blocking)
+- **Evidence:** Quote the original criterion (from spawn prompt) and the modified version (from task doc)
+- **Verdict:** CHANGES_REQUESTED — require cf-development to revert criteria text AND fix implementation to match original spec
+
+⛔ This is a hard gate. Criterion tampering AUTOMATICALLY results in CHANGES_REQUESTED regardless of code quality.
+
 ### Step 3: Read All Changed Files
 
 Use Read, Glob, and Grep to examine every file in scope. Understand the full change set before forming judgments.
@@ -437,6 +453,8 @@ Verify consistency across related artifacts.
 ### Step 8: Verify Acceptance Criteria
 
 Check every numbered criterion from the task specification point-by-point. A criterion is either PASS or FAIL -- no partial credit. Flag ANY deviation as a finding.
+
+⚠️ **"Task specification" means the ORIGINAL acceptance criteria from the team lead's spawn prompt, NOT the current task markdown.** The task markdown may have been modified during implementation. If the task markdown criteria differ from the spawn prompt criteria, use the spawn prompt as authoritative and flag the discrepancy as a CRITICAL finding.
 
 ### Step 9: Run Tests (CODE_REVIEW and TEST_REVIEW)
 

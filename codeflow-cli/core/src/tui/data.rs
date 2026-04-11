@@ -71,6 +71,10 @@ pub struct SessionView {
     pub duration_secs: i64,
     pub managed: bool,
     pub created_at: String,
+    /// Whether this session is hidden in the default (filtered) view.
+    /// Active sessions are never hidden; only terminal (stale/complete)
+    /// sessions beyond the `keep_last` threshold are marked hidden.
+    pub hidden: bool,
 }
 
 /// Aggregated counts for the interactive session dashboard header.
@@ -79,11 +83,81 @@ pub struct SessionSummary {
     pub active: usize,
     pub stale: usize,
     pub complete: usize,
+    /// Number of terminal sessions hidden in the default filtered view.
+    pub hidden_count: usize,
+}
+
+/// Summary entry for the autorun batch list view (one row per batch session).
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchListEntry {
+    pub session_id: String,
+    pub batch_name: String,
+    pub status: AutorunSessionStatus,
+    pub total_tasks: i32,
+    pub completed_tasks: i32,
+    pub failed_tasks: i32,
+    pub running_count: usize,
+    pub elapsed_secs: i64,
 }
 
 // ---------------------------------------------------------------------------
 // Data fetching
 // ---------------------------------------------------------------------------
+
+/// Fetch a list of all autorun batch sessions for the batch list TUI view.
+///
+/// Returns one `BatchListEntry` per autorun session, sorted with
+/// running/aborting first, then by created_at DESC.
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried.
+pub async fn fetch_batch_list<S: DataStore>(store: &S) -> Result<Vec<BatchListEntry>, DbError> {
+    let sessions = store
+        .list_autorun_sessions(crate::models::AutorunSessionFilter {
+            all: true,
+            ..Default::default()
+        })
+        .await?;
+
+    let mut entries = Vec::with_capacity(sessions.len());
+    for s in &sessions {
+        let workers = store.list_autorun_workers(&s.id).await?;
+        let running_count = workers
+            .iter()
+            .filter(|w| w.status == crate::types::AutorunWorkerStatus::Running)
+            .count();
+        entries.push(BatchListEntry {
+            session_id: s.id.clone(),
+            batch_name: s
+                .batch_name
+                .clone()
+                .unwrap_or_else(|| s.id[..s.id.len().min(20)].to_string()),
+            status: s.status,
+            total_tasks: s.total_tasks,
+            completed_tasks: s.completed_tasks,
+            failed_tasks: s.failed_tasks,
+            running_count,
+            elapsed_secs: compute_elapsed_secs(&s.created_at),
+        });
+    }
+
+    // Sort: running/aborting first, then by session_id (proxy for created_at DESC
+    // since list_autorun_sessions already returns sorted).
+    entries.sort_by(|a, b| {
+        let a_active = matches!(
+            a.status,
+            AutorunSessionStatus::Running | AutorunSessionStatus::Aborting
+        );
+        let b_active = matches!(
+            b.status,
+            AutorunSessionStatus::Running | AutorunSessionStatus::Aborting
+        );
+        b_active.cmp(&a_active)
+    });
+
+    Ok(entries)
+}
 
 /// Fetch a `BatchView` for the given session, or the most recent active session.
 ///
@@ -210,6 +284,22 @@ pub async fn fetch_session_views(
     store: &crate::store::SurrealStore,
     project_dir: &Path,
 ) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
+    fetch_session_views_with_keep_last(store, project_dir, 10).await
+}
+
+/// Fetch interactive session views with a configurable `keep_last` threshold.
+///
+/// `keep_last` controls how many terminal sessions are shown in the default
+/// filtered view. Active sessions are always visible.
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried.
+pub async fn fetch_session_views_with_keep_last(
+    store: &crate::store::SurrealStore,
+    project_dir: &Path,
+    keep_last: usize,
+) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
     let sessions: Vec<crate::models::InteractiveSession> = store
         .db()
         .query("SELECT * FROM interactive_session ORDER BY created_at DESC")
@@ -270,6 +360,8 @@ pub async fn fetch_session_views(
         });
 
         // Duration freeze: use completed_at or updated_at for non-active sessions.
+        // Use -1 as sentinel for "unknown duration" when a stale session has
+        // no completed_at (renders as "--" in both TUI and text mode).
         let elapsed = if effective_status == "active" {
             compute_elapsed_secs(&s.created_at)
         } else if let Some(ref completed) = s.completed_at {
@@ -277,7 +369,8 @@ pub async fn fetch_session_views(
         } else if let Some(ref updated) = s.updated_at {
             compute_elapsed_between(&s.created_at, updated)
         } else {
-            compute_elapsed_secs(&s.created_at)
+            // Stale/complete session with no timestamp endpoint -- unknown duration.
+            -1
         };
 
         views.push(SessionView {
@@ -292,8 +385,23 @@ pub async fn fetch_session_views(
             duration_secs: elapsed,
             managed: s.managed,
             created_at: s.created_at.clone(),
+            hidden: false, // will be set below
         });
     }
+
+    // Count-based display filtering: active sessions are never hidden,
+    // terminal sessions (stale/complete) are sorted by created_at DESC and
+    // only the first `keep_last` are shown by default.
+    let mut terminal_seen: usize = 0;
+    for v in &mut views {
+        if v.status == "active" {
+            v.hidden = false;
+        } else {
+            terminal_seen += 1;
+            v.hidden = terminal_seen > keep_last;
+        }
+    }
+    summary.hidden_count = terminal_seen.saturating_sub(keep_last);
 
     Ok((views, summary))
 }
@@ -657,6 +765,7 @@ mod tests {
             duration_secs: 60,
             managed: true,
             created_at: "2026-04-01T00:00:00Z".to_string(),
+            hidden: false,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains("\"session_id\":\"ses-001\""));
@@ -699,6 +808,133 @@ mod tests {
         assert!(view.stages.is_empty());
     }
 
+    #[test]
+    fn test_batch_list_entry_serializes() {
+        let entry = BatchListEntry {
+            session_id: "ses-batch-1".to_string(),
+            batch_name: "my-batch".to_string(),
+            status: AutorunSessionStatus::Running,
+            total_tasks: 5,
+            completed_tasks: 2,
+            failed_tasks: 1,
+            running_count: 2,
+            elapsed_secs: 300,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"session_id\":\"ses-batch-1\""));
+        assert!(json.contains("\"batch_name\":\"my-batch\""));
+        assert!(json.contains("\"total_tasks\":5"));
+        assert!(json.contains("\"running_count\":2"));
+        assert!(json.contains("\"elapsed_secs\":300"));
+    }
+
+    #[test]
+    fn test_batch_list_entry_default_name_truncation() {
+        // When batch_name is absent, the fallback truncates the session_id.
+        let long_id = "ses-01knymk575s72x85z68pk3gfws-extra";
+        let entry = BatchListEntry {
+            session_id: long_id.to_string(),
+            batch_name: long_id[..long_id.len().min(20)].to_string(),
+            status: AutorunSessionStatus::Completed,
+            total_tasks: 1,
+            completed_tasks: 1,
+            failed_tasks: 0,
+            running_count: 0,
+            elapsed_secs: 60,
+        };
+        assert_eq!(entry.batch_name.len(), 20);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_batch_list_empty_store() {
+        let store = crate::store::mock::MockStore::new();
+        let entries = fetch_batch_list(&store).await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_batch_list_sorts_running_first() {
+        use crate::store::DataStore;
+
+        let store = crate::store::mock::MockStore::new();
+        let completed = crate::models::AutorunSession {
+            id: "ses-completed".into(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("batch-old".into()),
+            status: AutorunSessionStatus::Completed,
+            max_session_workers: 2,
+            total_tasks: 3,
+            completed_tasks: 3,
+            failed_tasks: 0,
+            skipped_tasks: 0,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: Some("2026-01-01T01:00:00Z".into()),
+            pid: None,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+        };
+        let running = crate::models::AutorunSession {
+            id: "ses-running".into(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("batch-active".into()),
+            status: AutorunSessionStatus::Running,
+            max_session_workers: 2,
+            total_tasks: 5,
+            completed_tasks: 2,
+            failed_tasks: 0,
+            skipped_tasks: 0,
+            created_at: "2026-01-02T00:00:00Z".into(),
+            completed_at: None,
+            pid: None,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+        };
+        store.create_autorun_session(&completed).await.unwrap();
+        store.create_autorun_session(&running).await.unwrap();
+
+        let entries = fetch_batch_list(&store).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        // Running should sort first.
+        assert_eq!(entries[0].batch_name, "batch-active");
+        assert_eq!(entries[0].status, AutorunSessionStatus::Running);
+        assert_eq!(entries[0].total_tasks, 5);
+        assert_eq!(entries[0].completed_tasks, 2);
+        assert_eq!(entries[1].batch_name, "batch-old");
+        assert_eq!(entries[1].status, AutorunSessionStatus::Completed);
+    }
+
+    #[test]
+    fn test_session_summary_hidden_count_default() {
+        let summary = SessionSummary::default();
+        assert_eq!(summary.hidden_count, 0);
+    }
+
+    #[test]
+    fn test_session_view_hidden_field_serializes() {
+        let view = SessionView {
+            session_id: "ses-001".to_string(),
+            status: "stale".to_string(),
+            branch: None,
+            phase: None,
+            work_type: None,
+            team_name: None,
+            pid: 1,
+            worktree_path: None,
+            duration_secs: -1,
+            managed: false,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            hidden: true,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(json.contains("\"hidden\":true"));
+        // -1 sentinel for unknown duration
+        assert!(json.contains("\"duration_secs\":-1"));
+    }
+
     #[tokio::test]
     async fn test_fetch_session_views_empty_store() {
         let store = crate::store::SurrealStore::in_memory().await.unwrap();
@@ -708,6 +944,7 @@ mod tests {
         assert_eq!(summary.active, 0);
         assert_eq!(summary.stale, 0);
         assert_eq!(summary.complete, 0);
+        assert_eq!(summary.hidden_count, 0);
     }
 
     #[tokio::test]

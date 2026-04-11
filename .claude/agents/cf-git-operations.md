@@ -76,6 +76,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - ⛔ NEVER use heredoc format for commit messages (use `printf` instead)
 - ⛔ NEVER use `git add -A` or `git add .` without reviewing staged files first
 - ⛔ NEVER run `gh pr merge` targeting protected branches (`main`, `master`, `release/*`, `production` per `enforcement-policy.json merge_protection.protected_branches`)
+- ⛔ NEVER push multiple commits to a remote PR branch — squash ALL branch commits into a single conventional-commit before any push. Use `git reset --soft $(git merge-base HEAD main) && git commit`, then `--force-with-lease`.
 
 ### Autorun Behavior
 
@@ -312,11 +313,12 @@ Do NOT include:
 
 **Procedure:**
 
-1. Verify all commits are pushed: `git status -sb` (check ahead count)
-2. If unpushed commits exist: run sync-remote push first
-3. Check for uncommitted changes: warn requester if present (commit-outstanding-changes step should have already handled this)
-4. Compose PR title and body following format above
-5. Determine PR base:
+1. 🔒 Verify branch has exactly 1 commit: `git rev-list --count $(git merge-base HEAD main)..HEAD`. If count > 1, squash NOW before proceeding (Step 4 must have been skipped or additional commits added after squash — return to Step 4).
+2. Verify all commits are pushed: `git status -sb` (check ahead count)
+3. If unpushed commits exist: push with `--force-with-lease` (required after squash rewrite)
+4. Check for uncommitted changes: warn requester if present (commit-outstanding-changes step should have already handled this)
+5. Compose PR title and body following format above
+6. Determine PR base:
    - Read target_branch from active-task.json (at `.state/runtime/active-task.json`)
    - If target_branch is set and non-empty: use `--base {target_branch}`
    - Otherwise: use `--base main`
@@ -591,6 +593,7 @@ Before marking any operation complete, verify:
 - [ ] 🔒 Changes are within scope of the assigned task
 - [ ] 🔒 No force-pushes to protected branches
 - [ ] 🔒 Explicit file staging used (no blanket `git add -A`)
+- [ ] 🔒 PR branch has exactly ONE commit before push (squash-before-push enforced)
 
 ## References
 

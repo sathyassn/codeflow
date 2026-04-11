@@ -833,6 +833,66 @@ impl DataStore for SurrealStore {
         Ok(results.into_iter().next())
     }
 
+    async fn prune_interactive_sessions(
+        &self,
+        before: &str,
+        keep_last: usize,
+    ) -> Result<super::PruneResult, DbError> {
+        let mut result = super::PruneResult::default();
+
+        // Find terminal interactive sessions (stale/complete) completed before cutoff.
+        let ids_sql = "SELECT id, completed_at FROM interactive_session \
+             WHERE status IN ['stale', 'complete'] \
+             AND completed_at < $before \
+             ORDER BY completed_at DESC";
+        let mut resp = self
+            .db
+            .query(ids_sql)
+            .bind(("before", before.to_string()))
+            .await?;
+
+        #[derive(Debug, serde::Deserialize)]
+        struct IdRow {
+            #[serde(deserialize_with = "crate::models::serde_helpers::deserialize_record_id")]
+            id: String,
+        }
+        let rows: Vec<IdRow> = resp.take(0)?;
+        let mut candidate_ids: Vec<String> = rows.into_iter().map(|r| r.id).collect();
+
+        // If keep_last > 0, skip the N most recent (already sorted DESC).
+        if keep_last > 0 && candidate_ids.len() > keep_last {
+            candidate_ids = candidate_ids.into_iter().skip(keep_last).collect();
+        } else if keep_last > 0 {
+            // All candidates are within the keep_last window.
+            return Ok(result);
+        }
+
+        if candidate_ids.is_empty() {
+            return Ok(result);
+        }
+
+        // No FK cascade needed -- interactive_session has no child tables.
+        for sid in &candidate_ids {
+            match self
+                .db
+                .query("DELETE type::thing('interactive_session', $id)")
+                .bind(("id", sid.clone()))
+                .await
+            {
+                Ok(_) => {
+                    result.sessions_deleted += 1;
+                }
+                Err(e) => {
+                    result
+                        .failures
+                        .push(format!("interactive_session {sid}: {e}"));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     async fn prune_autorun_sessions(
         &self,
         before: &str,

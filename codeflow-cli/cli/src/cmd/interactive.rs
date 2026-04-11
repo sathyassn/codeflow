@@ -27,9 +27,19 @@ pub enum InteractiveCommand {
         /// Refresh interval in seconds (default: 2)
         #[arg(long, default_value = "2")]
         interval: u64,
+        /// Show all sessions regardless of age (default: last 7 days only)
+        #[arg(long)]
+        all: bool,
+        /// Filter by status: active, stale, complete, or all (default: all statuses)
+        #[arg(long)]
+        status: Option<String>,
     },
     /// Remove stale sessions (dead PID detection)
-    Cleanup,
+    Cleanup {
+        /// Skip DB purge of old terminal sessions
+        #[arg(long)]
+        no_purge: bool,
+    },
 }
 
 /// Run the interactive subcommand or launch a new session.
@@ -42,16 +52,18 @@ pub async fn run(command: Option<InteractiveCommand>) -> Result<()> {
             watch: _,
             once,
             interval,
+            all,
+            status,
         }) => {
             // Default to TUI when stdout is a TTY; --once forces text output.
             if once || !std::io::stdout().is_terminal() {
-                run_status().await
+                run_status(all, status.as_deref()).await
             } else {
                 let project_dir = helpers::detect_project_root()?;
                 run_status_tui(&project_dir, interval).await
             }
         }
-        Some(InteractiveCommand::Cleanup) => run_cleanup().await,
+        Some(InteractiveCommand::Cleanup { no_purge }) => run_cleanup(no_purge).await,
     }
 }
 
@@ -233,15 +245,31 @@ async fn register_interactive_session(
         .await;
 }
 
-/// Show interactive sessions (all statuses, most recent first).
+/// Show interactive sessions (text mode).
 ///
-/// Queries the DB for ALL sessions (limit 50) AND scans
-/// `.state/interactive/heartbeat-*` as a filesystem fallback so sessions
-/// are visible even when the DB is unavailable.
-async fn run_status() -> Result<()> {
+/// By default, shows only active sessions. Pass `show_all=true` (via `--all`)
+/// to show all sessions. Optionally filter by `--status <active|stale|complete>`.
+///
+/// Also scans `.state/interactive/heartbeat-*` as a filesystem fallback so
+/// sessions are visible even when the DB is unavailable.
+async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
-    // Show all sessions, not just active.
-    let sessions = query_sessions(&project_dir, None).await?;
+
+    // Determine the DB-level status filter.
+    // --all => no filter (show everything).
+    // --status <val> => filter to that status.
+    // Neither => active-only default.
+    let db_status_filter = if show_all {
+        None
+    } else {
+        match status_filter {
+            Some("all") => None,
+            Some(s) => Some(s),
+            None => Some("active"),
+        }
+    };
+
+    let sessions = query_sessions(&project_dir, db_status_filter).await?;
 
     let db_sids: std::collections::HashSet<String> =
         sessions.iter().map(|s| s.session_id.clone()).collect();
@@ -250,7 +278,11 @@ async fn run_status() -> Result<()> {
     let fs_only = scan_heartbeat_sessions(&project_dir, &db_sids);
 
     if sessions.is_empty() && fs_only.is_empty() {
-        println!("No interactive sessions found.");
+        if show_all {
+            println!("No interactive sessions found.");
+        } else {
+            println!("No active interactive sessions found. Use --all to show all sessions.");
+        }
         return Ok(());
     }
 
@@ -290,16 +322,20 @@ async fn run_status() -> Result<()> {
 /// List all interactive sessions (alias for `status --once`).
 #[allow(dead_code)]
 async fn run_list() -> Result<()> {
-    run_status().await
+    run_status(true, None).await
 }
 
 /// Remove stale sessions (dead PID) and sweep filesystem artifacts.
-async fn run_cleanup() -> Result<()> {
+///
+/// When `no_purge` is false (the default), also purges terminal sessions
+/// from the DB using retention config (days + keep_last from parallel-work-config).
+async fn run_cleanup(no_purge: bool) -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
     let sessions = query_sessions(&project_dir, Some("active")).await?;
 
     let mut cleaned = 0u32;
-    if let Ok(store) = open_store(&project_dir).await {
+    let store_result = open_store(&project_dir).await;
+    if let Ok(ref store) = store_result {
         for s in &sessions {
             if is_session_stale(s.pid) {
                 let now = chrono::Utc::now().to_rfc3339();
@@ -351,6 +387,36 @@ async fn run_cleanup() -> Result<()> {
             println!("Marked {wt_cleaned} stale worktree registry entry(ies).");
         }
     }
+
+    // DB purge: remove old terminal sessions unless --no-purge.
+    if !no_purge {
+        if let Ok(ref store) = store_result {
+            use codeflow_core::store::DataStore;
+            let retention = codeflow_core::autorun::load_config(&project_dir)
+                .map(|c| c.retention)
+                .unwrap_or_default();
+            if retention.purge_on_cleanup {
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention.days));
+                let cutoff_str = cutoff.to_rfc3339();
+                match store
+                    .prune_interactive_sessions(&cutoff_str, retention.keep_last)
+                    .await
+                {
+                    Ok(result) if result.sessions_deleted > 0 => {
+                        println!(
+                            "Purged {} old terminal session(s) from DB (>{} days, kept last {}).",
+                            result.sessions_deleted, retention.days, retention.keep_last,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("warning: DB purge failed: {e}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -810,7 +876,7 @@ fn mark_stale_worktree_entries(project_dir: &Path) -> u32 {
 async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     use std::time::Duration;
 
-    use codeflow_core::tui::data::fetch_session_views;
+    use codeflow_core::tui::data::fetch_session_views_with_keep_last;
     use codeflow_core::tui::theme;
     use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use ratatui::layout::{Constraint, Layout};
@@ -819,6 +885,11 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     use ratatui::widgets::{Paragraph, TableState};
 
     let store = open_store(project_dir).await?;
+
+    // Load retention config for keep_last threshold.
+    let keep_last = codeflow_core::autorun::load_config(project_dir)
+        .map(|c| c.retention.keep_last)
+        .unwrap_or(10);
 
     // Terminal setup.
     let mut terminal = ratatui::init();
@@ -834,26 +905,35 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
 
     let mut table_state = TableState::default();
     let mut status_message: Option<(String, std::time::Instant)> = None;
+    let mut show_all = false;
 
     // Fetch initial data.
-    let mut last_data = match fetch_session_views(&store, project_dir).await {
-        Ok(d) => Some(d),
-        Err(e) => {
-            eprintln!("warn: initial fetch failed: {e}");
-            None
-        }
-    };
+    let mut last_data =
+        match fetch_session_views_with_keep_last(&store, project_dir, keep_last).await {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("warn: initial fetch failed: {e}");
+                None
+            }
+        };
 
     loop {
-        // Preserve selection index across refreshes.
-        if let Some((ref views, _)) = last_data {
-            if !views.is_empty() && table_state.selected().is_none() {
-                table_state.select(Some(0));
+        // Compute filtered view count for navigation bounds.
+        let visible_count = last_data.as_ref().map_or(0, |(views, _)| {
+            if show_all {
+                views.len()
+            } else {
+                views.iter().filter(|v| !v.hidden).count()
             }
-            if let Some(sel) = table_state.selected() {
-                if sel >= views.len() {
-                    table_state.select(Some(views.len().saturating_sub(1)));
-                }
+        });
+
+        // Preserve selection index across refreshes.
+        if visible_count > 0 && table_state.selected().is_none() {
+            table_state.select(Some(0));
+        }
+        if let Some(sel) = table_state.selected() {
+            if sel >= visible_count {
+                table_state.select(Some(visible_count.saturating_sub(1)));
             }
         }
 
@@ -869,15 +949,28 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             .split(area);
 
             // --- Header ---
-            render_session_header(frame, chunks[0], last_data.as_ref().map(|(_, s)| s));
+            render_session_header(
+                frame,
+                chunks[0],
+                last_data.as_ref().map(|(_, s)| s),
+                show_all,
+            );
 
             // --- Session table ---
-            render_session_table(frame, chunks[1], &mut table_state, last_data.as_ref());
+            render_session_table(
+                frame,
+                chunks[1],
+                &mut table_state,
+                last_data.as_ref(),
+                show_all,
+            );
 
             // --- Detail pane ---
-            let selected_session = last_data
-                .as_ref()
-                .and_then(|(views, _)| table_state.selected().and_then(|i| views.get(i)));
+            let selected_session = last_data.as_ref().and_then(|(views, _)| {
+                table_state
+                    .selected()
+                    .and_then(|i| views.iter().filter(|v| show_all || !v.hidden).nth(i))
+            });
             render_session_detail(frame, chunks[2], selected_session);
 
             // --- Keybinding bar ---
@@ -915,10 +1008,10 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Up => {
-                        if let Some((ref views, _)) = last_data {
+                        if visible_count > 0 {
                             let i = table_state.selected().unwrap_or(0);
                             let prev = if i == 0 {
-                                views.len().saturating_sub(1)
+                                visible_count.saturating_sub(1)
                             } else {
                                 i - 1
                             };
@@ -926,20 +1019,16 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                         }
                     }
                     KeyCode::Down => {
-                        if let Some((ref views, _)) = last_data {
+                        if visible_count > 0 {
                             let i = table_state.selected().unwrap_or(0);
-                            let next = if views.is_empty() {
-                                0
-                            } else {
-                                (i + 1) % views.len()
-                            };
+                            let next = (i + 1) % visible_count;
                             table_state.select(Some(next));
                         }
                     }
                     KeyCode::Enter => {
                         // Attach to session's tmux (if in a worktree session).
                         if let Some(session) =
-                            get_selected_session(last_data.as_ref(), &table_state)
+                            get_selected_session(last_data.as_ref(), &table_state, show_all)
                         {
                             // Validate DB-sourced session_id before using as tmux argument.
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
@@ -976,7 +1065,7 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                     KeyCode::Char('c') => {
                         // Cleanup selected stale session.
                         if let Some(session) =
-                            get_selected_session(last_data.as_ref(), &table_state)
+                            get_selected_session(last_data.as_ref(), &table_state, show_all)
                         {
                             // Validate DB-sourced session_id before filesystem operations.
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
@@ -1012,13 +1101,22 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                             }
                         }
                     }
+                    KeyCode::Char('a') => {
+                        show_all = !show_all;
+                        table_state.select(Some(0));
+                        let label = if show_all { "all" } else { "filtered" };
+                        status_message = Some((
+                            format!("Showing {label} sessions"),
+                            std::time::Instant::now(),
+                        ));
+                    }
                     _ => {}
                 }
             }
         }
 
         // Refresh data every tick.
-        match fetch_session_views(&store, project_dir).await {
+        match fetch_session_views_with_keep_last(&store, project_dir, keep_last).await {
             Ok(d) => last_data = Some(d),
             Err(e) => eprintln!("warn: fetch failed: {e}"),
         }
@@ -1037,6 +1135,8 @@ fn session_keybinding_line() -> ratatui::text::Line<'static> {
         Span::raw(" Attach "),
         Span::styled("[c]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Cleanup "),
+        Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Toggle All "),
         Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Navigate "),
         Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
@@ -1048,6 +1148,7 @@ fn render_session_header(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     summary: Option<&codeflow_core::tui::data::SessionSummary>,
+    show_all: bool,
 ) {
     use codeflow_core::tui::theme;
     use ratatui::style::Style;
@@ -1055,7 +1156,7 @@ fn render_session_header(
     use ratatui::widgets::Paragraph;
 
     let line = if let Some(s) = summary {
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 format!(" {} ", theme::TRIANGLE),
                 Style::new().fg(theme::BLUE_ACCENT),
@@ -1080,7 +1181,22 @@ fn render_session_header(
                 format!("{} Complete", s.complete),
                 Style::new().fg(theme::DIM_PENDING),
             ),
-        ])
+        ];
+        // Show hidden count hint when in filtered view.
+        if !show_all && s.hidden_count > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("({} older hidden -- 'a' for all)", s.hidden_count),
+                Style::new().fg(theme::DIM_PENDING),
+            ));
+        } else if show_all && s.hidden_count > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                "('a' to filter)".to_string(),
+                Style::new().fg(theme::DIM_PENDING),
+            ));
+        }
+        Line::from(spans)
     } else {
         Line::styled("Loading sessions...", Style::new().fg(theme::DIM_PENDING))
     };
@@ -1095,6 +1211,7 @@ fn render_session_table(
         Vec<codeflow_core::tui::data::SessionView>,
         codeflow_core::tui::data::SessionSummary,
     )>,
+    show_all: bool,
 ) {
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
@@ -1112,6 +1229,7 @@ fn render_session_table(
         .map(|(views, _)| {
             views
                 .iter()
+                .filter(|s| show_all || !s.hidden)
                 .map(|s| {
                     // Truncate session_id to last 12 chars for display.
                     let sid_display = if s.session_id.len() > 16 {
@@ -1263,8 +1381,13 @@ fn get_selected_session<'a>(
         codeflow_core::tui::data::SessionSummary,
     )>,
     state: &ratatui::widgets::TableState,
+    show_all: bool,
 ) -> Option<&'a codeflow_core::tui::data::SessionView> {
-    data.and_then(|(views, _)| state.selected().and_then(|i| views.get(i)))
+    data.and_then(|(views, _)| {
+        state
+            .selected()
+            .and_then(|i| views.iter().filter(|v| show_all || !v.hidden).nth(i))
+    })
 }
 
 /// Check if a tmux session exists.
@@ -2411,7 +2534,7 @@ mod tests {
     #[test]
     fn test_get_selected_session_none_data() {
         let state = ratatui::widgets::TableState::default();
-        let result = get_selected_session(None, &state);
+        let result = get_selected_session(None, &state, true);
         assert!(result.is_none());
     }
 
@@ -2429,11 +2552,12 @@ mod tests {
             duration_secs: 0,
             managed: true,
             created_at: "2026-01-01T00:00:00Z".into(),
+            hidden: false,
         }];
         let summary = codeflow_core::tui::data::SessionSummary::default();
         let data = Some((views, summary));
         let state = ratatui::widgets::TableState::default();
-        let result = get_selected_session(data.as_ref(), &state);
+        let result = get_selected_session(data.as_ref(), &state, true);
         assert!(result.is_none());
     }
 
@@ -2451,14 +2575,62 @@ mod tests {
             duration_secs: 120,
             managed: true,
             created_at: "2026-01-01T00:00:00Z".into(),
+            hidden: false,
         }];
         let summary = codeflow_core::tui::data::SessionSummary::default();
         let data = Some((views, summary));
         let mut state = ratatui::widgets::TableState::default();
         state.select(Some(0));
-        let result = get_selected_session(data.as_ref(), &state);
+        let result = get_selected_session(data.as_ref(), &state, true);
         assert!(result.is_some());
         assert_eq!(result.unwrap().session_id, "ses-001");
+    }
+
+    #[test]
+    fn test_get_selected_session_respects_hidden_filter() {
+        let views = vec![
+            codeflow_core::tui::data::SessionView {
+                session_id: "ses-active".into(),
+                status: "active".into(),
+                branch: None,
+                phase: None,
+                work_type: None,
+                team_name: None,
+                pid: 1,
+                worktree_path: None,
+                duration_secs: 0,
+                managed: true,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                hidden: false,
+            },
+            codeflow_core::tui::data::SessionView {
+                session_id: "ses-hidden".into(),
+                status: "stale".into(),
+                branch: None,
+                phase: None,
+                work_type: None,
+                team_name: None,
+                pid: 2,
+                worktree_path: None,
+                duration_secs: 0,
+                managed: true,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                hidden: true,
+            },
+        ];
+        let summary = codeflow_core::tui::data::SessionSummary::default();
+        let data = Some((views, summary));
+        let mut state = ratatui::widgets::TableState::default();
+        state.select(Some(0));
+        // With show_all=false, only the non-hidden session is visible at index 0.
+        let result = get_selected_session(data.as_ref(), &state, false);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id, "ses-active");
+        // With show_all=true, the hidden session is at index 1.
+        state.select(Some(1));
+        let result = get_selected_session(data.as_ref(), &state, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id, "ses-hidden");
     }
 
     #[test]

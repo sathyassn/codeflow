@@ -133,6 +133,22 @@ When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an a
 
 Extract specific, testable criteria from the task assignment. List them as a checklist.
 
+#### Step 1a: Pre-Test Spec Compliance Check
+
+Before running any tests, trace through the code to verify it implements what each acceptance criterion describes. Tests prove code works correctly — they do NOT prove code implements the right feature.
+
+For each acceptance criterion:
+1. Read the criterion text verbatim (from the spawn prompt, not just the task doc — the task doc may have been modified)
+2. Identify what specific behavior or feature this criterion requires
+3. Scan the code to verify that behavior exists (grep for key identifiers, read relevant functions)
+4. If the code does NOT provide the described behavior, this is a spec mismatch:
+   - **Finding:** "Code does not implement criterion N: {criterion text}"
+   - **Severity:** CRITICAL
+   - **Action:** Issue FAIL verdict IMMEDIATELY — do not proceed to test execution
+   - **Rationale:** Running tests on code that implements the wrong feature wastes time and produces misleading PASS results
+
+⛔ Tests that pass for the WRONG feature are worse than tests that fail for the RIGHT feature. Verify spec compliance BEFORE test execution.
+
 #### Step 2: Run Full Test Suite
 
 ```text
@@ -162,6 +178,8 @@ codeflow test --mode full --coverage --category {category}
 #### Step 4: Verify Acceptance Criteria
 
 Check each criterion against test results and code inspection (read-only). Mark each as met or unmet.
+
+⚠️ **Cross-check:** Compare criteria from the task markdown against the criteria in your spawn prompt. If they differ, use the spawn prompt as authoritative. Flag discrepancies as a CRITICAL finding.
 
 #### Step 5: Check for Regressions
 

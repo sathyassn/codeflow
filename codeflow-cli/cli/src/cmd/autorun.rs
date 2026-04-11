@@ -45,6 +45,9 @@ pub enum AutorunCommand {
         /// Output JSON to stdout (non-watch mode only)
         #[arg(long)]
         json: bool,
+        /// Show all batches with stacked task details (text mode only)
+        #[arg(long)]
+        all: bool,
     },
     /// Attach to a running worker's tmux session
     Attach {
@@ -98,7 +101,11 @@ pub enum AutorunCommand {
         force: bool,
     },
     /// List available batch files in the autorun config directory
-    Batches,
+    Batches {
+        /// Force text output even in TTY (no TUI)
+        #[arg(long)]
+        once: bool,
+    },
     /// Clean up stale autorun sessions (dead orchestrator)
     Cleanup {
         /// Session ID of specific batch to clean
@@ -110,6 +117,9 @@ pub enum AutorunCommand {
         /// Show what would be cleaned without doing it
         #[arg(long)]
         dry_run: bool,
+        /// Skip DB purge of old terminal sessions
+        #[arg(long)]
+        no_purge: bool,
     },
     /// Prune old completed/failed autorun sessions and their workers/task_runs
     Prune {
@@ -161,6 +171,7 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             once,
             interval,
             json,
+            all,
         }) => {
             use std::io::IsTerminal;
 
@@ -168,7 +179,7 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             if json {
                 run_status_json(&project_dir, batch.as_deref()).await
             } else if once || !std::io::stdout().is_terminal() {
-                run_status(&project_dir, batch.as_deref()).await
+                run_status(&project_dir, batch.as_deref(), all).await
             } else {
                 run_status_watch(&project_dir, batch.as_deref(), interval).await
             }
@@ -189,7 +200,8 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             batch,
             all,
             dry_run,
-        }) => run_cleanup(&project_dir, batch.as_deref(), all, dry_run).await,
+            no_purge,
+        }) => run_cleanup(&project_dir, batch.as_deref(), all, dry_run, no_purge).await,
         Some(AutorunCommand::Results { batch }) => {
             run_results(&project_dir, batch.as_deref()).await
         }
@@ -198,7 +210,14 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
             foreground,
             force,
         }) => run_resume(&project_dir, batch.as_deref(), foreground, force).await,
-        Some(AutorunCommand::Batches) => run_batches_sync(&project_dir),
+        Some(AutorunCommand::Batches { once }) => {
+            use std::io::IsTerminal;
+            if once || !std::io::stdout().is_terminal() {
+                run_batches_sync(&project_dir)
+            } else {
+                run_batches_tui(&project_dir)
+            }
+        }
         Some(AutorunCommand::Prune {
             older_than,
             keep_last,
@@ -1343,7 +1362,7 @@ async fn resolve_task_session(
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 
-async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
+async fn run_status(project_dir: &Path, batch: Option<&str>, show_all: bool) -> Result<()> {
     use codeflow_core::store::DataStore;
 
     let store = open_store(project_dir).await?;
@@ -1357,13 +1376,35 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             Some(s) => vec![s],
             None => anyhow::bail!("no autorun session found with id '{sid}'"),
         }
-    } else {
-        // Show running/aborting first, then recent completed/failed.
+    } else if show_all {
+        // --all: fetch all sessions, sorted running/aborting first then by created_at DESC.
         use codeflow_core::models::AutorunSessionFilter;
-        let all = store
+        let all_sessions = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                all: true,
+                ..Default::default()
+            })
+            .await?;
+        let (mut active, rest): (Vec<_>, Vec<_>) = all_sessions.into_iter().partition(|s| {
+            matches!(
+                s.status,
+                codeflow_core::types::AutorunSessionStatus::Running
+                    | codeflow_core::types::AutorunSessionStatus::Aborting
+            )
+        });
+        active.extend(rest);
+        if active.is_empty() {
+            println!("No autorun batches found.");
+            return Ok(());
+        }
+        active
+    } else {
+        // Default: show running/aborting first, then recent completed/failed.
+        use codeflow_core::models::AutorunSessionFilter;
+        let all_sessions = store
             .list_autorun_sessions(AutorunSessionFilter::default())
             .await?;
-        let (mut active, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|s| {
+        let (mut active, rest): (Vec<_>, Vec<_>) = all_sessions.into_iter().partition(|s| {
             matches!(
                 s.status,
                 codeflow_core::types::AutorunSessionStatus::Running
@@ -1472,7 +1513,13 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
                             "--".to_string()
                         }
                     },
-                    format_duration_secs,
+                    |secs| {
+                        if secs < 0 {
+                            "--".to_string()
+                        } else {
+                            format_duration_secs(secs)
+                        }
+                    },
                 );
                 // C24: Show "Waiting" for pending tasks when session is active.
                 let display_status = if matches!(
@@ -1524,14 +1571,22 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Two-level navigation state for the autorun status TUI.
+enum AutorunView {
+    /// Top-level: list of all batch sessions.
+    BatchList,
+    /// Drill-down: task detail for a specific batch session.
+    BatchDetail(String),
+}
+
 async fn run_status_watch(
     project_dir: &Path,
     batch: Option<&str>,
     interval_secs: u64,
 ) -> Result<()> {
-    use codeflow_core::tui::data::{BatchView, fetch_batch_view};
+    use codeflow_core::tui::data::{BatchListEntry, BatchView, fetch_batch_list, fetch_batch_view};
     use codeflow_core::tui::theme;
-    use codeflow_core::tui::widgets::DetailPane;
+    use codeflow_core::tui::widgets::{DetailPane, DurationCell};
     use ratatui::crossterm::event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
     };
@@ -1539,7 +1594,7 @@ async fn run_status_watch(
     use ratatui::layout::{Constraint, Layout};
     use ratatui::style::Style;
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Paragraph, TableState};
+    use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
     let store = open_store(project_dir).await?;
     let batch_owned = batch.map(ToString::to_string);
@@ -1558,11 +1613,31 @@ async fn run_status_watch(
     }
     let _guard = TermGuard;
 
-    let mut table_state = TableState::default();
+    // Two-level navigation: BatchList (default) or BatchDetail (when --batch or Enter).
+    let mut view = if let Some(ref sid) = batch_owned {
+        AutorunView::BatchDetail(sid.clone())
+    } else {
+        AutorunView::BatchList
+    };
+    let started_with_batch = batch_owned.is_some();
 
-    // Fetch initial data before entering the loop.
+    let mut table_state = TableState::default();
+    let mut batch_table_state = TableState::default();
+
+    // Batch list data (for BatchList view).
+    let mut batch_list: Vec<BatchListEntry> =
+        fetch_batch_list(store.as_ref()).await.unwrap_or_default();
+    if !batch_list.is_empty() {
+        batch_table_state.select(Some(0));
+    }
+
+    // Fetch initial detail data (for BatchDetail view).
+    let detail_sid = match &view {
+        AutorunView::BatchDetail(sid) => Some(sid.as_str()),
+        AutorunView::BatchList => None,
+    };
     let mut last_view: Option<BatchView> =
-        match fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref()).await {
+        match fetch_batch_view(store.as_ref(), project_dir, detail_sid).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("warn: initial fetch failed: {e}");
@@ -1572,58 +1647,183 @@ async fn run_status_watch(
     let mut status_message: Option<(String, std::time::Instant)> = None;
 
     loop {
-        // Preserve selection index across refreshes.
-        if let Some(ref v) = last_view {
-            if !v.tasks.is_empty() && table_state.selected().is_none() {
-                table_state.select(Some(0));
+        // Preserve selection index across refreshes (for whichever view is active).
+        match view {
+            AutorunView::BatchList => {
+                if !batch_list.is_empty() && batch_table_state.selected().is_none() {
+                    batch_table_state.select(Some(0));
+                }
+                if let Some(sel) = batch_table_state.selected() {
+                    if sel >= batch_list.len() {
+                        batch_table_state.select(Some(batch_list.len().saturating_sub(1)));
+                    }
+                }
             }
-            if let Some(sel) = table_state.selected() {
-                if sel >= v.tasks.len() {
-                    table_state.select(Some(v.tasks.len().saturating_sub(1)));
+            AutorunView::BatchDetail(_) => {
+                if let Some(ref v) = last_view {
+                    if !v.tasks.is_empty() && table_state.selected().is_none() {
+                        table_state.select(Some(0));
+                    }
+                    if let Some(sel) = table_state.selected() {
+                        if sel >= v.tasks.len() {
+                            table_state.select(Some(v.tasks.len().saturating_sub(1)));
+                        }
+                    }
                 }
             }
         }
 
         // Draw UI.
         terminal.draw(|frame| {
-            let area = frame.area();
-            let chunks = Layout::vertical([
-                Constraint::Length(2), // header
-                Constraint::Min(5),    // table
-                Constraint::Length(6), // detail
-                Constraint::Length(1), // keys
-            ])
-            .split(area);
+            match view {
+                AutorunView::BatchList => {
+                    // --- Batch list view ---
+                    let area = frame.area();
+                    let chunks = Layout::vertical([
+                        Constraint::Length(2), // header
+                        Constraint::Min(5),    // table
+                        Constraint::Length(1), // keys
+                    ])
+                    .split(area);
 
-            // --- Header ---
-            render_header(frame, chunks[0], last_view.as_ref());
+                    // Header
+                    let running = batch_list
+                        .iter()
+                        .filter(|b| {
+                            matches!(
+                                b.status,
+                                codeflow_core::types::AutorunSessionStatus::Running
+                            )
+                        })
+                        .count();
+                    let header_line = Line::from(vec![
+                        Span::styled(
+                            format!(" {} ", theme::TRIANGLE),
+                            Style::new().fg(theme::BLUE_ACCENT),
+                        ),
+                        Span::styled("Autorun Batches", theme::header()),
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{} batch(es)", batch_list.len()),
+                            Style::new().fg(theme::DIM_PENDING),
+                        ),
+                        if running > 0 {
+                            Span::styled(
+                                format!("  {running} running"),
+                                Style::new().fg(theme::GREEN_SUCCESS),
+                            )
+                        } else {
+                            Span::raw("")
+                        },
+                    ]);
+                    frame.render_widget(Paragraph::new(header_line), chunks[0]);
 
-            // --- Task table ---
-            render_table(frame, chunks[1], &mut table_state, last_view.as_ref());
+                    // Table
+                    let tbl_header = Row::new(vec![
+                        "BATCH", "STATUS", "TASKS", "DONE", "FAIL", "RUN", "ELAPSED",
+                    ])
+                    .style(theme::header())
+                    .bottom_margin(1);
 
-            // --- Detail pane ---
-            let selected_task = last_view
-                .as_ref()
-                .and_then(|v| table_state.selected().and_then(|i| v.tasks.get(i)));
-            let detail = DetailPane::new(selected_task);
-            frame.render_widget(detail, chunks[2]);
+                    let rows: Vec<Row> = batch_list
+                        .iter()
+                        .map(|b| {
+                            let status_badge = crate::cmd::autorun::status_badge_text(b.status);
+                            let dur = DurationCell::new(Some(b.elapsed_secs));
+                            Row::new(vec![
+                                Cell::from(b.batch_name.clone()),
+                                Cell::from(status_badge),
+                                Cell::from(format!("{}", b.total_tasks)),
+                                Cell::from(format!("{}", b.completed_tasks)),
+                                Cell::from(format!("{}", b.failed_tasks)),
+                                Cell::from(format!("{}", b.running_count)),
+                                Cell::from(dur.to_span()),
+                            ])
+                        })
+                        .collect();
 
-            // --- Keybinding bar (with transient status message) ---
-            // Show status message for 3 seconds, then revert to keybindings.
-            let bar_line = if let Some((ref msg, at)) = status_message {
-                if at.elapsed() < Duration::from_secs(3) {
-                    Line::from(Span::styled(
-                        format!(" {msg}"),
-                        Style::new().fg(theme::YELLOW_RUNNING),
-                    ))
-                } else {
-                    status_message = None;
-                    context_keybinding_line(selected_task)
+                    let table = Table::new(
+                        rows,
+                        [
+                            Constraint::Min(20),    // BATCH
+                            Constraint::Length(12), // STATUS
+                            Constraint::Length(7),  // TASKS
+                            Constraint::Length(7),  // DONE
+                            Constraint::Length(7),  // FAIL
+                            Constraint::Length(5),  // RUN
+                            Constraint::Length(10), // ELAPSED
+                        ],
+                    )
+                    .header(tbl_header)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_type(theme::BORDER_TYPE)
+                            .title(" Batches ")
+                            .style(Style::new().fg(theme::WHITE_TEXT)),
+                    )
+                    .row_highlight_style(theme::selected())
+                    .highlight_symbol(format!("{} ", theme::TRIANGLE));
+
+                    frame.render_stateful_widget(table, chunks[1], &mut batch_table_state);
+
+                    // Keybinding bar
+                    let bar = Line::from(vec![
+                        Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Detail "),
+                        Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Navigate "),
+                        Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Quit"),
+                    ]);
+                    frame.render_widget(Paragraph::new(bar), chunks[2]);
                 }
-            } else {
-                context_keybinding_line(selected_task)
-            };
-            frame.render_widget(Paragraph::new(bar_line), chunks[3]);
+                AutorunView::BatchDetail(_) => {
+                    // --- Existing batch detail view ---
+                    let area = frame.area();
+                    let chunks = Layout::vertical([
+                        Constraint::Length(2), // header
+                        Constraint::Min(5),    // table
+                        Constraint::Length(6), // detail
+                        Constraint::Length(1), // keys
+                    ])
+                    .split(area);
+
+                    render_header(frame, chunks[0], last_view.as_ref());
+                    render_table(frame, chunks[1], &mut table_state, last_view.as_ref());
+
+                    let sel_task = last_view
+                        .as_ref()
+                        .and_then(|v| table_state.selected().and_then(|i| v.tasks.get(i)));
+                    let detail = DetailPane::new(sel_task);
+                    frame.render_widget(detail, chunks[2]);
+
+                    let bar_line = if let Some((ref msg, at)) = status_message {
+                        if at.elapsed() < Duration::from_secs(3) {
+                            Line::from(Span::styled(
+                                format!(" {msg}"),
+                                Style::new().fg(theme::YELLOW_RUNNING),
+                            ))
+                        } else {
+                            status_message = None;
+                            context_keybinding_line(sel_task)
+                        }
+                    } else {
+                        let mut line = context_keybinding_line(sel_task);
+                        // Add Esc hint for back-to-list navigation.
+                        if !started_with_batch {
+                            line.spans.insert(0, Span::raw(" "));
+                            line.spans.insert(
+                                0,
+                                Span::styled("[Esc]", Style::new().fg(theme::BLUE_ACCENT)),
+                            );
+                            line.spans.insert(1, Span::raw(" Back "));
+                        }
+                        line
+                    };
+                    frame.render_widget(Paragraph::new(bar_line), chunks[3]);
+                }
+            }
         })?;
 
         // Event handling with user-configurable tick interval.
@@ -1631,7 +1831,7 @@ async fn run_status_watch(
         if event::poll(tick)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // Ctrl+C: in raw mode SIGINT is not delivered; handle explicitly.
+                    // Ctrl+C always quits.
                     if key.code == KeyCode::Char('c')
                         && key
                             .modifiers
@@ -1639,9 +1839,194 @@ async fn run_status_watch(
                     {
                         break;
                     }
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Up => {
+                    match view {
+                        AutorunView::BatchList => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Up => {
+                                let i = batch_table_state.selected().unwrap_or(0);
+                                let prev = if i == 0 {
+                                    batch_list.len().saturating_sub(1)
+                                } else {
+                                    i - 1
+                                };
+                                batch_table_state.select(Some(prev));
+                            }
+                            KeyCode::Down => {
+                                let i = batch_table_state.selected().unwrap_or(0);
+                                let next = if batch_list.is_empty() {
+                                    0
+                                } else {
+                                    (i + 1) % batch_list.len()
+                                };
+                                batch_table_state.select(Some(next));
+                            }
+                            KeyCode::Enter => {
+                                if let Some(sel) = batch_table_state.selected() {
+                                    if let Some(entry) = batch_list.get(sel) {
+                                        let sid = entry.session_id.clone();
+                                        // Fetch detail for this session.
+                                        last_view = fetch_batch_view(
+                                            store.as_ref(),
+                                            project_dir,
+                                            Some(&sid),
+                                        )
+                                        .await
+                                        .unwrap_or(None);
+                                        table_state = TableState::default();
+                                        view = AutorunView::BatchDetail(sid);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        },
+                        AutorunView::BatchDetail(_) => match key.code {
+                            KeyCode::Char('q') => break,
+                            KeyCode::Esc => {
+                                if started_with_batch {
+                                    // Launched with --batch, Esc quits.
+                                    break;
+                                }
+                                // Go back to batch list.
+                                view = AutorunView::BatchList;
+                            }
+                            KeyCode::Up => {
+                                if let Some(ref v) = last_view {
+                                    let i = table_state.selected().unwrap_or(0);
+                                    let prev = if i == 0 {
+                                        v.tasks.len().saturating_sub(1)
+                                    } else {
+                                        i - 1
+                                    };
+                                    table_state.select(Some(prev));
+                                }
+                            }
+                            KeyCode::Down => {
+                                if let Some(ref v) = last_view {
+                                    let i = table_state.selected().unwrap_or(0);
+                                    let next = if v.tasks.is_empty() {
+                                        0
+                                    } else {
+                                        (i + 1) % v.tasks.len()
+                                    };
+                                    table_state.select(Some(next));
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(task) = selected_task(last_view.as_ref(), &table_state)
+                                {
+                                    if let Some(ref tmux_name) = task.tmux_session {
+                                        if !is_safe_tmux_name(tmux_name) {
+                                            status_message = Some((
+                                                "Invalid tmux session name".to_string(),
+                                                std::time::Instant::now(),
+                                            ));
+                                        } else if tmux_has_session(tmux_name) {
+                                            let _ =
+                                                execute!(std::io::stdout(), DisableMouseCapture);
+                                            ratatui::restore();
+                                            match std::process::Command::new("tmux")
+                                                .args(["attach-session", "-t", tmux_name])
+                                                .status()
+                                            {
+                                                Ok(s) if !s.success() => {
+                                                    eprintln!(
+                                                        "tmux attach failed (session may have ended)"
+                                                    );
+                                                }
+                                                Err(e) => eprintln!("tmux attach error: {e}"),
+                                                _ => {}
+                                            }
+                                            terminal = ratatui::init();
+                                            execute!(std::io::stdout(), EnableMouseCapture)?;
+                                        }
+                                    }
+                                }
+                            }
+                            KeyCode::Char('a') => {
+                                if let Some(task) = selected_task(last_view.as_ref(), &table_state)
+                                {
+                                    let is_cancellable = matches!(
+                                        task.status,
+                                        codeflow_core::types::AutorunTaskRunStatus::Running
+                                            | codeflow_core::types::AutorunTaskRunStatus::Pending
+                                    );
+                                    if is_cancellable {
+                                        let tid = task.task_id.clone();
+                                        let batch_ref = match &view {
+                                            AutorunView::BatchDetail(sid) => Some(sid.as_str()),
+                                            AutorunView::BatchList => None,
+                                        };
+                                        match run_cancel(project_dir, &tid, batch_ref).await {
+                                            Ok(()) => {
+                                                status_message = Some((
+                                                    format!("Aborting {tid}..."),
+                                                    std::time::Instant::now(),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                status_message = Some((
+                                                    format!("Abort failed: {e}"),
+                                                    std::time::Instant::now(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                if let Some(task) = selected_task(last_view.as_ref(), &table_state)
+                                {
+                                    let is_retryable = matches!(
+                                        task.status,
+                                        codeflow_core::types::AutorunTaskRunStatus::Failed
+                                            | codeflow_core::types::AutorunTaskRunStatus::Timeout
+                                    );
+                                    if is_retryable {
+                                        if let Some(ref v) = last_view {
+                                            match std::process::Command::new("codeflow")
+                                                .args([
+                                                    "autorun",
+                                                    "resume",
+                                                    "--batch",
+                                                    &v.session_id,
+                                                ])
+                                                .spawn()
+                                            {
+                                                Ok(_) => {
+                                                    status_message = Some((
+                                                        format!("Retrying {}...", task.task_id),
+                                                        std::time::Instant::now(),
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    status_message = Some((
+                                                        format!("Retry failed: {e}"),
+                                                        std::time::Instant::now(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        },
+                    }
+                }
+                Event::Mouse(mouse) if matches!(view, AutorunView::BatchDetail(_)) => {
+                    match mouse.kind {
+                        MouseEventKind::Down(_) => {
+                            if let Some(ref v) = last_view {
+                                let table_top: u16 = 2 + 1 + 1;
+                                if mouse.row >= table_top {
+                                    let idx = (mouse.row - table_top) as usize;
+                                    if idx < v.tasks.len() {
+                                        table_state.select(Some(idx));
+                                    }
+                                }
+                            }
+                        }
+                        MouseEventKind::ScrollUp => {
                             if let Some(ref v) = last_view {
                                 let i = table_state.selected().unwrap_or(0);
                                 let prev = if i == 0 {
@@ -1652,7 +2037,7 @@ async fn run_status_watch(
                                 table_state.select(Some(prev));
                             }
                         }
-                        KeyCode::Down => {
+                        MouseEventKind::ScrollDown => {
                             if let Some(ref v) = last_view {
                                 let i = table_state.selected().unwrap_or(0);
                                 let next = if v.tasks.is_empty() {
@@ -1663,159 +2048,24 @@ async fn run_status_watch(
                                 table_state.select(Some(next));
                             }
                         }
-                        KeyCode::Enter => {
-                            // Attach to tmux session. Exits alternate screen,
-                            // runs tmux attach, then re-enters TUI on detach.
-                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
-                                if let Some(ref tmux_name) = task.tmux_session {
-                                    // Validate DB-sourced tmux session name before
-                                    // passing as a command argument (defense-in-depth).
-                                    if !is_safe_tmux_name(tmux_name) {
-                                        status_message = Some((
-                                            "Invalid tmux session name".to_string(),
-                                            std::time::Instant::now(),
-                                        ));
-                                    } else if tmux_has_session(tmux_name) {
-                                        let _ = execute!(std::io::stdout(), DisableMouseCapture);
-                                        ratatui::restore();
-
-                                        // Check exit code: non-zero means session
-                                        // ended or tmux errored.
-                                        match std::process::Command::new("tmux")
-                                            .args(["attach-session", "-t", tmux_name])
-                                            .status()
-                                        {
-                                            Ok(s) if !s.success() => {
-                                                eprintln!(
-                                                    "tmux attach failed (session may have ended)"
-                                                );
-                                            }
-                                            Err(e) => eprintln!("tmux attach error: {e}"),
-                                            _ => {}
-                                        }
-
-                                        // Re-init terminal after detach. Propagate
-                                        // errors — if terminal can't be restored the
-                                        // TUI is unusable.
-                                        terminal = ratatui::init();
-                                        execute!(std::io::stdout(), EnableMouseCapture)?;
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char('a') => {
-                            // Abort selected task.
-                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
-                                let is_cancellable = matches!(
-                                    task.status,
-                                    codeflow_core::types::AutorunTaskRunStatus::Running
-                                        | codeflow_core::types::AutorunTaskRunStatus::Pending
-                                );
-                                if is_cancellable {
-                                    let tid = task.task_id.clone();
-                                    match run_cancel(project_dir, &tid, batch_owned.as_deref())
-                                        .await
-                                    {
-                                        Ok(()) => {
-                                            status_message = Some((
-                                                format!("Aborting {tid}..."),
-                                                std::time::Instant::now(),
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            status_message = Some((
-                                                format!("Abort failed: {e}"),
-                                                std::time::Instant::now(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char('r') => {
-                            // Retry failed/timed-out task.
-                            if let Some(task) = selected_task(last_view.as_ref(), &table_state) {
-                                let is_retryable = matches!(
-                                    task.status,
-                                    codeflow_core::types::AutorunTaskRunStatus::Failed
-                                        | codeflow_core::types::AutorunTaskRunStatus::Timeout
-                                );
-                                if is_retryable {
-                                    if let Some(ref v) = last_view {
-                                        // Spawn retry as subprocess. On error, show
-                                        // transient status message.
-                                        match std::process::Command::new("codeflow")
-                                            .args(["autorun", "resume", "--batch", &v.session_id])
-                                            .spawn()
-                                        {
-                                            Ok(_) => {
-                                                status_message = Some((
-                                                    format!("Retrying {}...", task.task_id),
-                                                    std::time::Instant::now(),
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                status_message = Some((
-                                                    format!("Retry failed: {e}"),
-                                                    std::time::Instant::now(),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                         _ => {}
                     }
                 }
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::Down(_) => {
-                        // Click to select row. The table header takes 2 rows (header + margin).
-                        // Offset: header chunk is rows 0-1, table starts at row 2.
-                        // Within the table, the header row is row 0 in the block, data starts below.
-                        // This is approximate; precise row mapping is complex. Use offset.
-                        if let Some(ref v) = last_view {
-                            let table_top: u16 = 2 + 1 + 1; // header chunk + block border + table header
-                            if mouse.row >= table_top {
-                                let idx = (mouse.row - table_top) as usize;
-                                if idx < v.tasks.len() {
-                                    table_state.select(Some(idx));
-                                }
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollUp => {
-                        if let Some(ref v) = last_view {
-                            let i = table_state.selected().unwrap_or(0);
-                            let prev = if i == 0 {
-                                v.tasks.len().saturating_sub(1)
-                            } else {
-                                i - 1
-                            };
-                            table_state.select(Some(prev));
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if let Some(ref v) = last_view {
-                            let i = table_state.selected().unwrap_or(0);
-                            let next = if v.tasks.is_empty() {
-                                0
-                            } else {
-                                (i + 1) % v.tasks.len()
-                            };
-                            table_state.select(Some(next));
-                        }
-                    }
-                    _ => {}
-                },
                 _ => {}
             }
         }
 
         // Refresh data every tick. On error, keep stale data and warn.
-        match fetch_batch_view(store.as_ref(), project_dir, batch_owned.as_deref()).await {
-            Ok(v) => last_view = v,
-            Err(e) => eprintln!("warn: fetch failed: {e}"),
+        match view {
+            AutorunView::BatchList => {
+                batch_list = fetch_batch_list(store.as_ref()).await.unwrap_or_default();
+            }
+            AutorunView::BatchDetail(ref sid) => {
+                match fetch_batch_view(store.as_ref(), project_dir, Some(sid.as_str())).await {
+                    Ok(v) => last_view = v,
+                    Err(e) => eprintln!("warn: fetch failed: {e}"),
+                }
+            }
         }
     }
 
@@ -2478,6 +2728,7 @@ async fn run_cleanup(
     batch: Option<&str>,
     all: bool,
     dry_run: bool,
+    no_purge: bool,
 ) -> Result<()> {
     use codeflow_core::store::DataStore;
 
@@ -2607,6 +2858,30 @@ async fn run_cleanup(
     println!("Sweep complete: {cleaned} cleaned, {} errors", errors.len());
     for (sid, err) in &errors {
         eprintln!("  error cleaning '{sid}': {err}");
+    }
+
+    // DB purge: remove old terminal autorun sessions unless --no-purge.
+    if !no_purge {
+        let retention = config.retention.clone();
+        if retention.purge_on_cleanup {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention.days));
+            let cutoff_str = cutoff.to_rfc3339();
+            match store
+                .prune_autorun_sessions(&cutoff_str, retention.keep_last)
+                .await
+            {
+                Ok(result) if result.sessions_deleted > 0 => {
+                    println!(
+                        "Purged {} old autorun session(s) from DB (>{} days, kept last {}).",
+                        result.sessions_deleted, retention.days, retention.keep_last,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("warning: autorun DB purge failed: {e}");
+                }
+                _ => {}
+            }
+        }
     }
 
     Ok(())
@@ -3039,13 +3314,61 @@ async fn run_resume(
 }
 
 fn run_batches_sync(project_dir: &Path) -> Result<()> {
+    let rows = parse_batch_rows(project_dir)?;
+
+    if rows.is_empty() {
+        let batch_dir = project_dir.join(".codeflow/config/autorun");
+        if batch_dir.exists() {
+            println!("No batch files found in {}", batch_dir.display());
+        } else {
+            println!(
+                "No autorun config directory found at {}",
+                batch_dir.display()
+            );
+        }
+        return Ok(());
+    }
+
+    println!(
+        "{:<30} {:>5} {:<12} {:<8}",
+        "FILE", "TASKS", "TARGET", "AUTO_MERGE"
+    );
+
+    for row in &rows {
+        if let Some(ref err) = row.parse_error {
+            println!(
+                "{:<30} {:>5} {:<12} {:<8}",
+                row.file_name,
+                "ERR",
+                "--",
+                format!("({err})"),
+            );
+        } else {
+            println!(
+                "{:<30} {:>5} {:<12} {:<8}",
+                row.file_name, row.task_count, row.target, row.auto_merge,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Parsed batch file row for TUI rendering.
+#[derive(Debug)]
+struct BatchRow {
+    file_name: String,
+    task_count: usize,
+    target: String,
+    auto_merge: bool,
+    parse_error: Option<String>,
+}
+
+/// Parse batch files from the autorun config directory into `BatchRow`s.
+fn parse_batch_rows(project_dir: &Path) -> Result<Vec<BatchRow>> {
     let batch_dir = project_dir.join(".codeflow/config/autorun");
     if !batch_dir.exists() {
-        println!(
-            "No autorun config directory found at {}",
-            batch_dir.display()
-        );
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let mut entries: Vec<_> = std::fs::read_dir(&batch_dir)
@@ -3058,43 +3381,200 @@ fn run_batches_sync(project_dir: &Path) -> Result<()> {
         })
         .collect();
 
-    if entries.is_empty() {
-        println!("No batch files found in {}", batch_dir.display());
-        return Ok(());
-    }
-
     entries.sort_by_key(std::fs::DirEntry::file_name);
 
-    println!(
-        "{:<30} {:>5} {:<12} {:<8}",
-        "FILE", "TASKS", "TARGET", "AUTO_MERGE"
-    );
-
+    let mut rows = Vec::with_capacity(entries.len());
     for entry in &entries {
         let path = entry.path();
         match codeflow_core::autorun::batch::parse_batch_file(&path) {
             Ok(batch) => {
                 let target = if batch.integration_branch.is_empty() {
-                    "main"
+                    "main".to_string()
                 } else {
-                    &batch.integration_branch
+                    batch.integration_branch.clone()
                 };
-                println!(
-                    "{:<30} {:>5} {:<12} {:<8}",
-                    entry.file_name().to_string_lossy(),
-                    batch.tasks.len(),
+                rows.push(BatchRow {
+                    file_name: entry.file_name().to_string_lossy().to_string(),
+                    task_count: batch.tasks.len(),
                     target,
-                    batch.integration_auto_merge,
-                );
+                    auto_merge: batch.integration_auto_merge,
+                    parse_error: None,
+                });
             }
             Err(e) => {
-                println!(
-                    "{:<30} {:>5} {:<12} {:<8}",
-                    entry.file_name().to_string_lossy(),
-                    "ERR",
-                    "--",
-                    format!("({})", e),
-                );
+                rows.push(BatchRow {
+                    file_name: entry.file_name().to_string_lossy().to_string(),
+                    task_count: 0,
+                    target: "--".to_string(),
+                    auto_merge: false,
+                    parse_error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    Ok(rows)
+}
+
+/// Render batch files in an interactive TUI table.
+fn run_batches_tui(project_dir: &Path) -> Result<()> {
+    use codeflow_core::tui::theme;
+    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+
+    let rows_data = parse_batch_rows(project_dir)?;
+    if rows_data.is_empty() {
+        println!(
+            "No batch files found in {}",
+            project_dir.join(".codeflow/config/autorun").display()
+        );
+        return Ok(());
+    }
+
+    let mut terminal = ratatui::init();
+    struct TermGuard;
+    impl Drop for TermGuard {
+        fn drop(&mut self) {
+            ratatui::restore();
+        }
+    }
+    let _guard = TermGuard;
+
+    let mut table_state = TableState::default();
+    if !rows_data.is_empty() {
+        table_state.select(Some(0));
+    }
+
+    loop {
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let chunks = Layout::vertical([
+                Constraint::Length(2), // header
+                Constraint::Min(5),    // table
+                Constraint::Length(1), // keybinding bar
+            ])
+            .split(area);
+
+            // Header.
+            let header_line = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", theme::TRIANGLE),
+                    Style::new().fg(theme::BLUE_ACCENT),
+                ),
+                Span::styled("Autorun Batch Files", theme::header()),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{} batch(es)", rows_data.len()),
+                    Style::new().fg(theme::DIM_PENDING),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(header_line), chunks[0]);
+
+            // Table.
+            let table_header = Row::new(vec!["FILE", "TASKS", "TARGET", "AUTO_MERGE"])
+                .style(theme::header())
+                .bottom_margin(1);
+
+            let table_rows: Vec<Row> = rows_data
+                .iter()
+                .map(|r| {
+                    if let Some(ref err) = r.parse_error {
+                        Row::new(vec![
+                            Cell::from(r.file_name.clone()),
+                            Cell::from(Span::styled("ERR", Style::new().fg(theme::RED_FAILURE))),
+                            Cell::from("--".to_string()),
+                            Cell::from(Span::styled(
+                                format!("({err})"),
+                                Style::new().fg(theme::RED_FAILURE),
+                            )),
+                        ])
+                    } else {
+                        let merge_badge = if r.auto_merge {
+                            Span::styled("yes", Style::new().fg(theme::GREEN_SUCCESS))
+                        } else {
+                            Span::styled("no", Style::new().fg(theme::DIM_PENDING))
+                        };
+                        Row::new(vec![
+                            Cell::from(r.file_name.clone()),
+                            Cell::from(format!("{}", r.task_count)),
+                            Cell::from(r.target.clone()),
+                            Cell::from(merge_badge),
+                        ])
+                    }
+                })
+                .collect();
+
+            let table = Table::new(
+                table_rows,
+                [
+                    Constraint::Min(28),    // FILE
+                    Constraint::Length(8),  // TASKS
+                    Constraint::Min(14),    // TARGET
+                    Constraint::Length(12), // AUTO_MERGE
+                ],
+            )
+            .header(table_header)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(theme::BORDER_TYPE)
+                    .title(" Batches ")
+                    .style(Style::new().fg(theme::WHITE_TEXT)),
+            )
+            .row_highlight_style(theme::selected())
+            .highlight_symbol(format!("{} ", theme::TRIANGLE));
+
+            frame.render_stateful_widget(table, chunks[1], &mut table_state);
+
+            // Keybinding bar.
+            let bar = Line::from(vec![
+                Span::styled(" [Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Navigate "),
+                Span::styled("[q/Esc]", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(" Quit"),
+            ]);
+            frame.render_widget(Paragraph::new(bar), chunks[2]);
+        })?;
+
+        // Event handling.
+        if event::poll(Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // Ctrl+C
+                if key.code == KeyCode::Char('c')
+                    && key
+                        .modifiers
+                        .contains(ratatui::crossterm::event::KeyModifiers::CONTROL)
+                {
+                    break;
+                }
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Up => {
+                        let i = table_state.selected().unwrap_or(0);
+                        let prev = if i == 0 {
+                            rows_data.len().saturating_sub(1)
+                        } else {
+                            i - 1
+                        };
+                        table_state.select(Some(prev));
+                    }
+                    KeyCode::Down => {
+                        let i = table_state.selected().unwrap_or(0);
+                        let next = if rows_data.is_empty() {
+                            0
+                        } else {
+                            (i + 1) % rows_data.len()
+                        };
+                        table_state.select(Some(next));
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -3105,6 +3585,38 @@ fn run_batches_sync(project_dir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Text representation of an autorun session status for display.
+pub(crate) fn status_badge_text(
+    status: codeflow_core::types::AutorunSessionStatus,
+) -> ratatui::text::Span<'static> {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    let (label, style) = match status {
+        codeflow_core::types::AutorunSessionStatus::Running => {
+            ("Running", Style::new().fg(theme::GREEN_SUCCESS))
+        }
+        codeflow_core::types::AutorunSessionStatus::Aborting => {
+            ("Aborting", Style::new().fg(theme::YELLOW_RUNNING))
+        }
+        codeflow_core::types::AutorunSessionStatus::Completed => {
+            ("Done", Style::new().fg(theme::DIM_PENDING))
+        }
+        codeflow_core::types::AutorunSessionStatus::Failed => {
+            ("Failed", Style::new().fg(theme::RED_FAILURE))
+        }
+        codeflow_core::types::AutorunSessionStatus::Cancelled => {
+            ("Cancel", Style::new().fg(theme::DIM_PENDING))
+        }
+        codeflow_core::types::AutorunSessionStatus::Timeout => {
+            ("Timeout", Style::new().fg(theme::RED_FAILURE))
+        }
+        _ => ("Unknown", Style::new().fg(theme::DIM_PENDING)),
+    };
+    Span::styled(label, style)
+}
 
 /// Compute a simple ETA string from elapsed time and task progress.
 ///
@@ -5681,7 +6193,7 @@ tasks:
             .await;
 
             // No running sessions -- should print "No active autorun batches." and succeed.
-            let result = run_status(dir.path(), None).await;
+            let result = run_status(dir.path(), None, false).await;
             assert!(result.is_ok());
         });
     }
@@ -5716,7 +6228,7 @@ tasks:
             )
             .await;
 
-            let result = run_status(dir.path(), None).await;
+            let result = run_status(dir.path(), None, false).await;
             assert!(result.is_ok());
         });
     }
@@ -5737,7 +6249,7 @@ tasks:
             )
             .await;
 
-            let result = run_status(dir.path(), Some("ses-specific")).await;
+            let result = run_status(dir.path(), Some("ses-specific"), false).await;
             assert!(result.is_ok());
         });
     }
@@ -5749,7 +6261,7 @@ tasks:
             let dir = tempfile::tempdir().unwrap();
             seed_store(dir.path(), vec![], vec![], vec![]).await;
 
-            let result = run_status(dir.path(), Some("ses-nope")).await;
+            let result = run_status(dir.path(), Some("ses-nope"), false).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -6796,6 +7308,230 @@ tasks:
         assert!(result.is_ok());
     }
 
+    // -- parse_batch_rows tests --
+
+    #[test]
+    fn test_parse_batch_rows_no_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // No .codeflow/config/autorun/ directory → empty vec.
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_valid_yaml_default_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        // Empty integration_branch → target defaults to "main".
+        // The parser infers auto_merge=true for empty (auto-generated) branches.
+        std::fs::write(
+            batch_dir.join("deploy.yaml"),
+            "name: deploy\ntasks:\n  - id: task-a\n  - id: task-b\n",
+        )
+        .unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_name, "deploy.yaml");
+        assert_eq!(rows[0].task_count, 2);
+        assert_eq!(rows[0].target, "main");
+        // auto_merge is inferred true when integration_branch is empty (auto-generated).
+        assert!(rows[0].auto_merge);
+        assert!(rows[0].parse_error.is_none());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_valid_yaml_custom_branch_and_auto_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("feature.yaml"),
+            "name: feature\nintegration_branch: integration/v2\nintegration_auto_merge: true\ntasks:\n  - id: task-x\n",
+        )
+        .unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_name, "feature.yaml");
+        assert_eq!(rows[0].task_count, 1);
+        assert_eq!(rows[0].target, "integration/v2");
+        assert!(rows[0].auto_merge);
+        assert!(rows[0].parse_error.is_none());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_invalid_yaml_has_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(batch_dir.join("broken.yaml"), "{{invalid yaml").unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_name, "broken.yaml");
+        assert_eq!(rows[0].task_count, 0);
+        assert_eq!(rows[0].target, "--");
+        assert!(!rows[0].auto_merge);
+        assert!(rows[0].parse_error.is_some());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_mixed_valid_and_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("alpha.yaml"),
+            "name: alpha\ntasks:\n  - id: t-1\n",
+        )
+        .unwrap();
+        std::fs::write(batch_dir.join("beta.yml"), "not: [valid: batch").unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert_eq!(rows.len(), 2);
+        // Sorted by file name: alpha.yaml < beta.yml.
+        assert_eq!(rows[0].file_name, "alpha.yaml");
+        assert!(rows[0].parse_error.is_none());
+        assert_eq!(rows[1].file_name, "beta.yml");
+        assert!(rows[1].parse_error.is_some());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_ignores_non_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(batch_dir.join("readme.md"), "# Not a batch").unwrap();
+        std::fs::write(batch_dir.join("config.json"), "{}").unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_read_dir_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let autorun_path = dir.path().join(".codeflow/config/autorun");
+        // Create a FILE where a directory is expected → read_dir() fails.
+        std::fs::create_dir_all(dir.path().join(".codeflow/config")).unwrap();
+        std::fs::write(&autorun_path, "not a directory").unwrap();
+        let result = parse_batch_rows(dir.path());
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("reading autorun config directory"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_batches_tui_empty_dir_returns_ok() {
+        // run_batches_tui with no batch files exits before entering the event loop.
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        let result = run_batches_tui(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batches_tui_no_dir_returns_ok() {
+        // No autorun dir at all → empty rows → early return.
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_batches_tui(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_batch_rows_yml_extension() {
+        // Verify .yml extension (not just .yaml) is recognized.
+        let dir = tempfile::tempdir().unwrap();
+        let batch_dir = dir.path().join(".codeflow/config/autorun");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("deploy.yml"),
+            "name: deploy\ntasks:\n  - id: task-z\n",
+        )
+        .unwrap();
+        let rows = parse_batch_rows(dir.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_name, "deploy.yml");
+        assert_eq!(rows[0].task_count, 1);
+        assert!(rows[0].parse_error.is_none());
+    }
+
+    // -- status_badge_text tests --
+
+    #[test]
+    fn test_status_badge_text_running() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Running);
+        assert_eq!(span.content.as_ref(), "Running");
+        assert_eq!(span.style.fg, Some(theme::GREEN_SUCCESS));
+    }
+
+    #[test]
+    fn test_status_badge_text_aborting() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Aborting);
+        assert_eq!(span.content.as_ref(), "Aborting");
+        assert_eq!(span.style.fg, Some(theme::YELLOW_RUNNING));
+    }
+
+    #[test]
+    fn test_status_badge_text_completed() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Completed);
+        assert_eq!(span.content.as_ref(), "Done");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_status_badge_text_failed() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Failed);
+        assert_eq!(span.content.as_ref(), "Failed");
+        assert_eq!(span.style.fg, Some(theme::RED_FAILURE));
+    }
+
+    #[test]
+    fn test_status_badge_text_cancelled() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Cancelled);
+        assert_eq!(span.content.as_ref(), "Cancel");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_status_badge_text_timeout() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Timeout);
+        assert_eq!(span.content.as_ref(), "Timeout");
+        assert_eq!(span.style.fg, Some(theme::RED_FAILURE));
+    }
+
+    #[test]
+    fn test_status_badge_text_pending() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Pending);
+        assert_eq!(span.content.as_ref(), "Unknown");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_status_badge_text_paused() {
+        use codeflow_core::tui::theme;
+        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Paused);
+        assert_eq!(span.content.as_ref(), "Unknown");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
     // -- Clap parsing: Resume and Batches variants --
 
     #[test]
@@ -6833,7 +7569,7 @@ tasks:
         }
 
         let cli = TestCli::try_parse_from(["test", "batches"]).unwrap();
-        assert!(matches!(cli.cmd, AutorunCommand::Batches));
+        assert!(matches!(cli.cmd, AutorunCommand::Batches { .. }));
     }
 
     // -- Clap parsing: Status --watch and --interval --

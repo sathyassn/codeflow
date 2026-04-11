@@ -1351,6 +1351,89 @@ fn is_emoji(c: char) -> bool {
     )
 }
 
+/// Content requirements for specific PR sections.
+///
+/// After verifying that section headers exist, this validates that the content
+/// between headers is substantive (not just a header with nothing after it).
+fn validate_section_content(body: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    // Helper: extract content between a section header and the next header of
+    // same or higher level, or end of string.
+    let extract_section_content = |header: &str| -> String {
+        let header_level = header.chars().take_while(|&c| c == '#').count();
+        if let Some(start) = body.find(header) {
+            let after_header = &body[start + header.len()..];
+            let end = after_header.lines().skip(1).position(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') {
+                    let level = trimmed.chars().take_while(|&c| c == '#').count();
+                    level <= header_level
+                } else {
+                    false
+                }
+            });
+            match end {
+                Some(line_idx) => after_header
+                    .lines()
+                    .skip(1)
+                    .take(line_idx)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string(),
+                None => after_header
+                    .lines()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string(),
+            }
+        } else {
+            String::new()
+        }
+    };
+
+    // 1. "### 1. Overall Test Pass Status" must have a "Result:" line.
+    if body.contains("### 1. Overall Test Pass Status") {
+        let content = extract_section_content("### 1. Overall Test Pass Status");
+        if !content.contains("Result:") {
+            errors.push(
+                "Section '### 1. Overall Test Pass Status' missing 'Result:' content".to_string(),
+            );
+        }
+    }
+
+    // 2. "### 2. Overall Coverage" must have at least one "%" value.
+    if body.contains("### 2. Overall Coverage") {
+        let content = extract_section_content("### 2. Overall Coverage");
+        if !content.contains('%') {
+            errors
+                .push("Section '### 2. Overall Coverage' missing coverage percentage".to_string());
+        }
+    }
+
+    // 3. "#### Exempted Files" must have a markdown table ("|" characters).
+    if body.contains("#### Exempted Files") {
+        let content = extract_section_content("#### Exempted Files");
+        if !content.contains('|') {
+            errors.push("Section '#### Exempted Files' missing markdown table".to_string());
+        }
+    }
+
+    // 4. "### 3. Modified File Coverage" must have a markdown table.
+    if body.contains("### 3. Modified File Coverage") {
+        let content = extract_section_content("### 3. Modified File Coverage");
+        if !content.contains('|') {
+            errors
+                .push("Section '### 3. Modified File Coverage' missing markdown table".to_string());
+        }
+    }
+
+    errors
+}
+
 /// GitHub PR guard: blocks `gh pr merge` on protected branches
 /// and validates `gh pr create` body content.
 pub struct GhPrGuard<R: PRResolver = OsPRResolver> {
@@ -1471,6 +1554,18 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
                         break;
                     }
                 }
+            }
+
+            // Check section content completeness (not just header presence).
+            // Only run when required_sections includes test stats headers,
+            // indicating this project enforces test results in PRs.
+            if self
+                .pr_config
+                .required_sections
+                .iter()
+                .any(|s| s.contains("Test"))
+            {
+                errors.extend(validate_section_content(command));
             }
 
             if !errors.is_empty() {
@@ -3921,6 +4016,161 @@ mod tests {
             result.exit_code(),
             2,
             "zero-width bypass must still be caught"
+        );
+    }
+
+    // -- GhPrGuard: section content validation tests --
+
+    /// Config that triggers content validation (has a section containing "Test").
+    fn test_stats_config() -> PrBodyConfig {
+        PrBodyConfig {
+            required_sections: vec![
+                "## Summary".into(),
+                "## Test Stats".into(),
+                "### 1. Overall Test Pass Status".into(),
+                "### 2. Overall Coverage".into(),
+                "#### Exempted Files".into(),
+                "### 3. Modified File Coverage".into(),
+            ],
+            require_body_flag: false,
+            forbid_emoji: false,
+        }
+    }
+
+    #[test]
+    fn test_validate_section_content_complete_body_passes() {
+        let body = "\
+## Summary\nSome summary\n\
+## Test Stats\n\
+### 1. Overall Test Pass Status\n- Result: 100 passed, 0 failed\n\
+### 2. Overall Coverage\n- Workspace: 85%\n- CLI: 80%\n\
+#### Exempted Files\n| File | Coverage | Threshold | Reason |\n|---|---|---|---|\n| foo.rs | 50% | 50 | TUI |\n\
+### 3. Modified File Coverage\n| File | Coverage | Threshold | Status |\n|---|---|---|---|\n| bar.rs | 90% | 85 | PASS |\n\
+## Test plan\n- [x] All tests pass\n";
+        let errors = validate_section_content(body);
+        assert!(errors.is_empty(), "expected no errors but got: {errors:?}");
+    }
+
+    #[test]
+    fn test_validate_section_content_truncated_body_fails() {
+        // Has headers but no content -- simulates truncation.
+        let body = "\
+## Summary\nSome summary\n\
+## Test Stats\n\
+### 1. Overall Test Pass Status\n\
+### 2. Overall Coverage\n\
+#### Exempted Files\n\
+### 3. Modified File Coverage\n";
+        let errors = validate_section_content(body);
+        assert!(
+            errors.iter().any(|e| e.contains("Result:")),
+            "should flag missing Result: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("coverage percentage")),
+            "should flag missing %: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Exempted Files") && e.contains("table")),
+            "should flag missing exempted table: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Modified File Coverage") && e.contains("table")),
+            "should flag missing modified table: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_section_content_missing_tables_only() {
+        // Has headers with some content but missing tables.
+        let body = "\
+## Summary\nSome summary\n\
+## Test Stats\n\
+### 1. Overall Test Pass Status\n- Result: 50 passed\n\
+### 2. Overall Coverage\n- Workspace: 85%\n\
+#### Exempted Files\nNo exemptions.\n\
+### 3. Modified File Coverage\nAll files passing.\n\
+## Test plan\n- Done\n";
+        let errors = validate_section_content(body);
+        // Result: and % are present, but tables are missing.
+        assert!(
+            !errors.iter().any(|e| e.contains("Result:")),
+            "Result: should pass: {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.contains("coverage percentage")),
+            "% should pass: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("Exempted Files")),
+            "should flag missing exempted table: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("Modified File Coverage")),
+            "should flag missing modified table: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_gh_pr_create_content_validation_blocks_truncated() {
+        let config = test_stats_config();
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        // Body has all headers but zero content -- truncated.
+        // Use real newlines (via HEREDOC-style command) so .lines() works.
+        let body = "## Summary\ntext\n\
+                     ## Test Stats\n\
+                     ### 1. Overall Test Pass Status\n\
+                     ### 2. Overall Coverage\n\
+                     #### Exempted Files\n\
+                     ### 3. Modified File Coverage\n";
+        let cmd = format!("gh pr create --title \"test\" --body \"$(cat <<'EOF'\n{body}\nEOF\n)\"");
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": cmd})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 2, "truncated body should be blocked");
+    }
+
+    #[test]
+    fn test_gh_pr_create_content_validation_passes_complete() {
+        let config = test_stats_config();
+        let handler = make_pr_guard_with_config(config, Vec::new());
+        // Build a complete body with all required content and real newlines.
+        let body = "## Summary\nSome summary\n\
+             ## Test Stats\n\
+             ### 1. Overall Test Pass Status\n- Result: 100 passed\n\
+             ### 2. Overall Coverage\n- Workspace: 85%\n\
+             #### Exempted Files\n| File | Cov | Threshold | Reason |\n|---|---|---|---|\n\
+             ### 3. Modified File Coverage\n| File | Cov | Threshold | Status |\n|---|---|---|---|\n\
+             ## Test plan\n- Done\n";
+        let cmd = format!("gh pr create --title \"test\" --body \"$(cat <<'EOF'\n{body}\nEOF\n)\"");
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": cmd})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(result.exit_code(), 0, "complete body should pass");
+    }
+
+    #[test]
+    fn test_validate_section_content_no_test_sections_returns_empty() {
+        // Body without any test stats sections -- no errors.
+        let body = "## Summary\nJust a normal PR\n## Testing\nManual testing done.\n";
+        let errors = validate_section_content(body);
+        assert!(
+            errors.is_empty(),
+            "no test sections should produce no errors: {errors:?}"
         );
     }
 

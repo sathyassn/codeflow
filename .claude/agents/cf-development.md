@@ -315,6 +315,18 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 1. **Update `### Criteria Status` table** — in the DEV column, mark each criterion as `DONE` (fully implemented), `PARTIAL` (partially addressed — add a note), or `N/A` (not applicable to this stage). Do not leave `--` in the DEV column.
 
+⛔ **CRITERIA IMMUTABILITY CONSTRAINT:** The acceptance criteria text in the task markdown is IMMUTABLE. You MUST NOT modify:
+- The `acceptance:` array in the YAML frontmatter
+- The criterion description text in the `### Criteria Status` table rows
+- The criterion numbering or ordering
+
+You may ONLY update the STATUS COLUMNS (DEV, SEC, REV, QA) with DONE/PARTIAL/N/A. If you cannot implement a criterion as written, you MUST:
+1. Escalate to the team lead: "Cannot implement criterion N as written because: {reason}"
+2. Wait for the team lead to approve a criterion change or provide guidance
+3. Do NOT silently simplify, rephrase, or remove criteria to match your implementation
+
+Rewriting criteria to match implementation instead of fixing implementation to match criteria is a PROTOCOL VIOLATION equivalent to skipping WS-REV.
+
 2. **Fill in `### DEV Report` section** — replace all placeholder text with actual data:
 
 ```markdown
@@ -526,7 +538,8 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 **Before claiming done:**
 
 1. Re-read the original task assignment. Compare each acceptance criterion against the actual file/output on disk — not my memory of what I did.
-2. Run the test suite. Confirm zero regressions with actual output, not assumed pass.
+2. Verify criteria integrity: Read the `acceptance:` frontmatter field in the task markdown. Confirm EVERY criterion is UNCHANGED from the original task assignment. If any criterion text was modified during implementation, revert it immediately before signaling STAGE-COMPLETE.
+3. Run the test suite. Confirm zero regressions with actual output, not assumed pass.
 3. Verify every new file I created is in the correct directory by checking sibling files with `Glob`.
 4. Verify every new test file is registered in `.codeflow/testing/test-config.json`.
 

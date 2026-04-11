@@ -22,7 +22,7 @@ const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.j
 /// Relative path to the local config override file (gitignored).
 const LOCAL_CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.local.json";
 
-/// Top-level parallel work configuration with 5 sections.
+/// Top-level parallel work configuration with 6 sections.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ParallelWorkConfig {
@@ -36,6 +36,32 @@ pub struct ParallelWorkConfig {
     pub claims: ClaimsConfig,
     /// Autorun worker settings.
     pub autorun: AutorunConfig,
+    /// Session retention and cleanup settings.
+    pub retention: RetentionConfig,
+}
+
+/// Session retention and cleanup settings.
+///
+/// Controls how old sessions are displayed and purged during cleanup.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RetentionConfig {
+    /// Number of days before terminal sessions are eligible for purge (default: 30).
+    pub days: u32,
+    /// Number of most-recent terminal sessions to keep regardless of age (default: 10).
+    pub keep_last: usize,
+    /// Whether `cleanup` commands should purge old sessions from the DB (default: true).
+    pub purge_on_cleanup: bool,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            days: 30,
+            keep_last: 10,
+            purge_on_cleanup: true,
+        }
+    }
 }
 
 /// Autorun worker execution settings.
@@ -404,6 +430,29 @@ mod tests {
         assert_eq!(cfg.autorun.worker_timeout_secs, 7200);
         assert_eq!(cfg.autorun.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.autorun.report_dir, ".state/autorun/reports");
+        // Retention defaults.
+        assert_eq!(cfg.retention.days, 30);
+        assert_eq!(cfg.retention.keep_last, 10);
+        assert!(cfg.retention.purge_on_cleanup);
+    }
+
+    #[test]
+    fn retention_config_defaults_when_section_missing() {
+        // Parsing a config without "retention" should use defaults via #[serde(default)].
+        let json = r#"{"worktree": {"mode": "autorun"}}"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.retention.days, 30);
+        assert_eq!(cfg.retention.keep_last, 10);
+        assert!(cfg.retention.purge_on_cleanup);
+    }
+
+    #[test]
+    fn retention_config_values_from_json() {
+        let json = r#"{"retention": {"days": 14, "keep_last": 5, "purge_on_cleanup": false}}"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.retention.days, 14);
+        assert_eq!(cfg.retention.keep_last, 5);
+        assert!(!cfg.retention.purge_on_cleanup);
     }
 
     // -- M5: Sync interval alignment test --

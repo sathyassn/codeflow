@@ -23,11 +23,20 @@ impl DurationCell {
     }
 
     /// Convert to a styled `Span`.
+    ///
+    /// - `None` renders as `"--:--"` (unknown/loading).
+    /// - `-1` renders as `"--"` (stale session with no completed_at).
+    /// - Positive values render as `MM:SS` or `HH:MM:SS`.
     #[must_use]
     pub fn to_span(&self) -> Span<'static> {
         let Some(secs) = self.secs else {
             return Span::styled("--:--", theme::dim());
         };
+
+        // Sentinel: -1 means "unknown duration" (stale session, no end timestamp).
+        if secs < 0 {
+            return Span::styled("--", theme::dim());
+        }
 
         let formatted = format_duration(secs);
         let style = duration_style(secs);
@@ -129,5 +138,19 @@ mod tests {
         let cell = DurationCell::new(Some(WARN_THRESHOLD_SECS - 1));
         let span = cell.to_span();
         assert_eq!(span.style.fg, Some(theme::WHITE_TEXT));
+    }
+
+    #[test]
+    fn test_negative_sentinel_shows_dashes() {
+        let cell = DurationCell::new(Some(-1));
+        let span = cell.to_span();
+        assert_eq!(span.content.as_ref(), "--");
+    }
+
+    #[test]
+    fn test_negative_other_shows_dashes() {
+        let cell = DurationCell::new(Some(-42));
+        let span = cell.to_span();
+        assert_eq!(span.content.as_ref(), "--");
     }
 }

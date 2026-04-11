@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-04-08T02:00:00Z"
-updated_at: "2026-04-11T13:16:21Z"
+updated_at: "2026-04-11T17:41:38Z"
 ---
 
 # INF-EPC-044: Autorun Reliability Fixes and TUI Terminal Experience
@@ -63,6 +63,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 - [x] INF-TSK-044-004: ratatui dependency added, shared tui/ module (data, theme, widgets) created, `codeflow autorun status --watch` renders interactive TUI dashboard with keyboard navigation
 - [x] INF-TSK-044-005: `codeflow interactive status --watch` TUI dashboard, `codeflow init` 7-step wizard, `codeflow welcome` formatted display -- all functional
 - [x] INF-TSK-044-006: TUI status accuracy (stale detection, duration freeze, phase label), tmux session launch, autorun reliability fixes (timeout salvage, last_phase, interval unification, repo root resolution) -- all functional with tests
+- [x] INF-TSK-044-007: Interactive TUI count-based filtering with toggle, text mode active-only default, DB session purge on cleanup, autorun batch list TUI, retention config, stale duration display fix -- all functional with tests
 - [x] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
 - [x] All modified Rust files pass `cargo fmt --check`
 - [x] Code coverage >= 85% per-file for all new and modified Rust files
@@ -82,6 +83,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 | INF-TSK-044-004 | TUI Foundation and Autorun Status Dashboard | complete | high | L | 003 |
 | INF-TSK-044-005 | Interactive Session TUI and Onboarding Wizard | complete | normal | L | 004 |
 | INF-TSK-044-006 | TUI Status Accuracy, tmux Interactive Sessions, and Autorun Improvements | complete | high | L | 005 |
+| INF-TSK-044-007 | Session Retention, Display Filtering, and Autorun Batch List TUI | complete | high | L | 006 |
 
 ## Dependencies
 

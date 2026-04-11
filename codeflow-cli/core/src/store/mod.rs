@@ -173,6 +173,17 @@ pub trait DataStore: Send + Sync {
         task_id: &str,
     ) -> impl std::future::Future<Output = Result<Option<AutorunWorker>, DbError>> + Send;
 
+    /// Prune old interactive sessions (stale/complete) from the database.
+    ///
+    /// Deletes records whose `completed_at` is before `before`. If `keep_last > 0`,
+    /// retains the N most recent terminal sessions regardless of age. Simpler than
+    /// autorun prune (no FK cascade -- interactive sessions have no child tables).
+    fn prune_interactive_sessions(
+        &self,
+        before: &str,
+        keep_last: usize,
+    ) -> impl std::future::Future<Output = Result<PruneResult, DbError>> + Send;
+
     /// Prune old autorun sessions, workers, and task runs in FK-safe cascade order.
     ///
     /// Deletes records for terminal-status sessions (Completed, Failed, Cancelled, Timeout)
@@ -326,6 +337,9 @@ impl DataStore for NoopStore {
         _: &str,
     ) -> Result<Option<AutorunWorker>, DbError> {
         Ok(None)
+    }
+    async fn prune_interactive_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> {
+        Ok(PruneResult::default())
     }
     async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> {
         Ok(PruneResult::default())
@@ -754,6 +768,15 @@ pub mod mock {
                 .cloned())
         }
 
+        async fn prune_interactive_sessions(
+            &self,
+            _before: &str,
+            _keep_last: usize,
+        ) -> Result<PruneResult, DbError> {
+            // MockStore does not track interactive sessions; return zero counts.
+            Ok(PruneResult::default())
+        }
+
         async fn prune_autorun_sessions(
             &self,
             before: &str,
@@ -872,6 +895,7 @@ pub mod mock {
         async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> { Ok(vec![]) }
         async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> { Ok(vec![]) }
         async fn get_autorun_worker_by_task_id(&self, _: &str, _: &str) -> Result<Option<AutorunWorker>, DbError> { Ok(None) }
+        async fn prune_interactive_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Ok(PruneResult::default()) }
         async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Err(DbError::Query("test: forced failure".into())) }
         async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
         async fn sync_from_events(&self, e: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> { Ok(SyncResult { events_processed: e.count() as u64, ..Default::default() }) }
