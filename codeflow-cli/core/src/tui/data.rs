@@ -87,6 +87,9 @@ pub struct SessionSummary {
 
 /// Fetch a `BatchView` for the given session, or the most recent active session.
 ///
+/// When no running/aborting session exists, falls back to the most recent
+/// completed/failed batch so the TUI always has something to display.
+///
 /// # Errors
 ///
 /// Returns an error if the store cannot be queried or no matching session is found.
@@ -101,12 +104,17 @@ pub async fn fetch_batch_view<S: DataStore>(
             let sessions = store
                 .list_autorun_sessions(crate::models::AutorunSessionFilter::default())
                 .await?;
-            sessions.into_iter().find(|s| {
+            // Prefer running/aborting; fall back to most recent by created_at.
+            let active = sessions.iter().find(|s| {
                 matches!(
                     s.status,
                     AutorunSessionStatus::Running | AutorunSessionStatus::Aborting
                 )
-            })
+            });
+            match active {
+                Some(s) => Some(s.clone()),
+                None => sessions.into_iter().next(), // most recent (already sorted DESC)
+            }
         }
     };
 
@@ -145,7 +153,8 @@ async fn build_batch_view<S: DataStore>(
 
         let display_status = compute_display_status(run.status, session.status);
 
-        let phase = read_latest_phase(project_dir, run.worktree_path.as_deref(), None);
+        let phase = read_latest_phase(project_dir, run.worktree_path.as_deref(), None)
+            .or_else(|| run.last_phase.clone());
 
         let stages = read_stage_pipeline(project_dir, run.worktree_path.as_deref(), None);
 
@@ -213,7 +222,29 @@ pub async fn fetch_session_views(
     let mut summary = SessionSummary::default();
 
     for s in &sessions {
-        match s.status.to_string().as_str() {
+        // PID liveness override: detect dead sessions still marked "active".
+        let effective_status = if s.status.to_string() == "active" {
+            let pid_u32 = u32::try_from(s.pid).unwrap_or(0);
+            if pid_u32 > 0 && !crate::session::process::is_process_alive(pid_u32) {
+                // Transition to stale in DB (best-effort, don't block TUI on failure).
+                let _ = store
+                    .db()
+                    .query(
+                        "UPDATE interactive_session SET status = 'stale', \
+                         completed_at = time::now(), updated_at = time::now() \
+                         WHERE session_id = $sid AND status = 'active'",
+                    )
+                    .bind(("sid", s.session_id.clone()))
+                    .await;
+                "stale".to_string()
+            } else {
+                s.status.to_string()
+            }
+        } else {
+            s.status.to_string()
+        };
+
+        match effective_status.as_str() {
             "active" => summary.active += 1,
             "stale" => summary.stale += 1,
             "complete" => summary.complete += 1,
@@ -223,9 +254,13 @@ pub async fn fetch_session_views(
         let raw_phase = derive_phase_from_session(project_dir, s);
         // Provide contextual fallback when phase is unknown.
         let phase = raw_phase.or_else(|| {
-            let is_active = s.status.to_string() == "active";
+            let is_active = effective_status == "active";
+            let is_stale = effective_status == "stale";
             let has_worktree = s.worktree_path.as_ref().is_some_and(|p| !p.is_empty());
-            if is_active && has_worktree {
+            if is_stale {
+                // Dead sessions without filesystem data show "Unknown".
+                None
+            } else if is_active && has_worktree {
                 Some("Starting...".to_string())
             } else if is_active {
                 Some("N/A".to_string())
@@ -233,11 +268,21 @@ pub async fn fetch_session_views(
                 None
             }
         });
-        let elapsed = compute_elapsed_secs(&s.created_at);
+
+        // Duration freeze: use completed_at or updated_at for non-active sessions.
+        let elapsed = if effective_status == "active" {
+            compute_elapsed_secs(&s.created_at)
+        } else if let Some(ref completed) = s.completed_at {
+            compute_elapsed_between(&s.created_at, completed)
+        } else if let Some(ref updated) = s.updated_at {
+            compute_elapsed_between(&s.created_at, updated)
+        } else {
+            compute_elapsed_secs(&s.created_at)
+        };
 
         views.push(SessionView {
             session_id: s.session_id.clone(),
-            status: s.status.to_string(),
+            status: effective_status,
             branch: s.branch.clone(),
             phase,
             work_type: s.work_type.clone(),
@@ -305,6 +350,18 @@ fn compute_elapsed_secs(started_at: &str) -> i64 {
                 .max(0)
         })
         .unwrap_or(0)
+}
+
+/// Compute duration between two RFC 3339 timestamps.
+///
+/// Returns 0 if either timestamp fails to parse.
+fn compute_elapsed_between(start: &str, end: &str) -> i64 {
+    let start_dt = chrono::DateTime::parse_from_rfc3339(start);
+    let end_dt = chrono::DateTime::parse_from_rfc3339(end);
+    match (start_dt, end_dt) {
+        (Ok(s), Ok(e)) => e.signed_duration_since(s).num_seconds().max(0),
+        _ => 0,
+    }
 }
 
 fn compute_display_status(
@@ -656,14 +713,15 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_session_views_with_sessions() {
         let store = crate::store::SurrealStore::in_memory().await.unwrap();
-        // Insert an interactive session via raw query.
+        // Use current process PID so PID liveness check considers it alive.
+        let current_pid = i64::from(std::process::id());
         let now = chrono::Utc::now().to_rfc3339();
         let _ = store
             .db()
             .query(
                 "CREATE interactive_session SET \
                  session_id = 'ses-test-tui', \
-                 pid = 999, \
+                 pid = $pid, \
                  status = 'active', \
                  worktree_path = NONE, \
                  branch = 'feat/tui', \
@@ -675,6 +733,7 @@ mod tests {
                  updated_at = NONE, \
                  completed_at = NONE;",
             )
+            .bind(("pid", current_pid))
             .bind(("now", now.clone()))
             .await;
 
@@ -690,7 +749,7 @@ mod tests {
         assert_eq!(v.branch.as_deref(), Some("feat/tui"));
         assert_eq!(v.work_type.as_deref(), Some("FEAT"));
         assert_eq!(v.team_name.as_deref(), Some("test-team"));
-        assert_eq!(v.pid, 999);
+        assert_eq!(v.pid, current_pid);
         assert!(v.managed);
     }
 
@@ -715,6 +774,7 @@ mod tests {
             worktree_path: Some(wt.to_string_lossy().to_string()),
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
@@ -744,6 +804,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
@@ -767,6 +828,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
@@ -885,6 +947,7 @@ mod tests {
             duration_seconds: Some(120),
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -968,7 +1031,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_batch_view_skips_completed_sessions() {
+    async fn test_fetch_batch_view_falls_back_to_completed_sessions() {
         let store = crate::store::mock::MockStore::new();
         let session = make_mock_session("ar-done", AutorunSessionStatus::Completed);
         store
@@ -979,7 +1042,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let result = fetch_batch_view(&store, tmp.path(), None).await.unwrap();
-        assert!(result.is_none());
+        // When no running sessions exist, fall back to most recent completed.
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id, "ar-done");
     }
 
     #[tokio::test]

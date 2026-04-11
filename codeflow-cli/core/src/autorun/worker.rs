@@ -886,6 +886,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             exit_code: None,
             error_message: None,
             verification_result: None,
+            last_phase: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         if let Err(e) = self.store.create_autorun_task_run(&task_run_record).await {
@@ -1128,7 +1129,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
 
         let _ = self.tmux.kill_session(&tmux_name).await;
 
-        // Branch safety check before cleanup — warn on unpushed work.
+        // Branch safety check before cleanup — salvage unpushed work.
         let wt_dir = self
             .project_dir
             .join(crate::worktree::DEFAULT_BASE_DIR)
@@ -1137,7 +1138,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             let safety = crate::worktree::check_branch_safety(&wt_dir);
             if safety.risk >= crate::worktree::BranchRisk::High {
                 eprintln!(
-                    "warning: branch safety issue for {wt_name}: {} (proceeding with force cleanup)",
+                    "warning: branch safety issue for {wt_name}: {} (attempting salvage push)",
                     safety.message
                 );
                 worker_log(
@@ -1147,6 +1148,48 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         safety.risk, safety.branch
                     ),
                 );
+
+                // Best-effort: push the branch before destroying the worktree.
+                if !safety.branch.is_empty() && safety.branch != "HEAD" {
+                    match std::process::Command::new("git")
+                        .args(["push", "origin", &safety.branch])
+                        .current_dir(&wt_dir)
+                        .output()
+                    {
+                        Ok(output) if output.status.success() => {
+                            eprintln!(
+                                "BRANCH_SALVAGE: pushed branch {} before cleanup",
+                                safety.branch
+                            );
+                            worker_log(
+                                &log_path,
+                                &format!("BRANCH_SALVAGE pushed={}", safety.branch),
+                            );
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            eprintln!(
+                                "BRANCH_SALVAGE: push failed for {}: {stderr}",
+                                safety.branch
+                            );
+                            worker_log(
+                                &log_path,
+                                &format!(
+                                    "BRANCH_SALVAGE push_failed={} err={}",
+                                    safety.branch,
+                                    stderr.trim()
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("BRANCH_SALVAGE: push error for {}: {e}", safety.branch);
+                            worker_log(
+                                &log_path,
+                                &format!("BRANCH_SALVAGE push_error={} err={e}", safety.branch),
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -1270,6 +1313,19 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }),
         };
 
+        // Read last phase from sentinel files before worktree cleanup destroys them.
+        let last_phase = {
+            let wt_dir = self
+                .project_dir
+                .join(crate::worktree::DEFAULT_BASE_DIR)
+                .join(&wt_name);
+            crate::tui::data::read_latest_phase(
+                &self.project_dir,
+                Some(wt_dir.to_str().unwrap_or("")),
+                None,
+            )
+        };
+
         // Update autorun_worker and autorun_task_run at completion.
         let completed_at = chrono::Utc::now().to_rfc3339();
         match &worker_result {
@@ -1330,6 +1386,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         } else {
                             Some(wr.branch_name.clone())
                         },
+                        last_phase: last_phase.clone(),
                         ..Default::default()
                     },
                 )

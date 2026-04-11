@@ -669,6 +669,9 @@ pub mod mock {
                 if let Some(v) = update.pr_url {
                     r.pr_url = Some(v);
                 }
+                if let Some(v) = update.last_phase {
+                    r.last_phase = Some(v);
+                }
             }
             Ok(())
         }
@@ -1340,6 +1343,7 @@ pub mod mock {
                 duration_seconds: None,
                 exit_code: None,
                 error_message: None,
+                last_phase: None,
                 verification_result: None,
                 created_at: "2026-03-08T00:00:00Z".into(),
             })
@@ -1449,6 +1453,7 @@ pub mod mock {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: created_at.into(),
         }

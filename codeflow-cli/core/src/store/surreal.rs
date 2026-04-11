@@ -731,6 +731,7 @@ impl DataStore for SurrealStore {
             "exit_code" => update.exit_code,
             "error_message" => update.error_message,
             "verification_result" => update.verification_result,
+            "last_phase" => update.last_phase,
         };
 
         let Some(data) = data else {
@@ -1652,6 +1653,7 @@ mod tests {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: "2026-03-08T00:00:00Z".into(),
         };
@@ -2829,6 +2831,7 @@ mod tests {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: "2026-01-01T00:00:00Z".into(),
         }

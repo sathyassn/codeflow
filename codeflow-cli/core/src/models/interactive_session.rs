@@ -27,6 +27,9 @@ pub struct InteractiveSession {
     pub work_type: Option<String>,
     #[serde(default)]
     pub team_name: Option<String>,
+    /// tmux session name when launched via tmux (e.g., `codeflow-ses-xxx`).
+    #[serde(default)]
+    pub tmux_session: Option<String>,
     /// How the session was started: `"codeflow"` (via `codeflow -i`) or
     /// `"claude"` (plain `claude` invocation detected by SessionStart hook).
     pub source_cli: String,

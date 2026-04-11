@@ -3,7 +3,7 @@ id: "epic-01KNNDF0R0XGX4ERCKVBHJJ9FP"
 format_id: "INF-EPC-044"
 title: "Autorun Reliability Fixes and TUI Terminal Experience"
 summary: "Fix autorun worker reliability issues (post-timeout PR detection, sentinel-aware completion, panic guard, cleanup retry) and build TUI terminal experience (autorun dashboard, interactive session monitor, onboarding wizard) using ratatui"
-status: planning
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-04-08T02:00:00Z"
-updated_at: "2026-04-08T02:00:00Z"
+updated_at: "2026-04-11T13:16:21Z"
 ---
 
 # INF-EPC-044: Autorun Reliability Fixes and TUI Terminal Experience
@@ -57,15 +57,16 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 
 ## Acceptance Criteria
 
-- [ ] Analysis document at `.codeflow/docs/analysis/tui-terminal-experience.md` covering ratatui capabilities, three TUI use cases, shared module architecture, and design guidelines
-- [ ] INF-TSK-044-002: Post-timeout PR detection, sentinel polling, pre-PR rebase, configurable timeout, panic guard, cleanup retry -- all functional with tests
+- [x] Analysis document at `.codeflow/docs/analysis/tui-terminal-experience.md` covering ratatui capabilities, three TUI use cases, shared module architecture, and design guidelines
+- [x] INF-TSK-044-002: Post-timeout PR detection, sentinel polling, pre-PR rebase, configurable timeout, panic guard, cleanup retry -- all functional with tests
 - [x] INF-TSK-044-003: Pending task cancel, wrap-up signal, DB ordering fix, interactive session DB fields -- all functional with tests
-- [ ] INF-TSK-044-004: ratatui dependency added, shared tui/ module (data, theme, widgets) created, `codeflow autorun status --watch` renders interactive TUI dashboard with keyboard navigation
-- [ ] INF-TSK-044-005: `codeflow interactive status --watch` TUI dashboard, `codeflow init` 7-step wizard, `codeflow welcome` formatted display -- all functional
-- [ ] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] All modified Rust files pass `cargo fmt --check`
-- [ ] Code coverage >= 85% per-file for all new and modified Rust files
-- [ ] Unicode symbols only in TUI (no emoji). Rounded borders. Green/red/yellow/dim palette
+- [x] INF-TSK-044-004: ratatui dependency added, shared tui/ module (data, theme, widgets) created, `codeflow autorun status --watch` renders interactive TUI dashboard with keyboard navigation
+- [x] INF-TSK-044-005: `codeflow interactive status --watch` TUI dashboard, `codeflow init` 7-step wizard, `codeflow welcome` formatted display -- all functional
+- [x] INF-TSK-044-006: TUI status accuracy (stale detection, duration freeze, phase label), tmux session launch, autorun reliability fixes (timeout salvage, last_phase, interval unification, repo root resolution) -- all functional with tests
+- [x] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] All modified Rust files pass `cargo fmt --check`
+- [x] Code coverage >= 85% per-file for all new and modified Rust files
+- [x] Unicode symbols only in TUI (no emoji). Rounded borders. Green/red/yellow/dim palette
 
 ### PII Handling Review
 
@@ -78,8 +79,9 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 | INF-TSK-044-001 | Epic planning and analysis | complete | high | M | -- |
 | INF-TSK-044-002 | Autorun Worker Reliability Fixes | complete | high | L | 001 |
 | INF-TSK-044-003 | Queue Lifecycle and Session Management | complete | high | L | 002 |
-| INF-TSK-044-004 | TUI Foundation and Autorun Status Dashboard | todo | high | L | 003 |
+| INF-TSK-044-004 | TUI Foundation and Autorun Status Dashboard | complete | high | L | 003 |
 | INF-TSK-044-005 | Interactive Session TUI and Onboarding Wizard | complete | normal | L | 004 |
+| INF-TSK-044-006 | TUI Status Accuracy, tmux Interactive Sessions, and Autorun Improvements | complete | high | L | 005 |
 
 ## Dependencies
 

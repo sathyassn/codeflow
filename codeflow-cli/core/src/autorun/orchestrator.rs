@@ -2437,6 +2437,7 @@ mod tests {
                 duration_seconds: Some(0),
                 exit_code: None,
                 error_message: Some("user_cancelled".into()),
+                last_phase: None,
                 verification_result: None,
                 created_at: "2026-04-08T00:00:00Z".into(),
             };

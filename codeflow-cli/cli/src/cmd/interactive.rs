@@ -15,34 +15,42 @@ use crate::helpers;
 /// Interactive session subcommands.
 #[derive(Debug, Subcommand)]
 pub enum InteractiveCommand {
-    /// Show active interactive sessions with PID liveness
+    /// Show interactive sessions (TUI when TTY, text when piped)
+    #[clap(alias = "list")]
     Status {
-        /// Watch mode: interactive TUI dashboard
+        /// Watch mode: interactive TUI dashboard (default when TTY)
         #[arg(long, short = 'w')]
         watch: bool,
-        /// Refresh interval in seconds (default: 2, requires --watch)
+        /// Force text output even in TTY (no TUI)
+        #[arg(long)]
+        once: bool,
+        /// Refresh interval in seconds (default: 2)
         #[arg(long, default_value = "2")]
         interval: u64,
     },
-    /// List all interactive sessions (active, complete, stale)
-    List,
     /// Remove stale sessions (dead PID detection)
     Cleanup,
 }
 
 /// Run the interactive subcommand or launch a new session.
 pub async fn run(command: Option<InteractiveCommand>) -> Result<()> {
+    use std::io::IsTerminal;
+
     match command {
         None => run_launch().await,
-        Some(InteractiveCommand::Status { watch, interval }) => {
-            if watch {
+        Some(InteractiveCommand::Status {
+            watch: _,
+            once,
+            interval,
+        }) => {
+            // Default to TUI when stdout is a TTY; --once forces text output.
+            if once || !std::io::stdout().is_terminal() {
+                run_status().await
+            } else {
                 let project_dir = helpers::detect_project_root()?;
                 run_status_tui(&project_dir, interval).await
-            } else {
-                run_status().await
             }
         }
-        Some(InteractiveCommand::List) => run_list().await,
         Some(InteractiveCommand::Cleanup) => run_cleanup().await,
     }
 }
@@ -136,11 +144,21 @@ async fn run_launch() -> Result<()> {
         }
     };
 
+    // Determine tmux availability and whether to use it.
+    let use_tmux = is_tmux_available();
+    let tmux_name = if use_tmux {
+        Some(format!("codeflow-{sid_str}"))
+    } else {
+        eprintln!("codeflow: tmux not available, using direct exec (no reattach support)");
+        None
+    };
+
     // Register InteractiveSession in DB (best-effort).
     register_interactive_session(
         &project_dir,
         &sid_str,
         worktree_path.as_deref(),
+        tmux_name.as_deref(),
         "codeflow",
         true,
     )
@@ -155,9 +173,14 @@ async fn run_launch() -> Result<()> {
         eprintln!("codeflow: worktree at {wt_path}");
     }
 
-    // Exec claude -- replaces the current process.
     let work_dir = resolve_work_dir(worktree_path.as_deref(), &project_dir_str);
 
+    if let Some(ref tmux_session) = tmux_name {
+        // Launch claude inside a tmux session, then attach.
+        launch_in_tmux(tmux_session, work_dir, &env_vars)?;
+    }
+
+    // Fallback: direct exec (replaces the current process).
     let err = exec_claude(work_dir, &env_vars);
     anyhow::bail!("failed to exec claude: {err}");
 }
@@ -169,6 +192,7 @@ async fn register_interactive_session(
     project_dir: &Path,
     session_id: &str,
     worktree_path: Option<&str>,
+    tmux_session: Option<&str>,
     source_cli: &str,
     managed: bool,
 ) {
@@ -180,6 +204,7 @@ async fn register_interactive_session(
     let now = chrono::Utc::now().to_rfc3339();
     let pid = i64::from(std::process::id());
     let wt = worktree_path.map(String::from);
+    let tmux = tmux_session.map(String::from);
     let _ = store
         .db()
         .query(
@@ -188,6 +213,7 @@ async fn register_interactive_session(
              pid = $pid, \
              status = 'active', \
              worktree_path = $worktree_path, \
+             tmux_session = $tmux_session, \
              branch = NONE, \
              work_type = NONE, \
              team_name = NONE, \
@@ -200,19 +226,22 @@ async fn register_interactive_session(
         .bind(("session_id", session_id.to_string()))
         .bind(("pid", pid))
         .bind(("worktree_path", wt))
+        .bind(("tmux_session", tmux))
         .bind(("source_cli", source_cli.to_string()))
         .bind(("managed", managed))
         .bind(("created_at", now))
         .await;
 }
 
-/// Show active interactive sessions.
+/// Show interactive sessions (all statuses, most recent first).
 ///
-/// Queries the DB for active sessions AND scans `.state/interactive/heartbeat-*`
-/// as a filesystem fallback so sessions are visible even when the DB is unavailable.
+/// Queries the DB for ALL sessions (limit 50) AND scans
+/// `.state/interactive/heartbeat-*` as a filesystem fallback so sessions
+/// are visible even when the DB is unavailable.
 async fn run_status() -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
-    let sessions = query_sessions(&project_dir, Some("active")).await?;
+    // Show all sessions, not just active.
+    let sessions = query_sessions(&project_dir, None).await?;
 
     let db_sids: std::collections::HashSet<String> =
         sessions.iter().map(|s| s.session_id.clone()).collect();
@@ -221,7 +250,7 @@ async fn run_status() -> Result<()> {
     let fs_only = scan_heartbeat_sessions(&project_dir, &db_sids);
 
     if sessions.is_empty() && fs_only.is_empty() {
-        println!("No active interactive sessions.");
+        println!("No interactive sessions found.");
         return Ok(());
     }
 
@@ -229,7 +258,8 @@ async fn run_status() -> Result<()> {
         "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {:<30}",
         "SESSION ID", "PID", "STATUS", "SOURCE", "BRANCH", "TYPE", "PHASE", "WORKTREE"
     );
-    for s in &sessions {
+    // Limit text output to 50 most recent.
+    for s in sessions.iter().take(50) {
         let pid_display = format_pid_with_liveness(s.pid);
         let wt = s.worktree_path.as_deref().unwrap_or("-");
         let branch = s.branch.as_deref().unwrap_or("-");
@@ -257,33 +287,10 @@ async fn run_status() -> Result<()> {
     Ok(())
 }
 
-/// List all interactive sessions.
+/// List all interactive sessions (alias for `status --once`).
+#[allow(dead_code)]
 async fn run_list() -> Result<()> {
-    let project_dir = helpers::detect_project_root()?;
-    let sessions = query_sessions(&project_dir, None).await?;
-
-    if sessions.is_empty() {
-        println!("No interactive sessions found.");
-        return Ok(());
-    }
-
-    println!(
-        "{:<32} {:<8} {:<10} {:<10} {:<10} {:<26}",
-        "SESSION ID", "PID", "STATUS", "MANAGED", "SOURCE", "CREATED"
-    );
-    let managed_str = |m: bool| if m { "yes" } else { "no" };
-    for s in &sessions {
-        let created = &s.created_at;
-        println!(
-            "{:<32} {:<8} {:<10} {:<10} {:<10} {created}",
-            s.session_id,
-            s.pid,
-            s.status,
-            managed_str(s.managed),
-            s.source_cli
-        );
-    }
-    Ok(())
+    run_status().await
 }
 
 /// Remove stale sessions (dead PID) and sweep filesystem artifacts.
@@ -469,6 +476,52 @@ fn exec_claude(work_dir: &str, env_vars: &[(String, String)]) -> std::io::Error 
         cmd.env(key, value);
     }
     cmd.exec()
+}
+
+/// Check if tmux is available on the system.
+fn is_tmux_available() -> bool {
+    std::process::Command::new("which")
+        .arg("tmux")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Launch claude inside a tmux session, then attach.
+///
+/// Creates a new tmux session running claude with the given env vars,
+/// then replaces the current process with `tmux attach-session`.
+///
+/// Environment variables are passed via tmux `-e KEY=VALUE` flags rather
+/// than shell interpolation, eliminating shell injection vectors.
+fn launch_in_tmux(tmux_name: &str, work_dir: &str, env_vars: &[(String, String)]) -> Result<()> {
+    // Build tmux args with -e flags for each env var (no shell interpolation).
+    let env_pairs: Vec<String> = env_vars.iter().map(|(k, v)| format!("{k}={v}")).collect();
+
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.args(["new-session", "-d", "-s", tmux_name, "-c", work_dir]);
+    for pair in &env_pairs {
+        cmd.args(["-e", pair]);
+    }
+    cmd.args(["claude"]);
+
+    let status = cmd.status().context("failed to create tmux session")?;
+
+    if !status.success() {
+        anyhow::bail!("tmux new-session failed with {status}");
+    }
+
+    eprintln!("codeflow: tmux session '{tmux_name}' created");
+    eprintln!("codeflow: detach with Ctrl+B D, reattach with: codeflow interactive status");
+
+    // Attach replaces the current process (exec).
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new("tmux")
+        .args(["attach-session", "-t", tmux_name])
+        .exec();
+
+    anyhow::bail!("tmux attach failed: {err}");
 }
 
 // ─── Filesystem sweep helpers ──────────────────────────────────────────
@@ -1393,7 +1446,7 @@ mod tests {
         // When DB directory doesn't exist, register should silently return.
         let dir = tempfile::tempdir().unwrap();
         // No .state/db directory — should not panic.
-        register_interactive_session(dir.path(), "ses-test", None, "codeflow", true).await;
+        register_interactive_session(dir.path(), "ses-test", None, None, "codeflow", true).await;
     }
 
     #[tokio::test]
@@ -1407,6 +1460,7 @@ mod tests {
             dir.path(),
             "ses-inttest1",
             Some("/tmp/wt"),
+            None,
             "codeflow",
             true,
         )
@@ -1440,7 +1494,7 @@ mod tests {
         let db_dir = dir.path().join(".state/db");
         std::fs::create_dir_all(&db_dir).unwrap();
 
-        register_interactive_session(dir.path(), "ses-f1", None, "claude", false).await;
+        register_interactive_session(dir.path(), "ses-f1", None, None, "claude", false).await;
 
         // Filter by 'active' should find it.
         let active = query_sessions(dir.path(), Some("active")).await.unwrap();
@@ -1468,7 +1522,8 @@ mod tests {
         let db_dir = dir.path().join(".state/db");
         std::fs::create_dir_all(&db_dir).unwrap();
 
-        register_interactive_session(dir.path(), "ses-unmanaged", None, "claude", false).await;
+        register_interactive_session(dir.path(), "ses-unmanaged", None, None, "claude", false)
+            .await;
 
         let sessions = query_sessions(dir.path(), Some("active")).await.unwrap();
         assert_eq!(sessions.len(), 1);
@@ -2146,6 +2201,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
@@ -2176,6 +2232,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: Some("fix/test".into()),
             work_type: Some("FIX".into()),
+            tmux_session: None,
             team_name: Some("team-1".into()),
             source_cli: "codeflow".into(),
             managed: true,
@@ -2196,6 +2253,7 @@ mod tests {
             worktree_path: Some("/tmp/wt".into()),
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
@@ -2216,6 +2274,7 @@ mod tests {
             worktree_path: Some("/tmp/../../../etc".into()),
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
@@ -2246,6 +2305,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
@@ -2276,6 +2336,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: None,
             work_type: None,
+            tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
@@ -2423,7 +2484,10 @@ mod tests {
         }
 
         let cli = TestCli::try_parse_from(["test", "status", "--watch"]).unwrap();
-        if let InteractiveCommand::Status { watch, interval } = cli.cmd {
+        if let InteractiveCommand::Status {
+            watch, interval, ..
+        } = cli.cmd
+        {
             assert!(watch);
             assert_eq!(interval, 2); // default
         } else {
@@ -2443,7 +2507,10 @@ mod tests {
 
         let cli =
             TestCli::try_parse_from(["test", "status", "--watch", "--interval", "5"]).unwrap();
-        if let InteractiveCommand::Status { watch, interval } = cli.cmd {
+        if let InteractiveCommand::Status {
+            watch, interval, ..
+        } = cli.cmd
+        {
             assert!(watch);
             assert_eq!(interval, 5);
         } else {

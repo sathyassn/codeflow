@@ -72,6 +72,8 @@ pub struct AutorunTaskRunUpdate {
     pub exit_code: Option<i64>,
     pub error_message: Option<String>,
     pub verification_result: Option<String>,
+    /// Last PathFlow phase reached before cleanup.
+    pub last_phase: Option<String>,
 }
 
 #[cfg(test)]

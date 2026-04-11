@@ -28,16 +28,19 @@ pub enum AutorunCommand {
         #[arg(long, visible_alias = "fg")]
         foreground: bool,
     },
-    /// Show status of active autorun batches
+    /// Show status of autorun batches (TUI when TTY, text when piped)
     Status {
         /// Filter to specific batch session ID
         #[arg(long)]
         batch: Option<String>,
-        /// Watch mode: interactive TUI dashboard
+        /// Watch mode: interactive TUI dashboard (default when TTY)
         #[arg(long, short = 'w')]
         watch: bool,
-        /// Refresh interval in seconds (default: 5, requires --watch)
-        #[arg(long, default_value = "5")]
+        /// Force text output even in TTY (no TUI)
+        #[arg(long)]
+        once: bool,
+        /// Refresh interval in seconds (default: 2)
+        #[arg(long, default_value = "2")]
         interval: u64,
         /// Output JSON to stdout (non-watch mode only)
         #[arg(long)]
@@ -154,16 +157,20 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
         }
         Some(AutorunCommand::Status {
             batch,
-            watch,
+            watch: _,
+            once,
             interval,
             json,
         }) => {
-            if watch {
-                run_status_watch(&project_dir, batch.as_deref(), interval).await
-            } else if json {
+            use std::io::IsTerminal;
+
+            let project_dir = resolve_repo_root(&project_dir)?;
+            if json {
                 run_status_json(&project_dir, batch.as_deref()).await
-            } else {
+            } else if once || !std::io::stdout().is_terminal() {
                 run_status(&project_dir, batch.as_deref()).await
+            } else {
+                run_status_watch(&project_dir, batch.as_deref(), interval).await
             }
         }
         Some(AutorunCommand::Attach { task_id, batch }) => {
@@ -738,7 +745,11 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
         end_time,
     };
     match generate_batch_report(&report_meta, &results) {
-        Ok(path) => eprintln!("report: {}", path.display()),
+        Ok(ref path) => {
+            eprintln!("report: {}", path.display());
+            // Best-effort: commit the report to the integration branch.
+            commit_report_to_branch(project_dir, path, &parsed.integration_branch);
+        }
         Err(e) => eprintln!("warning: failed to generate batch report: {e}"),
     }
 
@@ -997,6 +1008,133 @@ fn generate_batch_report(
     Ok(report_path)
 }
 
+/// Check whether a string is safe to use as a git ref name.
+///
+/// Rejects values that could be interpreted as git options or contain
+/// path traversal / special git ref syntax.
+fn is_safe_git_ref(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && !s.contains("..")
+        && !s.contains("@{")
+        && !s.contains('\\')
+        && !s.contains(':')
+        && !s.contains('?')
+        && !s.contains('*')
+        && !s.contains('[')
+        && !s.contains('^')
+        && !s.contains('~')
+        && !s.contains(' ')
+        && !s.contains('\t')
+        && !s.contains('\n')
+}
+
+/// Commit a batch report file to the integration branch (best-effort).
+///
+/// Checks out the integration branch, adds the report, commits, pushes,
+/// then switches back to the original branch. Silently logs failures
+/// without blocking the main flow.
+fn commit_report_to_branch(project_dir: &Path, report_path: &Path, integration_branch: &str) {
+    // Skip for protected branches (main, master) — report doesn't belong there.
+    if integration_branch == "main" || integration_branch == "master" {
+        return;
+    }
+
+    // Validate branch name to prevent git option injection.
+    if !is_safe_git_ref(integration_branch) {
+        eprintln!("report: skipping commit (invalid branch name '{integration_branch}')");
+        return;
+    }
+
+    // Check the integration branch exists locally.
+    let branch_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", integration_branch])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+
+    if !branch_exists {
+        eprintln!("report: skipping commit (integration branch '{integration_branch}' not found)");
+        return;
+    }
+
+    // Save current branch/HEAD for switching back.
+    let original_ref = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(project_dir)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    // Checkout integration branch.
+    let checkout = std::process::Command::new("git")
+        .args(["checkout", integration_branch])
+        .current_dir(project_dir)
+        .output();
+    if !checkout.is_ok_and(|o| o.status.success()) {
+        eprintln!("report: could not checkout {integration_branch}, skipping commit");
+        return;
+    }
+
+    // Helper: switch back to original ref on any exit path.
+    let switch_back = |original: &str| {
+        if !original.is_empty() && is_safe_git_ref(original) {
+            let _ = std::process::Command::new("git")
+                .args(["checkout", original])
+                .current_dir(project_dir)
+                .status();
+        }
+    };
+
+    // Make report path relative to project_dir for git add.
+    let rel_path = match report_path.strip_prefix(project_dir) {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("report: cannot compute relative path, skipping git add");
+            switch_back(&original_ref);
+            return;
+        }
+    };
+
+    // Add and commit.
+    let add_ok = std::process::Command::new("git")
+        .args(["add", &rel_path.display().to_string()])
+        .current_dir(project_dir)
+        .status()
+        .is_ok_and(|s| s.success());
+
+    if add_ok {
+        let commit_ok = std::process::Command::new("git")
+            .args([
+                "commit",
+                "-m",
+                &format!("chore: add batch report {}", rel_path.display()),
+            ])
+            .current_dir(project_dir)
+            .status()
+            .is_ok_and(|s| s.success());
+
+        if commit_ok {
+            let push_ok = std::process::Command::new("git")
+                .args(["push", "origin", integration_branch])
+                .current_dir(project_dir)
+                .status()
+                .is_ok_and(|s| s.success());
+            if push_ok {
+                eprintln!("report: committed to {integration_branch}");
+            } else {
+                eprintln!("report: commit succeeded but push to {integration_branch} failed");
+            }
+        }
+    }
+
+    // Switch back to original ref.
+    switch_back(&original_ref);
+}
+
 /// Format seconds into a human-readable duration string.
 fn format_duration_human(total_secs: i64) -> String {
     let hours = total_secs / 3600;
@@ -1220,20 +1358,22 @@ async fn run_status(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             None => anyhow::bail!("no autorun session found with id '{sid}'"),
         }
     } else {
-        // Show all active (running/aborting) sessions.
+        // Show running/aborting first, then recent completed/failed.
         use codeflow_core::models::AutorunSessionFilter;
-        let mut active = store
+        let all = store
             .list_autorun_sessions(AutorunSessionFilter::default())
             .await?;
-        active.retain(|s| {
+        let (mut active, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|s| {
             matches!(
                 s.status,
                 codeflow_core::types::AutorunSessionStatus::Running
                     | codeflow_core::types::AutorunSessionStatus::Aborting
             )
         });
+        // Append up to 10 recent non-active batches for visibility.
+        active.extend(rest.into_iter().take(10));
         if active.is_empty() {
-            println!("No active autorun batches.");
+            println!("No autorun batches found.");
             return Ok(());
         }
         active
@@ -2029,6 +2169,7 @@ async fn run_cancel(project_dir: &Path, task_id: &str, batch: Option<&str>) -> R
             exit_code: None,
             error_message: Some("user_cancelled".to_string()),
             verification_result: None,
+            last_phase: None,
             created_at: now,
         };
         store
@@ -5121,6 +5262,7 @@ tasks:
                     duration_seconds: None,
                     exit_code: None,
                     error_message: None,
+                    last_phase: None,
                     verification_result: None,
                     created_at: chrono::Utc::now().to_rfc3339(),
                 };
@@ -5514,6 +5656,7 @@ tasks:
             duration_seconds: Some(120),
             exit_code: Some(0),
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -6711,12 +6854,13 @@ tasks:
             watch,
             interval,
             json,
+            ..
         } = cli.cmd
         {
             assert!(watch);
             assert!(!json);
             assert!(batch.is_none());
-            assert_eq!(interval, 5); // default
+            assert_eq!(interval, 2); // default unified to 2s
         } else {
             panic!("expected Status variant");
         }
@@ -7088,5 +7232,126 @@ tasks:
         // After write: verify the file exists at the expected path.
         let signal_path = dir.path().join(".state/runtime/local/wrap-up-signal");
         assert!(signal_path.exists(), "signal file should exist after write");
+    }
+
+    // -----------------------------------------------------------------------
+    // is_safe_git_ref tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_safe_git_ref_valid_names() {
+        // Normal branch names should pass.
+        assert!(is_safe_git_ref("main"));
+        assert!(is_safe_git_ref("feat/my-feature"));
+        assert!(is_safe_git_ref("fix/issue-123"));
+        assert!(is_safe_git_ref("autorun/ses-abc"));
+        assert!(is_safe_git_ref("release/1.0.0"));
+        assert!(is_safe_git_ref("chore/update-deps"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_empty_string() {
+        // Empty string is rejected.
+        assert!(!is_safe_git_ref(""));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_leading_dash() {
+        // Leading dash looks like a git option (e.g. --upload-pack).
+        assert!(!is_safe_git_ref("-upload-pack=cmd"));
+        assert!(!is_safe_git_ref("--upload-pack"));
+        assert!(!is_safe_git_ref("-"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_double_dot() {
+        // ".." is used in range notation, not valid in a branch name passed
+        // directly to git commands.
+        assert!(!is_safe_git_ref("main..feature"));
+        assert!(!is_safe_git_ref(".."));
+        assert!(!is_safe_git_ref("feat/base..head"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_at_brace() {
+        // "@{" is git reflog syntax.
+        assert!(!is_safe_git_ref("HEAD@{1}"));
+        assert!(!is_safe_git_ref("branch@{0}"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_special_chars() {
+        // Characters that would be dangerous in shell or git contexts.
+        assert!(!is_safe_git_ref("branch\\name"));
+        assert!(!is_safe_git_ref("branch:name"));
+        assert!(!is_safe_git_ref("branch?name"));
+        assert!(!is_safe_git_ref("branch*name"));
+        assert!(!is_safe_git_ref("branch[name]"));
+        assert!(!is_safe_git_ref("branch^name"));
+        assert!(!is_safe_git_ref("branch~1"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_whitespace() {
+        // Whitespace (space, tab, newline) is rejected.
+        assert!(!is_safe_git_ref("branch name"));
+        assert!(!is_safe_git_ref("branch\tname"));
+        assert!(!is_safe_git_ref("branch\nname"));
+    }
+
+    #[test]
+    fn test_is_safe_git_ref_integration_branch_pattern() {
+        // Typical auto-generated integration branch names should pass.
+        assert!(is_safe_git_ref("integration/ses-01abc123def"));
+        assert!(is_safe_git_ref("autorun/batch-2026-04-11"));
+    }
+
+    // -----------------------------------------------------------------------
+    // commit_report_to_branch early-return tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_commit_report_skips_main_branch() {
+        // commit_report_to_branch must return immediately for "main" without
+        // touching the filesystem or running git commands.
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "batch report").unwrap();
+        // If this panics or runs git commands it would fail because there is
+        // no real git repo in the temp dir. The function must return early.
+        commit_report_to_branch(dir.path(), &report, "main");
+    }
+
+    #[test]
+    fn test_commit_report_skips_master_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "batch report").unwrap();
+        commit_report_to_branch(dir.path(), &report, "master");
+    }
+
+    #[test]
+    fn test_commit_report_skips_invalid_branch_name() {
+        // Branches that fail is_safe_git_ref must be rejected before any git
+        // command is executed.
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "batch report").unwrap();
+        // Leading dash looks like a git option.
+        commit_report_to_branch(dir.path(), &report, "--upload-pack=cmd");
+        // Branch with double-dot (range syntax).
+        commit_report_to_branch(dir.path(), &report, "main..evil");
+    }
+
+    #[test]
+    fn test_commit_report_branch_not_found_returns_early() {
+        // With a real (but empty) git repo, the integration branch does not
+        // exist locally, so commit_report_to_branch must return without error.
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "batch report").unwrap();
+        // "integration/nonexistent" is safe but not a real local branch.
+        commit_report_to_branch(dir.path(), &report, "integration/nonexistent");
     }
 }

@@ -770,6 +770,7 @@ mod tests {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         }

@@ -91,6 +91,10 @@ pub struct AutorunTaskRun {
     pub exit_code: Option<i64>,
     pub error_message: Option<String>,
     pub verification_result: Option<String>,
+    /// Last PathFlow phase reached before cleanup (e.g., "PF4").
+    /// Stored so TUI can display phase after worktree is destroyed.
+    #[serde(default)]
+    pub last_phase: Option<String>,
     pub created_at: String,
 }
 
@@ -266,6 +270,7 @@ mod tests {
             duration_seconds: Some(60),
             exit_code: Some(1),
             error_message: Some("failed".into()),
+            last_phase: None,
             verification_result: None,
             created_at: "2026-03-21T00:00:00Z".into(),
         };
@@ -294,6 +299,7 @@ mod tests {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: "2026-03-21T00:00:00Z".into(),
         };
@@ -322,6 +328,7 @@ mod tests {
             duration_seconds: None,
             exit_code: None,
             error_message: None,
+            last_phase: None,
             verification_result: None,
             created_at: "2026-03-21T00:00:00Z".into(),
         };
