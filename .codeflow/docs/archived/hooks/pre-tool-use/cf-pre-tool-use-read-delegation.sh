@@ -147,7 +147,7 @@ declare -a ALWAYS_BLOCK_PATTERNS=(
     ".codeflow/state/**"
     "*.jsonl"
     "*.db"
-    "*.sqlite"
+    "*.surrealdb"
     "*.log"
 )
 

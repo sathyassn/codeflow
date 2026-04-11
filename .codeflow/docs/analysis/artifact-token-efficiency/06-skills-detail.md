@@ -177,7 +177,7 @@ description: "Task management operations: work classification, epic/task CRUD,
 ### cf-db-operations (RESTORE + UPDATE)
 
 ```text
-description: "Database and persistence operations: three-tier model (JSONL/SQLite/
+description: "Database and persistence operations: three-tier model (JSONL/SurrealDB/
   Markdown), event recording, PathFlow transitions. Used by: cf-knowledge-layer.
   Not used by: team-lead, cf-development."
 ```
@@ -186,7 +186,7 @@ description: "Database and persistence operations: three-tier model (JSONL/SQLit
 
 | # | Source Artifact | Source Section | Lines | Target Operation |
 |---|----------------|---------------|:----:|-----------------|
-| 1 | Archived cf-db-operations | Full skill (468 lines) | ~468 | record-transitions, append-jsonl, query-sqlite, sync-markdown |
+| 1 | Archived cf-db-operations | Full skill (468 lines) | ~468 | record-transitions, append-jsonl, query-surrealdb, sync-markdown |
 | 2 | cf-knowledge-layer.md | Part 3: DB Operations | ~20 | Merge updates |
 | 3 | cf-knowledge-layer.md | Part 4: PathFlow Events | ~51 | record-transitions updates |
 | 4 | cf-knowledge-layer.md | Three-Tier + Canonical Ledger + Go CLI | ~45 | Reference section updates |
@@ -198,7 +198,7 @@ description: "Database and persistence operations: three-tier model (JSONL/SQLit
 |---|-----------|---------|
 | 1 | record-transitions | Phase/stage/session PathFlow events |
 | 2 | append-jsonl | JSONL file routing, event type mapping |
-| 3 | query-sqlite | Indexed lookups, rebuilds from JSONL |
+| 3 | query-surrealdb | Indexed lookups, rebuilds from JSONL |
 | 4 | sync-markdown | Tier 2 markdown derived views |
 
 **Restoration approach (review + revamp, NOT blind restore):**

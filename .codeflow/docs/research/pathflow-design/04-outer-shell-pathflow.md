@@ -86,7 +86,7 @@ The Outer Shell is the **generic session lifecycle pathway** that every Claude C
    - `cf-session-start-instructions.sh` -- Display behavioral instructions, verify CRDT state
    - `cf-session-start-logging.sh` -- Initialize session log (JSONL), create session record
 2. Generate `session-{ulid}` identifier
-3. Insert session record into sessions table (SQLite Tier 1) and JSONL ledger (Tier 0)
+3. Insert session record into sessions table (SurrealDB Tier 1) and JSONL ledger (Tier 0)
 4. Create the `pathflow:shell:boot` sentinel
 
 **Sentinel Creates**: `pathflow:shell:boot` (TTL: session lifetime)

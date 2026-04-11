@@ -14,7 +14,7 @@ parent: "parallel-work/README.md"
 
 ## Table of Contents
 
-- [1. SQLite (Tier 1)](#1-sqlite-tier-1)
+- [1. SurrealDB (Tier 1 Database)](#1-surrealdb-tier-1-database)
 - [2. JSONL Ledger (Tier 0)](#2-jsonl-ledger-tier-0)
 - [3. Claims System (Coordination Layer)](#3-claims-system-coordination-layer)
 - [4. Data Layer CLI-Only Enforcement](#4-data-layer-cli-only-enforcement)
@@ -26,7 +26,7 @@ parent: "parallel-work/README.md"
 
 ---
 
-## 1. SQLite (Tier 1)
+## 1. SurrealDB (Tier 1 Database)
 
 **Configuration** (from `connection.go:85-115`):
 - WAL mode (`PRAGMA journal_mode=WAL`, line 96)
@@ -36,16 +36,16 @@ parent: "parallel-work/README.md"
 - Max open connections: 1 (`SetMaxOpenConns(1)`, line 92)
 
 **Retry logic** (from `connection.go:118-163`):
-- `Query()` retries 3 times on SQLITE_BUSY with 100ms delay (lines 118-136)
-- `Execute()` retries 3 times on SQLITE_BUSY with 100ms delay (lines 145-163)
+- `Query()` retries 3 times on SURREALDB_BUSY with 100ms delay (lines 118-136)
+- `Execute()` retries 3 times on SURREALDB_BUSY with 100ms delay (lines 145-163)
 - `Transaction()` wraps operations in BEGIN/COMMIT with rollback on error (lines 167-189)
 
 **Parallel safety assessment:**
-- WAL mode enables concurrent readers with a single writer -- this is SQLite's strongest concurrency mode
+- WAL mode enabled concurrent readers with a single writer in the legacy Go CLI — SurrealDB's multi-writer architecture supersedes this
 - `busy_timeout=5000` means writes will wait up to 5 seconds for the write lock
 - The singleton pattern (`Get()` at `connection.go:56-68`) means all operations within a single process share one connection
 - Across worktrees (separate processes), each process opens its own connection to the same database file (symlinked)
-- Write serialization is handled by SQLite's WAL write lock -- not by Go code
+- Write serialization in the legacy Go CLI was handled by SurrealDB's WAL write lock — not by Go code
 
 **Risk:** Under heavy parallel write load, `busy_timeout=5000` may be insufficient. Two sessions writing to different tables (e.g., Session A writing sessions, Session B writing tasks) are still serialized at the WAL write lock level.
 
@@ -89,7 +89,7 @@ The previous Go implementation used `state.json` with a TOCTOU race: two session
 
 ## 4. Data Layer CLI-Only Enforcement
 
-The data layer (SQLite + JSONL) currently has insufficient access control. This is a general issue that becomes critical under parallel execution, where one session's destructive operation can affect all concurrent sessions.
+The data layer (SurrealDB + JSONL) currently has insufficient access control. This is a general issue that becomes critical under parallel execution, where one session's destructive operation can affect all concurrent sessions. (Note: Sections 4.1/4.2 below describe the legacy Go CLI state; the Rust CLI uses SurrealDB and mitigates many of these gaps.)
 
 ### 4.1 Current Enforcement Mechanisms
 
@@ -101,27 +101,27 @@ The data layer (SQLite + JSONL) currently has insufficient access control. This 
 | edit-write-guard | `blocked_directories` in `enforcement-policy.json` does NOT include `.state/ledger/` | Agents CAN bypass validation via direct Edit/Write to JSONL files |
 | PreToolUse hooks | No hook blocks `echo >> .state/ledger/*.jsonl` | Agents CAN bypass validation via Bash echo |
 
-**For SQLite:**
+**For SurrealDB (legacy Go CLI state — now superseded by Rust CLI):**
 
 | Mechanism | Protection Level | Gap |
 |-----------|-----------------|-----|
 | `codeflow db exec` (`db.go:266-287`) | Zero validation -- accepts ANY SQL | Agent can `DROP TABLE tasks` |
 | `codeflow db query` (`db.go:220-243`) | Weak prefix check -- blocks `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE` | Bypassable via CTE: `WITH x AS (DELETE FROM tasks) SELECT 1` |
 | Named operations | `codeflow workgraph create-epic/create-task/update-epic/update-task/query`, `codeflow state active-task get/set/clear`, `codeflow state memory record` | Properly gated, but agents not required to use them |
-| PreToolUse hooks | No hook blocks `sqlite3 .state/db/codeflow.db` | Full unrestricted shell access |
+| PreToolUse hooks | No hook blocks direct access to `.state/db/codeflow.db` | Full unrestricted shell access |
 | edit-write-guard | `blocked_directories` does NOT include `.state/db/` | Agents CAN Edit/Write to the .db file directly |
 
 ### 4.2 Required Enforcement Changes
 
-1. **Add `.state/ledger/` and `.state/db/` to `blocked_directories`** in `enforcement-policy.json`. This closes the Edit/Write bypass path for both JSONL and SQLite.
+1. **Add `.state/ledger/` and `.state/db/` to `blocked_directories`** in `enforcement-policy.json`. This closes the Edit/Write bypass path for both JSONL and SurrealDB.
 
-2. **Add PreToolUse hook blocking `sqlite3` shell access.** Pattern: reject `Bash` tool calls containing `sqlite3` targeting `.state/db/`. This closes the direct shell bypass path.
+2. **Add PreToolUse hook blocking direct SurrealDB shell access.** Pattern: reject `Bash` tool calls directly targeting `.state/db/`. This closes the direct shell bypass path.
 
 3. **Add PreToolUse hook blocking `codeflow db exec`** in Bash calls. This forces agents to use named operations.
 
 4. **Add PreToolUse hook blocking direct JSONL writes.** Pattern: reject `Bash` tool calls containing `>> .state/ledger/` or `echo` + `.jsonl`. This forces agents to use `codeflow ledger append`.
 
-5. **Remove `codeflow db exec` raw SQL interface.** Replace with named operations only. The CLI binary is the trusted gatekeeper for SQLite.
+5. **Remove `codeflow db exec` raw SQL interface.** Replace with named operations only. The CLI binary is the trusted gatekeeper for SurrealDB.
 
 6. **Strengthen `codeflow db query` SQL parsing.** Not just prefix matching -- parse the SQL statement to reject any write operations including CTEs with side effects.
 
@@ -140,24 +140,24 @@ SurrealDB is a multi-model database offering document, graph, vector (HNSW), ful
 - **Version:** SurrealDB 3.0 GA (February 2026)
 - **Funding:** $44M total (Series A $35M in 2023)
 - **Named users:** Tencent, Later.com
-- **Maturity:** 3 years vs SQLite's 24+ years. v2.x had stability issues. v3 claims "most stable release."
+- **Maturity:** 3 years vs legacy relational databases' 24+ years. v2.x had stability issues. v3 claims "most stable release."
 
-### 5.2 Capabilities Assessment
+### 5.2 Capabilities Assessment (Legacy Go CLI Comparison)
 
-| Capability | SurrealDB | SQLite | Relevance to CodeFlow |
+| Capability | SurrealDB | Legacy (Go CLI) | Relevance to CodeFlow |
 |-----------|-----------|--------|----------------------|
 | Document store | Native | JSON via json_extract() | Medium -- task/epic records are document-like |
 | Graph queries | Native (RELATE, graph traversal) | Not supported | HIGH -- task dependency graphs, epic-task-session relationships |
 | Vector search (HNSW) | Native (DEFINE INDEX ... HNSW) | Not supported | HIGH -- semantic search over memory, code summaries, agent context |
-| Full-text search | Native (DEFINE INDEX ... SEARCH) | FTS5 extension | Medium -- already possible with SQLite FTS5 |
+| Full-text search | Native (DEFINE INDEX ... SEARCH) | FTS5 extension | Medium -- already possible with legacy FTS5 |
 | Time-series | Native (GROUP BY time intervals) | Manual with date functions | Medium -- session metrics, performance trending |
 | Relational | SurrealQL JOIN equivalent | Full SQL | High -- current schema is relational (37 tables) |
-| ACID transactions | Yes, lockless reads | Yes, WAL mode | Parity |
-| Concurrency | Multi-writer, lockless reads | Single writer via WAL | SurrealDB better for parallel writes |
+| ACID transactions | Yes, lockless reads | Yes, WAL mode (legacy) | Parity |
+| Concurrency | Multi-writer, lockless reads | Single writer via WAL (legacy) | SurrealDB better for parallel writes |
 
 ### 5.3 Unified Query Advantage for Agentic Use Cases
 
-> **Note:** SurrealDB embedded replaces SQLite entirely in the Rust CLI (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). References to SQLite `busy_timeout` and WAL mode in this document reflect the legacy/transitional Go implementation. The Rust CLI uses SurrealDB's `RetryConfig` with exponential backoff for parallel access, not SQLite busy_timeout.
+> **Note:** SurrealDB embedded is the sole database in the Rust CLI (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). References to `busy_timeout` and WAL mode in this document reflect the legacy Go implementation. The Rust CLI uses SurrealDB's `RetryConfig` with exponential backoff for parallel access.
 
 SurrealDB's key advantage is combining multiple query types in a single statement:
 
@@ -174,7 +174,7 @@ ORDER BY score DESC
 LIMIT 5;
 ```
 
-With SQLite, this requires:
+With a legacy relational database, this requires:
 1. A separate vector database (or embedding library)
 2. Multiple queries to traverse relationships
 3. Application-level join logic
@@ -199,10 +199,10 @@ Using SurrealDB from Go would require a **sidecar server process** (~50MB binary
 
 ### 5.5 Performance Characteristics
 
-| Metric | SurrealDB v3 | SQLite | Notes |
+| Metric | SurrealDB v3 | Legacy (Go CLI) | Notes |
 |--------|-------------|--------|-------|
 | Simple queries | ~150ms (community benchmark) | ~10ms | 15x slower for basic CRUD |
-| Graph traversal (3 hops) | 8-22x faster than v2 | N/A (not supported) | No head-to-head SQLite comparison |
+| Graph traversal (3 hops) | 8-22x faster than v2 | N/A (not supported) | No head-to-head legacy comparison |
 | Write throughput | Multi-writer, lockless | Single writer via WAL | SurrealDB better for parallel writes |
 | Cold start | ~2-3s (sidecar startup) | ~1ms (file open) | Significant startup penalty |
 | Memory footprint | ~200MB baseline | ~10MB | 20x higher |
@@ -213,22 +213,22 @@ Using SurrealDB from Go would require a **sidecar server process** (~50MB binary
 |--------|-----------|
 | Tables to convert | 37 tables (current schema) |
 | SQL to SurrealQL | Every query must be rewritten |
-| Schema migration tool | None exists (SQLite to SurrealDB) |
+| Schema migration tool | None exists (legacy DB to SurrealDB) |
 | ORM/driver maturity | Go SDK v1.x, less battle-tested than database/sql |
-| Testing infrastructure | All test helpers assume SQLite |
+| Testing infrastructure | All test helpers assume legacy DB |
 | Rollback risk | High -- SurrealDB is the only copy of data |
 
 ### 5.7 Options Analysis
 
-> **Decision reached:** Option E is implemented as Epic 0. SQLite is being **replaced entirely** by SurrealDB — not supplemented. There is no hybrid mode. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
+> **Decision reached:** Option E is implemented as Epic 0. SurrealDB is the sole database — no hybrid mode. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
 
 | Option | Description | Pros | Cons | Status |
 |--------|-------------|------|------|--------|
-| A. Full replacement (SurrealDB sidecar) | Replace SQLite with SurrealDB as sidecar server (~50MB process) | Unified multi-model queries. Better parallel writes. | BLOCKED by Go embedded gap. 37 tables to migrate. Sidecar process management. Cold start ~2-3s. | Superseded by E |
-| B. Hybrid (SQLite + SurrealDB sidecar) | Keep SQLite for operational data. Add SurrealDB sidecar for agent memory/search. | Best of both worlds incrementally. | Two databases + sidecar process. Data sync. Double infrastructure. | Rejected — SurrealDB-only is the decision |
+| A. Full replacement (SurrealDB sidecar) | Replace legacy database with SurrealDB as sidecar server (~50MB process) | Unified multi-model queries. Better parallel writes. | BLOCKED by Go embedded gap. 37 tables to migrate. Sidecar process management. Cold start ~2-3s. | Superseded by E |
+| B. Hybrid (legacy DB + SurrealDB sidecar) | Keep legacy DB for operational data. Add SurrealDB sidecar for agent memory/search. | Best of both worlds incrementally. | Two databases + sidecar process. Data sync. Double infrastructure. | Rejected — SurrealDB-only is the decision |
 | C. Track and wait | Monitor Go embedded progress. Plan migration when available. | Zero risk now. | Misses capabilities now. Unknown timeline. | Rejected |
 | D. Rust shared library | Implement data layer in Rust. Expose to Go via C-compatible FFI. | True embedded SurrealDB. Native Loro. | CGo FFI overhead. Two-language codebase. | Superseded by E |
-| **E. Pure Rust CLI (DECIDED)** | **Replace Go CLI with Rust. SurrealDB embedded (`surrealkv://`) and Loro are direct crate dependencies. `SurrealStore` is the ONLY `DataStore` impl — no `SqliteStore`.** | **Single language. No FFI. No sidecar. One build pipeline. SQLite fully retired.** | **Large redesign scope (Epic 0, 25 tasks).** | **DECIDED — Epic 0** |
+| **E. Pure Rust CLI (DECIDED)** | **Replace Go CLI with Rust. SurrealDB embedded (`surrealkv://`) and Loro are direct crate dependencies. `SurrealStore` is the ONLY `DataStore` impl — no legacy store.** | **Single language. No FFI. No sidecar. One build pipeline. SurrealDB is the sole Tier 1 store.** | **Large redesign scope (Epic 0, 25 tasks).** | **DECIDED — Epic 0** |
 
 ---
 
@@ -236,14 +236,14 @@ Using SurrealDB from Go would require a **sidecar server process** (~50MB binary
 
 The Rust CLI is an idiomatic redesign, not a line-for-line port of the Go CLI. Data access is abstracted behind traits, enabling swappable backends and comprehensive testing.
 
-> **Updated:** `SurrealStore` is the ONLY `DataStore` implementation. `SqliteStore` is not present in the Rust redesign — SurrealDB embedded (`surrealkv://`) replaces SQLite from the start of Epic 0. The `DataStore` trait is retained for testability (mock implementations) and future extensibility (global daemon mode via `ws+unix://`).
+> **Updated:** `SurrealStore` is the ONLY `DataStore` implementation. No legacy store is present in the Rust redesign — SurrealDB embedded (`surrealkv://`) is the sole DataStore from the start of Epic 0. The `DataStore` trait is retained for testability (mock implementations) and future extensibility (global daemon mode via `ws+unix://`).
 
 ```text
 Rust CLI binary (codeflow) — modular crate structure
   codeflow-core (library crate):
   ├── DataStore trait ─────────── SurrealStore (embedded surrealkv:// for project-local;
   │                               ws+unix:// for global daemon — Epic C)
-  │                               [SqliteStore REMOVED — SurrealDB is the sole Tier 1 store]
+  │                               [legacy store REMOVED — SurrealDB is the sole Tier 1 store]
   ├── Coordinator trait ───────┬── LoroCoordinator (native loro crate — Epic A)
   │                            └── (extensible)
   ├── Transport trait ─────────┬── FileTransport (local file exchange)
@@ -259,7 +259,7 @@ Rust CLI binary (codeflow) — modular crate structure
 
 ### 6.1 Why Option E (Pure Rust CLI) Solves All Gaps
 
-1. **SurrealDB embedded works natively in Rust, and replaces SQLite entirely.** The `surrealdb` crate supports `mem://` (in-memory) and `surrealkv://` (key-value store, persistent) embedded modes — no server process, no network sockets, no sidecar. This eliminates the Go SDK gap entirely. `SurrealStore` is the sole `DataStore` implementation: `surrealkv://` at `.state/db/codeflow/` for project-local operations; `ws+unix://~/.codeflow/db.sock` for optional global daemon access (Epic C). SQLite and `SqliteStore` are not part of the Rust CLI at all.
+1. **SurrealDB embedded works natively in Rust as the sole database.** The `surrealdb` crate supports `mem://` (in-memory) and `surrealkv://` (key-value store, persistent) embedded modes — no server process, no network sockets, no sidecar. This eliminates the Go SDK gap entirely. `SurrealStore` is the sole `DataStore` implementation: `surrealkv://` at `.state/db/codeflow/` for project-local operations; `ws+unix://~/.codeflow/db.sock` for optional global daemon access (Epic C). No legacy store is part of the Rust CLI.
 
 2. **Loro CRDT is Rust-native.** The `loro` crate is the primary implementation (not a binding). Direct API calls (`use loro::LoroDoc;`), no community-maintained wrappers, no UniFFI indirection. Map, List, Text (Fugue), Tree CRDTs all available natively. `LoroCoordinator` implements the `Coordinator` trait.
 
@@ -356,11 +356,11 @@ Cross-project semantic search requires vector embeddings. These are generated lo
 | Tier | Location | Purpose | Git Tracked | Changed? |
 |------|----------|---------|-------------|----------|
 | 0 (JSONL) | `.state/ledger/*.jsonl` | Rebuild authority — immutable, append-only | Yes | No |
-| 1 (SurrealDB embedded) | `.state/db/codeflow/` | Query interface for project-local ops | No | **SQLite replaced** |
+| 1 (SurrealDB embedded) | `.state/db/codeflow/` | Query interface for project-local ops | No | **Sole Tier 1 store** |
 | 1+ (SurrealDB daemon) | `~/.codeflow/db.sock` | Optional global cross-project layer | No | **New** |
 | 2 (Markdown) | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes | No |
 
-JSONL (Tier 0) remains the rebuild authority — unchanged. If the SurrealDB embedded store is lost or corrupted, it is rebuilt from JSONL. The rebuild path (`codeflow db rebuild`) uses the same event-sourcing logic as the current SQLite rebuild path.
+JSONL (Tier 0) remains the rebuild authority — unchanged. If the SurrealDB embedded store is lost or corrupted, it is rebuilt from JSONL. The rebuild path (`codeflow db rebuild`) uses the same event-sourcing logic as the previous Go CLI rebuild path.
 
 ---
 
@@ -421,7 +421,7 @@ ORDER BY occurred_at DESC;
 
 ## 9. Scope Policy as Data Protection
 
-`scope_policy` enforces file-level access control in parallel worker scenarios. Where Sections 1-4 address protection of the data layer (SQLite, JSONL, CRDT state) from agent misuse, `scope_policy` protects source files and project artifacts from concurrent write conflicts between parallel workers.
+`scope_policy` enforces file-level access control in parallel worker scenarios. Where Sections 1-4 address protection of the data layer (SurrealDB, JSONL, CRDT state) from agent misuse, `scope_policy` protects source files and project artifacts from concurrent write conflicts between parallel workers.
 
 ### 9.1 The Concurrent Edit Problem
 

@@ -103,7 +103,7 @@ Additionally, establish the `autorun/{batch-name}` integration branch convention
 - **Design analysis**: See [design analysis](../../../../.codeflow/docs/analysis/inf-epc-008-design-analysis.md) for full design rationale, flow diagrams, and decision log (11 decisions: D1-D11).
 - **Task ordering**: INF-TSK-008-002 (schema) must complete before INF-TSK-008-004 (validation scripts) because validation checks status values. INF-TSK-008-003 (merge protection) and INF-TSK-008-004 (validation) are independent and can be parallelized. Note: Status values simplified in migration 004 to: todo, blocked, in_progress, complete, cancelled.
 - **PF3 reorder rationale**: Branch creation triggers the pf-3 sentinel which unlocks Edit/Write. Moving it before task registration ensures cf-knowledge-layer can write task records after the gate opens.
-- **SQLite CHECK constraint limitation**: SQLite does not support `ALTER TABLE ... ALTER COLUMN`. The migration must recreate the tasks table with the updated CHECK constraint, preserving all data.
+- **SurrealDB schema update**: The migration must recreate the tasks table with the updated constraint, preserving all data.
 - **auto_commit deprecation**: Column stays in schema for backward compatibility. Agents stop reading/writing it. Templates and docs remove it.
 - **Merge protection defense-in-depth**: Hook blocks `gh pr merge` + agent instructions forbid it + GitHub branch protection rules are the final safety net.
 

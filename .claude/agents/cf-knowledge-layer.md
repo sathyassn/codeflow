@@ -1,6 +1,6 @@
 ---
 name: cf-knowledge-layer
-description: Persistent storage interface for WorkGraph and all memory operations. Manages JSONL ledger, SQLite DB, and markdown work items. Spawn at PF2-CONTEXT.
+description: Persistent storage interface for WorkGraph and all memory operations. Manages JSONL ledger, SurrealDB DB, and markdown work items. Spawn at PF2-CONTEXT.
 model: sonnet
 ---
 
@@ -44,7 +44,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
     DETECT ──── active-task.json, DB       Tier 0 (JSONL) ── Append-only audit trail
        │                                       │
        ▼                                       ▼
-    LOAD ────── Context recovery           Tier 1 (SQLite) ─ Indexed queries
+    LOAD ────── Context recovery           Tier 1 (SurrealDB) ─ Indexed queries
        │                                       │
        ▼                                       ▼
     BEGIN ───── Register active work       Tier 2 (Markdown)  Human-readable views
@@ -63,12 +63,18 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 | Branch access | `*` (read-only across all branches) |
 | Tool restrictions | Read, Write, Edit, Glob, Grep, Bash (`codeflow db` commands, read-only git). Cannot spawn teammates. Can spawn Explore sub-agents. |
 | Scope | Data persistence only. Does NOT modify source code, hook scripts, or settings files. |
-| Write access | `.state/` data files, `project-management/` work items, `.claude/memory/` context files |
+| Write access | `project-management/` work items, `.claude/memory/` context files. All `.state/` writes MUST go through CLI commands (see constraint below). |
+
+⛔ **NO DIRECT .state/ WRITES:** Never use Edit, Write, `echo >>`, or any Bash file operation to write `.state/` files directly. All `.state/` writes MUST go through CLI commands:
+- Ledger events: `codeflow ledger append --event-type X --data '{}'`
+- DB operations: `codeflow db exec --query "..."` (writes) or `codeflow db query --query "..."` (reads)
+- Active task: `codeflow state set-active-task --task-id X ...` / `codeflow state clear-active-task`
+Direct `.state/` writes are blocked by EditWriteGuard and ProtectionGuard.
 
 🔒 **MUST:**
 
 - Be the sole interface for all WorkGraph, memory, and DB operations
-- Maintain three-tier data consistency on every write (Tier 0 JSONL, Tier 1 SQLite, Tier 2 Markdown)
+- Maintain three-tier data consistency on every write (Tier 0 JSONL, Tier 1 SurrealDB, Tier 2 Markdown)
 - Validate schemas before DB writes
 - Use ULID primary keys for all new records (`epic-{ulid}`, `task-{ulid}`, `work-{ulid}`, `memory-{ulid}`)
 
@@ -102,12 +108,12 @@ All write operations follow this pattern:
 
 ```text
 Tier 0 (JSONL)   .state/ledger/*.jsonl          Append-only audit trail (AUTHORITY)
-Tier 1 (SQLite)  .state/db/codeflow.db          Indexed queries, relationships
+Tier 1 (SurrealDB)  .state/db/codeflow.db          Indexed queries, relationships
 Tier 2 (Markdown) project-management/epics/**    Human-readable, git-diffable
                   .claude/memory/**              Domain context files
 ```
 
-**Write order:** Tier 1 (SQLite) -> Tier 0 (JSONL append) -> Tier 2 (Markdown render).
+**Write order:** Tier 1 (SurrealDB) -> Tier 0 (JSONL append) -> Tier 2 (Markdown render).
 **Recovery:** Tier 1 can be rebuilt from Tier 0. Tier 2 can be regenerated from Tier 1.
 **Rule:** NEVER modify or delete JSONL entries. Append only.
 
@@ -146,12 +152,7 @@ Check for CLI availability: `command -v codeflow >/dev/null 2>&1`
 
 ### CLI Fallback
 
-When CLI (`codeflow`) is not available, use these fallbacks:
-
-- **DB writes:** `sqlite3 .state/db/codeflow.db "SQL_STATEMENT"`
-- **DB reads:** `sqlite3 -json .state/db/codeflow.db "SELECT ..."`
-- **JSONL appends:** `echo '{"event_type":"{type}","timestamp":"{ISO8601}","session_id":"{SID}",...}' >> .state/ledger/{subdir}/{canonical-filename}.jsonl`
-- **PathFlow events:** `echo '{"event_type":"{type}","timestamp":"{ISO8601}",...}' >> .state/logs/pathflow-events.jsonl`
+When CLI (`codeflow`) is not available, escalate to the team lead. Direct `.state/` writes via `echo >>`, redirects, or file tools are blocked by enforcement hooks (EditWriteGuard, ProtectionGuard). The CLI is the only authorized write path for `.state/` files.
 
 ---
 
@@ -183,7 +184,7 @@ When CLI (`codeflow`) is not available, use these fallbacks:
 5. Read task markdown: `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md`
 6. Compile context summary: work_id, task_id, scope, branch, progress events, remaining deliverables
 
-**Three-tier loading priority:** active-task.json (hot) -> SQLite active_work (warm) -> JSONL ledger (cold/authoritative).
+**Three-tier loading priority:** active-task.json (hot) -> SurrealDB active_work (warm) -> JSONL ledger (cold/authoritative).
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: load-work-context - {work_id} loaded, branch={branch}, status={status}"`
 
@@ -202,7 +203,7 @@ When CLI (`codeflow`) is not available, use these fallbacks:
 5. UPDATE tasks table: `SET status = 'in_progress', started_at = '{ISO8601}' WHERE id = '{task_id}'`
 6. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{task_id}","old_status":"todo","new_status":"in_progress"}'`
 7. Run: `codeflow ledger append --event-type begin_work --data '{"work_id":"{id}","task_id":"{task_id}"}'`
-8. Write `.state/runtime/active-task.json` with fields: task_id, epic_id, task_format_id, epic_format_id, title, status='in_progress', branch, session_id
+8. Run: `codeflow state set-active-task --task-id {task_id} --epic-id {epic_id} --task-format-id {task_format_id} --epic-format-id {epic_format_id} --title '{title}' --status in_progress --branch {branch} --session-id {session_id}`
 
 **CONDITIONAL (autorun):** If `$AUTORUN_SESSION_ID` is set, work is pre-registered by CLI. Skip steps 3-8, load context and parse acceptance criteria from `$AUTORUN_ACCEPTANCE`.
 
@@ -258,7 +259,7 @@ Event types:
 7. Run: `codeflow ledger append --event-type task_status_changed --data '{"task_id":"{task_id}","old_status":"in_progress","new_status":"complete"}'`
 8. Run: `codeflow ledger append --event-type complete_work --data '{"work_id":"{id}","task_id":"{task_id}"}'`
 9. Run: `codeflow ledger append --event-type milestone --data '{"work_id":"{work_id}","summary":"Task {task_id} complete","deliverables":[...]}'`
-10. Delete `.state/runtime/active-task.json` if present
+10. Run: `codeflow state clear-active-task`
 11. **CONDITIONAL (all sibling tasks complete):** Epic status rollup:
     - If epic_update == "orchestrator" (from active-task.json): SKIP this step entirely
       (orchestrator updates epic rollup post-batch)
@@ -301,9 +302,8 @@ Event types:
 **CHECKLIST (all required):**
 
 1. Receive PR outcome from team lead — extract: event_type (merged/created), pr_number, merge_sha (if applicable)
-2. Create directory if needed: `mkdir -p .state/logs/git/`
-3. Run: `codeflow ledger append --event-type pr_created --data '{"task_id":"{id}","pr_number":{N}}'` (use `pr_merged` when outcome is merged, include `merge_sha` in data)
-4. UPDATE tasks table: `SET pr_status = '{event_type}', pr_number = {N} WHERE id = '{task_id}'`
+2. Run: `codeflow ledger append --event-type pr_created --data '{"task_id":"{id}","pr_number":{N}}'` (use `pr_merged` when outcome is merged, include `merge_sha` in data)
+3. Run: `codeflow db exec --query "UPDATE tasks SET pr_status = '{event_type}', pr_number = {N} WHERE id = '{task_id}'"`
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KL-UPDATE: PR outcome recorded - {event_type} for task {task_id}"`
 
@@ -541,8 +541,8 @@ Internal operations called by Parts 1 and 2.
 **log-append — CHECKLIST:**
 
 1. Determine log type from input
-2. INSERT into typed DB table
-3. Append to daily JSONL file
+2. Run: `codeflow db exec --query "INSERT INTO {table} ..."` for DB write
+3. Run: `codeflow ledger append --event-type {log_type} --data '{...}'` for JSONL append
 
 | Log Type | DB Table | JSONL File |
 |----------|----------|------------|
@@ -562,7 +562,7 @@ Internal operations called by Parts 1 and 2.
 
 **CHECKLIST (all required):**
 
-1. Read session ID from `.state/runtime/current-session-id`
+1. Read session ID via `codeflow state show` (or from `CODEFLOW_SESSION_ID` env var)
 2. Run: `codeflow pathflow phase-transition -s $SID -p $PHASE -t $STATUS`
 3. Valid phases: PF1-INIT, PF2-CONTEXT, PF3-CLASSIFY, PF4-EXECUTE, PF5-VERIFY, PF6-COMPLETE, PF7-END
 4. Valid statuses: entered, completed, skipped
@@ -575,7 +575,7 @@ Internal operations called by Parts 1 and 2.
 
 **CHECKLIST (all required):**
 
-1. Read session ID from `.state/runtime/current-session-id`
+1. Read session ID via `codeflow state show` (or from `CODEFLOW_SESSION_ID` env var)
 2. Run: `codeflow pathflow stage-transition -s $SID -g $STAGE -t $STATUS [-i $ITERATION] [-v $VERDICT]`
 3. Valid stages: WS-DEV, WS-PLAN, WS-DOCS, WS-TEST, WS-REV, WS-QA
 4. Valid statuses: pending, in_progress, complete, failed
@@ -629,7 +629,7 @@ Internal operations called by Parts 1 and 2.
 | Data inconsistency across tiers | Flag and report mismatch details to team lead |
 | Task dependency deadlock | Report deadlock chain to team lead |
 | DB exceeds 50 MB | Run VACUUM, report size to team lead |
-| active-task.json missing | Reconstruct from SQLite active_work table |
+| active-task.json missing | Reconstruct from SurrealDB active_work table |
 
 ### Protected File Staging Workflow
 
@@ -683,8 +683,8 @@ The team lead mirrors PathFlow phase/stage transitions into Claude Code's intern
 
 **Relationship to WorkGraph:**
 
-- Task tracker entries are derived mirrors of JSONL/SQLite state
-- If task tracker and JSONL/SQLite conflict, JSONL/SQLite is always correct
+- Task tracker entries are derived mirrors of JSONL/SurrealDB state
+- If task tracker and JSONL/SurrealDB conflict, JSONL/SurrealDB is always correct
 - cf-knowledge-layer does not read from or depend on task tracker state
 - Phase/stage transition events in JSONL (`pathflow-events.jsonl`) are the authoritative record, regardless of task tracker state
 
@@ -711,7 +711,7 @@ The team lead mirrors PathFlow phase/stage transitions into Claude Code's intern
 Send escalation to team lead when:
 
 - Work registration conflicts detected (overlapping active work)
-- Data inconsistency found across tiers (JSONL vs SQLite mismatch)
+- Data inconsistency found across tiers (JSONL vs SurrealDB mismatch)
 - JSONL append failure (Tier 0 integrity at risk)
 - Task dependency deadlock detected
 - DB size exceeds vacuum threshold (50 MB)

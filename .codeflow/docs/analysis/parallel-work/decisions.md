@@ -76,14 +76,14 @@ parent: "parallel-work/README.md"
 
 ## 3. Shared vs Per-Worktree Database
 
-**Question:** Should the SQLite database be shared (symlinked) or per-worktree?
+**Question:** Should the SurrealDB database be shared (symlinked) or per-worktree?
 
 | Option | Pros | Cons |
 |--------|------|------|
-| A. Shared (symlinked) | Single source of truth. No sync logic. WAL handles concurrency. | Write contention under heavy load. |
+| A. Shared (symlinked) | Single source of truth. No sync logic. SurrealDB handles concurrency. | Write contention under heavy load. |
 | B. Per-worktree (independent) | Zero write contention. Complete isolation. | Requires sync logic. Stale reads. Defeats single-source-of-truth. |
 
-**Recommendation: Option A (Shared).** SQLite WAL with busy_timeout=15000 handles 3 concurrent sessions. Per-worktree databases would require complex sync and violate the three-tier data model.
+**Recommendation: Option A (Shared).** SurrealDB with RetryConfig exponential backoff handles 3 concurrent sessions. Per-worktree databases would require complex sync and violate the three-tier data model.
 
 ---
 
@@ -155,13 +155,13 @@ parent: "parallel-work/README.md"
 
 ## 10. Maximum Concurrent Workers
 
-**Recommendation: 3 concurrent workers.** Matches V4 spec's `max_session_workers`. Within SQLite WAL capacity. Reasonable disk and token costs.
+**Recommendation: 3 concurrent workers.** Matches V4 spec's `max_session_workers`. Within SurrealDB concurrent access capacity. Reasonable disk and token costs.
 
 ---
 
 ## 11. SurrealDB Approach
 
-**Recommendation: Pure Rust CLI (Option E from [Data Layer Protection](data-layer-protection.md) Section 5).** After Epic 0 (Rust CLI redesign), SurrealDB embedded is a direct crate dependency — `use surrealdb::Surreal;`. `SurrealStore` is the sole `DataStore` implementation — SQLite is not present in the Rust CLI (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). This provides true embedded operation (`surrealkv://`) with native performance and a unified SurrealQL query language across all operations. SurrealDB handles CRUD, vector, graph, and document capabilities in a single store.
+**Recommendation: Pure Rust CLI (Option E from [Data Layer Protection](data-layer-protection.md) Section 5).** After Epic 0 (Rust CLI redesign), SurrealDB embedded is a direct crate dependency — `use surrealdb::Surreal;`. `SurrealStore` is the sole `DataStore` implementation (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). This provides true embedded operation (`surrealkv://`) with native performance and a unified SurrealQL query language across all operations. SurrealDB handles CRUD, vector, graph, and document capabilities in a single store.
 
 ---
 
@@ -189,7 +189,7 @@ parent: "parallel-work/README.md"
 | D. Unified Rust shared library | Both native in one library. No sidecar. No community bindings. | Rust toolchain in CI. Two-language codebase. CGo FFI overhead. |
 | **E. Pure Rust CLI (RECOMMENDED)** | **Single language. Maximum performance. No FFI overhead. No CGo complexity. Single binary. One build pipeline.** | **Large scope (full CLI port). Requires Rust expertise across team.** |
 
-**Recommendation: Option E (Pure Rust CLI).** Redesign the Go CLI in idiomatic Rust as Epic 0 (prerequisite). Trait-based abstractions (`DataStore`, `Coordinator`) are defined in `codeflow-core`. `SurrealStore` is the sole `DataStore` implementation — SQLite is not present in the Rust redesign (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). SurrealDB and Loro become direct crate dependencies (`use surrealdb::Surreal;`, `use loro::LoroDoc;`). No FFI, no shared library, no CGo. The sync daemon becomes a `codeflow sync daemon` subcommand within the single binary.
+**Recommendation: Option E (Pure Rust CLI).** Redesign the Go CLI in idiomatic Rust as Epic 0 (prerequisite). Trait-based abstractions (`DataStore`, `Coordinator`) are defined in `codeflow-core`. `SurrealStore` is the sole `DataStore` implementation (see [Decision #17](decisions.md#17-surrealdb-as-single-database-platform)). SurrealDB and Loro become direct crate dependencies (`use surrealdb::Surreal;`, `use loro::LoroDoc;`). No FFI, no shared library, no CGo. The sync daemon becomes a `codeflow sync daemon` subcommand within the single binary.
 
 This supersedes the earlier Option D (Rust shared library) recommendation. Option E eliminates the CGo FFI boundary entirely, removes two-language build complexity, and produces a single `codeflow` binary. The scope of the full CLI port is offset by the long-term simplicity gains: one language, one build pipeline, one test framework.
 
@@ -252,21 +252,21 @@ Go and Rust binaries coexist during migration. A contract conformance test suite
 
 ## 17. SurrealDB as Single Database Platform
 
-**Question:** Should SurrealDB supplement SQLite (hybrid) or replace it entirely?
+**Question:** Should SurrealDB be the sole database platform or operate alongside a legacy store?
 
 | Option | Pros | Cons |
 |--------|------|------|
-| A. Hybrid (SQLite + SurrealDB) | Incremental migration. SQLite handles CRUD. SurrealDB handles vector/graph. | Two databases. Data sync logic. Double infrastructure surface area. |
-| **B. SurrealDB-only (DECIDED)** | **Single query language (SurrealQL). One data model. Unified embedded operation. No sync logic between two stores.** | **Full schema migration from 37 SQLite tables. All SQL rewritten in SurrealQL.** |
+| A. Hybrid (legacy + SurrealDB) | Incremental migration. Legacy store handles CRUD. SurrealDB handles vector/graph. | Two databases. Data sync logic. Double infrastructure surface area. |
+| **B. SurrealDB-only (DECIDED)** | **Single query language (SurrealQL). One data model. Unified embedded operation. No sync logic between two stores.** | **Full schema migration from 37 database tables. All SQL rewritten in SurrealQL.** |
 
-**Decision: Option B (SurrealDB-only).** SQLite is dropped entirely. SurrealDB is the sole Tier 1 database.
+**Decision: Option B (SurrealDB-only).** SurrealDB is the sole Tier 1 database.
 
 - **Project level:** SurrealDB embedded mode (`surrealkv://`) at `.state/db/codeflow/`. No server process, no sidecar.
 - **Global level (optional):** SurrealDB daemon mode via Unix socket at `~/.codeflow/db.sock`. Enabled explicitly via `codeflow global enable`.
 - **Same query language everywhere.** SurrealQL replaces SQL across all contexts. No dual-language query maintenance.
-- **DataStore trait has ONE implementation:** `SurrealStore` with two connection modes — embedded (`surrealkv://`) for project-local and connected (`ws+unix://`) for global daemon. `SqliteStore` is not present in the Rust redesign — SurrealDB embedded replaces SQLite from the start of Epic 0.
+- **DataStore trait has ONE implementation:** `SurrealStore` with two connection modes — embedded (`surrealkv://`) for project-local and connected (`ws+unix://`) for global daemon. `legacy store` is not present in the Rust redesign — SurrealDB embedded is the sole DataStore from the start of Epic 0.
 - **Hot-path hooks use filesystem, not DB.** Gate-check, sentinel-write, checkpoint, team-guard, and edit-write-guard all operate on filesystem state. SurrealDB embedded latency (~1-3ms) is acceptable for the actual DB access patterns (session lifecycle, task CRUD, context search).
-- **Three-tier model updated:** Tier 0 JSONL (unchanged, rebuild authority), Tier 1 SurrealDB embedded (replaces SQLite), Tier 1+ SurrealDB daemon (optional global layer), Tier 2 Markdown (unchanged).
+- **Three-tier model:** Tier 0 JSONL (unchanged, rebuild authority), Tier 1 SurrealDB embedded, Tier 1+ SurrealDB daemon (optional global layer), Tier 2 Markdown (unchanged).
 
 ---
 
@@ -371,7 +371,7 @@ This is the simplest, most natural boundary that developers already understand.
 
 | Epic | Title | Scope | Tasks | Dependencies |
 |------|-------|-------|-------|-------------|
-| Epic 0 | Rust CLI — Idiomatic Redesign | Replace Go CLI with pure Rust. `SurrealStore` as the ONLY `DataStore` impl (no `SqliteStore`). 7 phases. | 25 | None — prerequisite for all |
+| Epic 0 | Rust CLI — Idiomatic Redesign | Replace Go CLI with pure Rust. `SurrealStore` as the ONLY `DataStore` impl (no `legacy store`). 7 phases. | 25 | None — prerequisite for all |
 | Epic A | Parallel Execution Core | Loro CRDT, worktrees, singleton elimination, autorun integration. | 19 | Epic 0 |
 | Epic B | Data Layer Standardization | Schema standardization in SurrealQL (not SQL). Phase F (SurrealDB) merged into Epic 0 — REMOVED from Epic B. | ~16 | Epic 0; A, B, C can run in parallel after Epic 0 |
 | Epic C | Global Intelligence Layer | Daemon mode, project registry, sync engine, local embeddings (`all-MiniLM-L6-v2` via `ort` crate, 384 dims, ~50MB), cross-project queries, knowledge graph extraction pipeline (INGEST/COGNIFY/MEMIFY/SEARCH), Loro CRDT KG sync for teams < 15 devs, codeflow-knowledge.toml config, extended ontology (16 entity types, 18 relationship types), bootstrap CLI command, trigger points and scheduling. | 14-18 | Epic 0 |
@@ -380,8 +380,8 @@ This is the simplest, most natural boundary that developers already understand.
 
 **Key changes from the previous 3-epic structure:**
 
-- Epic 0 is updated: `SurrealStore` is now the ONLY `DataStore` implementation. `SqliteStore` is not present in the Rust redesign — SurrealDB embedded replaces SQLite from the start.
-- Epic B is reduced: Phase F (SurrealDB) was previously in Epic B but is now integral to Epic 0 (since the Rust CLI starts with SurrealDB, not SQLite). Epic B now covers schema standardization and enforcement only (~16 tasks, 2 phases).
+- Epic 0 is updated: `SurrealStore` is now the ONLY `DataStore` implementation. `legacy store` is not present in the Rust redesign — SurrealDB embedded is the sole DataStore from the start.
+- Epic B is reduced: Phase F (SurrealDB) was previously in Epic B but is now integral to Epic 0. Epic B now covers schema standardization and enforcement only (~16 tasks, 2 phases).
 - Epic C is new: Global Intelligence Layer — daemon, project registry, sync engine, local ONNX embeddings, cross-project SurrealQL queries.
 - Epic D is updated: Model Orchestrator — 12 tasks, 3 phases (D1: Orchestration Core, D2: Execution Engine, D3: Tracking). See [Decision #24](#24-combined-epic-de-codeflow-app-vision).
 - Epic E is updated: CodeFlow App — 18-20 tasks, 5 phases (E1: App Foundation, E2: Streaming Terminal, E3: Project Management, E4: Configuration, E5: Intelligence). See [Decision #24](#24-combined-epic-de-codeflow-app-vision).

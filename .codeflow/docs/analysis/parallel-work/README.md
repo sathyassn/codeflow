@@ -38,7 +38,7 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 3. **The worktree manager already exists and splits state correctly.** `worktree.go:110-191` creates git worktrees with shared dirs (`db`, `ledger`, `coordination`, `logs`) symlinked and local dirs (`runtime`, `session`, `sentinels`) created fresh per worktree. Worktree creation must happen at SessionStart (hook-level), not PF1-INIT, so all PathFlow phases execute within the worktree.
 
-4. **The data layer is partially ready.** Ledger writes use `flock` for file I/O append safety (`writer.go:74-119`). SQLite uses WAL mode with `busy_timeout=5000` and retry logic (`connection.go:85-115`). However, state.json for claims uses non-atomic read-modify-write (`claim.go:89-133`) and must be replaced with Loro Map CRDT (the sole coordination mechanism).
+4. **The data layer is partially ready.** Ledger writes use `flock` for file I/O append safety (`writer.go:74-119`). The Go CLI used WAL mode with `busy_timeout=5000` and retry logic; the Rust CLI uses SurrealDB embedded with `RetryConfig` exponential backoff. However, state.json for claims uses non-atomic read-modify-write (`claim.go:89-133`) and must be replaced with Loro Map CRDT (the sole coordination mechanism).
 
 5. **The claims system exists but is not wired into PathFlow.** `claim.go:148-221` implements pattern-based conflict detection with fencing tokens, but no PathFlow hook calls `Acquire()` before Edit/Write operations. The claims state.json has a TOCTOU race that is resolved by migrating to Loro Map CRDT.
 
@@ -46,7 +46,7 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 7. **The ledger and log subsystem has significant schema inconsistencies.** Five distinct naming conventions coexist (`ts` vs `timestamp`, `event` vs `event_type` vs `e`), security logs use pretty-printed multi-line JSON instead of compact JSONL, and no retention policies exist for any log category.
 
-8. **Data layer CLI access lacks enforcement.** `codeflow db exec` accepts arbitrary SQL with zero validation. Agents can bypass the CLI entirely via `sqlite3` shell. Neither `.state/ledger/` nor `.state/db/` is in the edit-write-guard's `blocked_directories` list.
+8. **Data layer CLI access lacks enforcement.** `codeflow db exec` accepts arbitrary SQL with zero validation. Agents can bypass the CLI entirely via direct shell access. Neither `.state/ledger/` nor `.state/db/` is in the edit-write-guard's `blocked_directories` list.
 
 9. **SurrealDB offers compelling multi-model capabilities for agentic use cases** (vector, graph, document, time-series in a single query language), but the Go embedded mode does not exist -- only WebSocket/HTTP connections work from Go. True embedded mode exists only in Rust, JS, Python, and WASM.
 
@@ -54,11 +54,11 @@ This analysis package examines what is required to enable true parallel PathFlow
 
 11. **A pure Rust CLI redesign solves the SurrealDB, Loro, and CGo complexity gaps simultaneously.** By redesigning the Go CLI in idiomatic Rust as a prerequisite Epic 0, CodeFlow eliminates CGo FFI overhead, shared library cross-compilation, and two-language build complexity. The redesign is not a line-for-line port -- it introduces trait-based abstractions (`DataStore`, `Coordinator`, `Transport`), type system leverage (enums for states, tagged unions for events), and domain-specific error types that provide compile-time correctness guarantees. Loro and SurrealDB become direct crate dependencies (`use loro::LoroDoc;`, `use surrealdb::Surreal;`) -- native Rust, zero binding indirection. The sync daemon becomes a `codeflow sync daemon` subcommand within the single `codeflow` binary. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
 
-12. **SurrealDB replaces SQLite entirely — no hybrid mode.** The decision to use a pure Rust CLI (Epic 0) makes true embedded SurrealDB (`surrealkv://`) available as a direct crate dependency. SQLite is dropped completely. `SurrealStore` is the sole `DataStore` implementation with two connection modes: `surrealkv://` for project-local embedded operations, and `ws+unix://` for optional global daemon access. The three-tier data model is updated: Tier 0 JSONL (unchanged), Tier 1 SurrealDB embedded (replaces SQLite), Tier 1+ SurrealDB daemon (optional global), Tier 2 Markdown (unchanged). JSONL remains the rebuild authority. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
+12. **SurrealDB is the sole database — no hybrid mode.** The decision to use a pure Rust CLI (Epic 0) makes true embedded SurrealDB (`surrealkv://`) available as a direct crate dependency. `SurrealStore` is the sole `DataStore` implementation with two connection modes: `surrealkv://` for project-local embedded operations, and `ws+unix://` for optional global daemon access. The three-tier data model is: Tier 0 JSONL (unchanged), Tier 1 SurrealDB embedded, Tier 1+ SurrealDB daemon (optional global), Tier 2 Markdown (unchanged). JSONL remains the rebuild authority. See [Decision #17](decisions.md#17-surrealdb-as-single-database-platform).
 
 13. **A global database layer enables cross-project intelligence as an optional, modular feature.** The default mode remains project-only with SurrealDB embedded — no daemon required. `codeflow global enable` starts the SurrealDB daemon inside the codeflow binary (Unix socket at `~/.codeflow/db.sock`, no external install, no Docker). Projects opt in to sharing via `.codeflow/config/project.toml` visibility config. Local ONNX embeddings (`all-MiniLM-L6-v2`, 384 dims, via the `ort` crate) enable offline semantic search across linked project memories. Graceful degradation: if the daemon is unavailable, all project-local work continues unaffected. See [Decision #18](decisions.md#18-global-database-architecture) and [Global Intelligence Layer](global-intelligence.md).
 
-**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work now organizes into six epics. Epic 0 (Rust CLI idiomatic redesign with SurrealDB-only data layer) is the universal prerequisite foundation. Epic A (parallel execution core with native Loro CRDT) and Epic B (data layer standardization) can run in parallel after Epic 0. Epic C (Global Intelligence Layer -- daemon, project registry, cross-project queries, local embeddings) also runs after Epic 0. Epic D (Model Orchestrator -- 12 tasks, 3 phases: orchestration core, execution engine, tracking) depends on Epic 0 and Epic C. Epic E (CodeFlow App -- 18-20 tasks, 5 phases: app foundation, streaming terminal, project management, configuration, intelligence) depends on Epics 0, C, and D, with phased entry points allowing some phases to start before all dependencies complete. Loro CRDT is the sole coordination mechanism. The SurrealDB-only decision simplifies the architecture by eliminating the hybrid SQLite+SurrealDB scenario that would have required data sync logic between two stores.
+**Assessment:** Parallel work support is architecturally feasible with substantial but achievable effort. The work now organizes into six epics. Epic 0 (Rust CLI idiomatic redesign with SurrealDB-only data layer) is the universal prerequisite foundation. Epic A (parallel execution core with native Loro CRDT) and Epic B (data layer standardization) can run in parallel after Epic 0. Epic C (Global Intelligence Layer -- daemon, project registry, cross-project queries, local embeddings) also runs after Epic 0. Epic D (Model Orchestrator -- 12 tasks, 3 phases: orchestration core, execution engine, tracking) depends on Epic 0 and Epic C. Epic E (CodeFlow App -- 18-20 tasks, 5 phases: app foundation, streaming terminal, project management, configuration, intelligence) depends on Epics 0, C, and D, with phased entry points allowing some phases to start before all dependencies complete. Loro CRDT is the sole coordination mechanism. The SurrealDB-only decision simplifies the architecture by eliminating any hybrid database scenario that would have required data sync logic between two stores.
 
 ## V4 Specification Gap Analysis
 
@@ -158,7 +158,7 @@ Everything behind this interface is fair game for redesign.
 |---|------|-------------|--------|
 | 1 | Audit Go CLI for redesign opportunities | Analyze `codeflow-cli/` (27 packages under `internal/`, `cmd/codeflow/`) to identify: DRY violations (duplicate logic across packages), tightly coupled components (packages that import each other circularly or share globals), patterns that simplify under Rust idioms (error handling, state machines, tagged unions), and Go-specific workarounds that Rust eliminates (interface{} casts, string-typed enums, manual JSON marshaling). Produce a findings document with specific file:line references. | M |
 | 2 | Define trait hierarchy and module map | Design the `DataStore`, `Coordinator`, `Transport`, `LedgerWriter`, and `HookHandler` traits. Map each Go package to its Rust module. Identify which Go packages merge (consolidation) and which split (separation of concerns). Produce a module dependency graph. | M |
-| 3 | Create cf-rust-standards skill | Create `.claude/skills/cf-rust-standards/SKILL.md` (parallels existing `cf-go-standards`, `cf-shell-standards`, `cf-python-standards`). Covers: workspace and crate structure conventions, error handling (`thiserror` for library errors in `codeflow-core`, `anyhow` for CLI binary in `codeflow-cli`), trait design patterns (trait objects vs generics — when to use each), `serde` serialization conventions, async patterns (`tokio` runtime), testing conventions (`#[test]`, `#[tokio::test]`, property-based with `proptest`, snapshot with `insta`), naming conventions (snake_case, module structure), Clippy lint configuration and enforcement (`#![deny(clippy::all)]`), `unsafe` policy (when permitted, review requirements), crate dependency governance (approved crates list: `clap`, `serde`, `thiserror`, `anyhow`, `rusqlite`, `loro`, `surrealdb`, `git2`, `tokio`, `proptest`, `insta`, `cargo-nextest`), and builder pattern for complex configuration. | M |
+| 3 | Create cf-rust-standards skill | Create `.claude/skills/cf-rust-standards/SKILL.md` (parallels existing `cf-go-standards`, `cf-shell-standards`, `cf-python-standards`). Covers: workspace and crate structure conventions, error handling (`thiserror` for library errors in `codeflow-core`, `anyhow` for CLI binary in `codeflow-cli`), trait design patterns (trait objects vs generics — when to use each), `serde` serialization conventions, async patterns (`tokio` runtime), testing conventions (`#[test]`, `#[tokio::test]`, property-based with `proptest`, snapshot with `insta`), naming conventions (snake_case, module structure), Clippy lint configuration and enforcement (`#![deny(clippy::all)]`), `unsafe` policy (when permitted, review requirements), crate dependency governance (approved crates list: `clap`, `serde`, `thiserror`, `anyhow`, `loro`, `surrealdb`, `git2`, `tokio`, `proptest`, `insta`, `cargo-nextest`), and builder pattern for complex configuration. | M |
 | 4 | Configure Rust MCP servers | Add two MCP servers to `.claude/settings.json` or `.claude/settings.local.json`: **(1) Context7 MCP** — fetches up-to-date documentation for any crate (loro, surrealdb, clap, tokio, serde, etc.), prevents hallucinated APIs. Install: `claude mcp add context7 -- npx -y @upstash/context7-mcp@latest`. **(2) rust-analyzer MCP** — bridges AI with rust-analyzer for code intelligence, type checking, trait resolution. Install: `claude mcp add-json "rust-analyzer" '{"command":"rustmcp","args":[]}'`. Verify both MCPs respond correctly. Document MCP usage in cf-rust-standards skill. | S |
 
 #### Phase 0B: Foundation + Testing Infrastructure
@@ -176,7 +176,7 @@ Everything behind this interface is fair game for redesign.
 
 | # | Task | Description | Effort |
 |---|------|-------------|--------|
-| 9 | Implement `DataStore` trait and `SurrealStore` | `DataStore` trait with CRUD operations for sessions, tasks, epics, workgraph. `SurrealStore` implementation using the `surrealdb` crate in embedded `surrealkv://` mode. Port `internal/db/` query logic, rewriting SQL as SurrealQL. No `SqliteStore` — SurrealDB replaces SQLite from the start. | L |
+| 9 | Implement `DataStore` trait and `SurrealStore` | `DataStore` trait with CRUD operations for sessions, tasks, epics, workgraph. `SurrealStore` implementation using the `surrealdb` crate in embedded `surrealkv://` mode. Port `internal/db/` query logic, rewriting SQL as SurrealQL. No legacy store — SurrealDB is the sole DataStore from the start. | L |
 | 10 | Implement `LedgerWriter` trait and `JsonlWriter` | `LedgerWriter` trait for append-only event logging. `JsonlWriter` implementation with flock-based locking, serde serialization of `LedgerEvent` enum, schema validation at compile time via typed events. Port `internal/ledger/` logic. | M |
 | 11 | Implement session and state management | Port `internal/session/`, `internal/workstate/`, `internal/config/`. Session builder pattern. `SessionState` enum-based state machine with compile-time valid transitions. Active-task management, codeflow-env.sh read/write. | L |
 | 12 | Implement worktree manager | Port `internal/worktree/`. Git operations via `git2` crate. Registry (worktrees.yaml), shared/local symlinks, setup/cleanup. Typed worktree states. | M |
@@ -203,7 +203,7 @@ Everything behind this interface is fair game for redesign.
 | # | Task | Description | Effort |
 |---|------|-------------|--------|
 | 20 | Port Go unit tests to Rust | Port Go integration tests to Rust `#[test]` and `#[tokio::test]`. Feature parity with `make test-cover` and `make test-race` equivalents. Test against the frozen external interface (subcommands, JSON contracts, exit codes). Trait-based design enables unit testing core logic with mock implementations. Property-based tests with `proptest` for serialization roundtrips. Snapshot tests with `insta` for JSON output verification. | L |
-| 21 | Contract conformance test suite | Automated tests that verify the Rust binary produces identical output to the Go binary for all hook events and CLI commands. Run both binaries against the same inputs, diff outputs. This is the migration safety net. Must cover: all hook stdin/stdout JSON contracts, all CLI subcommand outputs, all exit code paths, all file I/O (JSONL, SQLite, state files). | M |
+| 21 | Contract conformance test suite | Automated tests that verify the Rust binary produces identical output to the Go binary for all hook events and CLI commands. Run both binaries against the same inputs, diff outputs. This is the migration safety net. Must cover: all hook stdin/stdout JSON contracts, all CLI subcommand outputs, all exit code paths, all file I/O (JSONL, SurrealDB, state files). | M |
 | 22 | Validate shell test suite passes | Run the full ~1,555 shell integration test suite against the Rust binary via the bridge script from task 8. All tests must pass UNCHANGED — these tests exercise the frozen external interface. Any failure indicates a contract violation that must be fixed before proceeding to Phase 0G. | M |
 
 #### Phase 0G: CI/CD + Cutover
@@ -262,14 +262,14 @@ Everything behind this interface is fair game for redesign.
 | 15 | Autorun worktree integration | Update autorun worker to create/cleanup worktree per worker. Pass worktree path as work directory. | L |
 | 16 | Merge conflict detection | Before PR creation, check for merge conflicts with target branch. | M |
 | 17 | Parallel session coordination | Sessions discover each other via worktree registry. FIFO merge queue. | L |
-| 18 | Increase SQLite busy_timeout | Bump to 15000 for parallel mode. Add jitter to retry delay. | S |
+| 18 | Increase SurrealDB retry backoff | Bump retry timeout to 15000ms for parallel mode. Add jitter to retry delay. | S |
 | 19 | pathflow-events.jsonl worktree field | Add `worktree` field to all events. Consumers filter by session_id. | S |
 
 ### Epic B: Data Layer Standardization (~16 tasks, 2 phases)
 
 **Scope:** Schema standardization, CLI-only enforcement, SurrealDB embedded, retention, log cleanup. All implemented in the pure Rust CLI from Epic 0.
 
-**Prerequisite:** Epic 0 (Rust CLI redesign). `SurrealStore` is the sole `DataStore` implementation from Epic 0 — SQLite is not present in the Rust CLI. Epic B Phase D (schema standardization) uses SurrealQL throughout. Phase F has been removed from Epic B — SurrealDB is integral to Epic 0.
+**Prerequisite:** Epic 0 (Rust CLI redesign). `SurrealStore` is the sole `DataStore` implementation from Epic 0. Epic B Phase D (schema standardization) uses SurrealQL throughout. Phase F has been removed from Epic B — SurrealDB is integral to Epic 0.
 
 #### Phase D: Schema Standardization + Enforcement
 
@@ -286,7 +286,7 @@ Everything behind this interface is fair game for redesign.
 | 9 | Revive file-changes log | Re-enable with `agent_role`, `agent_name`, `worktree`, `task_id`. | M |
 | 10 | Revive tasks log | Re-enable with agent_type, description, result_summary, duration. | M |
 | 11 | Add `.state/ledger/` and `.state/db/` to blocked_directories | Update enforcement-policy.json. Closes Edit/Write bypass. | S |
-| 12 | Add PreToolUse hook blocking sqlite3 and db exec | Reject Bash tool calls containing `sqlite3 .state/db/` or `codeflow db exec`. | M |
+| 12 | Add PreToolUse hook blocking direct db access and db exec | Reject Bash tool calls containing `codeflow db exec` or direct access to `.state/db/`. | M |
 | 13 | Add PreToolUse hook blocking direct JSONL writes | Reject Bash tool calls writing directly to `.state/ledger/*.jsonl`. | S |
 | 14 | Replace db exec with named ops | Remove raw SQL `codeflow db exec`. Named commands only. | L |
 | 15 | Strengthen db query SQL parsing | Parse SQL to reject write operations including CTEs with side effects. | M |
@@ -302,7 +302,7 @@ Everything behind this interface is fair game for redesign.
 
 #### Phase F: SurrealDB Embedded (Native Rust)
 
-> **Note:** SurrealDB integration is now part of Epic 0 (not Epic B). Epic 0 uses `SurrealStore` as the only `DataStore` implementation from the start — SQLite is never present in the Rust CLI. Epic B Phase F is removed. Schema standardization work (Phases D and E) is still in Epic B and uses SurrealQL rather than SQL.
+> **Note:** SurrealDB integration is now part of Epic 0 (not Epic B). Epic 0 uses `SurrealStore` as the only `DataStore` implementation from the start. Epic B Phase F is removed. Schema standardization work (Phases D and E) is still in Epic B and uses SurrealQL rather than SQL.
 
 ### Epic C: Global Intelligence Layer (14-18 tasks, 3 phases)
 
@@ -346,7 +346,7 @@ Everything behind this interface is fair game for redesign.
 
 ```text
 Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 25 tasks)
-    SurrealStore is the ONLY DataStore impl (surrealkv:// embedded, no SqliteStore)
+    SurrealStore is the ONLY DataStore impl (surrealkv:// embedded, no legacy store)
     Phase 0A (Codebase Analysis + Tooling)
     Phase 0B (Foundation + Testing Infrastructure — BEFORE Phase 0C code migration)
     Phase 0C (Core Library Crate — DataStore/SurrealStore, LedgerWriter, session, worktree, claims)
@@ -385,7 +385,7 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
 
 **Key dependency notes:**
 
-- Epic 0 is the universal prerequisite. It introduces `SurrealStore` as the only `DataStore` impl (no SQLite). All downstream epics build on Epic 0's trait hierarchy.
+- Epic 0 is the universal prerequisite. It introduces `SurrealStore` as the only `DataStore` impl. All downstream epics build on Epic 0's trait hierarchy.
 - Epics A, B, and C can run in parallel after Epic 0 completes.
 - Epic B Phase D can start independently of Epic A -- schema standardization in SurrealQL does not depend on parallel execution.
 - Epic D depends on Epic 0 and Epic C -- model routing uses global project context for cross-project task selection.
@@ -429,7 +429,7 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
-| SurrealDB write contention under heavy parallel writes | Low | Medium | SurrealDB multi-writer architecture handles concurrent writes better than SQLite WAL. Monitor under load in Epic A Phase C. |
+| SurrealDB write contention under heavy parallel writes | Low | Medium | SurrealDB multi-writer architecture handles concurrent writes with exponential backoff. Monitor under load in Epic A Phase C. |
 | state.json TOCTOU race in claims | High (on any parallel use) | High | Replace with Loro Map CRDT (Phase A) |
 | Git worktree branch conflicts | High (if sessions modify same files) | Medium | Claims prevent overlap; FIFO merge queue |
 | Rust CLI redesign scope | Medium | High (blocks Epic A and B -- this IS the foundation) | Idiomatic redesign with codebase analysis phase. Contract conformance tests validate identical external behavior. Go and Rust binaries coexist during migration. |
@@ -443,13 +443,13 @@ Epic 0: Rust CLI — Idiomatic Redesign (PREREQUISITE — must complete first, 2
 | Risk | Description | Mitigation |
 |------|-------------|-----------|
 | Worktree state split adds maintenance burden | Every new state file must be classified as shared or local | Document classification criteria; add CI check |
-| SurrealDB-only data layer (no SQLite) | Full 37-table schema migration, all SQL rewritten in SurrealQL | SurrealDB embedded is native in Rust CLI (Epic 0). JSONL remains rebuild authority — SurrealDB state is always recoverable from Tier 0. |
+| SurrealDB-only data layer | Full 37-table schema migration, all SQL rewritten in SurrealQL | SurrealDB embedded is native in Rust CLI (Epic 0). JSONL remains rebuild authority — SurrealDB state is always recoverable from Tier 0. |
 | Rust CLI redesign scope | Full Go-to-Rust idiomatic redesign, external interface frozen | Incremental migration with coexisting binaries. Contract conformance test suite validates identical external behavior. Codebase analysis phase (0A) identifies consolidation opportunities before implementation. |
 | Testing parallel scenarios | Inherently harder to test | Dedicated parallel integration tests; Loro concurrency tests |
 
 ### Incremental Rollout Strategy
 
-1. **Epic 0** (Rust CLI redesign) is the prerequisite foundation (25 tasks, 7 phases). It is an idiomatic redesign, not a line-for-line port. `SurrealStore` is the sole `DataStore` implementation — SurrealDB embedded (`surrealkv://`) replaces SQLite from the start. Phase 0A audits the Go CLI and establishes tooling (cf-rust-standards skill, MCP servers). Phase 0B sets up the workspace AND the complete testing infrastructure — testing is ready BEFORE any code migration. Phases 0C-0E implement trait-based abstractions (`DataStore`, `Coordinator`, `Transport`, `LedgerWriter`, `HookHandler`). Phase 0F validates external interface conformance. Go and Rust binaries coexist during migration. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
+1. **Epic 0** (Rust CLI redesign) is the prerequisite foundation (25 tasks, 7 phases). It is an idiomatic redesign, not a line-for-line port. `SurrealStore` is the sole `DataStore` implementation — SurrealDB embedded (`surrealkv://`) from the start. Phase 0A audits the Go CLI and establishes tooling (cf-rust-standards skill, MCP servers). Phase 0B sets up the workspace AND the complete testing infrastructure — testing is ready BEFORE any code migration. Phases 0C-0E implement trait-based abstractions (`DataStore`, `Coordinator`, `Transport`, `LedgerWriter`, `HookHandler`). Phase 0F validates external interface conformance. Go and Rust binaries coexist during migration. The external interface is FROZEN: same binary name, subcommands, hook JSON contracts, and exit codes.
 
 2. **Epic A Phase A** (Loro CRDT foundation) is the first post-migration work. It fixes the TOCTOU race in claims and establishes the coordination layer using native Loro.
 

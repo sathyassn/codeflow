@@ -5,6 +5,7 @@
     "description": "Configuration for Edit/Write pre-tool-use validation",
     "blocked_directories": [
       ".git",
+      ".state",
       "node_modules",
       "__pycache__",
       ".venv",
@@ -79,6 +80,12 @@
       ".git/hooks/**",
       ".state/sentinels/**",
       ".state/session/**",
+      ".state/runtime/**",
+      ".state/ledger/**",
+      ".state/db/**",
+      ".state/logs/**",
+      ".state/coordination/**",
+      ".state/worktrees/**",
       "codeflow-cli/core/src/hooks/**",
       "codeflow-cli/cli/src/cmd/hooks/**",
       "codeflow-cli/cli/src/cmd/git_hooks.rs"
@@ -91,6 +98,11 @@
       ".state/sentinels/**",
       ".state/session/**",
       ".state/runtime/**",
+      ".state/ledger/**",
+      ".state/db/**",
+      ".state/logs/**",
+      ".state/coordination/**",
+      ".state/worktrees/**",
       ".claude/hooks/codeflow/**",
       ".claude/settings-templates/**",
       ".claude/settings.json",
@@ -148,7 +160,7 @@
   },
   "read_delegation": {
     "allowed_paths": [".claude/CLAUDE.md", ".claude/settings.json", "README.md", "package.json", "Cargo.toml", "pyproject.toml"],
-    "always_block_patterns": [".claude/memory/**", ".codeflow/state/**", "*.jsonl", "*.db", "*.sqlite", "*.log"],
+    "always_block_patterns": [".claude/memory/**", ".codeflow/state/**", "*.jsonl", "*.db", "*.log"],
     "threshold_rules": {"md": 500, "txt": 500, "ts": 300, "tsx": 300, "js": 300, "jsx": 300, "py": 300, "sh": 200, "json": 200, "yaml": 200, "yml": 200, "toml": 200, "default": 400}
   },
   "managed_tmp": {

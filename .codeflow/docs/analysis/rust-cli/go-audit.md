@@ -142,7 +142,7 @@ Both packages implement `nullString` helpers that convert Go values to SQL-nulla
 - `autorun/orchestrator.go:517`: `func nullInt64(n int64) sql.NullInt64` -- converts int64 to `sql.NullInt64` (zero → null)
 - `workgraph/create.go:297`: `func nullString(s string) any` -- returns `nil` for empty strings, else the string (untyped nullable)
 
-**Rust opportunity:** `Option<String>` and `Option<i64>` replace all `sql.Null*` types. No conversion helpers needed. The `rusqlite` crate handles `Option<T>` transparently.
+**Rust opportunity:** `Option<String>` and `Option<i64>` replace all `sql.Null*` types. No conversion helpers needed. SurrealDB via the `surrealdb` crate handles `Option<T>` with SurrealQL natively.
 
 ### 3.6 High: Timestamp Parsing Duplication
 
@@ -371,7 +371,7 @@ type Task struct {
 
 Each nullable field requires explicit `.Valid` checks and `.String` access throughout the codebase.
 
-**Rust replacement:** `Option<String>` and `Option<i64>`. The `rusqlite` crate maps SQL NULLs to `None` automatically. Zero boilerplate.
+**Rust replacement:** `Option<String>` and `Option<i64>`. The `surrealdb` crate handles optional fields natively via SurrealQL `option<T>` types. Zero boilerplate.
 
 ### 5.4 Manual JSON Marshaling
 
@@ -409,7 +409,7 @@ return nil, fmt.Errorf("db: opening database %s: %w", path, err)
 #[derive(Debug, thiserror::Error)]
 enum DbError {
     #[error("opening database {path}")]
-    Open { path: String, #[source] source: rusqlite::Error },
+    Open { path: String, #[source] source: surrealdb::Error },
     ...
 }
 ```
@@ -535,7 +535,7 @@ codeflow-rs/                          # Rust workspace (coexists with codeflow-c
         schema.rs               # <-- db/schema.sql (embedded)
         migrate.rs              # <-- db/migrate.go
         models.rs               # <-- db/models.go (with Option<T> instead of sql.Null*)
-        queries.rs              # <-- db/queries.go (typed via rusqlite)
+        queries.rs              # <-- db/queries.go (typed via surrealdb SurrealQL)
         sync.rs                 # <-- db/sync.go + ledger/normalize.go (MERGED)
         crdt.rs                 # <-- db/crdt.go
 
@@ -748,11 +748,11 @@ codeflow-rs/                          # Rust workspace (coexists with codeflow-c
 | Workspace layout | Cargo workspace with 10 crates | Mirrors Go package boundaries with consolidations applied |
 | Error handling | `thiserror` for library crates, `anyhow` for CLI binary | Clean error hierarchy in libraries, convenience in binary |
 | JSON handling | `serde` + `serde_json` throughout | Eliminates all `map[string]any` and manual marshaling |
-| Database | `rusqlite` with typed queries | Direct replacement for `ncruces/go-sqlite3` |
+| Database | `surrealdb` crate (embedded `surrealkv://`) | Replaces legacy Go database driver with SurrealDB embedded |
 | CLI framework | `clap` with derive macros | Direct replacement for Cobra with less boilerplate |
 | File locking | `fs2` crate | Cross-platform replacement for `syscall.Flock` |
 | ID generation | `ulid` crate | Direct replacement for `oklog/ulid` |
-| Async model | Synchronous (no async runtime) | CLI tool with single-threaded SQLite; async adds complexity without benefit |
+| Async model | Synchronous (no async runtime) | CLI tool with synchronous SurrealDB embedded; async adds complexity without benefit |
 | Testing | Built-in `#[test]` + `assert_cmd` for CLI integration | Replaces `testing.T` + `testutil.TempProject` |
 
 ### 8.3 Risk Areas
@@ -761,6 +761,6 @@ codeflow-rs/                          # Rust workspace (coexists with codeflow-c
 |------|-----------|
 | Shadow test parity during migration | Keep Go binary as reference; run shadow tests comparing Rust output to Go output |
 | Hook latency regression | Rust cold-start is ~0ms (no runtime init); benchmark each hook independently |
-| SQLite migration compatibility | Use same `schema.sql` and migration SQL files; `rusqlite` reads same DB format |
+| SurrealDB migration compatibility | Port schema from SQL to SurrealQL; `surrealdb` crate uses embedded `surrealkv://` mode |
 | JSONL format compatibility | Use same serde serialization format; run normalization comparison tests |
 | Behavioral parity in 20+ hooks | Port shadow test registry (`shadowtest/registry.go`) to Rust integration tests |

@@ -162,7 +162,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
   - `.codeflow/config/` (enforcement and pathflow configs)
   - `.codeflow/scripts/security/protection/` (resource protection scripts)
   - `.codeflow/testing/` (test suite)
-  - `.state/db/` (SQLite database)
+  - `.state/db/` (SurrealDB database)
   - `.state/ledger/` (JSONL event logs)
   - `.state/runtime/` (runtime state)
   - `.state/sentinels/` (PathFlow sentinels)
@@ -341,7 +341,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 
 | Error | Cause | Recovery |
 |-------|-------|----------|
-| Database corruption | SQLite file damaged | Rebuild from JSONL (Tier 0 is authoritative) |
+| Database corruption | SurrealDB file damaged | Rebuild from JSONL (Tier 0 is authoritative) |
 | Hook subcommand error | Go CLI hook returned non-zero exit | Check `codeflow hooks <event> <subcommand>` output; verify `codeflow` binary is up to date |
 | Stale session state | Abnormal termination of previous session | Use `--repair` to clean up stale flags and sentinels |
 | Missing agent definitions | Files deleted or renamed | Restore from git: `git checkout main -- .claude/agents/` |

@@ -61,7 +61,7 @@ event routing in `codeflow-cli/core/src/ledger/routing.rs`.
 **Not in CANONICAL set:** The `pathflow-events` type is NOT included in `files::CANONICAL`
 (`codeflow-cli/core/src/ledger/mod.rs:33`). CANONICAL contains only `work-graph`,
 `memory-events`, `sessions`, and `config`. This means pathflow events are **not synced to
-SQLite** — they are only available from the JSONL ledger files.
+SurrealDB** — they are only available from the JSONL ledger files.
 
 **Event types routed to `pathflow-events`** (from `routing.rs:51-56`):
 

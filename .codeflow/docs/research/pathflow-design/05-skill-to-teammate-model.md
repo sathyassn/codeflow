@@ -508,7 +508,7 @@ The 7 operations become:
 | complete-work | Teammate marks task as completed via TaskUpdate + sends summary |
 | manage-memory-lifecycle | Team lead's periodic maintenance (archive old tasks, clean state) |
 
-**Net effect:** Work lifecycle becomes task status transitions + message-based reporting. ~200 tokens of lifecycle procedures per writing teammate blueprint. Cross-session persistence (JSONL/SQLite) deferred to a separate "session persistence" design.
+**Net effect:** Work lifecycle becomes task status transitions + message-based reporting. ~200 tokens of lifecycle procedures per writing teammate blueprint. Cross-session persistence (JSONL/SurrealDB) deferred to a separate "session persistence" design.
 
 #### cf-git-workflow (TRANSFORM)
 
@@ -894,8 +894,8 @@ Delegate mode is interactive-only (Shift+Tab). If Anthropic adds a settings key 
 
 ### A2: Cross-Session Teammate Persistence
 
-Agent Teams teammates do not persist across sessions. The V3 Knowledge Layer (JSONL + SQLite) provides cross-session memory. PathFlow needs a strategy for cross-session context that does not depend on teammate persistence. Options:
-- Continue using JSONL/SQLite for cross-session memory (separate from task system)
+Agent Teams teammates do not persist across sessions. The V3 Knowledge Layer (JSONL + SurrealDB) provides cross-session memory. PathFlow needs a strategy for cross-session context that does not depend on teammate persistence. Options:
+- Continue using JSONL/SurrealDB for cross-session memory (separate from task system)
 - Use MEMORY.md auto-memory for lightweight cross-session context
 - Use task metadata for structured cross-session state
 

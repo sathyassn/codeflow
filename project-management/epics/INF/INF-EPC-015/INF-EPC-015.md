@@ -2,7 +2,7 @@
 id: "epic-01KJ6YG0QA7MWQQFWCZMSP7HB6"
 format_id: "INF-EPC-015"
 title: "CodeFlow Go CLI - Phase 6 V4 Implementation"
-summary: "Build the production CodeFlow CLI binary in Go — sole SQLite authority, welcome screen, doctor, autorun, cross-platform"
+summary: "Build the production CodeFlow CLI binary in Go — sole SurrealDB authority, welcome screen, doctor, autorun, cross-platform"
 status: complete
 area_type: "INF"
 work_type: "FEAT"
@@ -21,7 +21,7 @@ updated_at: "2026-02-27T11:09:01Z"
 
 ## Summary
 
-Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite authority -- all database writes go through the compiled binary, eliminating LLM-driven shell-to-sqlite3 data layer risks. The CLI wraps Claude Code with a welcome screen, preflight checks, doctor diagnostics, session management, autorun orchestration, and cross-platform distribution. See `.codeflow/docs/analysis/inf-epc-015-go-cli-design.md` for full design analysis and rationale.
+Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SurrealDB authority -- all database writes go through the compiled binary, eliminating LLM-driven direct data layer risks. The CLI wraps Claude Code with a welcome screen, preflight checks, doctor diagnostics, session management, autorun orchestration, and cross-platform distribution. See `.codeflow/docs/analysis/inf-epc-015-go-cli-design.md` for full design analysis and rationale.
 
 ## Scope
 
@@ -56,8 +56,8 @@ Build the production CodeFlow CLI binary in Go. The Go CLI is the SOLE SQLite au
 
 - [ ] `go build ./cmd/codeflow/` produces working binary from `codeflow-cli/`
 - [ ] `codeflow --version` outputs version from ldflags, startup < 50ms
-- [ ] `codeflow db init` creates SQLite database from embedded schema
-- [ ] `codeflow db sync` rebuilds SQLite from all 4 canonical JSONL files
+- [ ] `codeflow db init` creates SurrealDB database from embedded schema
+- [ ] `codeflow db sync` rebuilds SurrealDB from all 4 canonical JSONL files
 - [ ] `codeflow db migrate` applies migration 005 fixing schema drift
 - [ ] `codeflow session start` and `codeflow session end` manage session lifecycle
 - [ ] `codeflow doctor` runs 16 health checks (13 V3 + 3 V4)

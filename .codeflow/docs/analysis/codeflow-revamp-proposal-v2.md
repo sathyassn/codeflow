@@ -102,7 +102,7 @@ This proposal replaces the V3 architecture with an agent-teams-only model built 
 **What does NOT change:**
 
 - V4 Phases 1-3 (complete): foundation, CLI, hooks infrastructure
-- Three-tier data model (JSONL -> SQLite -> Markdown)
+- Three-tier data model (JSONL -> SurrealDB -> Markdown)
 - Dual-ID system (ULID primary keys + human-readable format_ids) *(format_id naming simplified post-proposal; see Historical Context)*
 - Existing epics, tasks, and project management structure
 - Security hooks (always-on, team-wide)
@@ -284,7 +284,7 @@ Agent Teams Model (Direct Communication)
 
 | Concern | CodeFlow Solution |
 |---------|-------------------|
-| Cross-session persistence | WorkGraph (SQLite/JSONL) |
+| Cross-session persistence | WorkGraph (SurrealDB/JSONL) |
 | Workflow enforcement (task deps are advisory only) | Hooks + PathFlow sentinels |
 | Git convention enforcement | cf-gitops teammate + hooks |
 | Three-tier data persistence | cf-knowledge-layer teammate |
@@ -710,7 +710,7 @@ Create `.claude/agents/cf-security-auditor.md` following the 5-section format (I
 }
 ```
 
-**What requires NO changes:** The pathflow-gate hook, the lead's orchestration logic, the JSONL/SQLite event system, and all other teammates are unaffected. The routing engine discovers the new stage from the data.
+**What requires NO changes:** The pathflow-gate hook, the lead's orchestration logic, the JSONL/SurrealDB event system, and all other teammates are unaffected. The routing engine discovers the new stage from the data.
 
 **Default approach for Phase 4:** Security concerns are handled within cf-reviewer's CODE_REVIEW mode (OWASP top 10, injection, auth bypass). The persistent cf-security teammate is available for consultation during any stage. The custom WS-SEC stage is an extensibility path for projects with dedicated security requirements.
 
@@ -1042,7 +1042,7 @@ During the interim period (Period 1), all PathFlow state is written to JSONL. Ev
 {"id":"pf-05...","ts":"2026-...","type":"session_metadata","session_id":"session-01...","key":"work_type","value":"FEAT"}
 ```
 
-The pathflow-gate hook can read these events as a SECONDARY fallback (tail + jq parse). The PRIMARY enforcement mechanism uses file-based sentinels (see Section 6.4). JSONL events serve as an audit trail and as the future migration path to SQLite (Period 2+). Performance is acceptable because events are session-scoped (~100 lines max per session).
+The pathflow-gate hook can read these events as a SECONDARY fallback (tail + jq parse). The PRIMARY enforcement mechanism uses file-based sentinels (see Section 6.4). JSONL events serve as an audit trail and as the future migration path to SurrealDB (Period 2+). Performance is acceptable because events are session-scoped (~100 lines max per session).
 
 #### 5.2.7. Seed Data Summary
 
@@ -1346,7 +1346,7 @@ Current sentinels: pathflow-pf-1, pathflow-pf-2
 
 **Secondary read path:** JSONL tail + jq parse. Preserved as fallback for when cf-knowledge-layer writes phase_transition events.
 
-**Final read path (Period 2+):** SQLite indexed query. O(1) lookup.
+**Final read path (Period 2+):** SurrealDB indexed query. O(1) lookup.
 
 ### 6.3. Graceful Degradation
 
@@ -1520,7 +1520,7 @@ File-based sentinels are the PRIMARY enforcement mechanism. JSONL events are pre
 
 1. **Audit trail.** JSONL events provide a durable, append-only record of phase transitions that survives session end.
 2. **cf-knowledge-layer maturity.** When cf-knowledge-layer starts writing `phase_transition` events reliably, the JSONL-based check in pathflow-gate becomes a secondary verification mechanism.
-3. **Future SQLite migration.** Period 2+ replaces JSONL reads with SQLite indexed queries. The event schema is preserved for this transition.
+3. **Future SurrealDB migration.** Period 2+ replaces JSONL reads with SurrealDB indexed queries. The event schema is preserved for this transition.
 
 **Coexistence:** Both mechanisms work independently. File sentinels provide fast, reliable enforcement. JSONL events provide audit and future migration path. Neither depends on the other.
 
@@ -1543,7 +1543,7 @@ This section maps WHO calls WHICH script, WHEN, and what JSONL event type is pro
 | PF4-EXECUTE | Task updates | `cf-pathflow-task-update.sh` | cf-knowledge-layer | `pathflow_task_update` |
 | PF5-PF7 | Phase transitions | `cf-pathflow-phase-transition.sh` | cf-knowledge-layer | `phase_transition` |
 
-**Key principle:** In Phase 4 implementation, file sentinels are PRIMARY and SUFFICIENT for enforcement. JSONL writing by cf-knowledge-layer provides an audit trail and future SQLite rebuild capability. If cf-knowledge-layer fails to write JSONL, enforcement is NOT degraded -- file sentinels still work. The JSONL scripts are called by cf-knowledge-layer via `Bash` tool calls; the scripts source `ledger.sh` for append operations with flock-based parallel safety.
+**Key principle:** In Phase 4 implementation, file sentinels are PRIMARY and SUFFICIENT for enforcement. JSONL writing by cf-knowledge-layer provides an audit trail and future SurrealDB rebuild capability. If cf-knowledge-layer fails to write JSONL, enforcement is NOT degraded -- file sentinels still work. The JSONL scripts are called by cf-knowledge-layer via `Bash` tool calls; the scripts source `ledger.sh` for append operations with flock-based parallel safety.
 
 ### 6.8. Dual-Track State: File Sentinels + JSONL Events
 
@@ -1558,7 +1558,7 @@ File sentinels and JSONL events represent the same logical transitions through t
 | **Timing** | Immediate (fires on every matching tool call) | Delayed (depends on cf-knowledge-layer receiving and processing the event) |
 | **Reliability** | High (hooks fire reliably, `touch` always succeeds) | Medium (depends on teammate being alive, following instructions, jq available) |
 | **Persistence** | Session-scoped (cleaned up at session end) | Permanent (append-only ledger survives session end) |
-| **Purpose** | Enforcement (pathflow-gate checks these) | Audit trail + future SQLite rebuild |
+| **Purpose** | Enforcement (pathflow-gate checks these) | Audit trail + future SurrealDB rebuild |
 
 **Both happen for the same logical event but through different mechanisms:**
 
@@ -1577,7 +1577,7 @@ cf-development sends "STAGE-COMPLETE: WS-DEV"
 **Authoritative resolution:**
 
 - File sentinel is authoritative for **enforcement** (PRIMARY). The pathflow-gate hook checks ONLY file sentinels.
-- JSONL is authoritative for **audit/rebuild** (audit trail). JSONL events provide the durable record for post-session analysis and future SQLite migration.
+- JSONL is authoritative for **audit/rebuild** (audit trail). JSONL events provide the durable record for post-session analysis and future SurrealDB migration.
 - If they disagree: file sentinel wins for enforcement decisions. A missing JSONL event never blocks work.
 
 ---
@@ -1739,9 +1739,9 @@ PF7-END -> minimal cleanup, session logged as untracked
 
 **Period 1 (Interim):** Shell -> JSONL only. Hooks read JSONL (tail + jq). ~100 lines/session.
 
-**Period 2 (Final):** Go CLI -> SQLite first, JSONL second. SQLite = primary read. JSONL = rebuild authority.
+**Period 2 (Final):** Go CLI -> SurrealDB first, JSONL second. SurrealDB = primary read. JSONL = rebuild authority.
 
-**Period 3 (Transition):** Go CLI takes over writes. Shell stops. Hooks switch to SQLite.
+**Period 3 (Transition):** Go CLI takes over writes. Shell stops. Hooks switch to SurrealDB.
 
 ### 9.3. Backward Compatibility
 
@@ -1777,7 +1777,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 | **Tracked Session** | Work registered in WorkGraph, full PF1-PF7 lifecycle |
 | **Untracked Session** | Lead answers directly, skips PF3-PF6 |
 | **Agent-Teams Only** | Single mode. No standalone/dual-mode fallback. |
-| **Period 1/2/3** | DB/JSONL strategy: JSONL-only -> Go CLI dual-write -> SQLite primary |
+| **Period 1/2/3** | DB/JSONL strategy: JSONL-only -> Go CLI dual-write -> SurrealDB primary |
 
 ## Appendix C: Complete Hook Disposition Table
 
@@ -1790,7 +1790,7 @@ PF7-END -> minimal cleanup, session logged as untracked
 | 3 | cf-pre-tool-use-edit-write.sh | Active | **KEEP** | Edit\|Write | File scope checks |
 | 4 | cf-pre-tool-use-gh-pr.sh | Active | **KEEP** | Bash | PR format enforcement |
 | 5 | cf-pre-tool-use-webfetch.sh | Active | **KEEP** | WebFetch | URL validation |
-| 6 | cf-pre-tool-use-pathflow-gate.sh | New | **MODIFY** | Edit\|Write\|Bash | PathFlow phase enforcement. **PRIMARY:** file sentinel check (`has_sentinel()`). **SECONDARY:** JSONL/SQLite fallback. |
+| 6 | cf-pre-tool-use-pathflow-gate.sh | New | **MODIFY** | Edit\|Write\|Bash | PathFlow phase enforcement. **PRIMARY:** file sentinel check (`has_sentinel()`). **SECONDARY:** JSONL/SurrealDB fallback. |
 | 7 | cf-pre-tool-use-team-guard.sh | New | **MODIFY** | TeamDelete\|Teammate | Block team dissolution during active PathFlow session |
 | 8 | cf-pre-tool-use-read-delegation.sh | Active | **MODIFY** | Read | Simplified, no mode branching |
 | 9 | cf-pre-tool-use-bash-sentinel.sh | Active | **REMOVE** | Bash | Skill sentinels eliminated |

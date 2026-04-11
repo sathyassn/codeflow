@@ -8,7 +8,7 @@ Tree-sitter builds a symbol index for fast lookups without requiring a language 
 
 ```text
 .state/symbol-index/
-├── index.db           # SQLite database
+├── index.db           # SurrealDB database
 ├── files.json         # Indexed file list
 └── last-update        # Timestamp
 ```

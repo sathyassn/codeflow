@@ -164,13 +164,13 @@ Agent Teams provides the intra-session coordination layer. These concerns remain
 
 | Concern | Why Agent Teams Doesn't Address It | CodeFlow Solution |
 |---------|-----------------------------------|-------------------|
-| Cross-session persistence | Teams exist within a single session | CodeFlow WorkGraph (SQLite/JSONL) |
+| Cross-session persistence | Teams exist within a single session | CodeFlow WorkGraph (SurrealDB/JSONL) |
 | Batch orchestration | No YAML batch parsing, no Go CLI | Autorun system |
 | Git worktree management | No built-in worktree isolation | cf-gitops teammate + worktree scripts |
 | Acceptance criteria verification | No automated verification | Stop hooks + PCV |
 | Workflow enforcement | Task dependencies are advisory only | Hooks + agent instructions |
 | Security enforcement | No built-in access control | PreToolUse hooks, sentinels |
-| Three-tier data persistence | No JSONL/SQLite/Markdown management | cf-knowledge-layer teammate |
+| Three-tier data persistence | No JSONL/SurrealDB/Markdown management | cf-knowledge-layer teammate |
 
 The key insight about **workflow enforcement**: Claude's Task dependency system provides excellent graph structure (define, modify, re-open, delete, multi-predecessor, parallel branches) but zero execution enforcement. A teammate CAN start a blocked task. CodeFlow must add enforcement through hooks and agent instructions. See [Sentinel Model](08-enforcement-model.md) for details.
 

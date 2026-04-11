@@ -29,7 +29,7 @@
 
 ### 1. Claude Tasks != WorkGraph
 
-The M1 design conflated Claude's ephemeral Task system (TaskCreate/TaskList) with CodeFlow's persistent WorkGraph (epics/tasks in SQLite/JSONL). The revised design clearly separates these:
+The M1 design conflated Claude's ephemeral Task system (TaskCreate/TaskList) with CodeFlow's persistent WorkGraph (epics/tasks in SurrealDB/JSONL). The revised design clearly separates these:
 
 - **Claude Tasks**: Session orchestration (PathFlow phases + actual work items). Ephemeral.
 - **CodeFlow WorkGraph**: Project management (epics, tasks, acceptance criteria). Persistent.

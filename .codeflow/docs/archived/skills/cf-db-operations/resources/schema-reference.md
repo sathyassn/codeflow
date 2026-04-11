@@ -5,7 +5,7 @@
 CodeFlow uses a three-tier data consistency model:
 
 1. **Tier 0: JSONL Ledger** - Append-only audit trail, source of truth for rebuilds
-2. **Tier 1: SQLite** - Fast queries, indexed access, rebuildable from ledger
+2. **Tier 1: SurrealDB** - Fast queries, indexed access, rebuildable from ledger
 3. **Tier 2: Markdown** - Human-readable, version controlled
 
 All writes must update all tiers atomically via cf-db-operations.
@@ -220,7 +220,7 @@ All writes must update all tiers atomically via cf-db-operations.
 
 ## Accessing Data
 
-**Never query SQLite directly.** Use the appropriate operations:
+**Never query SurrealDB directly.** Use the appropriate operations:
 
 | Need | Operation |
 |------|-----------|

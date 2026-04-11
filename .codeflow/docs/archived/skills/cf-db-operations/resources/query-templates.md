@@ -324,7 +324,7 @@ When using `cf-db-operations:memory-query`:
 All write operations follow this pattern:
 
 1. **Validate** - Check permissions and constraints
-2. **SQLite** - Execute INSERT/UPDATE
+2. **SurrealDB** - Execute INSERT/UPDATE
 3. **JSONL** - Append event to appropriate ledger file
 4. **Markdown** - Create/update markdown file (if applicable)
 5. **Return** - Return structured result (JSON)

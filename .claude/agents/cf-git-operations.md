@@ -78,6 +78,12 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 - ⛔ NEVER run `gh pr merge` targeting protected branches (`main`, `master`, `release/*`, `production` per `enforcement-policy.json merge_protection.protected_branches`)
 - ⛔ NEVER push multiple commits to a remote PR branch — squash ALL branch commits into a single conventional-commit before any push. Use `git reset --soft $(git merge-base HEAD main) && git commit`, then `--force-with-lease`.
 
+⛔ **NO DIRECT .state/ WRITES:** Never use Edit, Write, `echo >>`, or any Bash file operation to write `.state/` files directly. All `.state/` writes MUST go through CLI commands:
+- Ledger events: `codeflow ledger append --event-type X --data '{}'`
+- DB operations: `codeflow db exec --query "..."` (writes) or `codeflow db query --query "..."` (reads)
+- Active task: `codeflow state set-active-task --task-id X ...` / `codeflow state clear-active-task`
+Direct `.state/` writes are blocked by EditWriteGuard and ProtectionGuard. You may `git add` and `git commit` existing `.state/` files (read + stage + commit is allowed).
+
 ### Autorun Behavior
 
 When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker.
@@ -216,7 +222,7 @@ cd "$GIT_DIR"
 2. If no changes: Report `GIT: commit-outstanding-changes — working tree clean, nothing to commit`
 3. If changes exist:
    a. Review changed files — categorize:
-      - Ledger files (.state/ledger/*.jsonl) — always include
+      - Ledger files (.state/ledger/*.jsonl) — commit existing fragments (do NOT create new ones)
       - Runtime state (.state/runtime/*) — always include
       - Task/epic markdown status updates — always include
       - Source code — STOP and escalate (unexpected at PF6)
@@ -356,8 +362,8 @@ Do NOT include:
 
 5c. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
 6. Capture PR URL and number from output
-7. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `pr_url`, `task_id`, `branch`, `target`, `session_id`.
-8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update `tasks.pr_number` in SQLite
+7. Record `pr_created` event: Run `codeflow ledger append --event-type pr_created --data '{"pr_number":{N},"pr_url":"{url}","task_id":"{task_id}","branch":"{branch}","target":"{base}","session_id":"{session_id}"}'`
+8. Message cf-knowledge-layer: `"GIT-UPDATE: pr_created -- pr_number={N}, pr_url={url}, task_id={task_id}"` so it can update tasks table via `codeflow db exec`
 9. Report to team lead: `"PR #{number} created: {url}"`
 
 **On failure:** Network blocked: report sandbox restriction, advise consulting cf-security. Format validation fails: fix and retry.
@@ -437,7 +443,7 @@ Do NOT include:
 3. Wait for team lead to confirm merge has been completed by the user via GitHub UI
 4. After merge confirmation: `git pull origin main`
    **Worktree mode:** For sync-local, cd to the main project root (not the worktree) before running `git pull origin main`. The worktree will be cleaned up at PF7-END.
-5. Record `pr_merged` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_merged"), `pr_number`, `merge_sha`, `task_id`, `session_id`.
+5. Record `pr_merged` event: Run `codeflow ledger append --event-type pr_merged --data '{"pr_number":{N},"merge_sha":"{sha}","task_id":"{task_id}","session_id":"{session_id}"}'`
 6. Message cf-knowledge-layer: `"GIT-UPDATE: pr_merged -- pr_number={N}, merge_sha={sha}, task_id={task_id}"`
 7. Report: `"GITOPS: verify-pr-and-sync complete -- main updated"`
 
@@ -455,7 +461,7 @@ The Rust worker layer handles serialized merging via the CRDT merge queue after 
 
 1. Poll CI status: `gh pr checks {number} --watch --fail-fast`
 2. If CI passes: verify PR was created successfully.
-3. Record `pr_created` event: Append a JSON line to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` (create directory with `mkdir -p` if needed) with fields: `ts` (ISO8601 UTC), `event` ("pr_created"), `pr_number`, `task_id`, `session_id`.
+3. Record `pr_created` event: Run `codeflow ledger append --event-type pr_created --data '{"pr_number":{N},"task_id":"{task_id}","session_id":"{session_id}"}'`
 4. Report: `"GITOPS: verify-pr-and-sync complete -- PR #{number} created, task already complete, proceeding to PF7"`
 
 #### Edge Cases

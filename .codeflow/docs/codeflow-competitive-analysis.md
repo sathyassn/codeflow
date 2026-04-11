@@ -38,9 +38,9 @@ Both frameworks address the **context loss problem** in AI-assisted development:
 
 | Feature | CodeFlow | Gastown |
 |---------|----------|---------|
-| **Foundation** | Three-tier (JSONL → SQLite → Markdown) | Git-backed storage |
+| **Foundation** | Three-tier (JSONL → SurrealDB → Markdown) | Git-backed storage |
 | **Rebuild Authority** | JSONL as immutable truth | Git hooks (worktree-based) |
-| **Query Layer** | SQLite with FTS5 + vector search | Direct git operations |
+| **Query Layer** | SurrealDB with FTS5 + vector search | Direct git operations |
 | **Human Interface** | Markdown + project-management/epics/*.md | Git-native workflow |
 
 **Analysis:** CodeFlow's three-tier architecture is more sophisticated, enabling semantic search, entity extraction, and complex queries. Gastown's git-only approach is simpler but less powerful for knowledge management.
@@ -62,7 +62,7 @@ Both frameworks address the **context loss problem** in AI-assisted development:
 |---------|----------|---------|
 | **Security Layers** | 7-tier defense-in-depth (SEC-OS to SEC-L5) | Not documented |
 | **Hook Enforcement** | 26 blocking/advisory hooks | Git hooks only |
-| **Audit Logging** | JSONL + SQLite dual-write | Not documented |
+| **Audit Logging** | JSONL + SurrealDB dual-write | Not documented |
 | **Protected Resources** | Path-based, pattern-based, branch-based | Not documented |
 
 **Analysis:** CodeFlow has significantly more sophisticated security controls, appropriate for enterprise environments. Gastown appears to trust the AI more implicitly.

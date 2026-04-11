@@ -338,7 +338,7 @@ Autorun merge to integration branch uses regular merge (`gh pr merge --delete-br
 |------|-----------|--------|------------|
 | Hook fails to block merge to main | Low | Critical | Defense-in-depth: hook + agent instructions + GitHub branch protection |
 | CI polling timeout in interactive mode | Medium | Low | User notified, can check manually |
-| SQLite CHECK constraint migration breaks existing data | Low | High | Migration script validates existing data first |
+| SurrealDB schema migration breaks existing data | Low | High | Migration script validates existing data first |
 | Validation script false positives block legitimate work | Medium | Medium | Script exits with descriptive errors, not silent blocks |
 | auto_commit deprecation breaks existing agents | Low | Low | Field stays in schema, just ignored -- no breaking change |
 

@@ -86,7 +86,7 @@ The predefined roster above represents optimized defaults. The team lead is neve
 
 | Aspect | Claude Task System | CodeFlow WorkGraph |
 |--------|-------------------|-------------------|
-| **What** | TaskCreate, TaskList, TaskUpdate | Epics and tasks in SQLite/JSONL/Markdown |
+| **What** | TaskCreate, TaskList, TaskUpdate | Epics and tasks in SurrealDB/JSONL/Markdown |
 | **Scope** | Single session, ephemeral | Cross-session, permanent |
 | **Purpose** | Orchestrate PathFlow phases and teammate assignments | Track project work items, status, planning |
 | **Analogy** | Sprint standup board (discarded after) | Jira/Linear project board (persists forever) |
@@ -105,7 +105,7 @@ The predefined roster above represents optimized defaults. The team lead is neve
 | **Role Teammate** | An on-demand teammate spawned for a specific task. Fresh context per assignment. Shut down after task completion. Examples: cf-developer, cf-reviewer, cf-qa. |
 | **Team Lead** | The main Claude Code agent that orchestrates the session. Creates the PathFlow task graph, assigns tasks, manages phase transitions, handles escalations. |
 | **Claude Task System** | The ephemeral task system provided by Claude Code (TaskCreate, TaskList, TaskUpdate, TaskGet). Used by PathFlow for session orchestration. Tasks are discarded when the session ends. |
-| **CodeFlow WorkGraph** | The persistent project management system in CodeFlow. Stores epics and tasks in SQLite/JSONL/Markdown. Survives across sessions. Managed by cf-knowledge-layer. |
+| **CodeFlow WorkGraph** | The persistent project management system in CodeFlow. Stores epics and tasks in SurrealDB/JSONL/Markdown. Survives across sessions. Managed by cf-knowledge-layer. |
 | **cf-gitops** | Persistent function teammate for all git operations. Loads cf-git-workflow SOPs. Handles branching, commits, PRs, sync. |
 | **cf-knowledge-layer** | Persistent function teammate for the Knowledge Layer. Manages WorkGraph CRUD, memory operations, DB operations, session tracking. Loads cf-memory-management, cf-task-management, and cf-db-operations SOPs. |
 | **Progressive Orchestration** | The pattern of creating the next PathFlow phase only when the current phase completes, rather than defining the entire task graph upfront. Enables dynamic adaptation. |

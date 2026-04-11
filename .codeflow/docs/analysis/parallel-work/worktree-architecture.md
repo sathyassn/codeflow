@@ -103,7 +103,7 @@ The shared/local split at `worktree.go:153-167` is well-designed for parallel wo
 
 | Shared (symlinked) | Why Shared | Parallel Safety |
 |--------------------|-----------|----------------|
-| `db/` | Single SQLite database | WAL mode + busy_timeout handle concurrent access |
+| `db/` | Single SurrealDB database | RetryConfig with exponential backoff handles concurrent access |
 | `coordination/` | Claims state | Loro Map CRDT (sole coordination mechanism, native crate dependency in Rust CLI). `state.loro` replaces `state.json`. TTL default 4200s; sync daemon handles fast crash cleanup (5–10s). See [Data Layer Protection](data-layer-protection.md) and [CRDT Coordination](crdt-coordination.md). |
 | `logs/` | Event logs | Append-only, flock for file I/O append safety (not coordination) |
 | `registry/` | Worktree tracking | Single writer expected |
@@ -340,7 +340,7 @@ If two `source=startup` sessions start at the same time on the same project:
 1. **Session ID collision:** Impossible. Session IDs are ULID-based (`session.generateID()` at `session.go:40-42`), which encode millisecond timestamps plus random entropy. Two ULIDs generated in the same millisecond differ in the random suffix.
 2. **Worktree name collision:** Impossible. Worktree names include the session ID (`worktree-{SID}`), so unique IDs produce unique worktree paths.
 3. **`codeflow-env.sh` race:** CRITICAL. Both sessions write to the same `.state/runtime/codeflow-env.sh`. Session B overwrites Session A's ID. This is the exact CRITICAL conflict from Section 1.2. **Resolution:** With worktrees, each session writes `codeflow-env.sh` to its own worktree's `.state/runtime/`, not the shared location. This eliminates the race entirely.
-4. **SQLite contention:** Both worktrees share the same SQLite database via symlink. WAL mode with `busy_timeout=5000` (connection.go:98) handles concurrent writes. `SetMaxOpenConns(1)` (connection.go:92) serializes per-process. Cross-process contention is handled by SQLite's file-level locking. Expected behavior: one session waits up to 5 seconds for the other's write to complete.
+4. **SurrealDB contention:** Both worktrees share the same SurrealDB database via symlink. `RetryConfig` with exponential backoff handles concurrent writes. SurrealDB's multi-writer architecture handles cross-process contention. Expected behavior: one session retries until the other's write completes.
 5. **JSONL contention:** Each worktree has its own LOCAL ledger directory (real dir, not symlink). Each session writes to its own session-scoped fragment file (`{type}-ses-{SID}.jsonl`). No cross-worktree write contention is possible -- sessions write to different files entirely. `flock(LOCK_EX)` still applies within a single worktree for concurrent hook processes writing to the same fragment.
 6. **Claims contention:** Both worktrees share `coordination/` via symlink. With Loro Map CRDT (Phase A), claims are coordinated atomically -- concurrent `Acquire()` calls produce deterministic merge via Loro's conflict resolution. The current state.json TOCTOU race is eliminated by the migration to `state.loro` (see [Data Layer Protection](data-layer-protection.md) Section 3).
 
@@ -348,7 +348,7 @@ If two `source=startup` sessions start at the same time on the same project:
 
 If Session A's `EndCleanup()` runs while Session B is actively using shared state (database):
 
-**SQLite:** Safe. Removing Session A's worktree removes the symlink to `.state/db/`, but does NOT affect the actual database file or Session B's connection to it. SQLite connections hold file descriptors to the actual file, not to the symlink.
+**SurrealDB:** Safe. Removing Session A's worktree removes the symlink to `.state/db/`, but does NOT affect the actual database directory or Session B's connection to it. SurrealDB connections hold references to the actual store, not to the symlink.
 
 **JSONL:** Safe. The ledger is LOCAL per-worktree (real directory, not symlink). Removing Session A's worktree removes Session A's own ledger directory and its fragment files. Session B's ledger lives in Session B's own worktree directory and is completely unaffected.
 
@@ -360,7 +360,7 @@ With the pure Rust CLI (Epic 0), Loro is a compiled-in crate dependency -- there
 
 **Single-session without parallel features:** If the Loro coordination module encounters an unexpected error (corrupt `state.loro`, disk full), the CLI should:
 - Emit a warning to stderr: `"codeflow: coordination state unavailable, parallel work disabled"`
-- Allow single-session operation (SQLite WAL and JSONL file-level append locking continue to work for single-session use)
+- Allow single-session operation (SurrealDB embedded and JSONL file-level append locking continue to work for single-session use)
 - Block parallel session creation (claims require functional Loro state)
 
 **Implementation requirement:** Both "coordination healthy" and "coordination degraded" paths need integration tests.

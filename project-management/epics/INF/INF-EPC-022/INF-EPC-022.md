@@ -237,7 +237,7 @@ codeflow-rs/                          (Rust workspace)
 
 | Go Package | Rust Module | Notes |
 |-----------|------------|-------|
-| `internal/db/` | `store/surreal.rs` | SQLite -> SurrealDB embedded |
+| `internal/db/` | `store/surreal.rs` | SurrealDB embedded |
 | `internal/ledger/` | `ledger/jsonl.rs` | Same flock semantics, serde serialization |
 | `internal/session/` | `session/` | Builder pattern, enum state machine |
 | `internal/workstate/` | `session/` (merged) | Consolidated with session |
@@ -261,7 +261,7 @@ codeflow-rs/                          (Rust workspace)
 ### Key Constraints
 
 1. **Frozen external interface** -- identical CLI subcommands, hook JSON contracts, exit codes, file I/O
-2. **SurrealDB-only** -- NO SqliteStore, NO SQLite dependency
+2. **SurrealDB-only** -- NO SqliteStore, NO legacy database dependency
 3. **Same binary name** -- output binary is `codeflow`
 4. **No new features** -- 1:1 behavioral replacement
 5. **Go binary remains active** throughout Phases 0A-0F

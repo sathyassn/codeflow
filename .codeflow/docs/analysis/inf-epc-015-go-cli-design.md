@@ -10,11 +10,11 @@ updated_at: "2026-02-23"
 
 ## 1. Overview
 
-Phase 6 builds the production CodeFlow CLI binary in Go. The Go CLI wraps Claude Code with a welcome screen, preflight checks, and commands. It is the SOLE SQLite authority -- all database writes go through the compiled binary, eliminating LLM-driven shell-to-sqlite3 data layer risks (hallucinated filenames, wrong-file event routing, schema drift).
+Phase 6 builds the production CodeFlow CLI binary in Go. The Go CLI wraps Claude Code with a welcome screen, preflight checks, and commands. It is the SOLE database authority -- all database writes go through the compiled binary, eliminating LLM-driven shell-to-database data layer risks (hallucinated filenames, wrong-file event routing, schema drift). Note: The Rust CLI redesign (Epic 0) replaced the Go CLI with SurrealDB embedded via the `surrealdb` crate.
 
 The CLI replaces:
 
-- `sqlite3` shell invocations for DB writes
+- `surrealdb` CLI / direct shell invocations for DB writes (legacy)
 - `echo ... >> file.jsonl` for JSONL appends
 - `python3 ulid_generator.py` for ID generation
 - Ad-hoc shell scripts for session management
@@ -38,7 +38,7 @@ The CLI preserves:
 ### Technology Stack
 
 - **Language:** Pure Go (CGO-free)
-- **SQLite driver:** `ncruces/go-sqlite3` (pure Go, WASM-based, no CGO)
+- **Database:** `surrealdb` crate (Rust CLI, embedded `surrealkv://` mode) — replaces legacy Go database driver
 - **CLI framework:** `spf13/cobra`
 - **ULID library:** `oklog/ulid` (or equivalent)
 - **Cross-compilation:** 5 platform targets via Makefile
@@ -273,7 +273,7 @@ Future events MUST use canonical form only (enforced by Go CLI validation at wri
 | Constraint | Target | Rationale |
 |-----------|--------|-----------|
 | No CGO | `CGO_ENABLED=0` | Enables cross-compilation without C toolchains |
-| Binary size | <20MB per platform | Pure Go + WASM SQLite is ~15MB |
+| Binary size | <20MB per platform | Go CLI was ~15MB; Rust CLI uses SurrealDB embedded (~30-50MB total) |
 | Startup time | <50ms to first output | CLI should feel instant |
 | Version injection | `-ldflags "-X main.version=$(VERSION)"` | No hardcoded version strings |
 
@@ -301,7 +301,7 @@ Analysis of mismatches between `schema.sql` (source of truth) and the live datab
 
 **schema.sql (line 182-183):** `stage TEXT DEFAULT NULL CHECK(stage IS NULL OR stage IN ('dev', 'work', 'review', 'qa', 'done'))`
 
-**Live DB:** The column may exist (added by migration 001) but without the CHECK constraint. SQLite does not support `ALTER TABLE ... ADD CONSTRAINT`.
+**Live DB:** The column may exist (added by migration 001) but without the CHECK constraint. (Note: This was a legacy schema limitation; the Rust CLI uses SurrealDB which handles schema evolution differently.)
 
 **Migration 005 fix:** Table rebuild to add CHECK constraint, only if constraint is missing.
 
@@ -447,13 +447,13 @@ After normalization, all events follow this structure:
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| `ncruces/go-sqlite3` WASM performance insufficient | Low | High | Benchmark during task 004; fallback to `modernc.org/sqlite` (also CGO-free) |
+| SurrealDB embedded performance insufficient | Low | High | Benchmark during task 004; the Rust CLI uses `surrealdb` crate with `surrealkv://` mode |
 | Binary size exceeds 20MB | Low | Medium | Profile with `go build -ldflags="-s -w"`; strip debug info |
 | JSONL normalization loses data | Medium | Critical | Backup before normalize; verify event counts match before/after; idempotency test |
 | Schema migration 005 corrupts existing DB | Low | Critical | Transaction-wrapped migration; backup before apply; rollback on error |
 | Cross-compilation failures on Windows | Medium | Low | Windows is lowest priority target; test last |
 | Test coverage drops below 85% as features accumulate | Medium | Medium | Coverage enforced by Makefile `test-cover` target; CI blocks on threshold |
-| Startup time exceeds 50ms due to SQLite WASM init | Medium | Medium | Lazy DB connection (only open when needed); benchmark in task 017 |
+| Startup time exceeds 50ms due to DB init | Medium | Medium | Lazy DB connection (only open when needed); benchmark in task 017 |
 | Cobra command conflicts with existing `./codeflow` shell script | Low | Medium | Different binary name in dev (`codeflow-cli`); global install as `codeflow` only after shell script is deprecated |
 
 ### Assumptions

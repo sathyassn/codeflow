@@ -728,7 +728,7 @@ own git worktree. The `.state/` directory is split:
 
 ```text
 Shared (symlinked to main .state/):
-  db/            SQLite database (WAL mode for concurrent access)
+  db/            SurrealDB database (WAL mode for concurrent access)
   ledger/        Append-only JSONL (flock for I/O safety)
   coordination/  Loro CRDT state (sole coordination mechanism)
   logs/          Event logs (flock for append safety)

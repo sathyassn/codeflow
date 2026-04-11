@@ -270,7 +270,7 @@ Uses `event: "memory_event"` — not in routing table. Also uses `event: "findin
 **Required fields:** Per `schema.go:41-42` — none beyond universal `event`+`timestamp` (both `config_set` and `config_updated` have `{}` required fields)
 **Routed event types:** `config_set`, `config_updated` — per `routing.go:61-62`
 
-**Current state:** Empty file (0 entries). Routing and validation infrastructure exists but nothing in the codebase emits these event types. The file is included in `CanonicalFiles()` at `routing.go:77` and would be synced to SQLite if events existed.
+**Current state:** Empty file (0 entries). Routing and validation infrastructure exists but nothing in the codebase emits these event types. The file is included in `CanonicalFiles()` at `routing.go:77` and would be synced to SurrealDB if events existed.
 
 **Target schema (proposed):**
 
@@ -302,7 +302,7 @@ Uses `event: "memory_event"` — not in routing table. Also uses `event: "findin
 **Writer:** `pathflow.TransitionWriter` (Go CLI, `internal/pathflow/transitions.go`) wrapping `ledger.Writer.AppendEventToFile()`
 **Required fields:** Per `schema.go:45-50` — `session_id`+`phase`+`status` (phase_transition), `session_id`+`stage`+`status` (stage_transition), `session_id` (session_register), `session_id`+`key`+`value` (session_metadata), `session_id`+`task_id`+`task_status` (pathflow_task_update)
 **Routed event types:** `phase_transition`, `stage_transition`, `session_register`, `session_metadata`, `pathflow_task_update` — per `routing.go:65-69`
-**Note:** NOT included in `CanonicalFiles()` — pathflow events are not synced to SQLite.
+**Note:** NOT included in `CanonicalFiles()` — pathflow events are not synced to SurrealDB.
 
 **Two schema generations coexist:**
 
@@ -1001,7 +1001,7 @@ Target: merge all security subdirectories (`audit/`, `blocked/`, `network/`, `pr
 
 ## 8. DB Table to JSONL Rebuild Mapping
 
-The three-tier data model requires Tier 0 (JSONL) to be the rebuild authority for Tier 1 (SQLite). This section maps every SQLite table to the JSONL ledger events needed to rebuild it, identifies field-by-field coverage, and flags critical gaps where DB columns have no corresponding JSONL field.
+The three-tier data model requires Tier 0 (JSONL) to be the rebuild authority for Tier 1 (SurrealDB). This section maps every legacy database table (Go CLI era) to the JSONL ledger events needed to rebuild it, identifies field-by-field coverage, and flags critical gaps where DB columns have no corresponding JSONL field.
 
 ### 8.1 Rebuild Coverage Summary
 

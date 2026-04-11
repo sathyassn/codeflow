@@ -27,7 +27,7 @@ The Knowledge Layer uses a three-tier data model:
 Tier 0: JSONL Ledger     (append-only, source of truth for rebuilds)
      |
      v
-Tier 1: SQLite            (fast queries, indexed, rebuildable from ledger)
+Tier 1: SurrealDB            (fast queries, indexed, rebuildable from ledger)
      |
      v
 Tier 2: Markdown           (human-readable, version controlled)
@@ -145,7 +145,7 @@ TIER 0 (JSONL):
     { "type": "stage_transition", "task_id": "FRT-TSK-042",
       "from_stage": "dev", "to_stage": "review", ... }
 
-TIER 1 (SQLite):
+TIER 1 (SurrealDB):
   UPDATE tasks SET
     stage = 'review',
     stage_status = 'pending',
@@ -345,7 +345,7 @@ Not all teammates should update stage fields. Permissions are enforced via instr
 
 **Why cf-knowledge-layer is the sole updater**: Centralizing stage updates through one teammate ensures:
 
-1. Three-tier consistency (JSONL + SQLite + Markdown always in sync)
+1. Three-tier consistency (JSONL + SurrealDB + Markdown always in sync)
 2. No conflicting concurrent updates to stage fields
 3. Single audit point for all stage transitions
 4. Other teammates simply message cf-knowledge-layer with their stage outcomes

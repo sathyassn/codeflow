@@ -116,7 +116,7 @@ codeflow-rs/                          (Rust workspace — replaces Go CLI)
 │   │       ├── db.rs                 (DbError)
 │   │       ├── hooks.rs              (HookError)
 │   │       └── ledger.rs             (LedgerError)
-│   └── Cargo.toml                    (loro, surrealdb, git2, rusqlite, serde, thiserror, ...)
+│   └── Cargo.toml                    (loro, surrealdb, git2, serde, thiserror, ...)
 │
 ├── codeflow-cli/                     (binary crate — thin CLI dispatch layer)
 │   ├── src/

@@ -25,7 +25,7 @@ This provides universal project context for all AI models.
 
 - Multi-agent team with specialized teammates (8 agents + team lead)
 - PathFlow session lifecycle (7 phases: PF1-INIT through PF7-END)
-- Persistent memory via three-tier data model (JSONL + SQLite + Markdown)
+- Persistent memory via three-tier data model (JSONL + SurrealDB + Markdown)
 - Hook-enforced PR-only development (19 hooks across 6 lifecycle events)
 - Work type pipelines with independent review and quality gates
 - Parallel execution via git worktree isolation, CRDT-based coordination, file-level claims, and serialized merge queue
@@ -42,7 +42,7 @@ This provides universal project context for all AI models.
 | **Command** | User entry point that triggers teammate spawning | `.claude/commands/cf-*.md` |
 | **Hook** | Automated enforcement at lifecycle events (PreToolUse, Stop, etc.) | `.claude/hooks/codeflow/` |
 | **PathFlow** | 7-phase session lifecycle from init to cleanup | CLAUDE.md Section 4 |
-| **WorkGraph** | Task tracking system (JSONL source of truth + SQLite query layer) | `.state/ledger/`, `.state/db/` |
+| **WorkGraph** | Task tracking system (JSONL source of truth + SurrealDB query layer) | `.state/ledger/`, `.state/db/` |
 
 **Relationship Summary:**
 
@@ -94,7 +94,7 @@ This provides universal project context for all AI models.
 │                                                                       │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐       │
 │   │   WorkGraph   │  │    Git       │  │      Memory          │       │
-│   │ JSONL+SQLite  │  │  PR-only    │  │  3-tier persistent   │       │
+│   │JSONL+SurrealDB│  │  PR-only    │  │  3-tier persistent   │       │
 │   └──────────────┘  └──────────────┘  └──────────────────────┘       │
 │                                                                       │
 │   ┌───────────────────────────────────────────────────────────┐       │
@@ -235,7 +235,7 @@ codeflow/
 │   └── VERSION                       # CodeFlow version
 ├── .git-worktrees/                   # Git worktrees for parallel sessions
 ├── .state/                           # Runtime state (partially gitignored)
-│   ├── db/codeflow.db                # Tier 1: SQLite (query interface)
+│   ├── db/codeflow.db                # Tier 1: SurrealDB (query interface)
 │   ├── coordination/                 # CRDT state (state.loro) for claims + merge queue
 │   ├── ledger/                       # Tier 0: JSONL event logs (rebuild authority)
 │   ├── runtime/                      # Active task, session ID
@@ -278,7 +278,7 @@ codeflow/
 | Tier | Location | Purpose | Git Tracked |
 |------|----------|---------|-------------|
 | **0 (JSONL)** | `.state/ledger/*.jsonl` | Rebuild authority -- immutable, append-only | Yes |
-| **1 (SQLite)** | `.state/db/codeflow.db` | Query interface -- fast indexed lookups | No |
+| **1 (SurrealDB)** | `.state/db/codeflow.db` | Query interface -- fast indexed lookups | No |
 | **2 (Markdown)** | `project-management/`, `.claude/memory/` | Human-readable derived views | Yes |
 
 ### Parallel Execution

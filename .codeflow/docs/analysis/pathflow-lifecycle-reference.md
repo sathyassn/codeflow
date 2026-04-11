@@ -977,7 +977,7 @@ SessionEnd: cf-session-end-cleanup.sh (v2.4.0)
 
 ```text
 .state/                              (directory, not symlink)
-├── db -> main/.state/db             (shared: single SQLite database)
+├── db -> main/.state/db             (shared: single SurrealDB database)
 ├── ledger -> main/.state/ledger     (shared: single JSONL event log)
 ├── registry -> main/.state/registry (shared: registry data)
 ├── backups -> main/.state/backups   (shared: backups)

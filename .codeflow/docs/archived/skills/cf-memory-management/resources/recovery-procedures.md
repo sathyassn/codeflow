@@ -72,7 +72,7 @@ Use `.codeflow/scripts/git/recover-branch.sh`:
 
 ## JSONL Ledger Recovery
 
-The JSONL ledger is the source of truth. If SQLite is corrupted:
+The JSONL ledger is the source of truth. If SurrealDB is corrupted:
 
 ```bash
 .codeflow/scripts/db/rebuild-from-ledger.sh
@@ -81,7 +81,7 @@ The JSONL ledger is the source of truth. If SQLite is corrupted:
 This script:
 
 1. Reads all events from JSONL ledger
-2. Rebuilds SQLite tables in correct order
+2. Rebuilds SurrealDB tables in correct order
 3. Verifies consistency
 
 ## Emergency Procedures
@@ -124,4 +124,4 @@ This script:
 
 - JSONL ledger is append-only, never modified
 - Regular backups via `cf-memory-management:manage-memory-lifecycle`
-- SQLite WAL mode for crash recovery
+- SurrealDB WAL mode for crash recovery

@@ -13,7 +13,7 @@ agent: cf-general-purpose
 
 ## Purpose
 
-**Provides validated database operations that maintain consistency across SQLite, JSONL ledger, and markdown files.**
+**Provides validated database operations that maintain consistency across SurrealDB, JSONL ledger, and markdown files.**
 
 ## Responsibilities
 

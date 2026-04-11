@@ -19,7 +19,7 @@ The session start is a deterministic sequence of hooks followed by skill-driven 
 ### Step 2: Session Record Created
 
 - Generate `session-{ulid}` identifier
-- Insert into `sessions` table (SQLite Tier 1)
+- Insert into `sessions` table (SurrealDB Tier 1)
 - Append `session_start` event to `sessions.jsonl` (Tier 0)
 - Log to JSONL ledger
 
@@ -204,7 +204,7 @@ Foundation skill. All database CRUD goes through this:
 | 7 | session-record | System (hooks) |
 | 8 | log-append | System (hooks) |
 
-Every write syncs across three tiers: JSONL (Tier 0) -> SQLite (Tier 1) -> Markdown (Tier 2).
+Every write syncs across three tiers: JSONL (Tier 0) -> SurrealDB (Tier 1) -> Markdown (Tier 2).
 
 ### 3.7 cf-documentation-standards (FORKED, ~600 tokens)
 
@@ -562,7 +562,7 @@ The hook system is the primary enforcement mechanism. Skills are invoked by the 
 
 ### Finding 6: Three-Tier Data Model Flows Through Everything
 
-Every write operation flows: JSONL (Tier 0, append-only authority) -> SQLite (Tier 1, operational) -> Markdown (Tier 2, presentation). This is enforced by `cf-db-operations`.
+Every write operation flows: JSONL (Tier 0, append-only authority) -> SurrealDB (Tier 1, operational) -> Markdown (Tier 2, presentation). This is enforced by `cf-db-operations`.
 
 ### Finding 7: Agent Handoffs Are Knowledge Layer Mediated
 

@@ -7,7 +7,7 @@
 ```text
 Current V4 Implementation Phases:
     Phase 1: Foundation (Hooks, Scripts)     -- DONE
-    Phase 2: Data Layer (JSONL, SQLite)      -- DONE
+    Phase 2: Data Layer (JSONL, SurrealDB)   -- DONE
     Phase 3: Agent Definitions               -- DONE
     Phase 4: PathFlow Integration            -- DONE
     Phase 5: Commands                        -- IN PROGRESS

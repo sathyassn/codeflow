@@ -57,7 +57,7 @@ claude
   config/          # Configuration
 
 .state/            # Runtime state
-  db/              # SQLite database
+  db/              # SurrealDB database
   ledger/          # JSONL event logs
 ```
 

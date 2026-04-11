@@ -153,7 +153,7 @@ This is elegant because:
 
 | Aspect | Claude Task System | CodeFlow WorkGraph |
 |--------|-------------------|-------------------|
-| **What** | TaskCreate, TaskList, TaskUpdate, TaskGet | epics, tasks in SQLite/JSONL/Markdown |
+| **What** | TaskCreate, TaskList, TaskUpdate, TaskGet | epics, tasks in SurrealDB/JSONL/Markdown |
 | **Scope** | Single session, ephemeral | Cross-session, permanent |
 | **Purpose** | Orchestrate PathFlow nodes and teammate assignments | Track project work items, status, planning |
 | **Managed by** | Team lead + PathFlow | cf-knowledge teammate (formerly cf-task-management) |
@@ -341,7 +341,7 @@ For role teammates (cf-developer, cf-planner, etc.): The agent .md embeds the ro
 | V3 Component | Impact | Details |
 |-------------|--------|---------|
 | WorkGraph (epics/tasks) | MODIFIED | Add `stage`, `stage_status`, `stage_history` to tasks table |
-| Three-tier data model | UNCHANGED | JSONL → SQLite → Markdown still applies |
+| Three-tier data model | UNCHANGED | JSONL → SurrealDB → Markdown still applies |
 | CRDT/Claims | ENHANCED | Claims now associated with teammate names, not just agent names. Teammates create claims for their file scope. |
 | Hooks | MODIFIED | PathFlow-aware hooks need to handle team context. New pathflow-gate hook possible. |
 | Skills | PRESERVED | Skills remain as SOPs and non-team-mode operation. Agent .md files created alongside. |
@@ -351,7 +351,7 @@ For role teammates (cf-developer, cf-planner, etc.): The agent .md embeds the ro
 | Session management | ENHANCED | Sessions now include team lifecycle. active_work table gets stage tracking. |
 
 **What does NOT change**:
-- Three-tier data model (JSONL, SQLite, Markdown)
+- Three-tier data model (JSONL, SurrealDB, Markdown)
 - JSONL ledger format
 - Epic/task ID conventions
 - Branch naming conventions

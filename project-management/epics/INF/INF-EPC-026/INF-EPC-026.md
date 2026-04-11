@@ -118,7 +118,7 @@ Epic D is organized into 3 phases with 12 tasks:
 
 **Architectural constraints:**
 
-- D17 (SurrealDB-only): All schema design targets SurrealDB. No SQLite. `SurrealStore` is the sole `DataStore` implementation.
+- D17 (SurrealDB-only): All schema design targets SurrealDB. `SurrealStore` is the sole `DataStore` implementation.
 - D21 (Multi-model orchestration): Claude Code remains the control plane; external models are delegated via tmux (T3) or direct subprocess (T1).
 - D22 (Revised epic structure): Epic D depends on Epic 0 + Epic C. Epic D blocks Epic E.
 - D24 (Combined D+E vision): Shared PTY infrastructure between Epic D and Epic E. Epic D is CLI-first and headless.

@@ -73,7 +73,7 @@ Analysis package (8 files): `.codeflow/docs/analysis/artifact-token-efficiency/`
 
 - Changing PathFlow phase logic or enforcement behavior
 - Modifying hook scripts or their configuration
-- Changing the data model (JSONL, SQLite, markdown tiers)
+- Changing the data model (JSONL, SurrealDB, markdown tiers)
 - Creating new agent definitions or commands
 - Modifying test infrastructure or test runner
 - Go CLI integration changes

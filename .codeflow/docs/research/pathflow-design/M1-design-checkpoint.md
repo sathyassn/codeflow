@@ -153,10 +153,10 @@ Can a single session traverse the outer shell multiple times? (e.g., user does a
 
 ### Q3: Cross-Session Teammate Persistence
 
-Agent Teams teammates don't persist across sessions. But V3's Knowledge Layer (JSONL + SQLite) provides cross-session memory. How should PathFlow handle cross-session context?
+Agent Teams teammates don't persist across sessions. But V3's Knowledge Layer (JSONL + SurrealDB) provides cross-session memory. How should PathFlow handle cross-session context?
 
 **Options**:
-- Continue using JSONL/SQLite for cross-session memory (separate from task system)
+- Continue using JSONL/SurrealDB for cross-session memory (separate from task system)
 - Use MEMORY.md auto-memory for lightweight cross-session context
 - Use task metadata for structured cross-session state
 - Combination of all three

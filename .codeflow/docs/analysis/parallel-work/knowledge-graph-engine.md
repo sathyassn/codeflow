@@ -32,7 +32,7 @@ parent: "parallel-work/README.md"
 
 ### Why Knowledge Graphs Matter for CodeFlow
 
-CodeFlow's three-tier data model (JSONL ledger, SQLite/SurrealDB, Markdown) stores *what happened* -- events, tasks, sessions, decisions. But it does not capture *how things relate semantically* -- which decisions informed which patterns, which problems recur across sessions, which components are conceptually linked even when they share no direct dependency.
+CodeFlow's three-tier data model (JSONL ledger, SurrealDB, Markdown) stores *what happened* -- events, tasks, sessions, decisions. But it does not capture *how things relate semantically* -- which decisions informed which patterns, which problems recur across sessions, which components are conceptually linked even when they share no direct dependency.
 
 A knowledge graph transforms flat records into a connected intelligence layer where relationships are first-class citizens. This enables:
 
@@ -445,7 +445,7 @@ GLOBAL-LEVEL (Daemon SurrealDB)
 | # | Entity Type | Description | Source | Example |
 |---|-------------|-------------|--------|---------|
 | 1 | Concept | Abstract technical concept | LLM extraction | "event-driven architecture", "CRDT consistency" |
-| 2 | Decision | Architectural or design decision (ADR) | Planning docs | "chose SurrealDB over SQLite" |
+| 2 | Decision | Architectural or design decision (ADR) | Planning docs | "chose SurrealDB over SurrealDB" |
 | 3 | Pattern | Recurring code/design pattern | Code analysis | "newtype wrapper pattern", "builder pattern" |
 | 4 | Component | System module or subsystem | Code structure | "PathFlow engine", "hook pipeline" |
 | 5 | Problem | Bug, issue, or challenge | Task/issue text | "session ID duplication", "context overflow" |
@@ -479,10 +479,10 @@ Sources for extended ontology: Nathan Lasnoski article on enterprise SDLC knowle
 | 10 | tested_by | Component | TestCase | Validation | "hook pipeline" tested_by "test-gate-check.sh" |
 | 11 | deployed_to | Component | Deployment | Deployment mapping | "codeflow binary" deployed_to "v0.4.0" |
 | 12 | owns | Developer | Component | Ownership | developer:alice owns "PathFlow engine" |
-| 13 | evolved_from | Decision | Decision | Superseded ADR chain | "SurrealDB-only" evolved_from "hybrid SQLite+Surreal" |
+| 13 | evolved_from | Decision | Decision | Superseded ADR chain | "SurrealDB-only" evolved_from "hybrid SurrealDB+Surreal" |
 | 14 | validates | TestCase | Requirement | Acceptance proof | "test-gate-check" validates "Edit blocked before PF3" |
 | 15 | learned_from | Lesson | Problem | Post-mortem insight | "check liveness before respawn" learned_from "zombie teammates" |
-| 16 | replaces | Component | Component | Migration/deprecation | "SurrealStore" replaces "SqliteStore" |
+| 16 | replaces | Component | Component | Migration/deprecation | "SurrealStore" replaces "legacy Go DB store" |
 | 17 | conflicts_with | Decision | Decision | Mutual exclusion | "embedded-only" conflicts_with "always-on daemon" |
 | 18 | references | Any | Any | Documentation coverage | ADR:017 references "data-layer-protection.md" |
 

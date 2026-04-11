@@ -24,7 +24,7 @@ agent: cf-general-purpose
 │ Purpose: Immutable audit trail, crash recovery source       │
 │ Rule: NEVER modify, only append                             │
 ├─────────────────────────────────────────────────────────────┤
-│ Tier 1: SQLite (Fast Queries)                               │
+│ Tier 1: SurrealDB (Fast Queries)                               │
 │ Location: .state/db/codeflow.db                             │
 │ Purpose: Indexed queries, relationships, aggregations       │
 │ Rule: Can rebuild from Tier 0 if corrupted                  │
@@ -356,14 +356,14 @@ Enforcement: ENF-L1 Sentinel
 CRITICAL: JSONL ledger is append-only authority (Tier 0)
 
 Three-Tier Update Pattern:
-  1. Write to SQLite (Tier 1) - fast, indexed
+  1. Write to SurrealDB (Tier 1) - fast, indexed
   2. Append to JSONL (Tier 0) - immutable audit
   3. Update Markdown (Tier 2) - human-readable
 
 Procedure:
   1. Identify stale data via cf-db-operations:memory-query (completed work > 30 days)
   2. Archive to cold storage (.claude/memory/archive/)
-  3. Prune from SQLite hot tables (Tier 1)
+  3. Prune from SurrealDB hot tables (Tier 1)
   4. Append archive event to JSONL (Tier 0) - NEVER delete from JSONL
   5. Update/remove Tier 2 markdown files
   6. Optional: VACUUM database

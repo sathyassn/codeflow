@@ -47,7 +47,7 @@
 | # | Script | Version | Purpose | Tests |
 |---|--------|---------|---------|-------|
 | 1 | cf-post-tool-use-instructions.sh | 2.0.0 | Config-driven contextual instructions | 24/24 |
-| 2 | cf-post-tool-use-logging.sh | 1.1.0 | Universal operation logging (JSONL + SQLite) | 17/17 |
+| 2 | cf-post-tool-use-logging.sh | 1.1.0 | Universal operation logging (JSONL + SurrealDB) | 17/17 |
 | 3 | cf-post-tool-use-memory-progress.sh | 1.2.0 | Memory progress reminders + claim heartbeat | 30/30 |
 | 4 | cf-post-tool-use-settings-templates.sh | 2.2.0 | Settings template consistency verification | 28/28 |
 | 5 | cf-post-tool-use-skill.sh | 2.0.0 | Skill processing, sentinel creation, audit logging | 16/16 |
@@ -102,7 +102,7 @@
 |-----------|-------|
 | **Path** | `.claude/hooks/codeflow/post-tool-use/cf-post-tool-use-logging.sh` |
 | **Version** | 1.1.0 |
-| **Purpose** | Universal operation logging with dual-write pattern (JSONL + SQLite) |
+| **Purpose** | Universal operation logging with dual-write pattern (JSONL + SurrealDB) |
 | **Matcher** | All tools (configurable) |
 | **Exit Codes** | 0 only |
 | **Tests** | 17/17 |
@@ -127,7 +127,7 @@
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Capture tool results | Implemented | JSONL + SQLite |
+| Capture tool results | Implemented | JSONL + SurrealDB |
 | Truncation rules | Implemented | MAX_RESULT_SIZE |
 | Sensitive data redaction | Implemented | Password, token, key, secret, Bearer, **email** |
 | Duration tracking | **Implemented** | `calculate_duration_ms()` (V1.1.0) |

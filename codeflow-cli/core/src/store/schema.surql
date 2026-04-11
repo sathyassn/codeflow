@@ -1,7 +1,7 @@
 -- CodeFlow SurrealDB Schema
 -- Applied idempotently on every startup via OVERWRITE.
 -- Order: tables -> fields -> indexes -> relation tables -> vector indexes.
--- Translates Go's 37 SQLite tables, consolidating where SurrealDB's
+-- Translates the original Go CLI's 37 tables, consolidating where SurrealDB's
 -- nested objects and graph relations reduce table count.
 
 -- =============================================================================

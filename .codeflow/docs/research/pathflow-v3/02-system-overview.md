@@ -175,7 +175,7 @@ In practice, the team lead may create a few phases ahead when the path is predic
 |                                                                   |
 |  CODEFLOW KNOWLEDGE LAYER (persistent, cross-session)            |
 |  +-----------------------------------------------------------+   |
-|  | WorkGraph (SQLite) | JSONL Ledger | Memory | Markdown      |   |
+|  | WorkGraph (SurrealDB) | JSONL Ledger | Memory | Markdown      |   |
 |  +-----------------------------------------------------------+   |
 |                                                                   |
 +=================================================================+
@@ -211,7 +211,7 @@ In practice, the team lead may create a few phases ahead when the path is predic
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| WorkGraph (SQLite) | `.state/db/codeflow.db` | Persistent task/epic storage |
+| WorkGraph (SurrealDB) | `.state/db/codeflow.db` | Persistent task/epic storage |
 | JSONL Ledger | `.state/memory/*.jsonl` | Append-only event log |
 | Session records | `.state/sessions/` | Session metadata and history |
 | Git hooks | `.codeflow/scripts/git-hooks/` | Commit/push enforcement |

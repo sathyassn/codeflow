@@ -135,7 +135,7 @@ It explicitly preserves shell hooks and shell scripts as-is during its phases.
 **Covered by INF-EPC-015:**
 
 - Go binary entry point and CLI framework
-- SQLite access via Go (eliminating direct `sqlite3` shell calls for DB writes)
+- SurrealDB access via Go (eliminating direct database shell calls for DB writes)
 - JSONL write via Go (eliminating `echo >>` for ledger)
 - Session start/end Go subcommands
 - Doctor, init, autorun, update subcommands
@@ -147,7 +147,7 @@ It explicitly preserves shell hooks and shell scripts as-is during its phases.
 - Migrating pathflow state management (cf-pathflow-state.sh)
 - Migrating sentinel operations (cf-sentinel.sh)
 - Migrating validation (validate-task.sh, validate-epic.sh)
-- Removing direct `sqlite3` calls from shell scripts (Phase 6 V4 spec requirement)
+- Removing direct `codeflow db` calls from shell scripts (Phase 6 V4 spec requirement — replaced by SurrealDB Rust CLI)
 - Verifying JSONL-only writes after migration (Phase 6 V4 spec requirement)
 - Python script elimination (coordination scripts, codeflow_py_lib)
 
@@ -171,7 +171,7 @@ for security enforcement. Migration is a prerequisite for production reliability
 | `.codeflow/scripts/state/cf-pathflow-state.sh` | 678 | Read-modify-write race on checkpoint JSON; `jq` subprocess chain |
 | `.codeflow/scripts/state/cf-work-state.sh` | 216 | macOS/Linux `date` parsing split |
 | `.codeflow/scripts/state/memory.sh` | 196 | Same JSON construction issues as ledger.sh |
-| `.codeflow/scripts/db/generate-format-id.sh` | 199 | `sqlite3` subprocess for ID generation |
+| `.codeflow/scripts/db/generate-format-id.sh` | 199 | `codeflow db` subprocess for ID generation |
 | `.codeflow/scripts/shell-lib/ulid.sh` | 158 | Spawns `python3` for millisecond timestamp |
 
 **Validation (3 scripts):**
@@ -356,7 +356,7 @@ binary command tree from Section 9. File counts cross-checked against `find` out
 
 | Current Path | Lines | Purpose | Tier | Go Target | Notes |
 |---|---|---|---|---|---|
-| `db/generate-format-id.sh` | 199 | Generate formatted IDs via sqlite3 | T1 | `codeflow db generate-id` | sqlite3 subprocess per call |
+| `db/generate-format-id.sh` | 199 | Generate formatted IDs via codeflow db | T1 | `codeflow db generate-id` | codeflow db subprocess per call (legacy) |
 | `db/migrate-to-dual-id.sh` | 356 | One-time dual-ID schema migration | T3 | `codeflow db migrate` | Rarely invoked; acceptable as shell short-term |
 | `db/normalize-jsonl.sh` | 316 | Normalize JSONL ledger files to canonical format | T2 | `codeflow ledger normalize` | Created in INF-TSK-015-017; superseded by Go-based INF-TSK-021-026 |
 
@@ -1124,7 +1124,7 @@ or removable:
 | `flock` | Write locking in ledger.sh | `sync.Mutex` / file lock via Go | Yes — not on macOS anyway |
 | `xxd` | Hex encoding for IDs | `encoding/hex` | Yes |
 | `shasum` / `sha256sum` | Content hashing | `crypto/sha256` | Yes |
-| `sqlite3` CLI | DB read/write | `github.com/ncruces/go-sqlite3` (pure Go, no CGO) | Yes — after DB layer migrated |
+| `codeflow db` CLI | DB read/write | SurrealDB via Rust CLI (`surrealdb` crate, embedded `surrealkv://`) | Yes — after DB layer migrated |
 | macOS `stat -f%z` | File size | `os.Stat().Size()` | Yes — unified |
 | Linux `stat --printf=%s` | File size | Same `os.Stat().Size()` | Yes — unified |
 | macOS `date -j -f` | Date parsing | `time.Parse()` | Yes — unified |
@@ -1199,7 +1199,7 @@ codeflow (Go binary — source: codeflow-cli/)
 ├── ledger
 │   ├── append <event-type>        -- replaces echo-to-jsonl pattern
 │   ├── validate <file>            -- validate JSONL integrity
-│   └── rebuild                    -- rebuild SQLite from JSONL
+│   └── rebuild                    -- rebuild SurrealDB from JSONL
 │
 ├── db
 │   ├── init                       -- initialize schema (existing)
@@ -1400,7 +1400,7 @@ This eliminates the code duplication between the CLI `mode` command (which read 
 
 **Scope:** Tier 1 state and data layer scripts (6 scripts).
 **What it delivers:** Eliminates JSONL corruption, flock issues, and python3 subprocesses
-for the core data path. SQLite writes and JSONL writes go through Go.
+for the core data path. SurrealDB writes and JSONL writes go through Go.
 **Epic:** INF-EPC-021.
 **Scripts:** ledger.sh, cf-pathflow-state.sh, cf-work-state.sh, memory.sh,
 generate-format-id.sh, ulid.sh.
@@ -1460,7 +1460,7 @@ independent of state layer migration.
 ### Phase I: Ledger and Log Schema Normalization
 
 **Scope:** JSONL schema consistency across all three ledger files.
-**What it delivers:** Uniform event schema enabling reliable replay, audit, and SQLite
+**What it delivers:** Uniform event schema enabling reliable replay, audit, and SurrealDB
 rebuild from JSONL.
 
 **Problem:** The three JSONL files have diverged schemas:
@@ -1480,7 +1480,7 @@ accumulates further. Running before cutover risks re-introducing schema bugs in 
 2. Normalize all records to the canonical schema (`event`, `timestamp`, plus type-specific
    fields)
 3. Write normalized records back atomically (temp file + rename)
-4. Rebuild SQLite from normalized JSONL via `codeflow db rebuild`
+4. Rebuild SurrealDB from normalized JSONL via `codeflow db rebuild`
 5. Verify record counts match pre-normalization counts
 
 **Epic:** INF-EPC-021 (dedicated normalization task).
@@ -1512,7 +1512,7 @@ to the shell script's output. Divergences are logged. No production behavior cha
 
 Normalize the three JSONL files to canonical schema (see Phase I above). This is a
 one-time data operation that must complete before cutover to prevent mixed-schema records
-in the rebuilt SQLite database.
+in the rebuilt SurrealDB database.
 
 **Phase E: Single-session cutover**
 
@@ -1647,7 +1647,7 @@ The migration is complete when:
 - All 18 Python source files are deleted from `.codeflow/scripts/`
 - All 20 pytest test files are deleted from `.codeflow/testing/`
 - `settings.json` hook commands reference `codeflow hooks <name>` exclusively
-- `flock`, `jq`, `python3`, and `sqlite3` are not called from any remaining shell script
+- `flock`, `jq`, `python3`, and `codeflow db` are not called from any remaining shell script
 - `macOS`/Linux platform splits (`date -j` vs `date -d`, `stat -f%z` vs `stat --printf`) exist
   only in the 4 Tier 4 scripts that have genuine shell requirements
 - `codeflow doctor` verifies all hook subcommands respond correctly before session start

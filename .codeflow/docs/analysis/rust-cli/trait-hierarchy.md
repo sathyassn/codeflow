@@ -311,7 +311,7 @@ pub trait DataStore: Send + Sync {
 // Note: Transaction support is intentionally NOT part of the DataStore trait.
 // Generic transactions (`<F, R>`) make the trait non-object-safe, and async fn
 // in traits does not support dynamic dispatch. Since transaction semantics are
-// implementation-specific (SurrealDB transactions differ from SQLite transactions),
+// implementation-specific (SurrealDB transactions are the only impl),
 // the `SurrealStore` impl provides its own `transaction()` method directly:
 //
 //   impl SurrealStore {
@@ -1084,7 +1084,7 @@ Three Go packages independently implement `os.ReadFile() -> json.Unmarshal()`. R
 | # | Assumption | Verified? | Evidence |
 |---|-----------|-----------|----------|
 | 1 | Two-crate structure (core lib + cli bin) | YES | data-layer-protection.md Section 6 diagram explicitly shows this |
-| 2 | SurrealDB is the sole DataStore impl (no SqliteStore) | YES | data-layer-protection.md Section 6: "SqliteStore REMOVED" |
+| 2 | SurrealDB is the sole DataStore impl (no legacy store) | YES | data-layer-protection.md Section 6: "legacy store REMOVED" |
 | 3 | Go db package has 10 model structs (8 with DataStore CRUD + 2 excluded) | YES | Read db/models.go: ActiveWork, Session, Epic, Task, MemoryEvent, AutorunSession, AutorunWorker, AutorunTaskRun (8 with CRUD). ProjectConfig and User defined as structs but excluded from trait (see Section 4.1.1). |
 | 4 | 8 separate Verdict structs exist in hooks | YES | go-audit.md Section 3.7 lists all 8 with file:line references |
 | 5 | 9 separate hookInput structs exist | YES | go-audit.md Section 3.8 lists all 9 with file:line references |

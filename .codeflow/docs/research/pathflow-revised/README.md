@@ -62,7 +62,7 @@ PF-7: Session End
 
 | Aspect | Claude Task System | CodeFlow WorkGraph |
 |--------|-------------------|-------------------|
-| **What** | TaskCreate, TaskList, TaskUpdate | epics, tasks in SQLite/JSONL/Markdown |
+| **What** | TaskCreate, TaskList, TaskUpdate | epics, tasks in SurrealDB/JSONL/Markdown |
 | **Scope** | Single session, ephemeral | Cross-session, permanent |
 | **Purpose** | Orchestrate PathFlow phases and teammate assignments | Track project work items, status, planning |
 | **Analogy** | Sprint standup board (discarded after) | Jira/Linear project board (persists forever) |

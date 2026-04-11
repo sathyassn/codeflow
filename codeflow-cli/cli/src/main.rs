@@ -13,11 +13,15 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Uninstall `CodeFlow`
     Uninstall,
     /// Database operations
-    Db,
+    Db {
+        #[command(subcommand)]
+        command: Option<cmd::db::DbCommand>,
+    },
     /// Session management
     Session,
     /// Initialize `CodeFlow` project
@@ -61,7 +65,10 @@ enum Command {
     /// `PathFlow` phase management
     Pathflow,
     /// State management
-    State,
+    State {
+        #[command(subcommand)]
+        command: Option<cmd::state::StateCommand>,
+    },
     /// Validate configuration and state
     Validate {
         #[command(subcommand)]
@@ -141,7 +148,7 @@ async fn main() -> Result<()> {
 async fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Uninstall => cmd::uninstall::run(),
-        Command::Db => cmd::db::run().await,
+        Command::Db { command } => cmd::db::run(command).await,
         Command::Session => cmd::session::run(),
         Command::Init {
             existing,
@@ -162,7 +169,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Welcome => cmd::welcome::run(),
         Command::Internal => cmd::internal::run(),
         Command::Pathflow => cmd::pathflow::run(),
-        Command::State => cmd::state::run(),
+        Command::State { command } => cmd::state::run(command),
         Command::Validate { command } => cmd::validate::run(command),
         Command::Hooks { command } => cmd::hooks::run(command),
         Command::Sentinel => cmd::sentinel::run(),
@@ -388,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_state() {
-        let result = dispatch(Command::State).await;
+        let result = dispatch(Command::State { command: None }).await;
         assert!(result.is_ok());
     }
 

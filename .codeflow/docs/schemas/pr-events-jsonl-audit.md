@@ -63,7 +63,7 @@ ledger system.
 
 **Dual-write reality:** Both the cf-git-operations SOP and the Rust CLI ledger are active.
 The standalone `.state/logs/git/pr-events-{date}.jsonl` files produced by the SOP are not
-synced to SQLite and serve as a supplemental audit trail. The `work-graph.jsonl` entries are
+synced to SurrealDB and serve as a supplemental audit trail. The `work-graph.jsonl` entries are
 the authoritative source for programmatic consumption.
 
 ---
@@ -354,6 +354,6 @@ cf-git-operations SOP, the dual-source inconsistencies, and the migration path.
 
 - The cf-git-operations SOP writes `pr_created` / `pr_merged` to `.state/logs/git/pr-events-{YYYY-MM-DD}.jsonl` using `ts` (not `timestamp`) and `task_id` (not `task_format_id`)
 - The Rust CLI ledger writes `pr_created` / `pr_merged` to `work-graph.jsonl` using `timestamp` and the `PrCreated` catch-all variant
-- The Rust ledger path is the authoritative source for programmatic consumption (indexed in SQLite via the CANONICAL set)
+- The Rust ledger path is the authoritative source for programmatic consumption (indexed in SurrealDB via the CANONICAL set)
 - The SOP-written files serve as a supplemental human-readable audit trail but are not read by any Rust tooling
 - Migration target: consolidate to a single write path (Rust ledger) and update the SOP to use `timestamp` and `task_format_id`

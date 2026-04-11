@@ -284,7 +284,7 @@ Rationale: Security operations are procedural gates, not an independent service.
 
 Rationale: Memory management is the work lifecycle backbone. Every teammate that modifies state needs these operations. This is too foundational to be a separate teammate -- it's a shared protocol.
 
-**PathFlow Implication**: In Agent Teams, memory management translates to the task system (TaskCreate, TaskUpdate, TaskList). The begin-work / record-progress / complete-work lifecycle maps to Task status transitions. The Knowledge Layer (SQLite + JSONL) becomes the shared task list.
+**PathFlow Implication**: In Agent Teams, memory management translates to the task system (TaskCreate, TaskUpdate, TaskList). The begin-work / record-progress / complete-work lifecycle maps to Task status transitions. The Knowledge Layer (SurrealDB + JSONL) becomes the shared task list.
 
 **Blueprint Format**: Embed lifecycle operations (begin-work, record-progress, complete-work) in each writing teammate's blueprint. detect-active-work becomes part of the team lead's session start.
 
@@ -353,7 +353,7 @@ Rationale: Quality enforcement for script files. Include in any teammate that wr
 
 **Teammate Mapping: REPLACES WITH AGENT TEAMS TASK SYSTEM**
 
-Rationale: Agent Teams has a native task system (TaskCreate, TaskUpdate, TaskList, TaskGet). The V3 cf-task-management skill performs the same function with custom SQLite tables. In PathFlow, the Agent Teams task list IS the task management system.
+Rationale: Agent Teams has a native task system (TaskCreate, TaskUpdate, TaskList, TaskGet). The V3 cf-task-management skill performs the same function with custom SurrealDB tables. In PathFlow, the Agent Teams task list IS the task management system.
 
 **PathFlow Implication**: The team lead's orchestration role replaces the main agent's task routing. TaskCreate replaces create-epic + create-task. TaskUpdate replaces update-task. TaskList replaces query-tasks. classify-work becomes the team lead's internal decision-making.
 
@@ -406,9 +406,9 @@ Rationale: This skill manages external AI model delegation via tmux sessions. In
 
 **Teammate Mapping: PARTIALLY REPLACED BY AGENT TEAMS TASK SYSTEM**
 
-Rationale: Epic/task CRUD maps to Agent Teams TaskCreate/TaskUpdate. Memory-store and memory-query map to the team's shared state (task descriptions and metadata). Session-record becomes automatic. The SQLite + JSONL three-tier model is a V3 custom solution; Agent Teams provides native task coordination.
+Rationale: Epic/task CRUD maps to Agent Teams TaskCreate/TaskUpdate. Memory-store and memory-query map to the team's shared state (task descriptions and metadata). Session-record becomes automatic. The SurrealDB + JSONL three-tier model is a V3 custom solution; Agent Teams provides native task coordination.
 
-**PathFlow Implication**: Custom SQLite DB may still be needed for memory events and detailed work tracking beyond what TaskCreate/TaskUpdate supports. But epic/task CRUD is fully replaced.
+**PathFlow Implication**: Custom SurrealDB DB may still be needed for memory events and detailed work tracking beyond what TaskCreate/TaskUpdate supports. But epic/task CRUD is fully replaced.
 
 **Blueprint Format**: Reduced scope -- only memory operations if needed. Task CRUD replaced by native tools.
 
@@ -547,11 +547,11 @@ V3 skills are forked via cf-general-purpose into isolated contexts. In Agent Tea
 
 ### 4. cf-task-management is Replaced by Native Task Tools
 
-Agent Teams provides TaskCreate, TaskUpdate, TaskList, TaskGet natively. The V3 epic/task/work-graph system with SQLite tables is redundant for coordination purposes. The team lead uses native task tools for work management.
+Agent Teams provides TaskCreate, TaskUpdate, TaskList, TaskGet natively. The V3 epic/task/work-graph system with SurrealDB tables is redundant for coordination purposes. The team lead uses native task tools for work management.
 
 ### 5. cf-memory-management Partially Survives
 
-Work lifecycle tracking (begin-work, record-progress, complete-work) has no native Agent Teams equivalent. If cross-session persistence is needed, the JSONL + SQLite model may still be valuable. But for within-session coordination, Task metadata suffices.
+Work lifecycle tracking (begin-work, record-progress, complete-work) has no native Agent Teams equivalent. If cross-session persistence is needed, the JSONL + SurrealDB model may still be valuable. But for within-session coordination, Task metadata suffices.
 
 ### 6. cf-general-purpose Dissolves Completely
 

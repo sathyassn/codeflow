@@ -55,7 +55,7 @@ CodeFlow V3 is a four-layer architecture:
 |-------|-----------|------|
 | L4: User Interface | 14 slash commands + Go CLI (`codeflow`) | User interaction |
 | L3: Claude Layer | Main agent + 8 sub-agents + 11 skills + 26 hooks | Intelligence + orchestration |
-| L2: State Layer | SQLite + JSONL + CRDT/Loro | Persistence + coordination |
+| L2: State Layer | SurrealDB + JSONL + CRDT/Loro | Persistence + coordination |
 | L1: Git Layer | Git hooks + rendered markdown | Version control |
 
 **Orchestration Model**: Strict hub-and-spoke. The main agent mediates all sub-agent interactions. Sub-agents cannot:
@@ -183,7 +183,7 @@ Agent Teams is an experimental feature (enabled via `CLAUDE_CODE_EXPERIMENTAL_AG
 | Acceptance criteria verification | No Haiku-based stop-hook verifier |
 | Multi-machine coordination | Teams are local to one machine |
 | CRDT-based claims | Teams use file-based task locking, not CRDT |
-| Three-tier data persistence | No JSONL/SQLite/Markdown data management |
+| Three-tier data persistence | No JSONL/SurrealDB/Markdown data management |
 
 ### 4.3 Overlap Analysis
 
@@ -241,7 +241,7 @@ Agent Teams is an experimental feature (enabled via `CLAUDE_CODE_EXPERIMENTAL_AG
                            │ persists to
 ┌──────────────────────────▼───────────────────────────────────┐
 │              L2: STATE LAYER (Knowledge Layer)                │
-│  SQLite + JSONL + CRDT -> Shared across teammates via git     │
+│  SurrealDB + JSONL + CRDT -> Shared across teammates via git     │
 │  Work graph -> Task/epic management                            │
 │  Active work claims -> CRDT-based resource locking             │
 └──────────────────────────┬───────────────────────────────────┘
@@ -541,7 +541,7 @@ Two task systems must coexist:
 
 | System | Scope | Persistence | Use |
 |--------|-------|-------------|-----|
-| **CodeFlow Work Graph** | Cross-session, cross-team | SQLite + JSONL + Markdown | Epic/task lifecycle management |
+| **CodeFlow Work Graph** | Cross-session, cross-team | SurrealDB + JSONL + Markdown | Epic/task lifecycle management |
 | **Agent Teams Task List** | Single session, single team | File-based (~/.claude/tasks/) | Intra-team coordination |
 
 **Integration approach**: The CodeFlow work graph is the **source of truth** for task definitions. Agent Teams task list is a **runtime projection** of work graph tasks assigned to the current team.

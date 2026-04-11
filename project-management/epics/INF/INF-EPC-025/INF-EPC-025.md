@@ -141,7 +141,7 @@ Epic C is organized into 5 phases with 26 tasks total:
 
 **Architectural constraints:**
 
-- D17 (SurrealDB-only): All schema design targets SurrealDB. No SQLite. `SurrealStore` is the sole `DataStore` implementation.
+- D17 (SurrealDB-only): All schema design targets SurrealDB. `SurrealStore` is the sole `DataStore` implementation.
 - D18 (Global DB architecture): Three operating modes -- project-only (default), global-enabled, global-only (future). Daemon is INSIDE the `codeflow` Rust binary.
 - D19 (Project identity): `project_id = proj_{SHA-256(canonical_root_path)[0..8]}`. Deterministic, stable, not path-dependent.
 - D20 (Cross-project visibility): Per-project opt-in via `.codeflow/config/project.toml`. `can_access` graph relation in SurrealDB.

@@ -185,12 +185,12 @@ else
     fail "Should block .db files"
 fi
 
-# Test 20: Blocks .sqlite files
-result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/app.sqlite"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
+# Test 20: Blocks .surrealdb files
+result=$(TOOL_NAME="Read" TOOL_INPUT='{"file_path":"data/app.surrealdb"}' bash "$HOOK" </dev/null 2>&1; echo "EXIT:$?")
 if [[ "$result" == *"EXIT:2"* ]] && [[ "$result" == *"BLOCKED"* ]]; then
-    pass "Blocks .sqlite files"
+    pass "Blocks .surrealdb files"
 else
-    fail "Should block .sqlite files"
+    fail "Should block .surrealdb files"
 fi
 
 # Test 21: Blocks .log files

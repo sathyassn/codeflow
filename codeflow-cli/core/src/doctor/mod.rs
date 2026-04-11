@@ -55,7 +55,7 @@ type ExecCommandFn = fn(&str, &[&str]) -> Result<String, String>;
 /// Configuration for doctor checks.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
-    /// Path to the `SQLite` database file.
+    /// Path to the `SurrealDB` database file.
     pub db_path: String,
     /// Path to the JSONL ledger directory.
     pub ledger_dir: String,
@@ -246,7 +246,33 @@ fn check_database(opts: &Options) -> CheckResult {
         };
     }
 
-    if !Path::new(&opts.db_path).exists() {
+    // Detect stale SQLite database from the Go CLI era.
+    // SQLite files start with the 16-byte magic "SQLite format 3\0".
+    let db_path = Path::new(&opts.db_path);
+    if db_path.exists() {
+        if let Ok(header) = std::fs::read(db_path).map(|b| b.get(..16).map(<[u8]>::to_vec)) {
+            if header.as_deref() == Some(b"SQLite format 3\0") {
+                let db_dir = db_path
+                    .parent()
+                    .map_or_else(|| opts.db_path.clone(), |p| p.display().to_string());
+                return CheckResult {
+                    name: "database".into(),
+                    status: Status::Warn,
+                    message: format!(
+                        "stale SQLite database found at {}\n  \
+                         This file is a leftover from the Go CLI era. \
+                         SurrealDB/SurrealKV stores data in {db_dir}/clog/ and {db_dir}/manifest/.\n  \
+                         The SQLite file can be safely deleted: \
+                         rm {} {}-shm {}-wal",
+                        opts.db_path, opts.db_path, opts.db_path, opts.db_path,
+                    ),
+                    duration: start.elapsed(),
+                };
+            }
+        }
+    }
+
+    if !db_path.exists() {
         return CheckResult {
             name: "database".into(),
             status: Status::Fail,
@@ -1002,7 +1028,7 @@ fn check_sentinel_drift(opts: &Options) -> CheckResult {
 // Repair functions (3)
 // ---------------------------------------------------------------------------
 
-/// Rebuild the `SQLite` database from JSONL ledger files.
+/// Rebuild the `SurrealDB` database from JSONL ledger files.
 ///
 /// This is a stub that ensures the directory structure exists. The actual
 /// database rebuild requires the `store` module and is delegated to the
@@ -1199,7 +1225,7 @@ mod tests {
     #[test]
     fn test_check_database_missing_file() {
         let mut opts = test_opts();
-        opts.db_path = "/nonexistent/path/db.sqlite".into();
+        opts.db_path = "/nonexistent/path/db.test".into();
         let result = check_database(&opts);
         assert_eq!(result.status, Status::Fail);
         assert!(result.message.contains("not found"));
@@ -1210,6 +1236,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         std::fs::write(&db_path, b"").unwrap();
+
+        let mut opts = test_opts();
+        opts.db_path = db_path.to_string_lossy().to_string();
+        let result = check_database(&opts);
+        assert_eq!(result.status, Status::Pass);
+    }
+
+    #[test]
+    fn test_check_database_stale_sqlite_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("codeflow.db");
+        // Write the SQLite magic header (16 bytes).
+        let mut header = b"SQLite format 3\0".to_vec();
+        header.extend_from_slice(&[0u8; 100]); // pad to look like a real file
+        std::fs::write(&db_path, &header).unwrap();
+
+        let mut opts = test_opts();
+        opts.db_path = db_path.to_string_lossy().to_string();
+        let result = check_database(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(
+            result.message.contains("stale SQLite database"),
+            "should warn about stale SQLite: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("safely deleted"),
+            "should include cleanup instructions: {}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn test_check_database_non_sqlite_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("codeflow.db");
+        // Write SurrealKV-like content (not SQLite magic).
+        std::fs::write(&db_path, b"surrealkv-data-here").unwrap();
 
         let mut opts = test_opts();
         opts.db_path = db_path.to_string_lossy().to_string();

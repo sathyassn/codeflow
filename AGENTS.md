@@ -11,7 +11,7 @@ This file provides instructions for AI tools other than Claude Code (e.g., Copil
 - **Shell Scripts:** Bash (shellcheck compliant)
 - **Python Scripts:** Python 3.8+ (flake8 compliant)
 - **Configuration:** JSON, YAML
-- **Database:** SQLite (for state management)
+- **Database:** SurrealDB (for state management)
 - **Version Control:** Git with PR-only workflow
 
 ## Key Directories

@@ -252,7 +252,7 @@ Next: [routes to current stage command]
 
 ### 7.1 Context Loading
 
-- **Query:** cf-knowledge-layer loads active work from Tier 1 (SQLite)
+- **Query:** cf-knowledge-layer loads active work from Tier 1 (SurrealDB)
 - **Events:** PathFlow events from Tier 0 (JSONL) determine phase state
 - **Context:** Domain-specific memory from Tier 2 (markdown) provides work context
 
@@ -292,7 +292,7 @@ ON "Database inaccessible":
   1. Check .state/db/ exists
   2. Query .state/logs/pathflow-events.jsonl for latest events
   3. Reconstruct task state from event log
-  4. Rebuild SQLite from JSONL if needed
+  4. Rebuild SurrealDB from JSONL if needed
 
 ON "Stale PathFlow markers":
   1. Read pathflow-events.jsonl for authoritative state

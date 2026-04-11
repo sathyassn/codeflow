@@ -139,7 +139,7 @@ Commands are loaded on-demand when the user invokes them. Common sections duplic
 | Duplicated Content | Per Command | Total (x14) | Replacement | Agent Access Preserved? |
 |-------------------|:----------:|:----------:|-------------|----------------------|
 | Working Protocol preamble | ~17 lines | ~238 | Replace with 2-line reference: `"Working Protocol: cf-working-protocol (loaded at session start, applies to all execution)."` | YES -- cf-working-protocol is already loaded before any command runs. The preamble was a redundant reminder. |
-| Three-Tier Data Model table | ~8 lines | ~112 | Replace with 1-line reference: `"Data model: Three-tier (JSONL -> SQLite -> Markdown). See CLAUDE.md Section 10."` | YES -- CLAUDE.md Section 10 stays always-loaded. Commands can reference it by section number. |
+| Three-Tier Data Model table | ~8 lines | ~112 | Replace with 1-line reference: `"Data model: Three-tier (JSONL -> SurrealDB -> Markdown). See CLAUDE.md Section 10."` | YES -- CLAUDE.md Section 10 stays always-loaded. Commands can reference it by section number. |
 | Skills Integration boilerplate | ~10 lines | ~140 | Replace with 2-line reference: `"Skills: Load on-demand per standards files. See CLAUDE.md Section 8."` | YES -- skill loading is a session-level concern, not a per-command concern. |
 | General hooks tables | ~15 lines | ~210 | Replace with 1-line reference: `"Hooks: See CLAUDE.md Section 8 (Hooks) for complete hook inventory."` | YES -- CLAUDE.md Section 8 stays always-loaded with the hook inventory. |
 

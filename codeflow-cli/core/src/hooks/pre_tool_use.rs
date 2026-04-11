@@ -271,6 +271,7 @@ impl EnforcementPolicy {
             edit_write: EditWriteConfig {
                 blocked_directories: vec![
                     ".git".into(),
+                    ".state".into(),
                     "node_modules".into(),
                     "__pycache__".into(),
                     ".venv".into(),
@@ -1163,6 +1164,7 @@ impl EditWriteGuard {
         let blocked_dirs = if config.blocked_directories.is_empty() {
             vec![
                 ".git".into(),
+                ".state".into(),
                 "node_modules".into(),
                 "__pycache__".into(),
                 ".venv".into(),
@@ -6176,5 +6178,219 @@ mod tests {
         // The outer check_wrap_up_signal should not panic when signal is absent.
         let dir = tempfile::tempdir().unwrap();
         check_wrap_up_signal(dir.path());
+    }
+
+    // -- Deliverable 1: EditWriteGuard blocks .state/ paths --
+
+    #[test]
+    fn test_edit_write_guard_blocks_state_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "feat/test".into());
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": ".state/ledger/foo.jsonl"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "Edit to .state/ledger/ should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_edit_write_guard_blocks_state_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "feat/test".into());
+        let input = HookInput {
+            tool_name: Some("Write".into()),
+            tool_input: Some(serde_json::json!({"file_path": ".state/db/codeflow.db"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "Write to .state/db/ should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_edit_write_guard_allows_state_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "feat/test".into());
+        // Read tool is not Edit/Write, so EditWriteGuard should allow it.
+        let input = HookInput {
+            tool_name: Some("Read".into()),
+            tool_input: Some(serde_json::json!({"file_path": ".state/ledger/foo.jsonl"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "Read from .state/ should be allowed"
+        );
+    }
+
+    // -- Deliverable 2: ProtectionGuard blocks echo/tee/redirects to .state/ --
+
+    #[test]
+    fn test_protection_guard_blocks_echo_append_to_state_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/ledger/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "echo '{\"event\":\"test\"}' >> .state/ledger/foo.jsonl"}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "echo >> to .state/ledger/ should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_codeflow_db_exec() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy.protected_resources.high.push(".state/db/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        // codeflow db exec runs as a subprocess — no redirect operators, no direct file access.
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "codeflow db exec --query \"INSERT INTO tasks SET name = 'test'\""}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "codeflow db exec should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_codeflow_ledger_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/ledger/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        // codeflow ledger append does NOT use >> or redirect operators, so ProtectionGuard allows it.
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "codeflow ledger append --event-type task_created --data '{\"task_id\":\"TSK-001\"}'"}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "codeflow ledger append should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_tee_to_state_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/logs/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "echo test | tee .state/logs/pathflow-events.jsonl"}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "tee to .state/logs/ should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_allows_codeflow_db_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy.protected_resources.high.push(".state/db/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        // codeflow db query runs as a subprocess — no redirect operators, no direct file access.
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "codeflow db query --query \"SELECT * FROM tasks\""}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "codeflow db query should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_redirect_to_state_coordination() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/coordination/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(
+                serde_json::json!({"command": "echo data > .state/coordination/sync-state.json"}),
+            ),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "redirect to .state/coordination/ should be blocked"
+        );
     }
 }

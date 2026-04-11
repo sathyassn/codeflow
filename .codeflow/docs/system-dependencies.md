@@ -11,7 +11,7 @@ This document lists external system tools required by CodeFlow.
 | bash | Shell execution (v4+) | `brew install bash` | Built-in |
 | jq | JSON processing | `brew install jq` | `apt install jq` |
 | shellcheck | Shell linting | `brew install shellcheck` | `apt install shellcheck` |
-| sqlite3 | Schema tests only (Go CLI is sole DB authority) | Built-in | `apt install sqlite3` |
+| codeflow db | SurrealDB access (Go CLI is sole DB authority) | Built-in | `apt install codeflow` |
 
 ### Python Tools
 

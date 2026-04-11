@@ -85,7 +85,6 @@
       "Bash(git mv:*)",
       "Bash(git tag:*)",
       "Bash(tmux:*)",
-      "Bash(sqlite3:*)",
       "Bash(jq:*)",
       "Bash(ls:*)",
       "Bash(pwd:*)",
