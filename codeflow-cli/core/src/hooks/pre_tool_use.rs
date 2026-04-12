@@ -1732,6 +1732,10 @@ impl ProtectionGuard {
     }
 
     fn normalize_path(&self, file_path: &str) -> String {
+        let mut file_path = file_path;
+        while let Some(stripped) = file_path.strip_prefix("./") {
+            file_path = stripped;
+        }
         let proj_prefix = format!("{}/", self.project_dir.to_string_lossy());
         if file_path.starts_with(&proj_prefix) {
             file_path
@@ -6392,5 +6396,76 @@ mod tests {
             2,
             "redirect to .state/coordination/ should be blocked"
         );
+    }
+
+    // -- Deliverable 1 (INF-TSK-044-009): ProtectionGuard ./ prefix bypass fix --
+
+    #[test]
+    fn test_protection_guard_blocks_dot_slash_redirect() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/ledger/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "echo foo >> ./.state/ledger/x.jsonl"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "echo >> ./.state/ledger/x.jsonl should be blocked (dot-slash prefix must be stripped)"
+        );
+    }
+
+    #[test]
+    fn test_protection_guard_blocks_dot_slash_tee() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = EnforcementPolicy::defaults();
+        policy
+            .protected_resources
+            .high
+            .push(".state/logs/**".into());
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+        let input = HookInput {
+            tool_name: Some("Bash".into()),
+            tool_input: Some(serde_json::json!({"command": "tee ./.state/logs/test.jsonl"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "tee ./.state/logs/test.jsonl should be blocked (dot-slash prefix must be stripped)"
+        );
+    }
+
+    #[test]
+    fn test_normalize_path_strips_dot_slash() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = ProtectionGuard::new_with_worktree(policy, dir.path().to_path_buf(), None);
+
+        // ./ prefix should be stripped
+        assert_eq!(handler.normalize_path("./.state/foo"), ".state/foo");
+        // Without ./ prefix, path is unchanged
+        assert_eq!(handler.normalize_path(".state/foo"), ".state/foo");
+        // Absolute path is unchanged
+        assert_eq!(
+            handler.normalize_path("/abs/path/file.rs"),
+            "/abs/path/file.rs"
+        );
+        // Just "./" returns empty string
+        assert_eq!(handler.normalize_path("./"), "");
+        // Double ./ prefix should also be stripped
+        assert_eq!(handler.normalize_path("././.state/foo"), ".state/foo");
     }
 }

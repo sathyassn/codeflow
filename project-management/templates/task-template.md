@@ -84,7 +84,6 @@ Apply the relevant standards skill for each language/tool used:
 | Rust | cf-rust-standards | No unsafe, thiserror/anyhow, clippy clean |
 | Shell/Bash | cf-shell-standards | shellcheck clean, error handling |
 | Python | cf-python-standards | Type hints, pytest |
-| Go | cf-go-standards | gofmt, golint, go vet |
 | SurrealDB | cf-surrealdb-standards | DEFINE OVERWRITE, embedded mode |
 | Markdown | cf-markdown-standards | Lint rules, templates |
 

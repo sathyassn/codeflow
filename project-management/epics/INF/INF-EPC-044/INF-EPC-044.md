@@ -3,7 +3,7 @@ id: "epic-01KNNDF0R0XGX4ERCKVBHJJ9FP"
 format_id: "INF-EPC-044"
 title: "Autorun Reliability Fixes and TUI Terminal Experience"
 summary: "Fix autorun worker reliability issues (post-timeout PR detection, sentinel-aware completion, panic guard, cleanup retry) and build TUI terminal experience (autorun dashboard, interactive session monitor, onboarding wizard) using ratatui"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -14,7 +14,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-04-08T02:00:00Z"
-updated_at: "2026-04-11T17:41:38Z"
+updated_at: "2026-04-12T02:30:00Z"
 ---
 
 # INF-EPC-044: Autorun Reliability Fixes and TUI Terminal Experience
@@ -64,7 +64,8 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 - [x] INF-TSK-044-005: `codeflow interactive status --watch` TUI dashboard, `codeflow init` 7-step wizard, `codeflow welcome` formatted display -- all functional
 - [x] INF-TSK-044-006: TUI status accuracy (stale detection, duration freeze, phase label), tmux session launch, autorun reliability fixes (timeout salvage, last_phase, interval unification, repo root resolution) -- all functional with tests
 - [x] INF-TSK-044-007: Interactive TUI count-based filtering with toggle, text mode active-only default, DB session purge on cleanup, autorun batch list TUI, retention config, stale duration display fix -- all functional with tests
-- [ ] INF-TSK-044-008: EditWriteGuard blocks .state/ writes, ProtectionGuard expanded, codeflow db exec/query, codeflow state set/clear, agent definitions updated to CLI commands
+- [x] INF-TSK-044-008: EditWriteGuard blocks .state/ writes, ProtectionGuard expanded, codeflow db exec/query, codeflow state set/clear, agent definitions updated to CLI commands
+- [x] INF-TSK-044-009: ProtectionGuard ./ prefix bypass fixed, stale plan files deleted, SqliteStore markdown refs cleaned, cf-go-standards removed if no Go in repo
 - [x] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
 - [x] All modified Rust files pass `cargo fmt --check`
 - [x] Code coverage >= 85% per-file for all new and modified Rust files
@@ -85,7 +86,8 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 | INF-TSK-044-005 | Interactive Session TUI and Onboarding Wizard | complete | normal | L | 004 |
 | INF-TSK-044-006 | TUI Status Accuracy, tmux Interactive Sessions, and Autorun Improvements | complete | high | L | 005 |
 | INF-TSK-044-007 | Session Retention, Display Filtering, and Autorun Batch List TUI | complete | high | L | 006 |
-| INF-TSK-044-008 | State File Write Protection — CLI Abstraction and Enforcement | in_progress | high | L | 007 |
+| INF-TSK-044-008 | State File Write Protection — CLI Abstraction and Enforcement | complete | high | L | 007 |
+| INF-TSK-044-009 | SQLite Remnant Cleanup and ProtectionGuard Prefix Bypass Fix | complete | high | S | 008 |
 
 ## Dependencies
 
