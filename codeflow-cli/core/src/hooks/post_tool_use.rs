@@ -34,9 +34,6 @@ fn pf_task_id_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"PF\d+-TSK-\d+").expect("valid regex"))
 }
 
-/// Primary work stages that must complete before `WS-REV`.
-const PRIMARY_STAGES: &[&str] = &["dev", "plan", "docs", "test"];
-
 // ---------------------------------------------------------------------------
 // SentinelWrite handler
 // ---------------------------------------------------------------------------
@@ -45,8 +42,9 @@ const PRIMARY_STAGES: &[&str] = &["dev", "plan", "docs", "test"];
 /// `SendMessage` content. Also handles `TeamCreate`, `Task` (teammate spawn),
 /// and `TeamDelete` events for `pathflow-team.json` management.
 ///
-/// Validates stage ordering (REV needs a primary stage sentinel, QA needs
-/// `ws-dev` or `ws-test`).
+/// Validates stage ordering via the work type's pipeline definition: for
+/// any stage S completing, every stage preceding S in the pipeline must
+/// already have a sentinel. No per-stage special casing.
 pub struct SentinelWrite {
     /// Project root directory for resolving sentinel paths.
     pub project_dir: PathBuf,
@@ -200,8 +198,35 @@ impl SentinelWrite {
         }
     }
 
-    /// Config-driven cumulative stage ordering validation.
-    /// Mirrors Go `validateStageOrdering()` in sentinel/stage.go.
+    /// Pipeline-driven cumulative stage ordering validation.
+    ///
+    /// For the stage currently completing, find its position within the
+    /// work_type's pipeline and verify every prior stage has a sentinel.
+    /// No special-casing per stage -- the only rule is "all pipeline stages
+    /// before me must be done".
+    ///
+    /// Returns `None` (no block) when:
+    /// - The stage has no prior entries in the pipeline (index 0)
+    /// - The pipeline lookup succeeds and all prior sentinels exist
+    /// - Session status, config, or pipeline entry cannot be resolved
+    ///   (non-blocking degradation -- the push/PR gate still catches
+    ///   missing stage sentinels downstream via `requires_all_pipeline_stages`)
+    ///
+    /// # Graceful degradation (intentional design, not a bug)
+    ///
+    /// This function returns `None` (no block) when any of the following
+    /// inputs cannot be resolved:
+    /// - `session_pathflow_dir()` fails (hook misconfiguration)
+    /// - `work_type` is empty in pathflow-session-status.json
+    /// - `pathflow-config.json` is missing or malformed
+    /// - the current work_type has no pipeline entry
+    ///
+    /// Each None-return emits a `diagnostics::warn` so the degradation is
+    /// auditable in the hook logs. The stray-sentinel risk from `None`
+    /// here is bounded by the downstream push/PR gate
+    /// (`check_cumulative_push_pr_gate` in pre_tool_use.rs), which is
+    /// universally config-driven with its own fallback and will block any
+    /// push where the full pipeline's stage sentinels aren't present.
     fn validate_stage_ordering(
         &self,
         sentinel_dir: &Path,
@@ -209,69 +234,104 @@ impl SentinelWrite {
     ) -> Option<HookOutput> {
         use super::pipeline;
 
-        // Try config-driven validation first.
-        if let Ok((session_dir, _)) = self.session_pathflow_dir() {
-            let work_type = pipeline::read_work_type_from_session_status(&session_dir);
-            if !work_type.is_empty() {
-                let config_dir = pipeline::derive_config_dir(sentinel_dir);
-                if let Ok(pipelines) = pipeline::load_pipelines(&config_dir) {
-                    if let Some(pipeline_stages) = pipelines.get(&work_type) {
-                        let current_stage = format!("WS-{}", stage_lower.to_uppercase());
-                        if let Some(current_index) =
-                            pipeline_stages.iter().position(|s| s == &current_stage)
-                        {
-                            if current_index > 0 {
-                                let (ok, missing) = pipeline::verify_cumulative_stage_sentinels(
-                                    sentinel_dir,
-                                    pipeline_stages,
-                                    current_index - 1,
-                                );
-                                if !ok {
-                                    return Some(HookOutput::Block {
-                                        reason: format!(
-                                            "BLOCKED: ws-{stage_lower} requires prior stage sentinel \
-                                             '{missing}' ({work_type} pipeline: {pipeline_stages:?})"
-                                        ),
-                                        category: Some(BlockCategory::Gate),
-                                    });
-                                }
-                            }
-                            return None; // Config-driven check passed
-                        }
-                    }
-                }
+        let (session_dir, _) = match self.session_pathflow_dir() {
+            Ok(pair) => pair,
+            Err(_) => {
+                crate::diagnostics::warn(
+                    "sentinel-write",
+                    &format!(
+                        "stage ordering check skipped for ws-{stage_lower}: \
+                         session pathflow dir could not be resolved"
+                    ),
+                );
+                return None;
             }
+        };
+        let work_type = pipeline::read_work_type_from_session_status(&session_dir);
+        if work_type.is_empty() {
+            crate::diagnostics::warn(
+                "sentinel-write",
+                &format!(
+                    "stage ordering check skipped for ws-{stage_lower}: \
+                     work_type missing from pathflow-session-status.json"
+                ),
+            );
+            return None;
         }
 
-        // Fallback to hardcoded ordering when config is unavailable.
-        match stage_lower {
-            "rev" => {
-                let has_primary = PRIMARY_STAGES
-                    .iter()
-                    .any(|ps| sentinel::check_by_name(sentinel_dir, &format!("ws-{ps}")));
-                if !has_primary {
-                    return Some(HookOutput::Block {
-                        reason: "BLOCKED: ws-rev requires prior primary stage \
-                                 (ws-dev/ws-plan/ws-docs/ws-test)"
-                            .into(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
+        let config_dir = pipeline::derive_config_dir(sentinel_dir);
+        let pipelines = match pipeline::load_pipelines(&config_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                crate::diagnostics::warn(
+                    "sentinel-write",
+                    &format!(
+                        "stage ordering check skipped for ws-{stage_lower}: \
+                         pathflow-config.json load failed: {e}"
+                    ),
+                );
+                return None;
             }
-            "qa" => {
-                if !sentinel::check_by_name(sentinel_dir, "ws-dev")
-                    && !sentinel::check_by_name(sentinel_dir, "ws-test")
-                {
-                    return Some(HookOutput::Block {
-                        reason: "BLOCKED: ws-qa requires prior ws-dev or ws-test sentinel".into(),
-                        category: Some(BlockCategory::Gate),
-                    });
-                }
-            }
-            _ => {}
-        }
-        None
+        };
+        let Some(pipeline_stages) = pipelines.get(&work_type) else {
+            crate::diagnostics::warn(
+                "sentinel-write",
+                &format!(
+                    "stage ordering check skipped for ws-{stage_lower}: \
+                     work_type={work_type} has no pipeline entry"
+                ),
+            );
+            return None;
+        };
+
+        check_stage_ordering(sentinel_dir, stage_lower, &work_type, pipeline_stages)
     }
+}
+
+/// Pure logic for cumulative stage ordering.
+///
+/// For the stage currently completing, find its position within
+/// `pipeline_stages` and verify every prior stage has a sentinel in
+/// `sentinel_dir`. No env or file IO beyond checking sentinel existence —
+/// all other inputs come from the caller.
+///
+/// Returns `None` (no block) when:
+/// - `stage_lower` is the first entry (no prior stages)
+/// - `stage_lower` is not in `pipeline_stages` (pipeline does not cover this stage)
+/// - Every prior stage sentinel exists
+///
+/// Returns `Some(Block)` when one or more prior stage sentinels are missing.
+#[must_use]
+fn check_stage_ordering(
+    sentinel_dir: &Path,
+    stage_lower: &str,
+    work_type: &str,
+    pipeline_stages: &[String],
+) -> Option<HookOutput> {
+    use super::pipeline;
+
+    let current_stage = format!("WS-{}", stage_lower.to_uppercase());
+    let current_index = pipeline_stages.iter().position(|s| s == &current_stage)?;
+
+    if current_index == 0 {
+        return None;
+    }
+
+    let (ok, missing) = pipeline::verify_cumulative_stage_sentinels(
+        sentinel_dir,
+        pipeline_stages,
+        current_index - 1,
+    );
+    if !ok {
+        return Some(HookOutput::Block {
+            reason: format!(
+                "BLOCKED: ws-{stage_lower} requires prior stage sentinel \
+                 '{missing}' ({work_type} pipeline: {pipeline_stages:?})"
+            ),
+            category: Some(BlockCategory::Gate),
+        });
+    }
+    None
 }
 
 impl HookHandler for SentinelWrite {
@@ -353,6 +413,30 @@ impl HookHandler for SentinelWrite {
                 ),
                 Err(_) => Ok(HookOutput::Allow),
             },
+            Some("Bash") => {
+                // Detect successful PR push (git push origin <branch> OR gh pr create)
+                // and set pr_pushed=true in pathflow-session-status.json. This is the
+                // semantic marker that rescue_uncommitted_work() uses to skip the
+                // auto-save WIP commit on worktree cleanup — once the PR is pushed,
+                // further writes to git-tracked files become stray commits.
+                let tool_input = input.tool_input.as_ref();
+                let command = tool_input
+                    .and_then(|v| v.get("command"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !command.is_empty()
+                    && is_pr_push_command(command)
+                    && bash_command_succeeded(input.tool_response.as_ref())
+                {
+                    if let Ok((session_dir, _)) = self.session_pathflow_dir() {
+                        update_session_status(
+                            &session_dir,
+                            &serde_json::json!({ "pr_pushed": true }),
+                        );
+                    }
+                }
+                Ok(HookOutput::Allow)
+            }
             _ => Ok(HookOutput::Allow),
         }
     }
@@ -364,6 +448,89 @@ impl HookHandler for SentinelWrite {
     fn events(&self) -> &[HookEvent] {
         &[HookEvent::PostToolUse]
     }
+}
+
+// ---------------------------------------------------------------------------
+// PR push detection helpers
+// ---------------------------------------------------------------------------
+
+/// Regex for detecting git push or gh pr create commands.
+fn pr_push_command_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?:^|\s|&&|\|)(?:git\s+push|gh\s+pr\s+create)(?:\s|$)").expect("valid regex")
+    })
+}
+
+/// Regex for stripping quoted strings to prevent false positives.
+fn pr_push_quoted_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#""(?:[^"\\]|\\.)*"|'[^']*'"#).expect("valid regex"))
+}
+
+/// Return true if `command` contains a `git push` or `gh pr create` invocation.
+///
+/// Quoted strings are stripped before matching so `echo "git push"` is not
+/// misidentified.
+#[must_use]
+pub fn is_pr_push_command(command: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+    let stripped = pr_push_quoted_re().replace_all(command, "");
+    pr_push_command_re().is_match(&stripped)
+}
+
+/// Return true if a Bash tool_response indicates successful execution.
+///
+/// Claude Code reports Bash results as either `{"exit_code": N, ...}`
+/// (structured) or a stringified version of the same.
+///
+/// # Fail-safe default
+///
+/// Unknown, missing, or malformed shapes return **false**. This is a
+/// deliberate fail-safe: the function is consumed by the `pr_pushed`
+/// write path, and writing `pr_pushed=true` on uncertain evidence causes
+/// `rescue_uncommitted_work` to skip the auto-save, which means dirty
+/// files are discarded on worktree cleanup. If we cannot prove the
+/// command succeeded, we treat it as failed so the rescue path still
+/// runs and work is preserved.
+///
+/// Call sites MUST understand: a `true` return is a positive assertion
+/// that `exit_code == 0` or `success == true` was observed. Any other
+/// case — no response, bad JSON, unknown keys — returns `false`.
+#[must_use]
+pub fn bash_command_succeeded(tool_response: Option<&serde_json::Value>) -> bool {
+    let Some(r) = tool_response else {
+        // No response at all — cannot prove success. Fail-safe: false.
+        return false;
+    };
+
+    // Handle string-encoded JSON response.
+    let value_owned;
+    let value: &serde_json::Value = if let Some(s) = r.as_str() {
+        match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(v) => {
+                value_owned = v;
+                &value_owned
+            }
+            // Malformed JSON — cannot prove success. Fail-safe: false.
+            Err(_) => return false,
+        }
+    } else {
+        r
+    };
+
+    // Prefer explicit exit_code == 0.
+    if let Some(code) = value.get("exit_code").and_then(serde_json::Value::as_i64) {
+        return code == 0;
+    }
+    // Fallback: some wrappers use `success: bool`.
+    if let Some(ok) = value.get("success").and_then(serde_json::Value::as_bool) {
+        return ok;
+    }
+    // Unknown shape — cannot prove success. Fail-safe: false.
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,6 +1310,52 @@ mod tests {
         sid.to_string()
     }
 
+    /// Seed `pathflow-config.json` with the given pipelines mapping.
+    fn write_pipeline_config(project_dir: &std::path::Path, pipelines: &[(&str, &[&str])]) {
+        let config_dir = project_dir
+            .join(".codeflow")
+            .join("config")
+            .join("pathflow");
+        fs::create_dir_all(&config_dir).unwrap();
+        let pipelines_json: serde_json::Value = pipelines
+            .iter()
+            .map(|(k, stages)| {
+                (
+                    (*k).to_string(),
+                    serde_json::Value::Array(
+                        stages
+                            .iter()
+                            .map(|s| serde_json::Value::String((*s).to_string()))
+                            .collect(),
+                    ),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        let config = serde_json::json!({ "pipelines": pipelines_json });
+        fs::write(
+            config_dir.join("pathflow-config.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Seed `pathflow-session-status.json` with a given `work_type` at the
+    /// tempdir's session path for the fake `sid`.
+    fn write_session_work_type(project_dir: &std::path::Path, sid: &str, work_type: &str) {
+        let session_dir = project_dir
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            serde_json::json!({ "work_type": work_type }).to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_sentinel_write_creates_dev_sentinel() {
         let dir = tempfile::tempdir().unwrap();
@@ -1218,26 +1431,138 @@ mod tests {
         );
     }
 
+    // Stage-ordering logic is tested directly against `check_stage_ordering`,
+    // which takes the pipeline and work_type as explicit parameters. Tests
+    // here exercise the pure logic without relying on env-resolved session
+    // state (tempdir-based tests cannot reliably override the inherited
+    // CODEFLOW_WORKTREE_PATH, so file-based session status doesn't round-trip
+    // cleanly through `session_pathflow_dir` in a test process).
+
+    /// Helper: build `pipeline_stages` as `Vec<String>` from a slice.
+    fn pipeline(stages: &[&str]) -> Vec<String> {
+        stages.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// Helper: create a sentinel dir at `{tempdir}/.state/sentinels/pathflow/{sid}/`
+    /// and write zero-length sentinel files for each name in `names`.
+    fn make_sentinel_dir(root: &std::path::Path, sid: &str, names: &[&str]) -> std::path::PathBuf {
+        let dir = root.join(".state/sentinels/pathflow").join(sid);
+        fs::create_dir_all(&dir).unwrap();
+        for n in names {
+            fs::write(dir.join(format!("pathflow-{n}")), "").unwrap();
+        }
+        dir
+    }
+
+    /// FEAT pipeline = [WS-DEV, WS-SEC, WS-REV, WS-QA]. With NO sentinels,
+    /// ws-rev must Block (ws-dev and ws-sec missing).
     #[test]
-    fn test_sentinel_write_rev_blocked_without_primary() {
+    fn test_check_stage_ordering_rev_blocks_without_prior_sentinels() {
         let dir = tempfile::tempdir().unwrap();
-        let _sid = setup_sentinel_env(dir.path());
-        let handler = SentinelWrite::new(dir.path().to_path_buf());
-        let input = make_input(
-            "SendMessage",
-            serde_json::json!({"message": "STAGE-COMPLETE: WS-REV"}),
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &[]);
+        let result = check_stage_ordering(
+            &sentinel_dir,
+            "rev",
+            "FEAT",
+            &pipeline(&["WS-DEV", "WS-SEC", "WS-REV", "WS-QA"]),
         );
-        let result = handler.handle(input).unwrap();
         assert!(
-            matches!(result, HookOutput::Block { .. }),
-            "ws-rev should be blocked without a primary stage sentinel"
+            matches!(result, Some(HookOutput::Block { .. })),
+            "expected Block, got {result:?}"
         );
     }
 
+    /// FEAT pipeline with only ws-dev present. ws-rev still Blocks because
+    /// ws-sec (prior stage) is missing. Verifies no hardcoded "primary
+    /// stage" concept — every prior stage matters.
+    #[test]
+    fn test_check_stage_ordering_pipeline_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &["ws-dev"]);
+        let pipe = pipeline(&["WS-DEV", "WS-SEC", "WS-REV", "WS-QA"]);
+
+        let blocked = check_stage_ordering(&sentinel_dir, "rev", "FEAT", &pipe);
+        assert!(
+            matches!(blocked, Some(HookOutput::Block { .. })),
+            "ws-rev should block when ws-sec is missing, got {blocked:?}"
+        );
+
+        // After adding ws-sec, ws-rev passes.
+        fs::write(sentinel_dir.join("pathflow-ws-sec"), "").unwrap();
+        let allowed = check_stage_ordering(&sentinel_dir, "rev", "FEAT", &pipe);
+        assert!(allowed.is_none(), "ws-rev should pass once ws-sec exists");
+    }
+
+    /// DOCS pipeline = [WS-DOCS, WS-REV]. ws-rev requires ws-docs — NOT
+    /// ws-dev, because ws-dev is not in this pipeline.
+    #[test]
+    fn test_check_stage_ordering_docs_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &[]);
+        let pipe = pipeline(&["WS-DOCS", "WS-REV"]);
+
+        let blocked = check_stage_ordering(&sentinel_dir, "rev", "DOCS", &pipe);
+        assert!(
+            matches!(blocked, Some(HookOutput::Block { .. })),
+            "ws-rev in DOCS pipeline should block without ws-docs"
+        );
+
+        // Add ONLY ws-docs (NOT ws-dev). ws-rev must pass.
+        fs::write(sentinel_dir.join("pathflow-ws-docs"), "").unwrap();
+        let allowed = check_stage_ordering(&sentinel_dir, "rev", "DOCS", &pipe);
+        assert!(
+            allowed.is_none(),
+            "DOCS pipeline ws-rev should only need ws-docs, not ws-dev"
+        );
+    }
+
+    /// qa needs all of dev, sec, rev. Missing rev should Block.
+    #[test]
+    fn test_check_stage_ordering_qa_blocks_without_rev() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &["ws-dev", "ws-sec"]);
+        let pipe = pipeline(&["WS-DEV", "WS-SEC", "WS-REV", "WS-QA"]);
+        let blocked = check_stage_ordering(&sentinel_dir, "qa", "FEAT", &pipe);
+        assert!(matches!(blocked, Some(HookOutput::Block { .. })));
+    }
+
+    /// First stage in a pipeline has no prior stages — must never Block.
+    #[test]
+    fn test_check_stage_ordering_first_stage_never_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &[]);
+        let pipe = pipeline(&["WS-DEV", "WS-SEC", "WS-REV", "WS-QA"]);
+        assert!(
+            check_stage_ordering(&sentinel_dir, "dev", "FEAT", &pipe).is_none(),
+            "ws-dev is index 0 in FEAT, must not block"
+        );
+    }
+
+    /// Stage not in the pipeline — Returns None (no ordering opinion).
+    /// The handler's outer flow decides what to do; check_stage_ordering
+    /// only opines on stages it recognises.
+    #[test]
+    fn test_check_stage_ordering_unknown_stage_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir(dir.path(), "ses-test", &[]);
+        let pipe = pipeline(&["WS-DOCS", "WS-REV"]);
+        // ws-qa is not in DOCS pipeline.
+        assert!(
+            check_stage_ordering(&sentinel_dir, "qa", "DOCS", &pipe).is_none(),
+            "unknown stage should return None (no opinion)"
+        );
+    }
+
+    /// Handler end-to-end smoke test: when work_type cannot be resolved
+    /// (e.g., tempdir has no session status file), validate_stage_ordering
+    /// returns None and the handler falls through to sentinel creation.
+    /// This covers the graceful-degradation path described in the docs.
     #[test]
     fn test_sentinel_write_rev_allowed_after_dev() {
         let dir = tempfile::tempdir().unwrap();
         let sid = setup_sentinel_env(dir.path());
+        write_pipeline_config(dir.path(), &[("FEAT", &["WS-DEV", "WS-REV", "WS-QA"])]);
+        write_session_work_type(dir.path(), &sid, "FEAT");
 
         // Create ws-dev sentinel first.
         let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(&sid);
@@ -1251,19 +1576,6 @@ mod tests {
         );
         let result = handler.handle(input).unwrap();
         assert!(matches!(result, HookOutput::Allow));
-    }
-
-    #[test]
-    fn test_sentinel_write_qa_blocked_without_dev_or_test() {
-        let dir = tempfile::tempdir().unwrap();
-        let _sid = setup_sentinel_env(dir.path());
-        let handler = SentinelWrite::new(dir.path().to_path_buf());
-        let input = make_input(
-            "SendMessage",
-            serde_json::json!({"message": "STAGE-COMPLETE: WS-QA"}),
-        );
-        let result = handler.handle(input).unwrap();
-        assert!(matches!(result, HookOutput::Block { .. }));
     }
 
     #[test]
@@ -2451,5 +2763,105 @@ mod tests {
             assert_eq!(br_values.len(), 1, "expected 1 session record");
             assert_eq!(br_values[0], "fix/test-branch");
         });
+    }
+
+    // -- PR push detection helpers --
+
+    #[test]
+    fn test_is_pr_push_command_git_push() {
+        assert!(is_pr_push_command("git push origin main"));
+        assert!(is_pr_push_command("git push"));
+        assert!(is_pr_push_command("git push --force-with-lease"));
+    }
+
+    #[test]
+    fn test_is_pr_push_command_gh_pr_create() {
+        assert!(is_pr_push_command("gh pr create --title foo --body bar"));
+        assert!(is_pr_push_command("gh pr create"));
+    }
+
+    #[test]
+    fn test_is_pr_push_command_chain() {
+        assert!(is_pr_push_command("git add -A && git push origin feat/x"));
+        assert!(is_pr_push_command("cd /tmp && gh pr create --title x"));
+    }
+
+    #[test]
+    fn test_is_pr_push_command_empty() {
+        assert!(!is_pr_push_command(""));
+    }
+
+    #[test]
+    fn test_is_pr_push_command_not_matching() {
+        assert!(!is_pr_push_command("git status"));
+        assert!(!is_pr_push_command("git commit -m msg"));
+        assert!(!is_pr_push_command("gh pr list"));
+        assert!(!is_pr_push_command("gh pr view"));
+        assert!(!is_pr_push_command("echo hello"));
+    }
+
+    #[test]
+    fn test_is_pr_push_command_quoted_strings_stripped() {
+        // Quoted "git push" inside echo should NOT match.
+        assert!(!is_pr_push_command(r#"echo "git push""#));
+        assert!(!is_pr_push_command("echo 'gh pr create'"));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_exit_code_zero() {
+        let r = serde_json::json!({"exit_code": 0, "stdout": "ok"});
+        assert!(bash_command_succeeded(Some(&r)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_exit_code_nonzero() {
+        let r = serde_json::json!({"exit_code": 1, "stderr": "failed"});
+        assert!(!bash_command_succeeded(Some(&r)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_success_true() {
+        let r = serde_json::json!({"success": true});
+        assert!(bash_command_succeeded(Some(&r)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_success_false() {
+        let r = serde_json::json!({"success": false});
+        assert!(!bash_command_succeeded(Some(&r)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_none_defaults_false() {
+        // Fail-safe: None (no response) must NOT be treated as success.
+        // If we wrote pr_pushed=true on uncertain evidence, a failed
+        // git push would still mark the session as pushed, causing
+        // rescue_uncommitted_work to skip and dirty work to be lost.
+        assert!(!bash_command_succeeded(None));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_string_encoded() {
+        let r = serde_json::json!(r#"{"exit_code": 0}"#);
+        assert!(bash_command_succeeded(Some(&r)));
+
+        let r_fail = serde_json::json!(r#"{"exit_code": 2}"#);
+        assert!(!bash_command_succeeded(Some(&r_fail)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_malformed_string_defaults_false() {
+        // Fail-safe: malformed JSON in a string-shaped response cannot
+        // be proven successful — treat as failure to preserve rescue.
+        let r = serde_json::json!("not json");
+        assert!(!bash_command_succeeded(Some(&r)));
+    }
+
+    #[test]
+    fn test_bash_command_succeeded_unknown_shape_defaults_false() {
+        // Fail-safe: response shape without exit_code or success fields
+        // is not provable success — don't write pr_pushed=true.
+        let r = serde_json::json!({"some_other_field": 42});
+        assert!(!bash_command_succeeded(Some(&r)));
     }
 }

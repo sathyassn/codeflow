@@ -113,12 +113,46 @@ impl CheckpointComplete {
     /// Update the worktree registry branch field and session status branch
     /// with the current git branch.
     ///
-    /// Called when the pf-3 sentinel is created (feature branch exists).
-    /// Delegates to `update_branch_from_current` which handles both the
-    /// worktree registry and session status atomically.
+    /// Called when the `work_type_infer` gate's trigger phase sentinel is
+    /// created (feature branch exists). Delegates to
+    /// `update_branch_from_current` which handles both the worktree
+    /// registry and session status atomically.
     fn update_worktree_branch(&self) {
         if let Err(e) = crate::worktree::update_branch_from_current(&self.project_dir) {
             eprintln!("checkpoint-complete: branch update failed: {e}");
+        }
+    }
+
+    /// Return `true` if `phase_normalized` (e.g., `"pf-3"`) matches the
+    /// phase configured as the trigger for the `work_type_infer` gate in
+    /// `pathflow-config.json`.
+    ///
+    /// Reads `gates.work_type_infer.on_phase_complete` via `GateConfig`.
+    /// When the config cannot be loaded or the gate is absent, falls back
+    /// to comparing against `pf-3` (historical behavior) so test scaffolds
+    /// without a full config still work.
+    fn is_work_type_infer_phase(sentinel_dir: &std::path::Path, phase_normalized: &str) -> bool {
+        use crate::pathflow::gates::GateConfig;
+
+        let config_dir = super::pipeline::derive_config_dir(sentinel_dir);
+        let config_path = config_dir.join("pathflow-config.json");
+        if !config_path.exists() {
+            return phase_normalized == "pf-3";
+        }
+
+        // GateConfig::load panics on malformed config; catch to keep the
+        // checkpoint-complete hook non-fatal even under config damage.
+        let result = std::panic::catch_unwind(|| GateConfig::load(&config_dir));
+        let Ok(gates) = result else {
+            return phase_normalized == "pf-3";
+        };
+
+        match gates.get("work_type_infer") {
+            Some(req) => match req.on_phase_complete {
+                Some(phase) => phase_normalized == format!("pf-{}", phase.index()),
+                None => phase_normalized == "pf-3",
+            },
+            None => phase_normalized == "pf-3",
         }
     }
 }
@@ -190,10 +224,13 @@ impl HookHandler for CheckpointComplete {
                         }
                         crate::hooks::post_tool_use::update_session_status(&session_dir, &updates);
 
-                        // When pf-3 is newly created, infer work_type from git branch
-                        // and write to checkpoint context + session status.
-                        // Mirrors Go registerWorkType() in hooks.go:855-877.
-                        if phase_normalized == "pf-3" {
+                        // When the `work_type_infer` gate's trigger phase is
+                        // newly created, infer work_type from git branch and
+                        // write to checkpoint context + session status.
+                        // The trigger phase is config-driven via
+                        // `gates.work_type_infer.on_phase_complete` in
+                        // pathflow-config.json (no hardcoded "pf-3" literal).
+                        if Self::is_work_type_infer_phase(&sentinel_dir, &phase_normalized) {
                             self.register_work_type(&session_dir, sid.as_ref());
                             // Update worktree registry branch field now that
                             // the feature branch exists (AC #10).
@@ -628,5 +665,92 @@ mod tests {
         // (which would mean it matched nothing / matched PF9-TSK-99).
         let result = handler.handle(input);
         assert!(result.is_err()); // session ID missing -> error (proves PF3-TSK-01 was extracted)
+    }
+
+    /// Helper: write a minimal `pathflow-config.json` at the project's
+    /// config dir with a single `work_type_infer` gate.
+    fn write_gates_config(project_dir: &std::path::Path, trigger_phase: &str) {
+        use std::fs;
+        let config_dir = project_dir
+            .join(".codeflow")
+            .join("config")
+            .join("pathflow");
+        fs::create_dir_all(&config_dir).unwrap();
+        let body = format!(
+            r#"{{
+              "phases": {{
+                "PF1-INIT": {{"phase_order": 1}},
+                "PF2-CONTEXT": {{"phase_order": 2}},
+                "PF3-CLASSIFY": {{"phase_order": 3}},
+                "PF4-EXECUTE": {{"phase_order": 4}}
+              }},
+              "gates": {{
+                "work_type_infer": {{
+                  "on_phase_complete": "{trigger_phase}",
+                  "description": "test"
+                }}
+              }}
+            }}"#
+        );
+        fs::write(config_dir.join("pathflow-config.json"), body).unwrap();
+    }
+
+    /// The `work_type_infer` gate is config-driven: when its
+    /// `on_phase_complete` is PF3-CLASSIFY, only the `pf-3` phase triggers
+    /// inference; when it is PF4-EXECUTE, only `pf-4` triggers it.
+    #[test]
+    fn test_task_completed_work_type_infer_config_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-work-type-infer-test";
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Config sets trigger phase to PF3-CLASSIFY -> "pf-3".
+        write_gates_config(dir.path(), "PF3-CLASSIFY");
+        assert!(CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-3"
+        ));
+        assert!(!CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-4"
+        ));
+        assert!(!CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-1"
+        ));
+
+        // Change trigger to PF4-EXECUTE -> "pf-4". Now pf-3 must NOT
+        // trigger; pf-4 MUST trigger.
+        write_gates_config(dir.path(), "PF4-EXECUTE");
+        assert!(CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-4"
+        ));
+        assert!(!CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-3"
+        ));
+    }
+
+    /// When the config is missing, the helper falls back to the historical
+    /// "pf-3" default so existing test scaffolding without full config still
+    /// works.
+    #[test]
+    fn test_task_completed_work_type_infer_fallback_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-no-config";
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // No pathflow-config.json in project_dir; falls back to "pf-3".
+        assert!(CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-3"
+        ));
+        assert!(!CheckpointComplete::is_work_type_infer_phase(
+            &sentinel_dir,
+            "pf-4"
+        ));
     }
 }

@@ -59,6 +59,13 @@
         "reason": "Pure module re-export file (pub mod + pub use) with no executable code. llvm-cov reports 0% but there is nothing to test.",
         "granularity": "per_file",
         "remove_when": "File gains executable code"
+      },
+      {
+        "file": "core/src/pathflow/mod.rs",
+        "threshold": 0,
+        "reason": "Pure module declaration file (pub mod checkpoint/gates/sentinel/transitions and a file_lock re-export) with no executable code. llvm-cov reports N/A but there is nothing to test.",
+        "granularity": "per_file",
+        "remove_when": "File gains executable code"
       }
     ]
   }

@@ -671,6 +671,40 @@
       "WS-REV"
     ]
   },
+  "gates": {
+    "_comment": "Declarative gate requirements consumed by codeflow-core/src/pathflow/gates.rs (GateConfig::load). Every requires_phase / on_phase_complete MUST parse to a valid Phase enum variant; GateConfig::load panics on invalid config. Adding a new gate or changing a requirement is a config-only change — no Rust enforcement code modifications required.",
+    "edit_write": {
+      "requires_phase": "PF3-CLASSIFY",
+      "description": "Feature branch must exist before file writes"
+    },
+    "git_commit": {
+      "requires_phase": "PF3-CLASSIFY",
+      "description": "Feature branch must exist before commits"
+    },
+    "role_spawn": {
+      "requires_phase": "PF3-CLASSIFY",
+      "description": "Work must be classified before spawning role teammates"
+    },
+    "git_push": {
+      "requires_phase": "PF5-VERIFY",
+      "cumulative_phases": true,
+      "requires_all_pipeline_stages": true,
+      "description": "All phases through verify and all pipeline stages must pass"
+    },
+    "team_delete": {
+      "requires_phase": "PF6-COMPLETE",
+      "requires_all_pipeline_stages": true,
+      "description": "PR must be complete before team dissolution"
+    },
+    "work_type_infer": {
+      "on_phase_complete": "PF3-CLASSIFY",
+      "description": "Infer work type from branch name when classify completes"
+    },
+    "pr_pushed": {
+      "on_phase_complete": "PF6-COMPLETE",
+      "description": "Semantic marker for rescue_uncommitted_work skip"
+    }
+  },
   "teammates": {
     "persistent": {
       "cf-security": {

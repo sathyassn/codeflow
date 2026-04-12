@@ -278,13 +278,29 @@ pub fn cleanup_orphan(
 
 /// Rescue uncommitted and unpushed work from a worktree before deletion.
 ///
-/// 1. If the worktree has dirty files: stages all and creates a WIP commit.
-/// 2. If the worktree has unpushed commits: attempts to push them.
-/// 3. If push fails (no network): returns `WorktreeError::UnpushedWork`.
-/// 4. If clean or push succeeds: returns `Ok(())` (safe to delete).
+/// 1. If the session's PR has already been pushed (pr_pushed=true in
+///    pathflow-session-status.json), skip the rescue entirely — any dirty
+///    files at this point are stray writes that would create noise commits
+///    after the PR is open. The cleanup caller will proceed to delete.
+/// 2. If the worktree has dirty files: stages all and creates a WIP commit.
+/// 3. If the worktree has unpushed commits: attempts to push them.
+/// 4. If push fails (no network): returns `WorktreeError::UnpushedWork`.
+/// 5. If clean or push succeeds: returns `Ok(())` (safe to delete).
 pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(), WorktreeError> {
     // Check if directory is a git repo at all.
     if !wt_path.join(".git").exists() {
+        return Ok(());
+    }
+
+    // Step 0: If the PR has already been pushed for this session, skip rescue.
+    // Post-PR writes are stray commits (worktree auto-save creates noise on
+    // a branch that's already under review). Crashed sessions without the
+    // pr_pushed flag still get the full rescue below.
+    if session_pushed_pr(wt_path, session_hint) {
+        crate::diagnostics::warn(
+            "worktree",
+            &format!("{session_hint}: skipping rescue — PR already pushed"),
+        );
         return Ok(());
     }
 
@@ -374,6 +390,57 @@ pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(),
             "worktree '{session_hint}' has unpushed commits on branch '{branch}'"
         ))),
     }
+}
+
+/// Return true if the session's `pr_pushed` flag is set in
+/// `pathflow-session-status.json`.
+///
+/// The flag is set atomically by the `SentinelWrite` PostToolUse hook after
+/// a successful `git push` or `gh pr create`. The check is read-only and
+/// tolerant: missing file, bad JSON, or missing field all return false —
+/// callers must fall back to the full rescue path in those cases.
+///
+/// `session_hint` is the worktree directory name (e.g., `worktree-ses-abc123`);
+/// the session ID is recovered by stripping the `worktree-` prefix.
+///
+/// # Path safety
+///
+/// The extracted session ID is validated against `[A-Za-z0-9_-]+` before
+/// being joined into the filesystem path. Any value containing `..`,
+/// path separators, null bytes, or other non-alphanumeric/`-_` characters
+/// is rejected (returns `false`). Today the source is trusted
+/// (`WorktreeManager` output), but the sanitization is cheap and forecloses
+/// path-traversal attack surface if the helper is ever reused with
+/// untrusted input.
+fn session_pushed_pr(wt_path: &Path, session_hint: &str) -> bool {
+    let session_id = session_hint
+        .strip_prefix("worktree-")
+        .unwrap_or(session_hint);
+    if session_id.is_empty() {
+        return false;
+    }
+    // Sanitize: only accept [A-Za-z0-9_-]. Reject anything else — this
+    // includes "..", "/", "\\", null bytes, and any character that could
+    // break path semantics.
+    if !session_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return false;
+    }
+
+    let status_path = wt_path
+        .join(".state/session")
+        .join(session_id)
+        .join("pathflow/pathflow-session-status.json");
+
+    let Ok(contents) = std::fs::read_to_string(&status_path) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&contents)
+        .ok()
+        .and_then(|v| v.get("pr_pushed")?.as_bool())
+        .unwrap_or(false)
 }
 
 /// Attempt to remove a worktree using git2.
@@ -1043,5 +1110,166 @@ mod tests {
             "cleanup_orphan should succeed for nonexistent path: {:?}",
             result.err()
         );
+    }
+
+    // -- session_pushed_pr tests --
+
+    fn write_session_status(
+        wt_path: &Path,
+        session_id: &str,
+        contents: &str,
+    ) -> std::path::PathBuf {
+        let dir = wt_path
+            .join(".state/session")
+            .join(session_id)
+            .join("pathflow");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pathflow-session-status.json");
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_session_pushed_pr_true() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(
+            dir.path(),
+            "ses-abc",
+            r#"{"pr_pushed": true, "status": "pf-in-progress"}"#,
+        );
+        assert!(session_pushed_pr(dir.path(), "worktree-ses-abc"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_false() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(dir.path(), "ses-abc", r#"{"pr_pushed": false}"#);
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses-abc"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_missing_field() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(dir.path(), "ses-abc", r#"{"status": "pf-in-progress"}"#);
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses-abc"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses-missing"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(dir.path(), "ses-abc", "not valid json {");
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses-abc"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_session_hint_without_prefix() {
+        // session_hint may be passed as "ses-abc" directly (no "worktree-" prefix).
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(dir.path(), "ses-abc", r#"{"pr_pushed": true}"#);
+        assert!(session_pushed_pr(dir.path(), "ses-abc"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_empty_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!session_pushed_pr(dir.path(), ""));
+        // Just a "worktree-" prefix with nothing after.
+        assert!(!session_pushed_pr(dir.path(), "worktree-"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_rejects_path_traversal() {
+        // Session IDs containing ".." or path separators must be rejected
+        // even if the attacker-controlled path would happen to land on a
+        // real status file with pr_pushed=true. Defense-in-depth (REV F6).
+        let dir = tempfile::tempdir().unwrap();
+        // Plant a status file at a location the traversal attempt might reach.
+        write_session_status(dir.path(), "ses-real", r#"{"pr_pushed": true}"#);
+
+        // Attempts that must all be rejected by the sanitizer:
+        assert!(!session_pushed_pr(
+            dir.path(),
+            "worktree-../../../etc/passwd"
+        ));
+        assert!(!session_pushed_pr(
+            dir.path(),
+            "worktree-ses-real/../ses-real"
+        ));
+        assert!(!session_pushed_pr(dir.path(), "worktree-..%2Fses-real"));
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses real")); // space
+        assert!(!session_pushed_pr(dir.path(), "worktree-ses\0real")); // null byte
+        assert!(!session_pushed_pr(dir.path(), "worktree-a/b/c"));
+        assert!(!session_pushed_pr(dir.path(), "worktree-a\\b\\c"));
+    }
+
+    #[test]
+    fn test_session_pushed_pr_accepts_valid_ids() {
+        // Happy-path IDs that match [A-Za-z0-9_-]+ must still work.
+        let dir = tempfile::tempdir().unwrap();
+        write_session_status(dir.path(), "ses-abc-123_XYZ", r#"{"pr_pushed": true}"#);
+        assert!(session_pushed_pr(dir.path(), "worktree-ses-abc-123_XYZ"));
+    }
+
+    #[test]
+    fn test_rescue_skips_when_pr_pushed() {
+        // Setup: worktree with dirty files + pr_pushed=true status.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().join("worktree-ses-pushed");
+        fs::create_dir_all(&wt_path).unwrap();
+
+        // Init a real git repo (rescue_uncommitted_work short-circuits if .git missing).
+        let init = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&wt_path)
+            .status();
+        assert!(init.is_ok() && init.unwrap().success());
+
+        // Create a dirty file.
+        fs::write(wt_path.join("dirty.txt"), "uncommitted").unwrap();
+
+        // Write pr_pushed=true status.
+        write_session_status(
+            &wt_path,
+            "ses-pushed",
+            r#"{"pr_pushed": true, "status": "pf-in-progress"}"#,
+        );
+
+        // Should return Ok immediately without staging/committing.
+        let result = rescue_uncommitted_work(&wt_path, "worktree-ses-pushed");
+        assert!(
+            result.is_ok(),
+            "rescue should skip when PR already pushed: {:?}",
+            result.err()
+        );
+
+        // Verify nothing was committed (git log should be empty — no commits).
+        let log_output = Command::new("git")
+            .args(["log", "--oneline"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        assert!(
+            log_output.stdout.is_empty(),
+            "no commits should have been created; got: {}",
+            String::from_utf8_lossy(&log_output.stdout)
+        );
+    }
+
+    #[test]
+    fn test_rescue_proceeds_when_no_status() {
+        // No pathflow-session-status.json at all — rescue should proceed normally.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().join("worktree-ses-nostatus");
+        fs::create_dir_all(&wt_path).unwrap();
+
+        // Not a git repo — rescue returns Ok immediately (existing behavior).
+        let result = rescue_uncommitted_work(&wt_path, "worktree-ses-nostatus");
+        assert!(result.is_ok());
     }
 }

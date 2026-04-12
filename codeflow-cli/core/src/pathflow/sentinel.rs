@@ -270,6 +270,7 @@ mod tests {
             Sentinel::PathflowPf6,
             Sentinel::PathflowPf7,
             Sentinel::PathflowWsDev,
+            Sentinel::PathflowWsSec,
             Sentinel::PathflowWsRev,
             Sentinel::PathflowWsQa,
             Sentinel::PathflowWsTest,
@@ -282,6 +283,6 @@ mod tests {
         }
 
         let names = list_sentinels(sentinel_dir).unwrap();
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 14);
     }
 }

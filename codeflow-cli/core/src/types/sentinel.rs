@@ -21,6 +21,7 @@ pub enum Sentinel {
     PathflowPf6,
     PathflowPf7,
     PathflowWsDev,
+    PathflowWsSec,
     PathflowWsRev,
     PathflowWsQa,
     PathflowWsTest,
@@ -41,6 +42,7 @@ impl Sentinel {
             Self::PathflowPf6 => "pathflow-pf-6",
             Self::PathflowPf7 => "pathflow-pf-7",
             Self::PathflowWsDev => "pathflow-ws-dev",
+            Self::PathflowWsSec => "pathflow-ws-sec",
             Self::PathflowWsRev => "pathflow-ws-rev",
             Self::PathflowWsQa => "pathflow-ws-qa",
             Self::PathflowWsTest => "pathflow-ws-test",
@@ -65,9 +67,10 @@ impl Sentinel {
 
     /// Return all stage sentinels.
     #[must_use]
-    pub const fn stage_sentinels() -> [Self; 6] {
+    pub const fn stage_sentinels() -> [Self; 7] {
         [
             Self::PathflowWsDev,
+            Self::PathflowWsSec,
             Self::PathflowWsRev,
             Self::PathflowWsQa,
             Self::PathflowWsTest,
@@ -108,6 +111,7 @@ impl FromStr for Sentinel {
             "pathflow-pf-6" => Ok(Self::PathflowPf6),
             "pathflow-pf-7" => Ok(Self::PathflowPf7),
             "pathflow-ws-dev" => Ok(Self::PathflowWsDev),
+            "pathflow-ws-sec" => Ok(Self::PathflowWsSec),
             "pathflow-ws-rev" => Ok(Self::PathflowWsRev),
             "pathflow-ws-qa" => Ok(Self::PathflowWsQa),
             "pathflow-ws-test" => Ok(Self::PathflowWsTest),
@@ -136,6 +140,7 @@ impl From<WorkStage> for Sentinel {
     fn from(stage: WorkStage) -> Self {
         match stage {
             WorkStage::WsDev => Self::PathflowWsDev,
+            WorkStage::WsSec => Self::PathflowWsSec,
             WorkStage::WsRev => Self::PathflowWsRev,
             WorkStage::WsQa => Self::PathflowWsQa,
             WorkStage::WsTest => Self::PathflowWsTest,
@@ -212,7 +217,19 @@ mod tests {
 
     #[test]
     fn test_stage_sentinels_count() {
-        assert_eq!(Sentinel::stage_sentinels().len(), 6);
+        assert_eq!(Sentinel::stage_sentinels().len(), 7);
+    }
+
+    #[test]
+    fn test_pathflow_ws_sec_sentinel() {
+        assert_eq!(Sentinel::PathflowWsSec.file_name(), "pathflow-ws-sec");
+        assert_eq!(Sentinel::PathflowWsSec.to_string(), "pathflow-ws-sec");
+        assert_eq!(
+            "pathflow-ws-sec".parse::<Sentinel>().unwrap(),
+            Sentinel::PathflowWsSec
+        );
+        assert_eq!(Sentinel::from(WorkStage::WsSec), Sentinel::PathflowWsSec);
+        assert!(Sentinel::stage_sentinels().contains(&Sentinel::PathflowWsSec));
     }
 
     #[test]
@@ -241,6 +258,7 @@ mod proptests {
             Just(Sentinel::PathflowPf6),
             Just(Sentinel::PathflowPf7),
             Just(Sentinel::PathflowWsDev),
+            Just(Sentinel::PathflowWsSec),
             Just(Sentinel::PathflowWsRev),
             Just(Sentinel::PathflowWsQa),
             Just(Sentinel::PathflowWsTest),

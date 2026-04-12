@@ -552,7 +552,7 @@ fn read_stage_pipeline(
 
     let sentinel_dir = base.join(".state/sentinels/pathflow");
 
-    let stage_names = ["ws-dev", "ws-sec", "ws-rev", "ws-qa"];
+    let stage_names = derive_stage_names_for_tui(&base);
     let mut completed_stages = std::collections::HashSet::new();
 
     match std::fs::read_dir(&sentinel_dir) {
@@ -575,8 +575,8 @@ fn read_stage_pipeline(
                         let name = sentinel.file_name();
                         let name = name.to_string_lossy();
                         for stage in &stage_names {
-                            if name.contains(stage) {
-                                completed_stages.insert((*stage).to_string());
+                            if name.contains(stage.as_str()) {
+                                completed_stages.insert(stage.clone());
                             }
                         }
                     }
@@ -596,9 +596,67 @@ fn read_stage_pipeline(
         .iter()
         .map(|name| StageInfo {
             name: name.to_uppercase(),
-            completed: completed_stages.contains(*name),
+            completed: completed_stages.contains(name),
         })
         .collect()
+}
+
+/// Derive the TUI stage name list from the pipelines section of
+/// `pathflow-config.json`.
+///
+/// Returns the union of all pipeline stages (lowercased, matching the
+/// sentinel file naming like `ws-dev`, `ws-sec`, etc.), preserving the
+/// order in which stages first appear across the FEAT, FIX, TEST, DOCS,
+/// and other pipelines. When the config cannot be loaded, falls back to
+/// the historical hardcoded list so the TUI continues to render
+/// meaningful columns.
+///
+/// This is a view-layer helper: the list is a display concern, NOT a
+/// routing decision. Gate enforcement still reads the pipeline
+/// per-session via `hooks::pipeline::load_pipelines`.
+fn derive_stage_names_for_tui(base: &Path) -> Vec<String> {
+    let config_path = base
+        .join(".codeflow")
+        .join("config")
+        .join("pathflow")
+        .join("pathflow-config.json");
+
+    // Parse only the pipelines section from the config file.
+    let names = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .and_then(|v| v.get("pipelines").cloned())
+        .and_then(|pipelines| {
+            let obj = pipelines.as_object()?;
+            let mut ordered: Vec<String> = Vec::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (_, stages_value) in obj {
+                if let Some(stages) = stages_value.as_array() {
+                    for entry in stages {
+                        if let Some(s) = entry.as_str() {
+                            let lowered = s.to_lowercase();
+                            if seen.insert(lowered.clone()) {
+                                ordered.push(lowered);
+                            }
+                        }
+                    }
+                }
+            }
+            if ordered.is_empty() {
+                None
+            } else {
+                Some(ordered)
+            }
+        });
+
+    names.unwrap_or_else(|| {
+        vec![
+            "ws-dev".to_string(),
+            "ws-sec".to_string(),
+            "ws-rev".to_string(),
+            "ws-qa".to_string(),
+        ]
+    })
 }
 
 #[cfg(test)]
@@ -1513,5 +1571,59 @@ mod tests {
         let stages = read_stage_pipeline(std::path::Path::new("/nonexistent/path"), None, None);
         assert_eq!(stages.len(), 4);
         assert!(stages.iter().all(|s| !s.completed));
+    }
+
+    /// The TUI stage names must come from the pipelines config, not a
+    /// hardcoded array. Adding a new stage (e.g. WS-BENCH) to any
+    /// pipeline should automatically appear in the derived names.
+    #[test]
+    fn test_tui_stage_names_pipeline_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("pathflow");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("pathflow-config.json"),
+            r#"{
+              "pipelines": {
+                "FEAT": ["WS-DEV", "WS-SEC", "WS-BENCH", "WS-REV", "WS-QA"],
+                "DOCS": ["WS-DOCS", "WS-REV"],
+                "PLAN": ["WS-PLAN", "WS-REV"]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let names = derive_stage_names_for_tui(dir.path());
+        // Every stage referenced in any pipeline must appear.
+        for expected in &[
+            "ws-dev", "ws-sec", "ws-bench", "ws-rev", "ws-qa", "ws-docs", "ws-plan",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "stage {expected} missing from {names:?}"
+            );
+        }
+        // No duplicates.
+        let mut deduped = names.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(deduped.len(), names.len(), "duplicates in {names:?}");
+    }
+
+    /// When the config file is absent, the helper falls back to the
+    /// historical stage set so the TUI still renders.
+    #[test]
+    fn test_tui_stage_names_fallback_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = derive_stage_names_for_tui(dir.path());
+        assert_eq!(
+            names,
+            vec![
+                "ws-dev".to_string(),
+                "ws-sec".to_string(),
+                "ws-rev".to_string(),
+                "ws-qa".to_string(),
+            ]
+        );
     }
 }

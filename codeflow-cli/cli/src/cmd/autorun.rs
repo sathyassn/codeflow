@@ -3815,6 +3815,11 @@ enum PathFlowState {
 ///
 /// Sentinel files live at `{worktree}/.state/sentinels/pathflow/{session_id}/`
 /// with names like `pathflow-pf-1`, `pathflow-pf-6`, `pathflow-pf-7`.
+///
+/// The phase sentinel that represents "PR pushed" is derived from
+/// `gates.pr_pushed.on_phase_complete` in `pathflow-config.json` via
+/// `GateConfig`. When the config or gate is absent, falls back to
+/// `pathflow-pf-6` (historical default).
 fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) -> PathFlowState {
     let sentinel_dir = worktree_path
         .join(".state/sentinels/pathflow")
@@ -3825,16 +3830,18 @@ fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) ->
         Err(_) => return PathFlowState::Unknown,
     };
 
+    let pr_pushed_sentinel = resolve_pr_pushed_sentinel_name(worktree_path);
+
     let mut has_pf7 = false;
-    let mut has_pf6 = false;
+    let mut has_pr_pushed = false;
     let mut latest_phase = String::new();
 
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name == "pathflow-pf-7" {
             has_pf7 = true;
-        } else if name == "pathflow-pf-6" {
-            has_pf6 = true;
+        } else if name == pr_pushed_sentinel {
+            has_pr_pushed = true;
         }
         // Track latest phase sentinel for InProgress reporting.
         if name.starts_with("pathflow-pf-") && (latest_phase.is_empty() || name > latest_phase) {
@@ -3844,13 +3851,46 @@ fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) ->
 
     if has_pf7 {
         PathFlowState::Complete
-    } else if has_pf6 {
+    } else if has_pr_pushed {
         PathFlowState::PrCreated
     } else if !latest_phase.is_empty() {
         PathFlowState::InProgress(latest_phase)
     } else {
         PathFlowState::Unknown
     }
+}
+
+/// Resolve the sentinel filename that signifies "PR pushed" by reading
+/// `gates.pr_pushed.on_phase_complete` from `pathflow-config.json`.
+///
+/// Falls back to `pathflow-pf-6` when the config cannot be loaded or the
+/// gate is missing (historical default).
+fn resolve_pr_pushed_sentinel_name(worktree_path: &std::path::Path) -> String {
+    use codeflow_core::pathflow::gates::GateConfig;
+
+    const FALLBACK: &str = "pathflow-pf-6";
+    let config_dir = worktree_path
+        .join(".codeflow")
+        .join("config")
+        .join("pathflow");
+    if !config_dir.join("pathflow-config.json").exists() {
+        return FALLBACK.to_string();
+    }
+
+    // GateConfig::load panics on malformed config; catch to keep this
+    // progress check non-fatal.
+    let result = std::panic::catch_unwind(|| GateConfig::load(&config_dir));
+    let Ok(gates) = result else {
+        return FALLBACK.to_string();
+    };
+
+    gates
+        .get("pr_pushed")
+        .and_then(|req| req.on_phase_complete)
+        .map_or_else(
+            || FALLBACK.to_string(),
+            |phase| format!("pathflow-pf-{}", phase.index()),
+        )
 }
 
 /// Write the wrap-up signal file to the worktree's runtime local directory.
@@ -8089,5 +8129,61 @@ tasks:
         std::fs::write(&report, "batch report").unwrap();
         // "integration/nonexistent" is safe but not a real local branch.
         commit_report_to_branch(dir.path(), &report, "integration/nonexistent");
+    }
+
+    /// Helper: seed a `pathflow-config.json` with one `pr_pushed` gate.
+    fn write_pr_pushed_gate_config(worktree: &std::path::Path, trigger_phase: &str) {
+        let config_dir = worktree.join(".codeflow").join("config").join("pathflow");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let body = format!(
+            r#"{{
+              "phases": {{
+                "PF5-VERIFY": {{"phase_order": 5}},
+                "PF6-COMPLETE": {{"phase_order": 6}}
+              }},
+              "gates": {{
+                "pr_pushed": {{
+                  "on_phase_complete": "{trigger_phase}",
+                  "description": "test"
+                }}
+              }}
+            }}"#
+        );
+        std::fs::write(config_dir.join("pathflow-config.json"), body).unwrap();
+    }
+
+    /// The `PathFlowState::PrCreated` detection must be config-driven:
+    /// `gates.pr_pushed.on_phase_complete` determines which phase sentinel
+    /// marks "PR pushed", not a hardcoded `pathflow-pf-6` literal.
+    #[test]
+    fn test_autorun_pr_pushed_gate_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-pr-pushed-gate";
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Fallback behavior: with no config, the resolver returns pf-6.
+        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-6");
+
+        // Config says PR is pushed at PF6-COMPLETE. Writing pathflow-pf-6
+        // should trigger PrCreated.
+        write_pr_pushed_gate_config(dir.path(), "PF6-COMPLETE");
+        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-6");
+        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
+        assert!(matches!(
+            check_pathflow_progress(dir.path(), sid),
+            PathFlowState::PrCreated
+        ));
+
+        // Change config to PF5-VERIFY as the trigger. Now pathflow-pf-5
+        // (not pf-6) should signify PrCreated. Swap the sentinel files.
+        std::fs::remove_file(sentinel_dir.join("pathflow-pf-6")).unwrap();
+        write_pr_pushed_gate_config(dir.path(), "PF5-VERIFY");
+        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-5");
+        std::fs::write(sentinel_dir.join("pathflow-pf-5"), "").unwrap();
+        assert!(matches!(
+            check_pathflow_progress(dir.path(), sid),
+            PathFlowState::PrCreated
+        ));
     }
 }

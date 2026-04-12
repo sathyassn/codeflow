@@ -12,6 +12,7 @@ use super::enums::ParseEnumError;
 #[serde(rename_all = "SCREAMING-KEBAB-CASE")]
 pub enum WorkStage {
     WsDev,
+    WsSec,
     WsRev,
     WsQa,
     WsTest,
@@ -23,6 +24,7 @@ impl fmt::Display for WorkStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WsDev => f.write_str("WS-DEV"),
+            Self::WsSec => f.write_str("WS-SEC"),
             Self::WsRev => f.write_str("WS-REV"),
             Self::WsQa => f.write_str("WS-QA"),
             Self::WsTest => f.write_str("WS-TEST"),
@@ -38,6 +40,7 @@ impl FromStr for WorkStage {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "WS-DEV" | "ws-dev" | "WsDev" => Ok(Self::WsDev),
+            "WS-SEC" | "ws-sec" | "WsSec" => Ok(Self::WsSec),
             "WS-REV" | "ws-rev" | "WsRev" => Ok(Self::WsRev),
             "WS-QA" | "ws-qa" | "WsQa" => Ok(Self::WsQa),
             "WS-TEST" | "ws-test" | "WsTest" => Ok(Self::WsTest),
@@ -54,9 +57,10 @@ impl FromStr for WorkStage {
 impl WorkStage {
     /// Return all stages.
     #[must_use]
-    pub const fn all() -> [Self; 6] {
+    pub const fn all() -> [Self; 7] {
         [
             Self::WsDev,
+            Self::WsSec,
             Self::WsRev,
             Self::WsQa,
             Self::WsTest,
@@ -73,6 +77,7 @@ mod tests {
     #[test]
     fn test_stage_display() {
         assert_eq!(WorkStage::WsDev.to_string(), "WS-DEV");
+        assert_eq!(WorkStage::WsSec.to_string(), "WS-SEC");
         assert_eq!(WorkStage::WsRev.to_string(), "WS-REV");
         assert_eq!(WorkStage::WsQa.to_string(), "WS-QA");
         assert_eq!(WorkStage::WsTest.to_string(), "WS-TEST");
@@ -104,20 +109,41 @@ mod tests {
 
     #[test]
     fn test_stage_all_count() {
-        assert_eq!(WorkStage::all().len(), 6);
+        assert_eq!(WorkStage::all().len(), 7);
     }
 
     #[test]
     fn test_stage_variant_count() {
         let stages = [
             WorkStage::WsDev,
+            WorkStage::WsSec,
             WorkStage::WsRev,
             WorkStage::WsQa,
             WorkStage::WsTest,
             WorkStage::WsPlan,
             WorkStage::WsDocs,
         ];
-        assert_eq!(stages.len(), 6);
+        assert_eq!(stages.len(), 7);
+    }
+
+    #[test]
+    fn test_ws_sec_in_work_stage_enum() {
+        assert_eq!("WS-SEC".parse::<WorkStage>().unwrap(), WorkStage::WsSec);
+        assert_eq!("ws-sec".parse::<WorkStage>().unwrap(), WorkStage::WsSec);
+        assert_eq!("WsSec".parse::<WorkStage>().unwrap(), WorkStage::WsSec);
+        assert_eq!(WorkStage::WsSec.to_string(), "WS-SEC");
+    }
+
+    #[test]
+    fn test_work_stage_roundtrip_includes_ws_sec() {
+        let all = WorkStage::all();
+        assert_eq!(all.len(), 7);
+        assert!(all.contains(&WorkStage::WsSec));
+        for stage in all {
+            let rendered = stage.to_string();
+            let parsed: WorkStage = rendered.parse().unwrap();
+            assert_eq!(parsed, stage);
+        }
     }
 }
 
@@ -129,6 +155,7 @@ mod proptests {
     fn arb_work_stage() -> impl Strategy<Value = WorkStage> {
         prop_oneof![
             Just(WorkStage::WsDev),
+            Just(WorkStage::WsSec),
             Just(WorkStage::WsRev),
             Just(WorkStage::WsQa),
             Just(WorkStage::WsTest),

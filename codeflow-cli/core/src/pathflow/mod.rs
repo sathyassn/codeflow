@@ -5,6 +5,7 @@
 //! and transition event writing.
 
 pub mod checkpoint;
+pub mod gates;
 pub mod sentinel;
 pub mod transitions;
 

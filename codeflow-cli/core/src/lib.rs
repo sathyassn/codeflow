@@ -90,13 +90,15 @@ mod tests {
     fn test_work_stage_enum_variants() {
         let stages = [
             WorkStage::WsDev,
+            WorkStage::WsSec,
             WorkStage::WsRev,
             WorkStage::WsQa,
             WorkStage::WsTest,
             WorkStage::WsPlan,
             WorkStage::WsDocs,
         ];
-        assert_eq!(stages.len(), 6);
+        assert_eq!(stages.len(), 7);
+        assert_eq!(stages.len(), WorkStage::all().len());
     }
 
     #[test]

@@ -14,7 +14,8 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-04-08T02:00:00Z"
-updated_at: "2026-04-12T02:30:00Z"
+updated_at: "2026-04-12T12:27:43Z"
+completed_at: "2026-04-12T12:27:43Z"
 ---
 
 # INF-EPC-044: Autorun Reliability Fixes and TUI Terminal Experience
@@ -65,7 +66,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 - [x] INF-TSK-044-006: TUI status accuracy (stale detection, duration freeze, phase label), tmux session launch, autorun reliability fixes (timeout salvage, last_phase, interval unification, repo root resolution) -- all functional with tests
 - [x] INF-TSK-044-007: Interactive TUI count-based filtering with toggle, text mode active-only default, DB session purge on cleanup, autorun batch list TUI, retention config, stale duration display fix -- all functional with tests
 - [x] INF-TSK-044-008: EditWriteGuard blocks .state/ writes, ProtectionGuard expanded, codeflow db exec/query, codeflow state set/clear, agent definitions updated to CLI commands
-- [x] INF-TSK-044-009: ProtectionGuard ./ prefix bypass fixed, stale plan files deleted, SqliteStore markdown refs cleaned, cf-go-standards removed if no Go in repo
+- [x] INF-TSK-044-009: PathFlow gates config introduced (declarative in pathflow-config.json); GateCheck and TeamGuard use GateConfig lookups in place of hardcoded pf-3/pf-6 sentinel names; rescue_uncommitted_work skips auto-save when pr_pushed=true; PostToolUse Bash handler sets pr_pushed after successful git push / gh pr create; WorkStage has WsSec + Sentinel has PathflowWsSec; cf-knowledge-layer agent def forbids post-PR git-tracked writes
 - [x] All modified Rust files pass `cargo clippy --all-targets --all-features -- -D warnings`
 - [x] All modified Rust files pass `cargo fmt --check`
 - [x] Code coverage >= 85% per-file for all new and modified Rust files
@@ -87,7 +88,7 @@ Additionally: queue lifecycle improvements (pending task abort, graceful wrap-up
 | INF-TSK-044-006 | TUI Status Accuracy, tmux Interactive Sessions, and Autorun Improvements | complete | high | L | 005 |
 | INF-TSK-044-007 | Session Retention, Display Filtering, and Autorun Batch List TUI | complete | high | L | 006 |
 | INF-TSK-044-008 | State File Write Protection — CLI Abstraction and Enforcement | complete | high | L | 007 |
-| INF-TSK-044-009 | SQLite Remnant Cleanup and ProtectionGuard Prefix Bypass Fix | complete | high | S | 008 |
+| INF-TSK-044-009 | PathFlow Dynamic Gates, ProtectionGuard Bypass Fix, and Cleanup | complete | high | XL | 008 |
 
 ## Dependencies
 

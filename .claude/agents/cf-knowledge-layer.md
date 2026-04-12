@@ -307,6 +307,8 @@ Event types:
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KL-UPDATE: PR outcome recorded - {event_type} for task {task_id}"`
 
+⛔ **NO GIT-TRACKED WRITES AFTER PF6-TSK-05 (PR push):** Once the PR is pushed, do NOT write to epic.md, task.md, or any git-tracked file. Post-PR state updates go to SurrealDB only via `codeflow db exec`. The markdown files are already committed in the PR. Writing after push creates stray commits via worktree cleanup auto-save.
+
 #### Memory Lifecycle Management
 
 **When:** Periodic maintenance, `/cf-cleanup`, or when `.state/db/codeflow.db` exceeds 50 MB.

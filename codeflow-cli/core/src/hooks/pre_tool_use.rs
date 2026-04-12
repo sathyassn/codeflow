@@ -438,6 +438,18 @@ fn classify_task_gate(tool_input: &serde_json::Value) -> GateType {
     GateType::Ungated
 }
 
+/// Load [`GateConfig`] relative to the session's sentinel directory.
+///
+/// Sentinel dir is `{project_dir}/.state/sentinels/pathflow/{SID}/`, so the
+/// config dir is derived by going up and into `.codeflow/config/pathflow`.
+/// Returns `None` if the config cannot be loaded — callers must fall back
+/// to hardcoded defaults (graceful degradation matches the project's
+/// general enforcement-system philosophy).
+fn load_gate_config(sentinel_dir: &Path) -> Option<crate::pathflow::gates::GateConfig> {
+    let config_dir = super::pipeline::derive_config_dir(sentinel_dir);
+    std::panic::catch_unwind(|| crate::pathflow::gates::GateConfig::load(&config_dir)).ok()
+}
+
 /// `PathFlow` gate-check handler.
 ///
 /// Blocks Edit/Write before pf-3, git commit before pf-3,
@@ -457,6 +469,10 @@ pub struct GateCheck {
     session_id: SessionId,
     /// Project root directory for reading active-task.json.
     project_dir: PathBuf,
+    /// Declarative gate configuration loaded from pathflow-config.json.
+    /// Populated lazily — `None` when config is unavailable or fails to
+    /// parse, in which case hardcoded fallback behavior applies.
+    gates: Option<crate::pathflow::gates::GateConfig>,
 }
 
 impl GateCheck {
@@ -467,12 +483,27 @@ impl GateCheck {
         session_id: SessionId,
         project_dir: PathBuf,
     ) -> Self {
+        let gates = load_gate_config(&sentinel_dir);
         Self {
             sentinel_dir,
             state_path,
             session_id,
             project_dir,
+            gates,
         }
+    }
+
+    /// Return the sentinel file name required for a named gate, falling back
+    /// to the hardcoded default when no config is loaded.
+    fn gate_phase_sentinel(&self, gate_name: &str, fallback: &str) -> String {
+        if let Some(gates) = self.gates.as_ref() {
+            if let Some(req) = gates.get(gate_name) {
+                if let Some(phase) = req.requires_phase {
+                    return format!("pf-{}", phase.index());
+                }
+            }
+        }
+        fallback.to_string()
     }
 
     /// Read scope_policy and file_scope from active-task.json.
@@ -682,16 +713,34 @@ impl GateCheck {
 
     /// Cumulative push/PR gate: verify ALL pf-1..pf-5 + ALL pipeline stage sentinels.
     /// Mirrors Go `checkCumulativePushPRGate()` in gate/gate.go.
+    ///
+    /// The upper phase bound is now driven by the `git_push` gate config
+    /// (`requires_phase` + `cumulative_phases`). Hardcoded fallback to
+    /// PF5-VERIFY preserves behavior when config is absent or malformed.
     fn check_cumulative_push_pr_gate(&self) -> HookOutput {
         use super::pipeline;
 
-        // Cumulative phase check: ALL pf-1 through pf-5.
-        let (ok, missing) = pipeline::verify_cumulative_phase_sentinels(&self.sentinel_dir, 5);
+        // Cumulative phase check: ALL pf-1 through pf-{git_push.requires_phase}.
+        let git_push_phase = self
+            .gates
+            .as_ref()
+            .and_then(|g| g.get("git_push"))
+            .and_then(|req| req.requires_phase);
+        let up_to_phase = git_push_phase.map_or(5, |p| p.index() as usize);
+
+        // Resolve the phase display name for the error message. Falls back
+        // to "up to phase {N}" when config is absent so the message never
+        // misrepresents the actual gate requirement.
+        let phase_display =
+            git_push_phase.map_or_else(|| format!("up to phase {up_to_phase}"), |p| p.to_string());
+
+        let (ok, missing) =
+            pipeline::verify_cumulative_phase_sentinels(&self.sentinel_dir, up_to_phase);
         if !ok {
             return HookOutput::Block {
                 reason: format!(
                     "BLOCKED: PathFlow gate - prerequisite not met\n\
-                     Reason: git_push_pr requires all phases through PF5-VERIFY. \
+                     Reason: git_push_pr requires all phases through {phase_display}. \
                      Missing phase sentinel: pathflow-{missing}\n\
                      Gate: git_push_pr\n"
                 ),
@@ -871,12 +920,13 @@ impl HookHandler for GateCheck {
         match gate_type {
             GateType::Ungated => Ok(HookOutput::Allow),
             GateType::EditWrite => {
-                if !sentinel::check_by_name(&self.sentinel_dir, "pf-3") {
+                let required = self.gate_phase_sentinel("edit_write", "pf-3");
+                if !sentinel::check_by_name(&self.sentinel_dir, &required) {
                     return Ok(HookOutput::Block {
                         reason: format!(
                             "BLOCKED: PathFlow gate - prerequisite not met\n\
                              Reason: {gate_type:?} requires PF3-CLASSIFY (branch creation). \
-                             No pathflow-pf-3 sentinel found.\n\
+                             No pathflow-{required} sentinel found.\n\
                              Gate: {gate_type:?}\n"
                         ),
                         category: Some(BlockCategory::Gate),
@@ -893,14 +943,19 @@ impl HookHandler for GateCheck {
                 Ok(self.try_acquire_claim(file_path))
             }
             GateType::GitCommit | GateType::RoleTeammateSpawn => {
-                if sentinel::check_by_name(&self.sentinel_dir, "pf-3") {
+                let gate_name = match gate_type {
+                    GateType::GitCommit => "git_commit",
+                    _ => "role_spawn",
+                };
+                let required = self.gate_phase_sentinel(gate_name, "pf-3");
+                if sentinel::check_by_name(&self.sentinel_dir, &required) {
                     Ok(HookOutput::Allow)
                 } else {
                     Ok(HookOutput::Block {
                         reason: format!(
                             "BLOCKED: PathFlow gate - prerequisite not met\n\
                              Reason: {gate_type:?} requires PF3-CLASSIFY (branch creation). \
-                             No pathflow-pf-3 sentinel found.\n\
+                             No pathflow-{required} sentinel found.\n\
                              Gate: {gate_type:?}\n"
                         ),
                         category: Some(BlockCategory::Gate),
@@ -958,19 +1013,37 @@ fn detect_wrap_up_signal(project_dir: &Path) -> bool {
 // TeamGuard handler
 // ---------------------------------------------------------------------------
 
-/// Team guard: blocks `TeamDelete` while `PathFlow` is active and pf-6 is missing.
+/// Team guard: blocks `TeamDelete` while `PathFlow` is active and the
+/// phase required by the `team_delete` gate is missing.
 pub struct TeamGuard {
     session_dir: PathBuf,
     sentinel_dir: PathBuf,
+    /// Declarative gate configuration loaded from pathflow-config.json.
+    gates: Option<crate::pathflow::gates::GateConfig>,
 }
 
 impl TeamGuard {
     #[must_use]
     pub fn new(session_dir: PathBuf, sentinel_dir: PathBuf) -> Self {
+        let gates = load_gate_config(&sentinel_dir);
         Self {
             session_dir,
             sentinel_dir,
+            gates,
         }
+    }
+
+    /// Return the sentinel required for the `team_delete` gate, falling back
+    /// to `pf-6` when config is unavailable.
+    fn team_delete_required_sentinel(&self) -> String {
+        if let Some(gates) = self.gates.as_ref() {
+            if let Some(req) = gates.get("team_delete") {
+                if let Some(phase) = req.requires_phase {
+                    return format!("pf-{}", phase.index());
+                }
+            }
+        }
+        "pf-6".to_string()
     }
 
     /// Check pipeline stage sentinels before allowing `TeamDelete`.
@@ -1047,8 +1120,9 @@ impl HookHandler for TeamGuard {
             return Ok(HookOutput::Allow);
         }
 
-        // PF7-END gate: if pf-6 sentinel exists AND all pipeline stages complete, allow TeamDelete.
-        if is_team_delete && sentinel::check_by_name(&self.sentinel_dir, "pf-6") {
+        // PF7-END gate: if the team_delete sentinel exists AND all pipeline stages complete, allow TeamDelete.
+        let required = self.team_delete_required_sentinel();
+        if is_team_delete && sentinel::check_by_name(&self.sentinel_dir, &required) {
             // Also verify ALL pipeline stage sentinels exist.
             if let Some(block) = self.check_pipeline_stage_sentinels() {
                 return Ok(block);
@@ -2705,6 +2779,113 @@ mod tests {
             result.exit_code(),
             2,
             "push should be blocked when work_type is missing"
+        );
+    }
+
+    /// Build a sentinel_dir where `derive_config_dir()` resolves to a real
+    /// temp config dir containing a `pathflow-config.json` with the given
+    /// gates body. Layout:
+    ///     {root}/.state/sentinels/pathflow/{sid}/   <- sentinel_dir
+    ///     {root}/.codeflow/config/pathflow/pathflow-config.json
+    fn make_sentinel_dir_with_gates_config(root: &std::path::Path, gates_body: &str) -> PathBuf {
+        let sentinel_dir = root
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join("ses-config-test");
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        let config_dir = root.join(".codeflow").join("config").join("pathflow");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_body = format!(
+            r#"{{
+              "phases": {{
+                "PF1-INIT": {{"phase_order": 1}},
+                "PF2-CONTEXT": {{"phase_order": 2}},
+                "PF3-CLASSIFY": {{"phase_order": 3}},
+                "PF4-EXECUTE": {{"phase_order": 4}},
+                "PF5-VERIFY": {{"phase_order": 5}},
+                "PF6-COMPLETE": {{"phase_order": 6}},
+                "PF7-END": {{"phase_order": 7}}
+              }},
+              "gates": {gates_body}
+            }}"#
+        );
+        std::fs::write(config_dir.join("pathflow-config.json"), config_body).unwrap();
+        sentinel_dir
+    }
+
+    #[test]
+    fn test_gate_phase_sentinel_config_driven() {
+        // Override edit_write to PF2-CONTEXT. gate_phase_sentinel should return
+        // "pf-2", not the hardcoded "pf-3" fallback. This covers the config-
+        // driven path that previously had no test coverage (REV F4).
+        let root = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir_with_gates_config(
+            root.path(),
+            r#"{
+              "edit_write": {"requires_phase": "PF2-CONTEXT", "description": "test"},
+              "git_commit": {"requires_phase": "PF3-CLASSIFY", "description": "test"},
+              "role_spawn": {"requires_phase": "PF3-CLASSIFY", "description": "test"}
+            }"#,
+        );
+        let handler = GateCheck::new(
+            sentinel_dir.clone(),
+            PathBuf::from("/dev/null"),
+            SessionId::new_unchecked("ses-config-test"),
+            sentinel_dir,
+        );
+        assert_eq!(
+            handler.gate_phase_sentinel("edit_write", "pf-3"),
+            "pf-2",
+            "config-driven edit_write must yield pf-2 override, not fallback"
+        );
+        assert_eq!(
+            handler.gate_phase_sentinel("git_commit", "pf-99"),
+            "pf-3",
+            "git_commit must still resolve from config, not fallback"
+        );
+        // Unknown gate name — fallback fires.
+        assert_eq!(
+            handler.gate_phase_sentinel("nonexistent_gate", "pf-99"),
+            "pf-99",
+            "unknown gate must use fallback"
+        );
+    }
+
+    #[test]
+    fn test_team_delete_required_sentinel_config_driven() {
+        // Override team_delete to PF5-VERIFY. team_delete_required_sentinel
+        // should return "pf-5", not the hardcoded "pf-6" fallback. Covers
+        // the config-driven TeamGuard path (REV F4).
+        let root = tempfile::tempdir().unwrap();
+        let sentinel_dir = make_sentinel_dir_with_gates_config(
+            root.path(),
+            r#"{
+              "team_delete": {"requires_phase": "PF5-VERIFY", "description": "test"}
+            }"#,
+        );
+        let session_dir = root.path().join(".state/session/ses-config-test/pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let handler = TeamGuard::new(session_dir, sentinel_dir);
+        assert_eq!(
+            handler.team_delete_required_sentinel(),
+            "pf-5",
+            "config-driven team_delete must yield pf-5 override, not fallback"
+        );
+    }
+
+    #[test]
+    fn test_gate_phase_sentinel_fallback_when_no_config() {
+        // Sentinel dir without a matching .codeflow/config/pathflow/ —
+        // gate_phase_sentinel must return the supplied fallback. Graceful
+        // degradation path (CLAUDE.md Section 7).
+        let dir = tempfile::tempdir().unwrap();
+        let handler = make_gate_check(dir.path().to_path_buf());
+        assert_eq!(
+            handler.gate_phase_sentinel("edit_write", "pf-3"),
+            "pf-3",
+            "missing config must fall back to the supplied default"
         );
     }
 
