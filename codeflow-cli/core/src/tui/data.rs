@@ -48,6 +48,10 @@ pub struct TaskView {
     pub worktree_path: Option<String>,
     pub error_message: Option<String>,
     pub stages: Vec<StageInfo>,
+    /// Worker session ID for display in the unified table.
+    pub worker_session_id: Option<String>,
+    /// Work type derived from branch prefix (e.g., "FEAT", "FIX").
+    pub work_type: Option<String>,
 }
 
 /// Stage pipeline entry for the detail pane.
@@ -65,6 +69,7 @@ pub struct SessionView {
     pub branch: Option<String>,
     pub phase: Option<String>,
     pub work_type: Option<String>,
+    pub task_id: Option<String>,
     pub team_name: Option<String>,
     pub pid: i64,
     pub worktree_path: Option<String>,
@@ -232,6 +237,17 @@ async fn build_batch_view<S: DataStore>(
 
         let stages = read_stage_pipeline(project_dir, run.worktree_path.as_deref(), None);
 
+        let worker_session_id = workers
+            .iter()
+            .find(|w| w.task_id == run.task_id)
+            .and_then(|w| w.worker_session_id.clone());
+
+        let work_type = run
+            .branch_name
+            .as_deref()
+            .map(crate::hooks::pipeline::infer_work_type_from_branch)
+            .map(String::from);
+
         tasks.push(TaskView {
             task_id: run.task_id.clone(),
             status: run.status,
@@ -251,6 +267,8 @@ async fn build_batch_view<S: DataStore>(
             worktree_path: run.worktree_path.clone(),
             error_message: run.error_message.clone(),
             stages,
+            worker_session_id,
+            work_type,
         });
     }
 
@@ -373,12 +391,27 @@ pub async fn fetch_session_views_with_keep_last(
             -1
         };
 
+        // Resolve task_id: prefer DB value, fall back to active-task.json.
+        let task_id = s.task_id.clone().or_else(|| {
+            let wt = s.worktree_path.as_deref().filter(|p| !p.is_empty())?;
+            let at_path = std::path::Path::new(wt).join(".state/runtime/active-task.json");
+            let data = std::fs::read_to_string(at_path).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+            let tid = v.get("task_id")?.as_str()?;
+            if tid.is_empty() {
+                None
+            } else {
+                Some(tid.to_string())
+            }
+        });
+
         views.push(SessionView {
             session_id: s.session_id.clone(),
             status: effective_status,
             branch: s.branch.clone(),
             phase,
             work_type: s.work_type.clone(),
+            task_id,
             team_name: s.team_name.clone(),
             pid: s.pid,
             worktree_path: s.worktree_path.clone(),
@@ -448,6 +481,19 @@ fn derive_phase_from_session(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Abbreviate a session ID for display.
+///
+/// Session IDs longer than 20 characters are shown as `{first 10}...{last 5}`.
+/// Shorter IDs are returned unchanged.
+#[must_use]
+pub fn abbreviate_session_id(sid: &str) -> String {
+    if sid.len() > 20 {
+        format!("{}...{}", &sid[..10], &sid[sid.len() - 5..])
+    } else {
+        sid.to_string()
+    }
+}
 
 fn compute_elapsed_secs(started_at: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(started_at)
@@ -799,6 +845,8 @@ mod tests {
                         completed: false,
                     },
                 ],
+                worker_session_id: Some("ses-worker-1".to_string()),
+                work_type: Some("FEAT".to_string()),
             }],
         };
 
@@ -817,6 +865,7 @@ mod tests {
             branch: Some("feat/test".to_string()),
             phase: Some("PF4".to_string()),
             work_type: Some("FEAT".to_string()),
+            task_id: Some("TSK-001".to_string()),
             team_name: Some("team-1".to_string()),
             pid: 12345,
             worktree_path: Some("/tmp/wt".to_string()),
@@ -829,6 +878,7 @@ mod tests {
         assert!(json.contains("\"session_id\":\"ses-001\""));
         assert!(json.contains("\"branch\":\"feat/test\""));
         assert!(json.contains("\"work_type\":\"FEAT\""));
+        assert!(json.contains("\"task_id\":\"TSK-001\""));
         assert!(json.contains("\"pid\":12345"));
         assert!(json.contains("\"managed\":true"));
     }
@@ -859,11 +909,15 @@ mod tests {
             worktree_path: None,
             error_message: None,
             stages: vec![],
+            worker_session_id: None,
+            work_type: None,
         };
         assert!(view.phase.is_none());
         assert!(view.branch.is_none());
         assert!(view.pr_number.is_none());
         assert!(view.stages.is_empty());
+        assert!(view.worker_session_id.is_none());
+        assert!(view.work_type.is_none());
     }
 
     #[test]
@@ -979,6 +1033,7 @@ mod tests {
             branch: None,
             phase: None,
             work_type: None,
+            task_id: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -1021,6 +1076,7 @@ mod tests {
                  worktree_path = NONE, \
                  branch = 'feat/tui', \
                  work_type = 'FEAT', \
+                 task_id = NONE, \
                  team_name = 'test-team', \
                  source_cli = 'codeflow', \
                  managed = true, \
@@ -1069,6 +1125,7 @@ mod tests {
             worktree_path: Some(wt.to_string_lossy().to_string()),
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1099,6 +1156,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1123,6 +1181,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1625,5 +1684,112 @@ mod tests {
                 "ws-qa".to_string(),
             ]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Session ID abbreviation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_abbreviate_session_id_long() {
+        let sid = "ses-01kp3fett99rh6eqh22kmrygrk";
+        let abbr = abbreviate_session_id(sid);
+        assert_eq!(abbr, "ses-01kp3f...rygrk");
+        // First 10 + "..." + last 5 = 18 chars
+        assert_eq!(abbr.len(), 18);
+    }
+
+    #[test]
+    fn test_abbreviate_session_id_short() {
+        let sid = "ses-short";
+        let abbr = abbreviate_session_id(sid);
+        assert_eq!(abbr, "ses-short");
+    }
+
+    #[test]
+    fn test_abbreviate_session_id_exact_threshold() {
+        // Exactly 20 chars: should NOT be abbreviated.
+        let sid = "ses-01234567890abcde";
+        assert_eq!(sid.len(), 20);
+        let abbr = abbreviate_session_id(sid);
+        assert_eq!(abbr, sid);
+    }
+
+    #[test]
+    fn test_abbreviate_session_id_21_chars() {
+        // 21 chars: should be abbreviated.
+        let sid = "ses-01234567890abcdef";
+        assert_eq!(sid.len(), 21);
+        let abbr = abbreviate_session_id(sid);
+        assert_eq!(abbr, "ses-012345...bcdef");
+    }
+
+    // -----------------------------------------------------------------------
+    // InteractiveSession serde roundtrip with task_id
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_interactive_session_task_id_serializes() {
+        // Verify task_id appears in serialization output when set.
+        let session = crate::models::InteractiveSession {
+            id: "test".to_string(),
+            session_id: "ses-test-123".to_string(),
+            pid: 42,
+            status: crate::types::InteractiveSessionStatus::Active,
+            worktree_path: Some("/tmp/wt".to_string()),
+            branch: Some("feat/test".to_string()),
+            work_type: Some("FEAT".to_string()),
+            task_id: Some("TSK-001".to_string()),
+            tmux_session: None,
+            team_name: Some("team-1".to_string()),
+            source_cli: "codeflow".to_string(),
+            managed: true,
+            created_at: "2026-04-13T00:00:00Z".to_string(),
+            updated_at: None,
+            completed_at: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"task_id\":\"TSK-001\""));
+    }
+
+    #[test]
+    fn test_interactive_session_task_id_none() {
+        // Verify task_id is null when not set.
+        let session = crate::models::InteractiveSession {
+            id: "test".to_string(),
+            session_id: "ses-test-456".to_string(),
+            pid: 1,
+            status: crate::types::InteractiveSessionStatus::Active,
+            worktree_path: None,
+            branch: None,
+            work_type: None,
+            task_id: None,
+            tmux_session: None,
+            team_name: None,
+            source_cli: "codeflow".to_string(),
+            managed: false,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: None,
+            completed_at: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"task_id\":null"));
+    }
+
+    // -----------------------------------------------------------------------
+    // TaskView work_type derivation from branch prefix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_task_view_work_type_from_branch() {
+        let work_type = |branch: &str| -> String {
+            crate::hooks::pipeline::infer_work_type_from_branch(branch).to_string()
+        };
+        assert_eq!(work_type("feat/add-login"), "FEAT");
+        assert_eq!(work_type("fix/auth-bug"), "FIX");
+        assert_eq!(work_type("refactor/cleanup"), "RFCT");
+        assert_eq!(work_type("docs/readme"), "DOCS");
+        assert_eq!(work_type("test/coverage"), "TEST");
+        assert_eq!(work_type("main"), "FIX"); // default fallback
     }
 }

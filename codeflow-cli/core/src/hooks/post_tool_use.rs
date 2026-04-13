@@ -627,7 +627,18 @@ fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, ses
         })
         .unwrap_or_default();
 
-    if work_type.is_empty() && branch.is_empty() {
+    // Read task_id from active-task.json (worktree-aware).
+    let task_id = {
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        let path = crate::session::active_task_path_resolved(project_dir, worktree_path.as_deref());
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+            .and_then(|v| v.get("task_id")?.as_str().map(String::from))
+            .filter(|s| !s.is_empty())
+    };
+
+    if work_type.is_empty() && branch.is_empty() && task_id.is_none() {
         return;
     }
 
@@ -639,11 +650,13 @@ fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, ses
             .db()
             .query(
                 "UPDATE interactive_session SET \
-                 branch = $branch, work_type = $work_type, updated_at = $now \
+                 branch = $branch, work_type = $work_type, \
+                 task_id = $task_id, updated_at = $now \
                  WHERE session_id = $sid AND status = 'active'",
             )
             .bind(("branch", branch))
             .bind(("work_type", work_type))
+            .bind(("task_id", task_id))
             .bind(("now", now))
             .bind(("sid", sid))
             .await

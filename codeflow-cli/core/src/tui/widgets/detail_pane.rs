@@ -139,6 +139,8 @@ mod tests {
                     completed: false,
                 },
             ],
+            worker_session_id: Some("ses-worker-1".to_string()),
+            work_type: Some("FEAT".to_string()),
         }
     }
 

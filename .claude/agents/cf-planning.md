@@ -238,6 +238,8 @@ Select and apply the correct document type template:
 
 Templates via cf-markdown-standards skill (`.claude/skills/cf-markdown-standards/SKILL.md`).
 
+🔒 **Task file naming:** Task markdown files MUST be named using only the task format ID — e.g., `INF-TSK-046-001.md`. Do NOT append descriptive suffixes to the filename (e.g., `INF-TSK-046-001-plan-generic-testing.md` is WRONG). The title and description belong inside the file, not in the filename.
+
 **For Task documents — pipeline-specific stage reporting sections:**
 
 When creating a new task file, include the `### Criteria Status` subsection under `## Acceptance Criteria` and the `## Stage Reports` section. Generate the correct pipeline-specific column mapping based on the task `work_type`:

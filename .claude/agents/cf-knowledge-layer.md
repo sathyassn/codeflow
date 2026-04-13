@@ -426,6 +426,8 @@ The CLI generates a Crockford base32 ULID with the given prefix. For multiple ID
 
 **GATE:** Report all steps with DONE/SKIP status to requester. Format: `"KNOWLEDGE: ensure-work-registered - task {format_id} under epic {epic_format_id}"`
 
+🔒 **Task file naming:** Task markdown files MUST be named using only the task format ID — e.g., `INF-TSK-046-001.md`. Do NOT append descriptive suffixes to the filename (e.g., `INF-TSK-046-001-plan-generic-testing.md` is WRONG). The title and description belong inside the file, not in the filename.
+
 Area-to-folder mapping (area code IS the folder name): FRT->FRT/, BKD->BKD/, INF->INF/, SHR->SHR/, DOC->DOC/, PLN->PLN/
 
 #### Validate Task Fields
@@ -495,6 +497,8 @@ When a teammate requests work in PLN or DOC area, first check if the ongoing epi
 6. **CONDITIONAL (dependencies specified):** INSERT into task_dependencies table
 7. Run: `codeflow ledger append --event-type task_created --data '{"task_id":"{id}","format_id":"{format_id}","epic_id":"{epic_id}"}'`
 8. Create markdown at `project-management/epics/{AREA}/{epic-format_id}/tasks/{task-format_id}.md` using template at `project-management/templates/task-template.md`
+
+🔒 **Task file naming:** The markdown file MUST be named `{task-format_id}.md` exactly — e.g., `INF-TSK-046-001.md`. Do NOT append descriptive suffixes (e.g., `INF-TSK-046-001-plan-generic-testing.md` is WRONG). The title belongs inside the file, not in the filename.
 
 Optional autorun fields (set by cf-planning only): autorun_eligible, raise_pr, auto_merge, target_branch.
 

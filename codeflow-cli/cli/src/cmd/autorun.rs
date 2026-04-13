@@ -1596,7 +1596,6 @@ async fn run_status_watch(
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-    let store = open_store(project_dir).await?;
     let batch_owned = batch.map(ToString::to_string);
 
     // Terminal setup with mouse support.
@@ -1624,9 +1623,11 @@ async fn run_status_watch(
     let mut table_state = TableState::default();
     let mut batch_table_state = TableState::default();
 
-    // Batch list data (for BatchList view).
-    let mut batch_list: Vec<BatchListEntry> =
-        fetch_batch_list(store.as_ref()).await.unwrap_or_default();
+    // Fetch initial data (fresh store for cross-process visibility).
+    let init_store = open_store(project_dir).await?;
+    let mut batch_list: Vec<BatchListEntry> = fetch_batch_list(init_store.as_ref())
+        .await
+        .unwrap_or_default();
     if !batch_list.is_empty() {
         batch_table_state.select(Some(0));
     }
@@ -1637,13 +1638,15 @@ async fn run_status_watch(
         AutorunView::BatchList => None,
     };
     let mut last_view: Option<BatchView> =
-        match fetch_batch_view(store.as_ref(), project_dir, detail_sid).await {
+        match fetch_batch_view(init_store.as_ref(), project_dir, detail_sid).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("warn: initial fetch failed: {e}");
                 None
             }
         };
+    // Drop initial store — all subsequent fetches open fresh connections.
+    drop(init_store);
     let mut status_message: Option<(String, std::time::Instant)> = None;
 
     loop {
@@ -1864,14 +1867,16 @@ async fn run_status_watch(
                                 if let Some(sel) = batch_table_state.selected() {
                                     if let Some(entry) = batch_list.get(sel) {
                                         let sid = entry.session_id.clone();
-                                        // Fetch detail for this session.
-                                        last_view = fetch_batch_view(
-                                            store.as_ref(),
-                                            project_dir,
-                                            Some(&sid),
-                                        )
-                                        .await
-                                        .unwrap_or(None);
+                                        // Fetch detail (fresh store for cross-process visibility).
+                                        if let Ok(nav_store) = open_store(project_dir).await {
+                                            last_view = fetch_batch_view(
+                                                nav_store.as_ref(),
+                                                project_dir,
+                                                Some(&sid),
+                                            )
+                                            .await
+                                            .unwrap_or(None);
+                                        }
                                         table_state = TableState::default();
                                         view = AutorunView::BatchDetail(sid);
                                     }
@@ -2055,13 +2060,21 @@ async fn run_status_watch(
             }
         }
 
-        // Refresh data every tick. On error, keep stale data and warn.
+        // Refresh data every tick (re-open store for cross-process visibility).
+        let refresh_store = match open_store(project_dir).await {
+            Ok(s) => s,
+            Err(_) => continue, // keep stale data on error
+        };
         match view {
             AutorunView::BatchList => {
-                batch_list = fetch_batch_list(store.as_ref()).await.unwrap_or_default();
+                batch_list = fetch_batch_list(refresh_store.as_ref())
+                    .await
+                    .unwrap_or_default();
             }
             AutorunView::BatchDetail(ref sid) => {
-                match fetch_batch_view(store.as_ref(), project_dir, Some(sid.as_str())).await {
+                match fetch_batch_view(refresh_store.as_ref(), project_dir, Some(sid.as_str()))
+                    .await
+                {
                     Ok(v) => last_view = v,
                     Err(e) => eprintln!("warn: fetch failed: {e}"),
                 }
@@ -2191,15 +2204,18 @@ fn render_table(
     state: &mut ratatui::widgets::TableState,
     view: Option<&codeflow_core::tui::data::BatchView>,
 ) {
+    use codeflow_core::tui::data::abbreviate_session_id;
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge, StatusBadge};
     use ratatui::layout::Constraint;
     use ratatui::style::{Modifier, Style};
     use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
-    let header = Row::new(vec!["TASK", "STATUS", "PHASE", "BRANCH", "PR", "DURATION"])
-        .style(theme::header())
-        .bottom_margin(1);
+    let header = Row::new(vec![
+        "TASK", "SESSION", "BRANCH", "TYPE", "STATUS", "PHASE", "DURATION",
+    ])
+    .style(theme::header())
+    .bottom_margin(1);
 
     let rows: Vec<Row> = view
         .map(|v| {
@@ -2210,16 +2226,19 @@ fn render_table(
                         StatusBadge::new(task.status).with_display(task.display_status.clone());
                     let phase_badge = PhaseBadge::new(task.phase.as_deref());
                     let duration = DurationCell::new(task.duration_secs);
-                    let pr_text = task
-                        .pr_number
-                        .map_or_else(|| "--".to_string(), |n| format!("#{n}"));
+                    let session_display = task
+                        .worker_session_id
+                        .as_deref()
+                        .map_or_else(|| "--".to_string(), abbreviate_session_id);
+                    let work_type = task.work_type.as_deref().unwrap_or("--");
 
                     Row::new(vec![
                         Cell::from(task.task_id.clone()),
+                        Cell::from(session_display),
+                        Cell::from(task.branch.as_deref().unwrap_or("--").to_string()),
+                        Cell::from(work_type.to_string()),
                         Cell::from(status_badge.to_span()),
                         Cell::from(phase_badge.to_span()),
-                        Cell::from(task.branch.as_deref().unwrap_or("--")),
-                        Cell::from(pr_text),
                         Cell::from(duration.to_span()),
                     ])
                 })
@@ -2228,12 +2247,13 @@ fn render_table(
         .unwrap_or_default();
 
     let widths = [
-        Constraint::Length(26),
-        Constraint::Length(14),
-        Constraint::Length(6),
-        Constraint::Length(24),
-        Constraint::Length(8),
-        Constraint::Length(10),
+        Constraint::Length(20), // TASK
+        Constraint::Min(16),    // SESSION
+        Constraint::Min(16),    // BRANCH
+        Constraint::Length(6),  // TYPE
+        Constraint::Length(12), // STATUS
+        Constraint::Length(6),  // PHASE
+        Constraint::Length(10), // DURATION
     ];
 
     let table = Table::new(rows, widths)

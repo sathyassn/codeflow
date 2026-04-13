@@ -228,6 +228,7 @@ async fn register_interactive_session(
              tmux_session = $tmux_session, \
              branch = NONE, \
              work_type = NONE, \
+             task_id = NONE, \
              team_name = NONE, \
              source_cli = $source_cli, \
              managed = $managed, \
@@ -884,8 +885,6 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Paragraph, TableState};
 
-    let store = open_store(project_dir).await?;
-
     // Load retention config for keep_last threshold.
     let keep_last = codeflow_core::autorun::load_config(project_dir)
         .map(|c| c.retention.keep_last)
@@ -907,15 +906,22 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     let mut status_message: Option<(String, std::time::Instant)> = None;
     let mut show_all = false;
 
-    // Fetch initial data.
-    let mut last_data =
-        match fetch_session_views_with_keep_last(&store, project_dir, keep_last).await {
-            Ok(d) => Some(d),
-            Err(e) => {
-                eprintln!("warn: initial fetch failed: {e}");
-                None
+    // Fetch initial data (open store fresh each time for cross-process visibility).
+    let mut last_data = match open_store(project_dir).await {
+        Ok(store) => {
+            match fetch_session_views_with_keep_last(&store, project_dir, keep_last).await {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    eprintln!("warn: initial fetch failed: {e}");
+                    None
+                }
             }
-        };
+        }
+        Err(e) => {
+            eprintln!("warn: initial store open failed: {e}");
+            None
+        }
+    };
 
     loop {
         // Compute filtered view count for navigation bounds.
@@ -1071,17 +1077,19 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
                                 if session.status == "stale" || is_session_stale(session.pid) {
                                     let sid = session.session_id.clone();
-                                    // Mark stale in DB.
-                                    let now = chrono::Utc::now().to_rfc3339();
-                                    let _ = store
-                                        .db()
-                                        .query(
-                                            "UPDATE interactive_session SET status = 'stale', updated_at = $now \
-                                             WHERE session_id = $sid AND status = 'active'",
-                                        )
-                                        .bind(("now", now))
-                                        .bind(("sid", sid.clone()))
-                                        .await;
+                                    // Mark stale in DB (fresh connection for cross-process visibility).
+                                    if let Ok(cleanup_store) = open_store(project_dir).await {
+                                        let now = chrono::Utc::now().to_rfc3339();
+                                        let _ = cleanup_store
+                                            .db()
+                                            .query(
+                                                "UPDATE interactive_session SET status = 'stale', updated_at = $now \
+                                                 WHERE session_id = $sid AND status = 'active'",
+                                            )
+                                            .bind(("now", now))
+                                            .bind(("sid", sid.clone()))
+                                            .await;
+                                    }
                                     remove_session_artifacts(project_dir, &sid);
                                     status_message = Some((
                                         format!("Cleaned up {sid}"),
@@ -1115,8 +1123,12 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             }
         }
 
-        // Refresh data every tick.
-        match fetch_session_views_with_keep_last(&store, project_dir, keep_last).await {
+        // Refresh data every tick (re-open store for cross-process visibility).
+        let refresh_store = match open_store(project_dir).await {
+            Ok(s) => s,
+            Err(_) => continue, // keep last_data on error
+        };
+        match fetch_session_views_with_keep_last(&refresh_store, project_dir, keep_last).await {
             Ok(d) => last_data = Some(d),
             Err(e) => eprintln!("warn: fetch failed: {e}"),
         }
@@ -1213,6 +1225,7 @@ fn render_session_table(
     )>,
     show_all: bool,
 ) {
+    use codeflow_core::tui::data::abbreviate_session_id;
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
     use ratatui::layout::Constraint;
@@ -1220,7 +1233,7 @@ fn render_session_table(
     use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
     let header = Row::new(vec![
-        "SESSION", "STATUS", "PHASE", "BRANCH", "TYPE", "DURATION",
+        "TASK", "SESSION", "BRANCH", "TYPE", "STATUS", "PHASE", "DURATION",
     ])
     .style(theme::header())
     .bottom_margin(1);
@@ -1231,13 +1244,8 @@ fn render_session_table(
                 .iter()
                 .filter(|s| show_all || !s.hidden)
                 .map(|s| {
-                    // Truncate session_id to last 12 chars for display.
-                    let sid_display = if s.session_id.len() > 16 {
-                        format!("..{}", &s.session_id[s.session_id.len() - 14..])
-                    } else {
-                        s.session_id.clone()
-                    };
-
+                    let sid_display = abbreviate_session_id(&s.session_id);
+                    let task_id = s.task_id.as_deref().unwrap_or("--");
                     let status_badge = session_status_badge(&s.status);
                     let phase_badge = PhaseBadge::new(s.phase.as_deref());
                     let duration = DurationCell::new(Some(s.duration_secs));
@@ -1245,11 +1253,12 @@ fn render_session_table(
                     let work_type = s.work_type.as_deref().unwrap_or("--");
 
                     Row::new(vec![
+                        Cell::from(task_id.to_string()),
                         Cell::from(sid_display),
-                        Cell::from(status_badge),
-                        Cell::from(phase_badge.to_span()),
                         Cell::from(branch.to_string()),
                         Cell::from(work_type.to_string()),
+                        Cell::from(status_badge),
+                        Cell::from(phase_badge.to_span()),
                         Cell::from(duration.to_span()),
                     ])
                 })
@@ -1260,11 +1269,12 @@ fn render_session_table(
     let table = Table::new(
         rows,
         [
-            Constraint::Min(18),    // SESSION
-            Constraint::Length(12), // STATUS
-            Constraint::Length(8),  // PHASE
+            Constraint::Length(20), // TASK
+            Constraint::Min(16),    // SESSION
             Constraint::Min(16),    // BRANCH
-            Constraint::Length(8),  // TYPE
+            Constraint::Length(6),  // TYPE
+            Constraint::Length(12), // STATUS
+            Constraint::Length(6),  // PHASE
             Constraint::Length(10), // DURATION
         ],
     )
@@ -2324,6 +2334,7 @@ mod tests {
             worktree_path: None,
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2355,6 +2366,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: Some("fix/test".into()),
             work_type: Some("FIX".into()),
+            task_id: None,
             tmux_session: None,
             team_name: Some("team-1".into()),
             source_cli: "codeflow".into(),
@@ -2376,6 +2388,7 @@ mod tests {
             worktree_path: Some("/tmp/wt".into()),
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2397,6 +2410,7 @@ mod tests {
             worktree_path: Some("/tmp/../../../etc".into()),
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2428,6 +2442,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2459,6 +2474,7 @@ mod tests {
             worktree_path: Some(wt_path),
             branch: None,
             work_type: None,
+            task_id: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2546,6 +2562,7 @@ mod tests {
             branch: None,
             phase: None,
             work_type: None,
+            task_id: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -2569,6 +2586,7 @@ mod tests {
             branch: Some("feat/test".into()),
             phase: Some("PF4".into()),
             work_type: Some("FEAT".into()),
+            task_id: None,
             team_name: Some("team-1".into()),
             pid: 42,
             worktree_path: None,
@@ -2595,6 +2613,7 @@ mod tests {
                 branch: None,
                 phase: None,
                 work_type: None,
+                task_id: None,
                 team_name: None,
                 pid: 1,
                 worktree_path: None,
@@ -2609,6 +2628,7 @@ mod tests {
                 branch: None,
                 phase: None,
                 work_type: None,
+                task_id: None,
                 team_name: None,
                 pid: 2,
                 worktree_path: None,

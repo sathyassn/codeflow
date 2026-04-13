@@ -26,6 +26,8 @@ pub struct InteractiveSession {
     #[serde(default)]
     pub work_type: Option<String>,
     #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
     pub team_name: Option<String>,
     /// tmux session name when launched via tmux (e.g., `codeflow-ses-xxx`).
     #[serde(default)]

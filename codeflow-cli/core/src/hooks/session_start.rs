@@ -1740,6 +1740,7 @@ impl SessionStartInit {
                      worktree_path = $worktree_path, \
                      branch = NONE, \
                      work_type = NONE, \
+                     task_id = NONE, \
                      team_name = NONE, \
                      source_cli = 'claude', \
                      managed = false, \
