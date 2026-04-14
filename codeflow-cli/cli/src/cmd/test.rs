@@ -110,6 +110,30 @@ pub enum TestSubcommand {
         #[arg(long, default_value_t = false)]
         yes: bool,
     },
+    /// Interactive setup wizard for test configuration.
+    Setup {
+        /// Non-interactive auto-detection mode.
+        #[arg(long, default_value_t = false)]
+        auto: bool,
+        /// Apply a named template.
+        #[arg(long)]
+        template: Option<String>,
+        /// List available templates.
+        #[arg(long, default_value_t = false)]
+        list: bool,
+        /// Add a target to existing config (interactive).
+        #[arg(long, default_value_t = false)]
+        add_target: bool,
+        /// Force overwrite existing config (with --template).
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Validate test configuration.
+    Doctor {
+        /// Output format.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
 }
 
 /// Report subcommands.
@@ -307,6 +331,21 @@ fn run_with_dir(project_dir: &Path, args: &TestArgs) -> Result<()> {
                 run_exceptions_subcommand(project_dir, command)
             }
             TestSubcommand::Clean { yes, .. } => run_clean(project_dir, *yes),
+            TestSubcommand::Setup {
+                auto,
+                template,
+                list,
+                add_target,
+                force,
+            } => run_setup(
+                project_dir,
+                *auto,
+                template.as_deref(),
+                *list,
+                *add_target,
+                *force,
+            ),
+            TestSubcommand::Doctor { format } => run_doctor(project_dir, format),
         };
     }
 
@@ -832,6 +871,83 @@ fn run_clean(project_dir: &Path, yes: bool) -> Result<()> {
     Ok(())
 }
 
+// ── Setup & Doctor ────────────────────────────────────────────────────────
+
+#[allow(clippy::fn_params_excessive_bools)]
+fn run_setup(
+    project_dir: &Path,
+    auto: bool,
+    template: Option<&str>,
+    list: bool,
+    add_target: bool,
+    force: bool,
+) -> Result<()> {
+    use codeflow_core::testing::setup;
+    use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
+
+    if list {
+        return setup::list_templates(project_dir).map_err(|e| anyhow::anyhow!("{e}"));
+    }
+
+    if let Some(name) = template {
+        return match setup::run_template(project_dir, name, force) {
+            Ok(_) => Ok(()),
+            Err(setup::SetupError::ConfigExists(p)) => {
+                eprintln!(
+                    "Config already exists at {}. Use --force to overwrite.",
+                    p.display()
+                );
+                std::process::exit(2);
+            }
+            Err(setup::SetupError::TemplateNotFound(_)) => {
+                eprintln!(
+                    "Template not found. Run `codeflow test setup --list` to see available templates."
+                );
+                std::process::exit(1);
+            }
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        };
+    }
+
+    if auto {
+        return setup::run_auto(project_dir)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("{e}"));
+    }
+
+    if add_target {
+        let prompts = TerminalPromptProvider;
+        return setup::run_add_target(project_dir, &prompts)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("{e}"));
+    }
+
+    // Default: interactive wizard
+    let prompts = TerminalPromptProvider;
+    setup::run_interactive(project_dir, &prompts)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn run_doctor(project_dir: &Path, format: &OutputFormat) -> Result<()> {
+    use codeflow_core::testing::doctor;
+
+    let checks = doctor::run_all_checks(project_dir);
+    let code = doctor::exit_code(&checks);
+
+    match format {
+        OutputFormat::Human => print!("{}", doctor::format_human(&checks)),
+        OutputFormat::Json => println!("{}", doctor::format_json(&checks)),
+    }
+
+    if code != 0 {
+        std::process::exit(code);
+    }
+
+    Ok(())
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn load_or_create_config(path: &Path) -> Result<test_config::TestConfig> {
@@ -839,6 +955,7 @@ fn load_or_create_config(path: &Path) -> Result<test_config::TestConfig> {
         test_config::load_test_config(path).map_err(|e| anyhow::anyhow!("{e}"))
     } else {
         Ok(test_config::TestConfig {
+            description: None,
             schema_ref: Some(".codeflow/schemas/test-config.schema.json".to_string()),
             schema_version: "1.0".to_string(),
             execution: test_config::ExecutionConfig::default(),
@@ -1774,5 +1891,106 @@ mod tests {
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_ok());
+    }
+
+    // ── Setup subcommand tests ───────────────────────────────────────────
+
+    fn make_args_with_subcommand(sub: TestSubcommand) -> TestArgs {
+        TestArgs {
+            mode: None,
+            coverage: false,
+            report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: Some(sub),
+        }
+    }
+
+    #[test]
+    fn test_setup_list_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = make_args_with_subcommand(TestSubcommand::Setup {
+            auto: false,
+            template: None,
+            list: true,
+            add_target: false,
+            force: false,
+        });
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_setup_auto_empty_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = make_args_with_subcommand(TestSubcommand::Setup {
+            auto: true,
+            template: None,
+            list: false,
+            add_target: false,
+            force: false,
+        });
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
+        // Config should be created
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_setup_template_with_force() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create template dir with a minimal template
+        let tpl_dir = dir.path().join(".codeflow/templates/test-config");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("minimal.json"),
+            r#"{"schema_version":"1.0","targets":[]}"#,
+        )
+        .unwrap();
+
+        let args = make_args_with_subcommand(TestSubcommand::Setup {
+            auto: false,
+            template: Some("minimal.json".to_string()),
+            list: false,
+            add_target: false,
+            force: true,
+        });
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_doctor_human_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // Doctor with missing config calls process::exit(1) via run_doctor,
+        // so we test the internal functions directly.
+        use codeflow_core::testing::doctor;
+        let checks = doctor::run_all_checks(dir.path());
+        let code = doctor::exit_code(&checks);
+        assert_eq!(code, 1);
+        let output = doctor::format_human(&checks);
+        assert!(output.contains("FAIL"));
+    }
+
+    #[test]
+    fn test_doctor_json_with_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("test-config.json"),
+            r#"{"schema_version":"1.0","targets":[]}"#,
+        )
+        .unwrap();
+        use codeflow_core::testing::doctor;
+        let checks = doctor::run_all_checks(dir.path());
+        let code = doctor::exit_code(&checks);
+        assert_eq!(code, 0);
+        let output = doctor::format_json(&checks);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed.is_array());
     }
 }

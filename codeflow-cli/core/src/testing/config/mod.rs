@@ -17,6 +17,14 @@ const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1.0"];
 /// Top-level test configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestConfig {
+    /// Template description (preserved for round-trip fidelity).
+    #[serde(
+        rename = "_description",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<String>,
+
     /// Path to JSON schema for editor validation.
     #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
     pub schema_ref: Option<String>,
@@ -271,6 +279,7 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
 
     // Warn about unknown top-level fields
     let known_top_level = [
+        "_description",
         "$schema",
         "schema_version",
         "execution",
@@ -501,6 +510,7 @@ mod tests {
         let path = dir.path().join("test-config.json");
 
         let config = TestConfig {
+            description: None,
             schema_ref: Some(".codeflow/schemas/test-config.schema.json".to_string()),
             schema_version: "1.0".to_string(),
             execution: ExecutionConfig::default(),

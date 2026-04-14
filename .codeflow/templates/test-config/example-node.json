@@ -1,0 +1,41 @@
+{
+  "_description": "Node.js project with vitest, native CTRF reporter, and Istanbul coverage.",
+  "$schema": ".codeflow/schemas/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "web",
+      "enabled": true,
+      "runner": "vitest",
+      "modes": {
+        "essential": {
+          "command": "pnpm test --run"
+        },
+        "full": {
+          "command": "pnpm test --run --coverage --reporter=vitest-ctrf-json-reporter"
+        }
+      },
+      "report": {
+        "format": "ctrf",
+        "path": "ctrf/ctrf-report.json"
+      },
+      "coverage": {
+        "format": "istanbul-summary",
+        "path": "coverage/coverage-summary.json",
+        "rules": [
+          {
+            "scope": "per_file",
+            "minimum": 85
+          }
+        ]
+      }
+    }
+  ]
+}

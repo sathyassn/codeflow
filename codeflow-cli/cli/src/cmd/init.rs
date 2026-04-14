@@ -181,6 +181,8 @@ pub struct WizardState {
     pub location_preset: bool,
     /// Transient hint message shown in the keybinding bar.
     pub hint_message: Option<String>,
+    /// Testing setup choice (y=setup wizard, N=minimal config, skip=nothing).
+    pub testing_choice: TestingChoice,
 }
 
 impl WizardState {
@@ -236,6 +238,7 @@ impl WizardState {
             skip_auth: flags.skip_auth,
             location_preset,
             hint_message: None,
+            testing_choice: TestingChoice::Minimal,
         })
     }
 
@@ -615,7 +618,18 @@ fn render_step_setup(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, st
         },
     ];
 
-    let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(5)]).split(area);
+    let testing_label = match state.testing_choice {
+        TestingChoice::Minimal => "Testing: write minimal config (default)",
+        TestingChoice::Setup => "Testing: run setup wizard",
+        TestingChoice::Skip => "Testing: skip (no config)",
+    };
+
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(5),
+        Constraint::Length(3),
+    ])
+    .split(area);
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled(" Step 6: ", theme::header()),
@@ -630,6 +644,12 @@ fn render_step_setup(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, st
 
     let list = SelectionList::new(&options, state.setup_selection, "Setup mode");
     frame.render_widget(list, chunks[1]);
+
+    let testing_info = Paragraph::new(Line::from(vec![
+        Span::styled("  Testing: ", theme::header()),
+        Span::raw(format!("{testing_label}  (press 't' to cycle: y/N/skip)")),
+    ]));
+    frame.render_widget(testing_info, chunks[2]);
 }
 
 fn render_step_verification(
@@ -866,6 +886,15 @@ fn handle_setup_input(state: &mut WizardState, key: KeyCode) -> StepResult {
             }
             StepResult::Stay
         }
+        KeyCode::Char('t') => {
+            // Cycle testing choice: Minimal -> Setup -> Skip -> Minimal
+            state.testing_choice = match state.testing_choice {
+                TestingChoice::Minimal => TestingChoice::Setup,
+                TestingChoice::Setup => TestingChoice::Skip,
+                TestingChoice::Skip => TestingChoice::Minimal,
+            };
+            StepResult::Stay
+        }
         KeyCode::Enter => {
             state.pathflow_enabled = state.setup_selection == 1;
             StepResult::Advance
@@ -995,7 +1024,41 @@ fn run_setup(state: &mut WizardState) -> Result<()> {
         state.created_dirs.push(pathflow_dir);
     }
 
+    // Testing setup: prompt for testing configuration.
+    // TUI wizard exits raw mode briefly for this prompt since it's a simple y/N/skip.
+    handle_testing_setup_prompt(&state.project_dir, state.testing_choice);
+
     Ok(())
+}
+
+/// Three-way testing setup choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestingChoice {
+    /// Run setup wizard (y).
+    Setup,
+    /// Write minimal config (N, default).
+    Minimal,
+    /// Do nothing (skip).
+    Skip,
+}
+
+/// Handle testing setup based on user's choice.
+fn handle_testing_setup_prompt(project_dir: &Path, choice: TestingChoice) {
+    match choice {
+        TestingChoice::Setup => {
+            let prompts = codeflow_core::testing::setup::prompt::TerminalPromptProvider;
+            match codeflow_core::testing::setup::run_interactive(project_dir, &prompts) {
+                Ok(_) => {}
+                Err(e) => eprintln!("warning: test setup failed: {e}"),
+            }
+        }
+        TestingChoice::Minimal => {
+            if let Err(e) = codeflow_core::testing::setup::write_minimal_config(project_dir) {
+                eprintln!("warning: could not write test config: {e}");
+            }
+        }
+        TestingChoice::Skip => {}
+    }
 }
 
 /// Create all essential CodeFlow directories.
@@ -1155,6 +1218,16 @@ fn run_non_interactive_with_runner(flags: InitFlags, runner: &dyn CommandRunner)
     let mut created_dirs = Vec::new();
     create_project_directories(&project_dir, &mut created_dirs)?;
     println!("{} Created project directories", theme::CHECKMARK);
+
+    // Step 6b: Testing setup (non-interactive defaults to minimal.json).
+    if let Err(e) = codeflow_core::testing::setup::write_minimal_config(&project_dir) {
+        eprintln!("warning: could not write test config: {e}");
+    } else {
+        println!(
+            "{} Testing: wrote minimal config (run `codeflow test setup` to configure)",
+            theme::CHECKMARK,
+        );
+    }
 
     // Step 7: Verification.
     let dirs_ok = project_dir.join(".state/db").is_dir();

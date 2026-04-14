@@ -1,0 +1,41 @@
+{
+  "_description": "Go project with go test, CTRF via go-ctrf-json-reporter, and go-cover coverage.",
+  "$schema": ".codeflow/schemas/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "go-service",
+      "enabled": true,
+      "runner": "go",
+      "modes": {
+        "essential": {
+          "command": "go test ./..."
+        },
+        "full": {
+          "command": "go test ./... -coverprofile=coverage.out -json | go-ctrf-json-reporter"
+        }
+      },
+      "report": {
+        "format": "ctrf",
+        "path": "ctrf/ctrf-report.json"
+      },
+      "coverage": {
+        "format": "go-cover",
+        "path": "coverage.out",
+        "rules": [
+          {
+            "scope": "per_file",
+            "minimum": 85
+          }
+        ]
+      }
+    }
+  ]
+}

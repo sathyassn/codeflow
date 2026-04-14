@@ -1,0 +1,43 @@
+{
+  "_description": "Rust project with cargo nextest, JUnit report via derive_from, and lcov coverage.",
+  "$schema": ".codeflow/schemas/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "rust-core",
+      "enabled": true,
+      "cwd": "codeflow-cli",
+      "runner": "cargo",
+      "modes": {
+        "essential": {
+          "command": "cargo nextest run"
+        },
+        "full": {
+          "command": "cargo nextest run --profile full"
+        }
+      },
+      "report": {
+        "format": "junit",
+        "path": "target/nextest/default/junit.xml",
+        "derive_from": "junit"
+      },
+      "coverage": {
+        "format": "lcov",
+        "path": "target/llvm-cov/lcov.info",
+        "rules": [
+          {
+            "scope": "per_file",
+            "minimum": 85
+          }
+        ]
+      }
+    }
+  ]
+}
