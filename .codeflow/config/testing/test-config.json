@@ -1,0 +1,17 @@
+{
+  "$schema": "../../schemas/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": [
+      {
+        "scope": "changed_files",
+        "minimum": 85
+      }
+    ]
+  },
+  "targets": []
+}

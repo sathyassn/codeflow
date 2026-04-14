@@ -132,6 +132,24 @@ impl WorktreePaths {
             .join("pathflow")
             .join(session_id)
     }
+
+    /// Return the `.state/test-reports/` directory (LOCAL, not symlinked).
+    ///
+    /// Each worktree stores its own test report artifacts here to prevent
+    /// cross-contamination during parallel test runs.
+    #[must_use]
+    pub fn test_reports_dir(&self) -> PathBuf {
+        self.root.join(".state").join("test-reports")
+    }
+
+    /// Return the `.state/coverage/` directory (LOCAL, not symlinked).
+    ///
+    /// Each worktree stores its own coverage artifacts here to prevent
+    /// cross-contamination during parallel test runs.
+    #[must_use]
+    pub fn coverage_dir(&self) -> PathBuf {
+        self.root.join(".state").join("coverage")
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +309,47 @@ mod tests {
         assert_eq!(
             wp.temp_dir(),
             PathBuf::from("/tmp/claude/codeflow/single/managed")
+        );
+    }
+
+    #[test]
+    fn test_worktree_paths_test_reports_dir() {
+        let wp = make_paths();
+        assert_eq!(
+            wp.test_reports_dir(),
+            PathBuf::from("/project/.git-worktrees/worktree-ses-abc123/.state/test-reports")
+        );
+    }
+
+    #[test]
+    fn test_worktree_paths_coverage_dir() {
+        let wp = make_paths();
+        assert_eq!(
+            wp.coverage_dir(),
+            PathBuf::from("/project/.git-worktrees/worktree-ses-abc123/.state/coverage")
+        );
+    }
+
+    #[test]
+    fn test_worktree_paths_test_reports_different_worktrees() {
+        let wp_a = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-aaa");
+        let wp_b = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-bbb");
+        assert_ne!(wp_a.test_reports_dir(), wp_b.test_reports_dir());
+        assert_ne!(wp_a.coverage_dir(), wp_b.coverage_dir());
+    }
+
+    #[test]
+    fn test_worktree_paths_coverage_different_worktrees() {
+        let wp_a = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-111");
+        let wp_b = WorktreePaths::new("/proj/.git-worktrees/worktree-ses-222");
+        assert_ne!(wp_a.coverage_dir(), wp_b.coverage_dir());
+        assert_eq!(
+            wp_a.coverage_dir(),
+            PathBuf::from("/proj/.git-worktrees/worktree-ses-111/.state/coverage")
+        );
+        assert_eq!(
+            wp_b.coverage_dir(),
+            PathBuf::from("/proj/.git-worktrees/worktree-ses-222/.state/coverage")
         );
     }
 

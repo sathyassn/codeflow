@@ -86,6 +86,8 @@
       ".state/logs/**",
       ".state/coordination/**",
       ".state/worktrees/**",
+      ".state/test-reports/**",
+      ".state/coverage/**",
       "codeflow-cli/core/src/hooks/**",
       "codeflow-cli/cli/src/cmd/hooks/**",
       "codeflow-cli/cli/src/cmd/git_hooks.rs"
@@ -103,6 +105,8 @@
       ".state/logs/**",
       ".state/coordination/**",
       ".state/worktrees/**",
+      ".state/test-reports/**",
+      ".state/coverage/**",
       ".claude/hooks/codeflow/**",
       ".claude/settings-templates/**",
       ".claude/settings.json",

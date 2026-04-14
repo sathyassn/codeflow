@@ -20,8 +20,9 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         "session_start" | "session_end" | "session_progress" | "work_claimed" | "claim_created"
         | "claim_released" | "claim_renewed" => Ok(files::SESSIONS),
 
-        // work-graph.jsonl
-        "epic_created"
+        // work-graph.jsonl (includes test results for cross-session queryability)
+        "test_result_recorded"
+        | "epic_created"
         | "epic_status_changed"
         | "task_created"
         | "task_status_changed"
@@ -251,6 +252,7 @@ mod tests {
             "void",
             "work_cancelled",
             "stale_work_cleanup",
+            "test_result_recorded",
             "memory_store",
             "milestone",
             "progress",

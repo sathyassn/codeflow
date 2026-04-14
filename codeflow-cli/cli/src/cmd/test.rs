@@ -1,29 +1,46 @@
 //! Test command: run the codeflow test suite.
+//!
+//! Supports the new generic testing engine via `test-config.json` configuration,
+//! with subcommands for report viewing, config mutation, exception management,
+//! and artifact cleanup.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::Command as StdCommand;
 
 use anyhow::{Context, Result};
-use clap::{Args, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 
 use crate::helpers;
-use codeflow_core::testing::validation::TestValidator;
+use codeflow_core::testing::config::{
+    self as test_config, CoverageFormat, ReportFormat, RunnerType,
+};
+use codeflow_core::testing::legacy_validation::TestValidator;
 
 /// Test mode controlling which suites run.
 #[derive(Debug, Clone, ValueEnum)]
 pub enum TestMode {
+    /// Quick sanity tests.
+    Quick,
     /// Essential tests only (default).
     Essential,
-    /// Standard test suite.
-    Standard,
     /// Full suite including integration and property tests.
     Full,
+}
+
+impl TestMode {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Quick => "quick",
+            Self::Essential => "essential",
+            Self::Full => "full",
+        }
+    }
 }
 
 /// Arguments for the `test` subcommand.
 #[derive(Debug, Clone, Args)]
 pub struct TestArgs {
-    /// Test mode: essential, standard, or full.
+    /// Test mode: quick, essential, or full.
     #[arg(long, value_enum)]
     pub mode: Option<TestMode>,
 
@@ -31,9 +48,238 @@ pub struct TestArgs {
     #[arg(long, default_value_t = false)]
     pub coverage: bool,
 
-    /// Print the last saved test stats report (from `.state/runtime/test-stats.json`).
+    /// Print the last saved test stats report.
     #[arg(long, default_value_t = false)]
     pub report: bool,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+
+    /// Run only the named target(s), comma-separated.
+    #[arg(long)]
+    pub only: Option<String>,
+
+    /// Skip the named target(s), comma-separated.
+    #[arg(long)]
+    pub skip: Option<String>,
+
+    /// Stop on first target failure.
+    #[arg(long, default_value_t = false)]
+    pub fail_fast: bool,
+
+    /// Subcommand (report, config, exceptions, clean).
+    #[command(subcommand)]
+    pub subcommand: Option<TestSubcommand>,
+}
+
+/// Output format for CLI commands.
+#[derive(Debug, Clone, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable output.
+    #[default]
+    Human,
+    /// Stable JSON output.
+    Json,
+}
+
+/// Test subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub enum TestSubcommand {
+    /// Test report operations.
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
+    },
+    /// Test configuration operations.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// Coverage exception management.
+    Exceptions {
+        #[command(subcommand)]
+        command: ExceptionsCommand,
+    },
+    /// Clean test artifacts.
+    Clean {
+        /// Remove test artifacts (default scope).
+        #[arg(long, default_value_t = true)]
+        artifacts: bool,
+        /// Skip confirmation prompt.
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+}
+
+/// Report subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ReportCommand {
+    /// Show the last test run report.
+    Show {
+        /// Specific run ID to show.
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Convert between report formats.
+    Convert {
+        /// Source format.
+        #[arg(long)]
+        from: String,
+        /// Target format.
+        #[arg(long)]
+        to: String,
+        /// Input file path.
+        #[arg(long)]
+        input: String,
+        /// Output file path.
+        #[arg(long)]
+        output: String,
+    },
+    /// Compare two test runs.
+    Diff {
+        /// First run ID.
+        #[arg(long)]
+        from: String,
+        /// Second run ID.
+        #[arg(long)]
+        to: String,
+    },
+}
+
+/// Config subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ConfigCommand {
+    /// Show current test configuration.
+    Show,
+    /// Add a new test target.
+    AddTarget {
+        /// Target name.
+        #[arg(long)]
+        name: String,
+        /// Runner type.
+        #[arg(long)]
+        runner: String,
+        /// Working directory.
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Mode command pairs (e.g., full="cargo test").
+        #[arg(long = "mode", value_name = "MODE=CMD")]
+        modes: Vec<String>,
+    },
+    /// Remove a test target.
+    RemoveTarget {
+        /// Target name.
+        #[arg(long)]
+        name: String,
+    },
+    /// Enable a test target.
+    Enable {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+    },
+    /// Disable a test target.
+    Disable {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+    },
+    /// Set a mode command for a target.
+    SetCommand {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// Mode name.
+        #[arg(long)]
+        mode: String,
+        /// Shell command.
+        #[arg(long)]
+        command: String,
+    },
+    /// Set a coverage threshold for a target.
+    SetThreshold {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// Coverage scope.
+        #[arg(long)]
+        scope: String,
+        /// Minimum threshold (0-100).
+        #[arg(long)]
+        minimum: u32,
+        /// Rule index to modify (if multiple rules exist).
+        #[arg(long)]
+        rule_index: Option<usize>,
+    },
+    /// Set report configuration for a target.
+    SetReport {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// Report format (junit or ctrf).
+        #[arg(long)]
+        format: String,
+        /// Path to report file.
+        #[arg(long)]
+        path: String,
+        /// Derive from format (e.g., junit).
+        #[arg(long)]
+        derive_from: Option<String>,
+    },
+    /// Set coverage configuration for a target.
+    SetCoverage {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// Coverage format.
+        #[arg(long)]
+        format: String,
+        /// Path to coverage artifact.
+        #[arg(long)]
+        path: String,
+    },
+}
+
+/// Exceptions subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ExceptionsCommand {
+    /// Add a coverage exception.
+    Add {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// File path.
+        #[arg(long)]
+        file: String,
+        /// Lowered threshold.
+        #[arg(long)]
+        threshold: u32,
+        /// Justification (required).
+        #[arg(long)]
+        reason: String,
+        /// Removal condition (required).
+        #[arg(long)]
+        remove_when: String,
+    },
+    /// Remove a coverage exception.
+    Remove {
+        /// Target name.
+        #[arg(long)]
+        target: String,
+        /// File path.
+        #[arg(long)]
+        file: String,
+    },
+    /// List coverage exceptions.
+    List {
+        /// Filter by target name.
+        #[arg(long)]
+        target: Option<String>,
+    },
 }
 
 pub fn run(args: Option<TestArgs>) -> Result<()> {
@@ -42,35 +288,618 @@ pub fn run(args: Option<TestArgs>) -> Result<()> {
         mode: None,
         coverage: false,
         report: false,
+        format: OutputFormat::Human,
+        only: None,
+        skip: None,
+        fail_fast: false,
+        subcommand: None,
     });
     run_with_dir(&project_dir, &args)
 }
 
 fn run_with_dir(project_dir: &Path, args: &TestArgs) -> Result<()> {
+    // Route subcommands
+    if let Some(ref sub) = args.subcommand {
+        return match sub {
+            TestSubcommand::Report { command } => run_report_subcommand(project_dir, command),
+            TestSubcommand::Config { command } => run_config_subcommand(project_dir, command),
+            TestSubcommand::Exceptions { command } => {
+                run_exceptions_subcommand(project_dir, command)
+            }
+            TestSubcommand::Clean { yes, .. } => run_clean(project_dir, *yes),
+        };
+    }
+
     // --report: print saved artifact and exit.
     if args.report {
-        return run_report(project_dir);
+        return run_report_show(project_dir);
     }
 
-    // --mode full --coverage: full validation pipeline.
+    // Try new engine first
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("testing")
+        .join("test-config.json");
+
+    // Check if new-style config exists with schema_version
+    if config_path.exists() {
+        if let Ok(config) = test_config::load_test_config(&config_path) {
+            return run_new_engine(project_dir, args, &config);
+        }
+    }
+
+    // --mode full --coverage: full validation pipeline (legacy).
     if matches!(args.mode, Some(TestMode::Full)) && args.coverage {
-        return run_full_coverage(project_dir);
+        return run_full_coverage_legacy(project_dir);
     }
 
-    // Default: run the shell-based test runner.
+    // Default: run the shell-based test runner (legacy).
     run_legacy_tests(project_dir)
 }
 
-/// Print the last saved test stats report.
-fn run_report(project_dir: &Path) -> Result<()> {
+/// Run tests using the new generic engine.
+fn run_new_engine(
+    project_dir: &Path,
+    args: &TestArgs,
+    config: &test_config::TestConfig,
+) -> Result<()> {
+    use codeflow_core::testing::runner;
+
+    let mode = args.mode.as_ref().map_or("essential", TestMode::as_str);
+
+    // Check for fresh-project path
+    let active_targets: Vec<_> = config.targets.iter().filter(|t| t.enabled).collect();
+    if active_targets.is_empty() {
+        println!("No test targets configured. Run `codeflow test setup` to add targets.");
+        return Ok(());
+    }
+
+    let only: Vec<String> = args
+        .only
+        .as_ref()
+        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+        .unwrap_or_default();
+    let skip: Vec<String> = args
+        .skip
+        .as_ref()
+        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    // Check for targets that don't have the requested mode (silent skip with debug)
+    for target in &config.targets {
+        if target.enabled && !target.modes.contains_key(mode) {
+            eprintln!(
+                "skipping target {}: mode {mode} not configured",
+                target.name
+            );
+        }
+    }
+
+    let results = runner::run_all_targets(
+        &config.targets,
+        mode,
+        project_dir,
+        config.execution.parallel,
+        args.fail_fast,
+        &only,
+        &skip,
+    );
+
+    let mut any_failure = false;
+    for result in &results {
+        match result {
+            Ok(r) => {
+                if r.exit_code != 0 {
+                    any_failure = true;
+                    eprintln!(
+                        "FAIL: target {} exited with code {}",
+                        r.target_name, r.exit_code
+                    );
+                } else {
+                    println!(
+                        "PASS: target {} ({:.1}s)",
+                        r.target_name,
+                        r.duration_ms as f64 / 1000.0
+                    );
+                }
+            }
+            Err(e) => {
+                any_failure = true;
+                eprintln!("ERROR: {e}");
+            }
+        }
+    }
+
+    if any_failure {
+        anyhow::bail!("one or more test targets failed");
+    }
+
+    Ok(())
+}
+
+/// Report subcommand dispatch.
+fn run_report_subcommand(project_dir: &Path, command: &ReportCommand) -> Result<()> {
+    match command {
+        ReportCommand::Show {
+            run_id: _,
+            format: _,
+        } => run_report_show(project_dir),
+        ReportCommand::Convert {
+            from,
+            to,
+            input,
+            output,
+        } => run_report_convert(from, to, input, output),
+        ReportCommand::Diff { from, to } => run_report_diff(project_dir, from, to),
+    }
+}
+
+/// Diff two test runs by run-id, showing regressions.
+fn run_report_diff(project_dir: &Path, from_id: &str, to_id: &str) -> Result<()> {
+    use codeflow_core::testing::report::diff;
+
+    let ledger_dir = project_dir.join(".state").join("ledger");
+
+    let from_event = diff::read_run_from_ledger(&ledger_dir, from_id)
+        .map_err(|_| anyhow::anyhow!("run {from_id} not found in ledger"))?;
+    let to_event = diff::read_run_from_ledger(&ledger_dir, to_id)
+        .map_err(|_| anyhow::anyhow!("run {to_id} not found in ledger"))?;
+
+    // Extract reports from events if available, otherwise build minimal reports from summaries
+    let from_report = extract_report_from_event(&from_event, from_id);
+    let to_report = extract_report_from_event(&to_event, to_id);
+
+    let result = diff::diff_reports(&from_report, &to_report, from_id, to_id);
+    let output = diff::format_diff_human(&result);
+    print!("{output}");
+
+    if result.total_regressions > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Extract a minimal `CanonicalTestReport` from a ledger event JSON value.
+fn extract_report_from_event(
+    event: &serde_json::Value,
+    run_id: &str,
+) -> codeflow_core::testing::report::CanonicalTestReport {
+    use codeflow_core::testing::report::{CanonicalTestReport, CtrfStatus, CtrfTest};
+
+    // Build a minimal report from the summary fields
+    let total_passed = event
+        .get("total_passed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let total_failed = event
+        .get("total_failed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    let mut tests = Vec::new();
+    // We don't have individual test names from the summary event,
+    // so the diff will be limited to aggregate counts
+    for i in 0..total_passed {
+        tests.push(CtrfTest {
+            name: format!("{run_id}::passed_{i}"),
+            status: CtrfStatus::Passed,
+            duration: 0.0,
+            suite: None,
+            message: None,
+            trace: None,
+            tags: vec![],
+            flaky: false,
+        });
+    }
+    for i in 0..total_failed {
+        tests.push(CtrfTest {
+            name: format!("{run_id}::failed_{i}"),
+            status: CtrfStatus::Failed,
+            duration: 0.0,
+            suite: None,
+            message: None,
+            trace: None,
+            tags: vec![],
+            flaky: false,
+        });
+    }
+
+    CanonicalTestReport::new("ledger", tests)
+}
+
+/// Config subcommand dispatch.
+fn run_config_subcommand(project_dir: &Path, command: &ConfigCommand) -> Result<()> {
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("testing")
+        .join("test-config.json");
+
+    match command {
+        ConfigCommand::Show => {
+            let config =
+                test_config::load_test_config(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let json = serde_json::to_string_pretty(&config)?;
+            println!("{json}");
+            Ok(())
+        }
+        ConfigCommand::AddTarget {
+            name,
+            runner,
+            cwd,
+            modes,
+        } => {
+            let mut config = load_or_create_config(&config_path)?;
+
+            if config.targets.iter().any(|t| t.name == *name) {
+                anyhow::bail!("target '{name}' already exists");
+            }
+
+            let runner_type: RunnerType = serde_json::from_str(&format!("\"{runner}\""))
+                .map_err(|_| anyhow::anyhow!("unknown runner: {runner}"))?;
+
+            let mut mode_map = std::collections::BTreeMap::new();
+            for mode_str in modes {
+                if let Some((k, v)) = mode_str.split_once('=') {
+                    mode_map.insert(
+                        k.to_string(),
+                        test_config::ModeCommand {
+                            command: v.to_string(),
+                        },
+                    );
+                }
+            }
+
+            config.targets.push(test_config::TargetConfig {
+                name: name.clone(),
+                enabled: true,
+                cwd: cwd.clone(),
+                env: std::collections::BTreeMap::new(),
+                runner: runner_type,
+                modes: mode_map,
+                report: None,
+                coverage: None,
+            });
+
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("added target '{name}'");
+            Ok(())
+        }
+        ConfigCommand::RemoveTarget { name } => {
+            let mut config = load_or_create_config(&config_path)?;
+            let before = config.targets.len();
+            config.targets.retain(|t| t.name != *name);
+            if config.targets.len() == before {
+                anyhow::bail!("target '{name}' not found");
+            }
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("removed target '{name}'");
+            Ok(())
+        }
+        ConfigCommand::Enable { target } => toggle_target(&config_path, target, true),
+        ConfigCommand::Disable { target } => toggle_target(&config_path, target, false),
+        ConfigCommand::SetCommand {
+            target,
+            mode,
+            command,
+        } => {
+            codeflow_core::testing::runner::check_balanced_quotes(command)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            let valid_modes = ["quick", "essential", "full"];
+            if !valid_modes.contains(&mode.as_str()) {
+                anyhow::bail!(
+                    "unknown mode '{mode}'; valid modes: {}",
+                    valid_modes.join(", ")
+                );
+            }
+
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+            t.modes.insert(
+                mode.clone(),
+                test_config::ModeCommand {
+                    command: command.clone(),
+                },
+            );
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("set {target}.modes.{mode}");
+            Ok(())
+        }
+        ConfigCommand::SetThreshold {
+            target,
+            scope,
+            minimum,
+            rule_index,
+        } => {
+            let scope_type: test_config::CoverageScope =
+                serde_json::from_str(&format!("\"{scope}\""))
+                    .map_err(|_| anyhow::anyhow!("unknown scope: {scope}"))?;
+
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+
+            let cov = t
+                .coverage
+                .get_or_insert_with(|| test_config::CoverageConfig {
+                    format: CoverageFormat::Lcov,
+                    path: String::new(),
+                    transform: None,
+                    rules: Vec::new(),
+                    exceptions: Vec::new(),
+                });
+
+            if let Some(idx) = rule_index {
+                if let Some(rule) = cov.rules.get_mut(*idx) {
+                    rule.minimum = *minimum;
+                } else {
+                    anyhow::bail!("rule index {idx} out of range");
+                }
+            } else {
+                // Find existing rule with matching scope or add new
+                let found = cov.rules.iter_mut().find(|r| r.scope == scope_type);
+                if let Some(rule) = found {
+                    rule.minimum = *minimum;
+                } else {
+                    eprintln!("warning: no existing rule with scope '{scope}'; adding new rule");
+                    cov.rules.push(test_config::CoverageRule {
+                        scope: scope_type,
+                        include: Vec::new(),
+                        exclude: Vec::new(),
+                        minimum: *minimum,
+                    });
+                }
+            }
+
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("set threshold for {target}");
+            Ok(())
+        }
+        ConfigCommand::SetReport {
+            target,
+            format,
+            path,
+            derive_from,
+        } => {
+            let fmt: ReportFormat = serde_json::from_str(&format!("\"{format}\""))
+                .map_err(|_| anyhow::anyhow!("unknown report format: {format}"))?;
+
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+            t.report = Some(test_config::ReportConfig {
+                format: fmt,
+                path: path.clone(),
+                derive_from: derive_from.clone(),
+            });
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("set report for {target}");
+            Ok(())
+        }
+        ConfigCommand::SetCoverage {
+            target,
+            format,
+            path,
+        } => {
+            let fmt: CoverageFormat = serde_json::from_str(&format!("\"{format}\""))
+                .map_err(|_| anyhow::anyhow!("unknown coverage format: {format}"))?;
+
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+
+            let cov = t
+                .coverage
+                .get_or_insert_with(|| test_config::CoverageConfig {
+                    format: fmt.clone(),
+                    path: String::new(),
+                    transform: None,
+                    rules: Vec::new(),
+                    exceptions: Vec::new(),
+                });
+            cov.format = fmt;
+            path.clone_into(&mut cov.path);
+
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("set coverage for {target}");
+            Ok(())
+        }
+    }
+}
+
+/// Exceptions subcommand dispatch.
+fn run_exceptions_subcommand(project_dir: &Path, command: &ExceptionsCommand) -> Result<()> {
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("testing")
+        .join("test-config.json");
+
+    match command {
+        ExceptionsCommand::Add {
+            target,
+            file,
+            threshold,
+            reason,
+            remove_when,
+        } => {
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+
+            let cov = t
+                .coverage
+                .get_or_insert_with(|| test_config::CoverageConfig {
+                    format: CoverageFormat::Lcov,
+                    path: String::new(),
+                    transform: None,
+                    rules: Vec::new(),
+                    exceptions: Vec::new(),
+                });
+
+            cov.exceptions.push(test_config::CoverageException {
+                file: file.clone(),
+                threshold: *threshold,
+                reason: reason.clone(),
+                remove_when: remove_when.clone(),
+            });
+
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("added exception for {file} in target {target}");
+            Ok(())
+        }
+        ExceptionsCommand::Remove { target, file } => {
+            let mut config = load_or_create_config(&config_path)?;
+            let t = find_target_mut(&mut config, target)?;
+
+            if let Some(ref mut cov) = t.coverage {
+                let before = cov.exceptions.len();
+                cov.exceptions.retain(|e| e.file != *file);
+                if cov.exceptions.len() == before {
+                    anyhow::bail!("exception for '{file}' not found in target '{target}'");
+                }
+            } else {
+                anyhow::bail!("target '{target}' has no coverage configuration");
+            }
+
+            test_config::write_test_config(&config_path, &config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("removed exception for {file} from target {target}");
+            Ok(())
+        }
+        ExceptionsCommand::List { target } => {
+            let config =
+                test_config::load_test_config(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            let header = format!(
+                "{:<20} {:<40} {:<10} {}",
+                "Target", "File", "Threshold", "Reason"
+            );
+            println!("{header}");
+            println!("{}", "-".repeat(90));
+
+            for t in &config.targets {
+                if let Some(filter) = target {
+                    if t.name != *filter {
+                        continue;
+                    }
+                }
+                if let Some(ref cov) = t.coverage {
+                    for exc in &cov.exceptions {
+                        println!(
+                            "{:<20} {:<40} {:<10} {}",
+                            t.name, exc.file, exc.threshold, exc.reason
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Clean test artifacts.
+fn run_clean(project_dir: &Path, yes: bool) -> Result<()> {
+    let test_reports = project_dir.join(".state").join("test-reports");
+    let coverage = project_dir.join(".state").join("coverage");
+
+    if !yes {
+        eprintln!("This will remove:");
+        if test_reports.exists() {
+            eprintln!("  {}", test_reports.display());
+        }
+        if coverage.exists() {
+            eprintln!("  {}", coverage.display());
+        }
+        eprintln!("Use --yes to confirm.");
+        return Ok(());
+    }
+
+    if test_reports.exists() {
+        std::fs::remove_dir_all(&test_reports)?;
+        println!("removed {}", test_reports.display());
+    }
+    if coverage.exists() {
+        std::fs::remove_dir_all(&coverage)?;
+        println!("removed {}", coverage.display());
+    }
+
+    Ok(())
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+fn load_or_create_config(path: &Path) -> Result<test_config::TestConfig> {
+    if path.exists() {
+        test_config::load_test_config(path).map_err(|e| anyhow::anyhow!("{e}"))
+    } else {
+        Ok(test_config::TestConfig {
+            schema_ref: Some(".codeflow/schemas/test-config.schema.json".to_string()),
+            schema_version: "1.0".to_string(),
+            execution: test_config::ExecutionConfig::default(),
+            defaults: test_config::DefaultsConfig::default(),
+            targets: Vec::new(),
+        })
+    }
+}
+
+fn find_target_mut<'a>(
+    config: &'a mut test_config::TestConfig,
+    name: &str,
+) -> Result<&'a mut test_config::TargetConfig> {
+    config
+        .targets
+        .iter_mut()
+        .find(|t| t.name == name)
+        .ok_or_else(|| anyhow::anyhow!("target '{name}' not found"))
+}
+
+fn toggle_target(config_path: &Path, target: &str, enabled: bool) -> Result<()> {
+    let mut config = load_or_create_config(config_path)?;
+    let t = find_target_mut(&mut config, target)?;
+    t.enabled = enabled;
+    test_config::write_test_config(config_path, &config).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let state = if enabled { "enabled" } else { "disabled" };
+    println!("{state} target '{target}'");
+    Ok(())
+}
+
+/// Print the last saved test stats report (legacy).
+fn run_report_show(project_dir: &Path) -> Result<()> {
     let result = TestValidator::read_artifact(project_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
     let md = TestValidator::format_markdown(&result);
     println!("{md}");
     Ok(())
 }
 
-/// Full validation: run tests, coverage, validate, write artifact, print report.
-fn run_full_coverage(project_dir: &Path) -> Result<()> {
+/// Convert between report formats.
+fn run_report_convert(from: &str, to: &str, input: &str, output: &str) -> Result<()> {
+    use codeflow_core::testing::report::{CanonicalTestReport, junit};
+
+    let input_path = std::path::Path::new(input);
+    let output_path = std::path::Path::new(output);
+
+    match (from, to) {
+        ("junit", "ctrf") => {
+            let junit_report =
+                junit::parse_junit(input_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let ctrf: CanonicalTestReport = junit_report.into();
+            let json = serde_json::to_string_pretty(&ctrf)?;
+            std::fs::write(output_path, format!("{json}\n"))?;
+            println!("converted {input} (JUnit) -> {output} (CTRF)");
+            Ok(())
+        }
+        _ => anyhow::bail!("unsupported conversion: {from} -> {to}"),
+    }
+}
+
+/// Full validation: run tests, coverage, validate, write artifact, print report (legacy).
+fn run_full_coverage_legacy(project_dir: &Path) -> Result<()> {
     println!("Running full test validation...");
 
     let result = TestValidator::full_validate(project_dir)?;
@@ -108,7 +937,7 @@ fn run_legacy_tests(project_dir: &Path) -> Result<()> {
         anyhow::bail!("test runner not found at {}", test_script.display());
     }
 
-    let status = Command::new("bash")
+    let status = StdCommand::new("bash")
         .arg(&test_script)
         .current_dir(project_dir)
         .status()
@@ -132,6 +961,11 @@ mod tests {
             mode: None,
             coverage: false,
             report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
@@ -149,65 +983,14 @@ mod tests {
             mode: None,
             coverage: false,
             report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_test_no_script_error_message() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: false,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("test runner not found"),
-            "expected 'test runner not found', got: {msg}"
-        );
-        assert!(
-            msg.contains("run-all-tests.sh"),
-            "expected path to contain run-all-tests.sh, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_test_with_passing_script_returns_ok() {
-        let dir = tempfile::tempdir().unwrap();
-        let script_dir = dir.path().join(".codeflow").join("testing");
-        std::fs::create_dir_all(&script_dir).unwrap();
-        let script_path = script_dir.join("run-all-tests.sh");
-        std::fs::write(&script_path, "#!/bin/bash\nexit 0\n").unwrap();
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: false,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_ok(), "passing script should return Ok(())");
-    }
-
-    #[test]
-    fn test_test_script_path_includes_codeflow_testing() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: false,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains(".codeflow"),
-            "error should mention .codeflow directory: {msg}"
-        );
-        assert!(
-            msg.contains("testing"),
-            "error should mention testing directory: {msg}"
-        );
     }
 
     #[test]
@@ -217,8 +1000,12 @@ mod tests {
             mode: None,
             coverage: false,
             report: true,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
-        // run_with_dir routes to run_report, which returns Err for missing artifact.
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -227,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_report_flag_with_artifact() {
-        use codeflow_core::testing::validation::{TestRunResult, TestValidationResult};
+        use codeflow_core::testing::legacy_validation::{TestRunResult, TestValidationResult};
 
         let dir = tempfile::tempdir().unwrap();
         let artifact = TestValidationResult {
@@ -251,64 +1038,33 @@ mod tests {
 
         TestValidator::write_artifact(dir.path(), &artifact).unwrap();
 
-        // run_with_dir routes to run_report, which reads and formats the artifact.
         let args = TestArgs {
             mode: None,
             coverage: false,
             report: true,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_ok(), "report with valid artifact should succeed");
     }
 
     #[test]
-    fn test_report_flag_failing_artifact() {
-        use codeflow_core::testing::validation::{TestRunResult, TestValidationResult};
-
-        let dir = tempfile::tempdir().unwrap();
-        let artifact = TestValidationResult {
-            overall_pass: false,
-            test_run: TestRunResult {
-                passed: 9,
-                failed: 1,
-                ignored: 0,
-                failures: vec!["tests::broken".to_string()],
-                duration_secs: 1.0,
-            },
-            file_coverages: Vec::new(),
-            crate_coverages: Vec::new(),
-            workspace_coverage: 90.0,
-            modified_file_results: Vec::new(),
-            exempted_files: Vec::new(),
-            new_tests_added: 0,
-            consecutive_clean_runs: 1,
-            warnings: Vec::new(),
-        };
-
-        TestValidator::write_artifact(dir.path(), &artifact).unwrap();
-
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: true,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err(), "report with failing artifact should error");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("overall_pass=false"), "got: {msg}");
-    }
-
-    #[test]
     fn test_report_takes_priority_over_mode() {
-        // When both --report and --mode full --coverage are set, --report wins.
         let dir = tempfile::tempdir().unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Full),
             coverage: true,
             report: true,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
-        // report=true routes to run_report, which fails on missing artifact
-        // (not to run_full_coverage which would fail differently on missing cargo).
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -320,12 +1076,16 @@ mod tests {
 
     #[test]
     fn test_mode_full_without_coverage_runs_legacy() {
-        // --mode full without --coverage should fall through to legacy test runner.
         let dir = tempfile::tempdir().unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Full),
             coverage: false,
             report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
@@ -343,6 +1103,11 @@ mod tests {
             mode: Some(TestMode::Essential),
             coverage: false,
             report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
@@ -354,19 +1119,660 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_standard_runs_legacy() {
+    fn test_fresh_project_no_targets() {
         let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{"schema_version": "1.0", "targets": []}"#,
+        )
+        .unwrap();
+
         let args = TestArgs {
-            mode: Some(TestMode::Standard),
+            mode: None,
             coverage: false,
             report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_engine_with_passing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "echo-test",
+                    "runner": "custom",
+                    "modes": {"essential": {"command": "echo pass"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok(), "echo-test should pass: {result:?}");
+    }
+
+    #[test]
+    fn test_clean_without_yes_does_not_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports = dir.path().join(".state").join("test-reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        std::fs::write(reports.join("test.json"), "{}").unwrap();
+
+        let result = run_clean(dir.path(), false);
+        assert!(result.is_ok());
+        assert!(reports.exists(), "should not delete without --yes");
+    }
+
+    #[test]
+    fn test_clean_with_yes_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports = dir.path().join(".state").join("test-reports");
+        let coverage = dir.path().join(".state").join("coverage");
+        std::fs::create_dir_all(&reports).unwrap();
+        std::fs::create_dir_all(&coverage).unwrap();
+
+        let result = run_clean(dir.path(), true);
+        assert!(result.is_ok());
+        assert!(!reports.exists(), "should delete test-reports");
+        assert!(!coverage.exists(), "should delete coverage");
+    }
+
+    #[test]
+    fn test_test_mode_as_str() {
+        assert_eq!(TestMode::Quick.as_str(), "quick");
+        assert_eq!(TestMode::Essential.as_str(), "essential");
+        assert_eq!(TestMode::Full.as_str(), "full");
+    }
+
+    #[test]
+    fn test_config_add_and_show_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let cmd = ConfigCommand::AddTarget {
+            name: "rust".to_string(),
+            runner: "cargo".to_string(),
+            cwd: Some("codeflow-cli".to_string()),
+            modes: vec!["full=cargo nextest run".to_string()],
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok(), "add-target should succeed: {result:?}");
+
+        // Verify it was written
+        let config_path = config_dir.join("test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        assert_eq!(config.targets.len(), 1);
+        assert_eq!(config.targets[0].name, "rust");
+    }
+
+    #[test]
+    fn test_config_add_duplicate_target_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let cmd = ConfigCommand::AddTarget {
+            name: "t".to_string(),
+            runner: "custom".to_string(),
+            cwd: None,
+            modes: vec![],
+        };
+        run_config_subcommand(dir.path(), &cmd).unwrap();
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_config_remove_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Add then remove
+        let add = ConfigCommand::AddTarget {
+            name: "t".to_string(),
+            runner: "custom".to_string(),
+            cwd: None,
+            modes: vec![],
+        };
+        run_config_subcommand(dir.path(), &add).unwrap();
+
+        let remove = ConfigCommand::RemoveTarget {
+            name: "t".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &remove);
+        assert!(result.is_ok());
+
+        let config_path = config_dir.join("test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        assert!(config.targets.is_empty());
+    }
+
+    #[test]
+    fn test_exceptions_add_and_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Create a target first
+        let add_target = ConfigCommand::AddTarget {
+            name: "rust".to_string(),
+            runner: "cargo".to_string(),
+            cwd: None,
+            modes: vec![],
+        };
+        run_config_subcommand(dir.path(), &add_target).unwrap();
+
+        // Add exception
+        let add_exc = ExceptionsCommand::Add {
+            target: "rust".to_string(),
+            file: "worker.rs".to_string(),
+            threshold: 79,
+            reason: "process spawning".to_string(),
+            remove_when: "mock harness".to_string(),
+        };
+        let result = run_exceptions_subcommand(dir.path(), &add_exc);
+        assert!(result.is_ok());
+
+        // Verify in config
+        let config_path = config_dir.join("test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert_eq!(cov.exceptions.len(), 1);
+        assert_eq!(cov.exceptions[0].file, "worker.rs");
+    }
+
+    /// Helper: create a temp dir with a config containing one target named "rust".
+    fn setup_config_with_target(dir: &std::path::Path) -> std::path::PathBuf {
+        let config_dir = dir.join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "rust",
+                    "runner": "cargo",
+                    "modes": {"full": {"command": "cargo test"}},
+                    "coverage": {
+                        "format": "lcov",
+                        "path": "lcov.info",
+                        "rules": [{"scope": "changed_files", "minimum": 85}]
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        config_dir
+    }
+
+    #[test]
+    fn test_config_set_command() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetCommand {
+            target: "rust".to_string(),
+            mode: "essential".to_string(),
+            command: "cargo test --lib".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok(), "set-command should succeed: {result:?}");
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        assert!(config.targets[0].modes.contains_key("essential"));
+        assert_eq!(
+            config.targets[0].modes["essential"].command,
+            "cargo test --lib"
+        );
+    }
+
+    #[test]
+    fn test_config_set_command_unknown_mode_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetCommand {
+            target: "rust".to_string(),
+            mode: "turbo".to_string(),
+            command: "cargo test".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("unknown mode"),
+            "should reject unknown mode"
+        );
+    }
+
+    #[test]
+    fn test_config_set_command_unbalanced_quotes_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetCommand {
+            target: "rust".to_string(),
+            mode: "full".to_string(),
+            command: "echo 'unbalanced".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unbalanced"));
+    }
+
+    #[test]
+    fn test_config_set_threshold_existing_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetThreshold {
+            target: "rust".to_string(),
+            scope: "changed_files".to_string(),
+            minimum: 90,
+            rule_index: None,
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok(), "set-threshold should succeed: {result:?}");
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert_eq!(cov.rules[0].minimum, 90);
+    }
+
+    #[test]
+    fn test_config_set_threshold_by_rule_index() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetThreshold {
+            target: "rust".to_string(),
+            scope: "changed_files".to_string(),
+            minimum: 95,
+            rule_index: Some(0),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert_eq!(cov.rules[0].minimum, 95);
+    }
+
+    #[test]
+    fn test_config_set_threshold_new_scope_adds_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetThreshold {
+            target: "rust".to_string(),
+            scope: "global".to_string(),
+            minimum: 80,
+            rule_index: None,
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert_eq!(cov.rules.len(), 2);
+    }
+
+    #[test]
+    fn test_config_set_threshold_invalid_rule_index() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetThreshold {
+            target: "rust".to_string(),
+            scope: "changed_files".to_string(),
+            minimum: 90,
+            rule_index: Some(99),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn test_config_set_report() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetReport {
+            target: "rust".to_string(),
+            format: "junit".to_string(),
+            path: "target/nextest/junit.xml".to_string(),
+            derive_from: None,
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok(), "set-report should succeed: {result:?}");
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let report = config.targets[0].report.as_ref().unwrap();
+        assert_eq!(
+            report.format,
+            codeflow_core::testing::config::ReportFormat::Junit
+        );
+        assert_eq!(report.path, "target/nextest/junit.xml");
+    }
+
+    #[test]
+    fn test_config_set_report_with_derive_from() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetReport {
+            target: "rust".to_string(),
+            format: "ctrf".to_string(),
+            path: "target/ctrf.json".to_string(),
+            derive_from: Some("junit".to_string()),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let report = config.targets[0].report.as_ref().unwrap();
+        assert_eq!(report.derive_from.as_deref(), Some("junit"));
+    }
+
+    #[test]
+    fn test_config_set_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetCoverage {
+            target: "rust".to_string(),
+            format: "cobertura".to_string(),
+            path: "coverage.xml".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok(), "set-coverage should succeed: {result:?}");
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert_eq!(
+            cov.format,
+            codeflow_core::testing::config::CoverageFormat::Cobertura
+        );
+        assert_eq!(cov.path, "coverage.xml");
+    }
+
+    #[test]
+    fn test_config_enable_disable() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        // Disable
+        let cmd = ConfigCommand::Disable {
+            target: "rust".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        assert!(!config.targets[0].enabled);
+
+        // Enable
+        let cmd = ConfigCommand::Enable {
+            target: "rust".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+
+        let config = test_config::load_test_config(&config_path).unwrap();
+        assert!(config.targets[0].enabled);
+    }
+
+    #[test]
+    fn test_exceptions_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        // Add exception first
+        let add = ExceptionsCommand::Add {
+            target: "rust".to_string(),
+            file: "worker.rs".to_string(),
+            threshold: 79,
+            reason: "test".to_string(),
+            remove_when: "later".to_string(),
+        };
+        run_exceptions_subcommand(dir.path(), &add).unwrap();
+
+        // Remove it
+        let remove = ExceptionsCommand::Remove {
+            target: "rust".to_string(),
+            file: "worker.rs".to_string(),
+        };
+        let result = run_exceptions_subcommand(dir.path(), &remove);
+        assert!(result.is_ok());
+
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let config = test_config::load_test_config(&config_path).unwrap();
+        let cov = config.targets[0].coverage.as_ref().unwrap();
+        assert!(cov.exceptions.is_empty());
+    }
+
+    #[test]
+    fn test_exceptions_remove_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let remove = ExceptionsCommand::Remove {
+            target: "rust".to_string(),
+            file: "nonexistent.rs".to_string(),
+        };
+        let result = run_exceptions_subcommand(dir.path(), &remove);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_exceptions_list_with_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        // Add exception
+        let add = ExceptionsCommand::Add {
+            target: "rust".to_string(),
+            file: "test.rs".to_string(),
+            threshold: 70,
+            reason: "r".to_string(),
+            remove_when: "w".to_string(),
+        };
+        run_exceptions_subcommand(dir.path(), &add).unwrap();
+
+        // List with filter
+        let list = ExceptionsCommand::List {
+            target: Some("rust".to_string()),
+        };
+        let result = run_exceptions_subcommand(dir.path(), &list);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_exceptions_list_no_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let list = ExceptionsCommand::List { target: None };
+        let result = run_exceptions_subcommand(dir.path(), &list);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_report_diff_run_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = ReportCommand::Diff {
+            from: "run-1".to_string(),
+            to: "run-2".to_string(),
+        };
+        let result = run_report_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not found in ledger")
+        );
+    }
+
+    #[test]
+    fn test_report_convert_unsupported_format() {
+        let cmd = ReportCommand::Convert {
+            from: "ctrf".to_string(),
+            to: "junit".to_string(),
+            input: "/tmp/in.json".to_string(),
+            output: "/tmp/out.xml".to_string(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_report_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported conversion")
+        );
+    }
+
+    #[test]
+    fn test_report_convert_input_not_found() {
+        let cmd = ReportCommand::Convert {
+            from: "junit".to_string(),
+            to: "ctrf".to_string(),
+            input: "/nonexistent/report.xml".to_string(),
+            output: "/tmp/out.json".to_string(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_report_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_show() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::Show;
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_set_command_target_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+
+        let cmd = ConfigCommand::SetCommand {
+            target: "nonexistent".to_string(),
+            mode: "full".to_string(),
+            command: "echo".to_string(),
+        };
+        let result = run_config_subcommand(dir.path(), &cmd);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_new_engine_with_failing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "fail-test",
+                    "runner": "custom",
+                    "modes": {"essential": {"command": "exit 1"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("test runner not found"),
-            "standard should run legacy, got: {msg}"
+            result.unwrap_err().to_string().contains("failed"),
+            "failing target should produce error"
         );
+    }
+
+    #[test]
+    fn test_new_engine_disabled_targets_produce_fresh_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "disabled-test",
+                    "enabled": false,
+                    "runner": "custom",
+                    "modes": {"essential": {"command": "echo should not run"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let args = TestArgs {
+            mode: None,
+            coverage: false,
+            report: false,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
     }
 }

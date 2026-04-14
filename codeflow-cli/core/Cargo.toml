@@ -24,6 +24,8 @@ sha2 = "0.10"
 tokio = { workspace = true }
 loro = { workspace = true }
 base64 = { workspace = true }
+quick-xml = { workspace = true }
+glob = { workspace = true }
 which = "7"
 signal-hook = "0.3"
 libc = { workspace = true }

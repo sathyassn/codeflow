@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codeflow.dev/schemas/test-config.schema.json",
+  "title": "CodeFlow Test Configuration",
+  "description": "Declarative test configuration for the CodeFlow generic testing engine.",
+  "type": "object",
+  "required": ["schema_version", "targets"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this JSON schema for editor validation."
+    },
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"],
+      "description": "Schema version. Currently only '1.0' is supported."
+    },
+    "execution": {
+      "type": "object",
+      "description": "Execution settings.",
+      "properties": {
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run targets in parallel."
+        },
+        "fail_fast": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stop on first target failure."
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Default settings applied to all targets.",
+      "properties": {
+        "coverage": {
+          "type": "array",
+          "description": "Default coverage rules applied when targets omit them.",
+          "items": {
+            "$ref": "#/$defs/coverage_rule"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "targets": {
+      "type": "array",
+      "description": "Test targets. Can be empty for fresh projects.",
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["name", "runner", "modes"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique target identifier, used in --only/--skip flags and PR body tables."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Skip entirely when false."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory for commands, relative to repo root. Default: repo root."
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables merged with inherited env.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "runner": {
+          "type": "string",
+          "enum": ["cargo", "pytest", "jest", "vitest", "go", "mocha", "rspec", "phpunit", "custom"],
+          "description": "Test runner type."
+        },
+        "modes": {
+          "type": "object",
+          "description": "Mode-specific commands. At least one mode must be defined.",
+          "properties": {
+            "quick": {
+              "$ref": "#/$defs/mode_command"
+            },
+            "essential": {
+              "$ref": "#/$defs/mode_command"
+            },
+            "full": {
+              "$ref": "#/$defs/mode_command"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "$ref": "#/$defs/report_config"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage_config"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mode_command": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute for this mode."
+        }
+      },
+      "additionalProperties": false
+    },
+    "report_config": {
+      "type": "object",
+      "required": ["format", "path"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["junit", "ctrf"],
+          "description": "Report format."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to the report file, relative to target cwd."
+        },
+        "derive_from": {
+          "type": "string",
+          "enum": ["junit"],
+          "description": "When format is CTRF but emitted format is JUnit, triggers internal conversion."
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage_config": {
+      "type": "object",
+      "required": ["format", "path"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["lcov", "cobertura", "istanbul-summary", "go-cover"],
+          "description": "Coverage artifact format."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to the coverage artifact, relative to target cwd."
+        },
+        "transform": {
+          "type": "string",
+          "description": "Optional shell command to convert tool-native output to one of the four supported formats."
+        },
+        "rules": {
+          "type": "array",
+          "description": "Ordered coverage rule list. First-match-wins for file-level scopes.",
+          "items": {
+            "$ref": "#/$defs/coverage_rule"
+          }
+        },
+        "exceptions": {
+          "type": "array",
+          "description": "Per-file threshold exceptions.",
+          "items": {
+            "$ref": "#/$defs/coverage_exception"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage_rule": {
+      "type": "object",
+      "required": ["scope", "minimum"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["per_file", "per_package", "per_module", "changed_files", "global"],
+          "description": "Coverage evaluation scope."
+        },
+        "include": {
+          "type": "array",
+          "description": "Include glob patterns. Default: all files.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Exclude glob patterns.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "minimum": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Coverage threshold in percent."
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage_exception": {
+      "type": "object",
+      "required": ["file", "threshold", "reason", "remove_when"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "File path, repo-relative."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Lowered threshold for this file."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Justification for the exception."
+        },
+        "remove_when": {
+          "type": "string",
+          "description": "Condition under which the exception should be removed."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
