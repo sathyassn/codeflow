@@ -266,8 +266,8 @@ main() {
         local failed_count="${#FAILED_TESTS[@]}"
         local skipped_count="${#SKIPPED_TESTS[@]}"
         local total=$((passed_count + failed_count + skipped_count))
-        local timestamp
-        timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        local epoch_ms
+        epoch_ms=$(date +%s)000
 
         local tests_json="["
         local first=true
@@ -299,8 +299,8 @@ main() {
       "pending": 0,
       "skipped": $skipped_count,
       "other": 0,
-      "start": "$timestamp",
-      "stop": "$timestamp"
+      "start": $epoch_ms,
+      "stop": $epoch_ms
     },
     "tests": $tests_json
   }

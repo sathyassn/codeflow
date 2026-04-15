@@ -28,7 +28,7 @@ retries = 0
 fail-fast = true
 
 [profile.essential.junit]
-path = "target/nextest/essential/junit.xml"
+path = "junit.xml"
 
 [[profile.essential.overrides]]
 filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
@@ -40,7 +40,7 @@ fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 3 }
 
 [profile.full.junit]
-path = "target/nextest/full/junit.xml"
+path = "junit.xml"
 
 [[profile.full.overrides]]
 filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'

@@ -348,13 +348,15 @@ fn run_with_dir(project_dir: &Path, args: &TestArgs) -> Result<()> {
     run_new_engine(project_dir, args, &config)
 }
 
-/// Run tests using the new generic engine.
+/// Run tests using the new generic engine, then parse reports, evaluate
+/// coverage thresholds, render PR body, and write test report.
 fn run_new_engine(
     project_dir: &Path,
     args: &TestArgs,
     config: &test_config::TestConfig,
 ) -> Result<()> {
     use codeflow_core::testing::runner;
+    use codeflow_core::testing::validation;
 
     let mode = args.mode.as_ref().map_or("essential", TestMode::as_str);
 
@@ -376,7 +378,6 @@ fn run_new_engine(
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Check for targets that don't have the requested mode (silent skip with debug)
     for target in &config.targets {
         if target.enabled && !target.modes.contains_key(mode) {
             eprintln!(
@@ -386,6 +387,7 @@ fn run_new_engine(
         }
     }
 
+    // Step 1: Run all targets
     let results = runner::run_all_targets(
         &config.targets,
         mode,
@@ -396,33 +398,108 @@ fn run_new_engine(
         &skip,
     );
 
-    let mut any_failure = false;
+    // Collect successful run results paired with their target config
+    let mut any_test_failure = false;
+    let mut successful_runs: Vec<(runner::TargetRunResult, &test_config::TargetConfig)> =
+        Vec::new();
+
     for result in &results {
         match result {
             Ok(r) => {
                 if r.exit_code != 0 {
-                    any_failure = true;
+                    any_test_failure = true;
                     eprintln!(
                         "FAIL: target {} exited with code {}",
                         r.target_name, r.exit_code
                     );
                 } else {
-                    println!(
+                    eprintln!(
                         "PASS: target {} ({:.1}s)",
                         r.target_name,
                         r.duration_ms as f64 / 1000.0
                     );
                 }
+                // Find matching target config
+                if let Some(tc) = config.targets.iter().find(|t| t.name == r.target_name) {
+                    successful_runs.push((r.clone(), tc));
+                }
             }
             Err(e) => {
-                any_failure = true;
+                any_test_failure = true;
                 eprintln!("ERROR: {e}");
             }
         }
     }
 
-    if any_failure {
+    // Steps 2-3: Parse reports + coverage, evaluate thresholds
+    let mut post_data: Vec<validation::TargetPostData> = Vec::new();
+    let mut any_threshold_failure = false;
+
+    for (run_result, target_config) in &successful_runs {
+        // Parse test report (JUnit -> CTRF or native CTRF)
+        let report = validation::parse_target_report(target_config, run_result)
+            .map_err(|e| anyhow::anyhow!("report parse error for {}: {e}", target_config.name))?;
+
+        // Parse coverage
+        let file_coverages = validation::parse_target_coverage(target_config, run_result)
+            .map_err(|e| anyhow::anyhow!("coverage parse error for {}: {e}", target_config.name))?;
+
+        // Evaluate thresholds (empty changed_files — PR body handles modified files separately)
+        let threshold_results =
+            validation::evaluate_target_thresholds(target_config, &file_coverages, &[]);
+
+        if threshold_results.iter().any(|r| !r.pass) {
+            any_threshold_failure = true;
+        }
+
+        post_data.push(validation::TargetPostData {
+            name: target_config.name.clone(),
+            mode: mode.to_string(),
+            run_result: run_result.clone(),
+            report,
+            file_coverages,
+            threshold_results,
+            target_config: (*target_config).clone(),
+        });
+    }
+
+    // Step 4: Render PR body
+    let pr_body = validation::render_full_pr_body(&post_data, &[], 1);
+    println!("{pr_body}");
+
+    // Step 5: Write test report
+    let run_id = format!(
+        "run-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+    if let Err(e) = validation::write_test_report(project_dir, &run_id, &post_data) {
+        eprintln!("warning: failed to write test report: {e}");
+    }
+
+    // Step 6: Exit code — fail if tests or thresholds failed
+    if any_test_failure {
         anyhow::bail!("one or more test targets failed");
+    }
+    if any_threshold_failure {
+        let failing: Vec<String> = post_data
+            .iter()
+            .flat_map(|t| {
+                t.threshold_results.iter().filter(|r| !r.pass).map(|r| {
+                    format!(
+                        "  {} ({:.0}% < {}%)",
+                        r.file, r.coverage_percent, r.threshold
+                    )
+                })
+            })
+            .collect();
+        eprintln!("FAIL: coverage thresholds not met:");
+        for f in &failing {
+            eprintln!("{f}");
+        }
+        anyhow::bail!("coverage threshold violations");
     }
 
     Ok(())
