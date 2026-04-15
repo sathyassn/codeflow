@@ -5,16 +5,14 @@
 //! and artifact cleanup.
 
 use std::path::Path;
-use std::process::Command as StdCommand;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::helpers;
 use codeflow_core::testing::config::{
     self as test_config, CoverageFormat, ReportFormat, RunnerType,
 };
-use codeflow_core::testing::legacy_validation::TestValidator;
 
 /// Test mode controlling which suites run.
 #[derive(Debug, Clone, ValueEnum)]
@@ -43,14 +41,6 @@ pub struct TestArgs {
     /// Test mode: quick, essential, or full.
     #[arg(long, value_enum)]
     pub mode: Option<TestMode>,
-
-    /// Run coverage collection and validation after tests.
-    #[arg(long, default_value_t = false)]
-    pub coverage: bool,
-
-    /// Print the last saved test stats report.
-    #[arg(long, default_value_t = false)]
-    pub report: bool,
 
     /// Output format.
     #[arg(long, value_enum, default_value = "human")]
@@ -190,7 +180,7 @@ pub enum ConfigCommand {
         /// Working directory.
         #[arg(long)]
         cwd: Option<String>,
-        /// Mode command pairs (e.g., full="cargo test").
+        /// Mode command pairs (e.g., full="make test").
         #[arg(long = "mode", value_name = "MODE=CMD")]
         modes: Vec<String>,
     },
@@ -310,8 +300,6 @@ pub fn run(args: Option<TestArgs>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
     let args = args.unwrap_or(TestArgs {
         mode: None,
-        coverage: false,
-        report: false,
         format: OutputFormat::Human,
         only: None,
         skip: None,
@@ -349,32 +337,15 @@ fn run_with_dir(project_dir: &Path, args: &TestArgs) -> Result<()> {
         };
     }
 
-    // --report: print saved artifact and exit.
-    if args.report {
-        return run_report_show(project_dir);
-    }
-
-    // Try new engine first
+    // Load config from canonical location
     let config_path = project_dir
         .join(".codeflow")
         .join("config")
         .join("testing")
         .join("test-config.json");
 
-    // Check if new-style config exists with schema_version
-    if config_path.exists() {
-        if let Ok(config) = test_config::load_test_config(&config_path) {
-            return run_new_engine(project_dir, args, &config);
-        }
-    }
-
-    // --mode full --coverage: full validation pipeline (legacy).
-    if matches!(args.mode, Some(TestMode::Full)) && args.coverage {
-        return run_full_coverage_legacy(project_dir);
-    }
-
-    // Default: run the shell-based test runner (legacy).
-    run_legacy_tests(project_dir)
+    let config = test_config::load_test_config(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    run_new_engine(project_dir, args, &config)
 }
 
 /// Run tests using the new generic engine.
@@ -986,11 +957,23 @@ fn toggle_target(config_path: &Path, target: &str, enabled: bool) -> Result<()> 
     Ok(())
 }
 
-/// Print the last saved test stats report (legacy).
+/// Print the last saved test report.
 fn run_report_show(project_dir: &Path) -> Result<()> {
-    let result = TestValidator::read_artifact(project_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let md = TestValidator::format_markdown(&result);
-    println!("{md}");
+    let report_dir = project_dir.join(".state").join("test-reports");
+    if !report_dir.exists() {
+        anyhow::bail!("no test reports found at {}", report_dir.display());
+    }
+    // Find the most recent report file
+    let mut entries: Vec<_> = std::fs::read_dir(&report_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    let latest = entries
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no test report files found"))?;
+    let content = std::fs::read_to_string(latest.path())?;
+    println!("{content}");
     Ok(())
 }
 
@@ -1015,69 +998,15 @@ fn run_report_convert(from: &str, to: &str, input: &str, output: &str) -> Result
     }
 }
 
-/// Full validation: run tests, coverage, validate, write artifact, print report (legacy).
-fn run_full_coverage_legacy(project_dir: &Path) -> Result<()> {
-    println!("Running full test validation...");
-
-    let result = TestValidator::full_validate(project_dir)?;
-
-    TestValidator::write_artifact(project_dir, &result)?;
-
-    let md = TestValidator::format_markdown(&result);
-    println!("{md}");
-
-    if !result.overall_pass {
-        eprintln!(
-            "FAIL: {} test failures, {} modified files below threshold",
-            result.test_run.failed,
-            result
-                .modified_file_results
-                .iter()
-                .filter(|m| !m.pass)
-                .count()
-        );
-        std::process::exit(1);
-    }
-
-    println!("PASS: All tests pass, all coverage thresholds met.");
-    Ok(())
-}
-
-/// Legacy mode: run the shell-based `run-all-tests.sh` script.
-fn run_legacy_tests(project_dir: &Path) -> Result<()> {
-    let test_script = project_dir
-        .join(".codeflow")
-        .join("testing")
-        .join("run-all-tests.sh");
-
-    if !test_script.exists() {
-        anyhow::bail!("test runner not found at {}", test_script.display());
-    }
-
-    let status = StdCommand::new("bash")
-        .arg(&test_script)
-        .current_dir(project_dir)
-        .status()
-        .context("executing test runner")?;
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_test_no_script() {
+    fn test_no_config_fails() {
         let dir = tempfile::tempdir().unwrap();
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1085,154 +1014,7 @@ mod tests {
             subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("test runner not found"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_test_with_passing_script() {
-        let dir = tempfile::tempdir().unwrap();
-        let script_dir = dir.path().join(".codeflow").join("testing");
-        std::fs::create_dir_all(&script_dir).unwrap();
-        std::fs::write(script_dir.join("run-all-tests.sh"), "#!/bin/bash\nexit 0\n").unwrap();
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: false,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_report_flag_missing_artifact() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: true,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("test stats artifact not found"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_report_flag_with_artifact() {
-        use codeflow_core::testing::legacy_validation::{TestRunResult, TestValidationResult};
-
-        let dir = tempfile::tempdir().unwrap();
-        let artifact = TestValidationResult {
-            overall_pass: true,
-            test_run: TestRunResult {
-                passed: 50,
-                failed: 0,
-                ignored: 0,
-                failures: Vec::new(),
-                duration_secs: 2.0,
-            },
-            file_coverages: Vec::new(),
-            crate_coverages: Vec::new(),
-            workspace_coverage: 90.0,
-            modified_file_results: Vec::new(),
-            exempted_files: Vec::new(),
-            new_tests_added: 0,
-            consecutive_clean_runs: 1,
-            warnings: Vec::new(),
-        };
-
-        TestValidator::write_artifact(dir.path(), &artifact).unwrap();
-
-        let args = TestArgs {
-            mode: None,
-            coverage: false,
-            report: true,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_ok(), "report with valid artifact should succeed");
-    }
-
-    #[test]
-    fn test_report_takes_priority_over_mode() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: Some(TestMode::Full),
-            coverage: true,
-            report: true,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("test stats artifact not found"),
-            "should route to report path, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_mode_full_without_coverage_runs_legacy() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: Some(TestMode::Full),
-            coverage: false,
-            report: false,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("test runner not found"),
-            "should fall to legacy, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_mode_essential_runs_legacy() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = TestArgs {
-            mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
-            format: OutputFormat::Human,
-            only: None,
-            skip: None,
-            fail_fast: false,
-            subcommand: None,
-        };
-        let result = run_with_dir(dir.path(), &args);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("test runner not found"),
-            "essential should run legacy, got: {msg}"
-        );
+        assert!(result.is_err(), "missing config should fail");
     }
 
     #[test]
@@ -1248,8 +1030,6 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1280,8 +1060,6 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1844,8 +1622,6 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1881,8 +1657,6 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1898,8 +1672,6 @@ mod tests {
     fn make_args_with_subcommand(sub: TestSubcommand) -> TestArgs {
         TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,

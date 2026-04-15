@@ -108,3 +108,7 @@ coverage/
 # Autorun local batch files (ad-hoc, not tracked)
 .codeflow/config/autorun/local/*
 !.codeflow/config/autorun/local/.gitkeep
+
+# Generic testing engine ephemeral artifacts (per-worktree)
+.state/test-reports/
+.state/coverage/

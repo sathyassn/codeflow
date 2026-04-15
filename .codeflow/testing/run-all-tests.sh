@@ -35,6 +35,8 @@ VALIDATE_COVERAGE_FIRST="false"
 STRUCTURAL_CHECK="auto"
 MAX_JOBS=""
 SEQUENTIAL="false"
+CTRF_FORMAT=""
+CTRF_OUTPUT=""
 
 # ============================================================================
 # ARGUMENT PARSING
@@ -46,6 +48,11 @@ while [[ $# -gt 0 ]]; do
             validate_mode "$2" || exit 1
             export TEST_MODE="$2"
             shift 2
+            ;;
+        --mode=*)
+            validate_mode "${1#--mode=}" || exit 1
+            export TEST_MODE="${1#--mode=}"
+            shift
             ;;
         --category)
             export RUNNER_CATEGORY="$2"
@@ -94,6 +101,24 @@ while [[ $# -gt 0 ]]; do
         --sequential)
             SEQUENTIAL="true"
             shift
+            ;;
+        --format|--format=*)
+            if [[ "$1" == --format=* ]]; then
+                CTRF_FORMAT="${1#--format=}"
+                shift
+            else
+                CTRF_FORMAT="$2"
+                shift 2
+            fi
+            ;;
+        --output|--output=*)
+            if [[ "$1" == --output=* ]]; then
+                CTRF_OUTPUT="${1#--output=}"
+                shift
+            else
+                CTRF_OUTPUT="$2"
+                shift 2
+            fi
             ;;
         --help|-h)
             echo "CodeFlow Test Runner"
@@ -222,6 +247,65 @@ main() {
             "$mode" \
             "${FAILED_TESTS[@]}")
         log_info "Text report: $text_report"
+    fi
+
+    # Emit CTRF JSON if --format=ctrf --output=<path> were given
+    if [[ "$CTRF_FORMAT" == "ctrf" ]]; then
+        if [[ -z "$CTRF_OUTPUT" ]]; then
+            log_error "--format=ctrf requires --output=<path>"
+            exit 1
+        fi
+        if [[ "$CTRF_OUTPUT" == *".."* ]]; then
+            log_error "--output path must not contain '..': $CTRF_OUTPUT"
+            exit 1
+        fi
+        command -v jq >/dev/null 2>&1 || { log_error "jq is required for --format=ctrf output but is not installed"; exit 1; }
+    fi
+    if [[ "$CTRF_FORMAT" == "ctrf" ]] && [[ -n "$CTRF_OUTPUT" ]]; then
+        local passed_count="${#PASSED_TESTS[@]}"
+        local failed_count="${#FAILED_TESTS[@]}"
+        local skipped_count="${#SKIPPED_TESTS[@]}"
+        local total=$((passed_count + failed_count + skipped_count))
+        local timestamp
+        timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        local tests_json="["
+        local first=true
+        for t in "${PASSED_TESTS[@]}"; do
+            if [[ "$first" != "true" ]]; then tests_json+=","; fi
+            first=false
+            tests_json+="{\"name\":$(printf '%s' "$t" | jq -Rs .),\"status\":\"passed\",\"duration\":0}"
+        done
+        for t in "${FAILED_TESTS[@]}"; do
+            if [[ "$first" != "true" ]]; then tests_json+=","; fi
+            first=false
+            tests_json+="{\"name\":$(printf '%s' "$t" | jq -Rs .),\"status\":\"failed\",\"duration\":0}"
+        done
+        for t in "${SKIPPED_TESTS[@]}"; do
+            if [[ "$first" != "true" ]]; then tests_json+=","; fi
+            first=false
+            tests_json+="{\"name\":$(printf '%s' "$t" | jq -Rs .),\"status\":\"skipped\",\"duration\":0}"
+        done
+        tests_json+="]"
+
+        cat > "$CTRF_OUTPUT" <<CTRF_EOF
+{
+  "results": {
+    "tool": {"name": "codeflow-shell-tests"},
+    "summary": {
+      "tests": $total,
+      "passed": $passed_count,
+      "failed": $failed_count,
+      "pending": 0,
+      "skipped": $skipped_count,
+      "other": 0,
+      "start": "$timestamp",
+      "stop": "$timestamp"
+    },
+    "tests": $tests_json
+  }
+}
+CTRF_EOF
     fi
 
     exit $exit_code

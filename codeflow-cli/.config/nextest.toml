@@ -19,3 +19,29 @@ test-group = "surrealdb-serial"
 [[profile.ci.overrides]]
 filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
 test-group = "surrealdb-serial"
+
+# ── Testing engine profiles ──────────────────────────────────────────────
+# Used by `codeflow test --mode essential` and `codeflow test --mode full`.
+
+[profile.essential]
+retries = 0
+fail-fast = true
+
+[profile.essential.junit]
+path = "target/nextest/essential/junit.xml"
+
+[[profile.essential.overrides]]
+filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
+test-group = "surrealdb-serial"
+
+[profile.full]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+[profile.full.junit]
+path = "target/nextest/full/junit.xml"
+
+[[profile.full.overrides]]
+filter = 'test(::surreal::) | (package(codeflow-cli) & (test(test_db_) | test(test_workgraph_)))'
+test-group = "surrealdb-serial"

@@ -3,7 +3,7 @@ id: "epic-01KP0WRNT08J88E09QGQ6185BP"
 format_id: "INF-EPC-046"
 title: "Generic Testing Subsystem — decouple CodeFlow testing from Rust self-host"
 summary: "Generalize CodeFlow testing subsystem so downstream adopters on any stack (Node/Go/Python/Rust/mixed monorepos) can configure it via declarative config without per-stack code. Canonical internal model: CTRF-shaped with JUnit input adapter. Strip Rust-specific assumptions from Claude artifacts, the codeflow test CLI, and test-config.json. Migrate CodeFlow self-host as first adopter."
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -68,7 +68,7 @@ Generalize CodeFlow's testing subsystem so downstream adopters on any stack (Nod
 | INF-TSK-046-002 | Engine + parsers + CTRF model + JUnit converter | XL | complete | high |
 | INF-TSK-046-003 | Setup wizard + doctor + template library | L | complete | high |
 | INF-TSK-046-004 | Claude artifact generalization | XL | complete | high |
-| INF-TSK-046-005 | Self-host migration + hardcode retirement | L | todo | high |
+| INF-TSK-046-005 | Self-host migration + hardcode retirement | L | complete | high |
 
 ## Dependencies
 
