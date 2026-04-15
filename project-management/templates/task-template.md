@@ -77,7 +77,7 @@ stage_history: "[]"                    # JSON array of stage transition records
 
 ## Standards & Practices
 
-Apply the relevant standards skill for each language/tool used:
+Apply the standards skill for whichever language(s) the task touches. Load each skill before starting work in that language.
 
 | Language/Tool | Standards Skill | Key Requirements |
 |--------------|----------------|-----------------|
@@ -87,7 +87,7 @@ Apply the relevant standards skill for each language/tool used:
 | SurrealDB | cf-surrealdb-standards | DEFINE OVERWRITE, embedded mode |
 | Markdown | cf-markdown-standards | Lint rules, templates |
 
-Read the applicable skill BEFORE starting implementation.
+Load the applicable skill(s) on-demand when working on that target — not all skills apply to every task.
 
 ## Files
 
@@ -140,7 +140,7 @@ Mechanisms available in codebase:
 
 1. {Specific, measurable criterion with file:line if applicable}
 2. {Specific, measurable criterion}
-3. All modified script/code files (.sh, .py) have corresponding test files created/updated and registered in test-config.json
+3. All modified source files matching a configured test target have corresponding test files created/updated and registered in test-config.json
 
 ### PII Handling Review
 
@@ -187,7 +187,7 @@ Mechanisms available in codebase:
 ### Automated
 
 - [ ] {Test or script that validates the change}
-- [ ] Test coverage validation passes (bash .codeflow/testing/lib/test-coverage.sh --audit)
+- [ ] Test coverage validation passes (`codeflow test --mode full --coverage`)
 
 ### Manual
 
@@ -225,24 +225,32 @@ Mechanisms available in codebase:
 
 **Test Stats (draft — verified by WS-QA)**
 
-#### 1. Pass Status
+#### 1. Overall Test Pass Status
 
-| Suite | Passed | Failed | Skipped |
-|-------|--------|--------|---------|
-| cargo test --workspace | {n} | 0 | 0 |
+| Target | Mode | Passed | Failed | Skipped | Duration |
+|--------|------|--------|--------|---------|----------|
+| {target} | full | {n} | 0 | 0 | {time} |
+| **Total** | | **{n}** | **0** | **0** | **{time}** |
 
-#### 2. Workspace Coverage
+Runs: {n} consecutive clean.
 
-| Crate | Coverage | Threshold | Status |
-|-------|----------|-----------|--------|
-| codeflow-core | {n}% | {n}% | PASS/FAIL |
-| codeflow-cli | {n}% | {n}% | PASS/FAIL |
+#### 2. Overall Coverage
+
+| Target | Coverage | Per-rule summary |
+|--------|----------|-----------------|
+| {target} | {n}% | {rule summary} |
+
+#### Exempted Files (only when exceptions exist)
+
+| Target | File | Coverage | Configured Threshold | Reason |
+|--------|------|---------:|---------------------:|--------|
+| {target} | {path} | {n}% | {n}% | {reason from test-config.json} |
 
 #### 3. Modified File Coverage
 
-| File | Coverage | Threshold | Status |
-|------|----------|-----------|--------|
-| {path} | {n}% | 85% | PASS/FAIL |
+| Target | File | Coverage | Threshold | Status |
+|--------|------|---------:|----------:|--------|
+| {target} | {path} | {n}% | 85% | PASS/FAIL |
 
 #### Code Path Audit
 
@@ -405,38 +413,39 @@ Mechanisms available in codebase:
 
 #### 1. Overall Test Pass Status
 
-- Command: `cargo test --workspace --no-fail-fast`
+- Command: `codeflow test --mode full --coverage`
 - Result: {n} passed, 0 failed, 0 skipped
 - New tests added: {n}
 - Runs: {n} consecutive clean runs (minimum 2)
 
-| Suite | Passed | Failed | Skipped | Duration |
-|-------|--------|--------|---------|----------|
-| {suite name} | {n} | {n} | {n} | {time} |
+| Target | Mode | Passed | Failed | Skipped | Duration |
+|--------|------|--------|--------|---------|----------|
+| {target} | full | {n} | {n} | {n} | {time} |
+| **Total** | | **{n}** | **0** | **0** | **{time}** |
 
 #### 2. Overall Coverage
 
-> Run `cargo llvm-cov --manifest-path codeflow-cli/Cargo.toml --workspace` to generate.
+> Run `codeflow test --mode full --coverage` to generate. Data sourced from structured output per target.
 
-- Workspace: {n}%
-- CLI crate: {n}%
-- Core crate: {n}%
+| Target | Coverage | Per-rule summary |
+|--------|----------|-----------------|
+| {target} | {n}% | {rule summary} |
 
-##### Exempted Files (below 85%)
+##### Exempted Files (only when exceptions exist)
 
 All project-wide coverage exceptions from test-config.json conventions.exceptions[].
 
-| File | Coverage | Configured Threshold | Reason |
-|------|----------|---------------------|--------|
-| {path} | {n}% | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
+| Target | File | Coverage | Configured Threshold | Reason |
+|--------|------|---------:|---------------------:|--------|
+| {target} | {path} | {n}% | {n}% | {reason from test-config.json} |
 
 #### 3. Modified File Coverage
 
 > Per-file coverage for files modified in this PR only. Each must be >= 85%.
 
-| File | Coverage | Threshold | Status |
-|------|----------|-----------|--------|
-| {path} | {n}% | 85% | PASS/FAIL |
+| Target | File | Coverage | Threshold | Status |
+|--------|------|---------:|----------:|--------|
+| {target} | {path} | {n}% | 85% | PASS/FAIL |
 
 #### Acceptance Verification
 
@@ -471,10 +480,11 @@ All project-wide coverage exceptions from test-config.json conventions.exception
 > **Standard Requirements (all tasks):**
 >
 > **Testing:** MANDATORY 85%+ per-file code coverage via
-> `cargo llvm-cov` (Rust) or equivalent. Tests MUST be in
-> the same file as implementation (`#[cfg(test)] mod tests`
-> for Rust). Exceptions require documented technical
-> justification consulted with user.
+> `codeflow test --mode full --coverage`. Test placement
+> follows the conventions of the target language (e.g.,
+> inline modules for Rust, test files for Python/shell).
+> Exceptions require documented technical justification
+> consulted with user.
 >
 > **No Unsafe:** Zero `unsafe` blocks in production code.
 > The only existing unsafe (libc::kill in autorun abort) is

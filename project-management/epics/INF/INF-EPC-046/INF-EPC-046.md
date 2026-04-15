@@ -67,7 +67,7 @@ Generalize CodeFlow's testing subsystem so downstream adopters on any stack (Nod
 | INF-TSK-046-001 | Plan generic testing subsystem — ADR, design doc, epic breakdown, 5 implementation task specs | L | complete | high |
 | INF-TSK-046-002 | Engine + parsers + CTRF model + JUnit converter | XL | complete | high |
 | INF-TSK-046-003 | Setup wizard + doctor + template library | L | complete | high |
-| INF-TSK-046-004 | Claude artifact generalization | XL | todo | high |
+| INF-TSK-046-004 | Claude artifact generalization | XL | complete | high |
 | INF-TSK-046-005 | Self-host migration + hardcode retirement | L | todo | high |
 
 ## Dependencies

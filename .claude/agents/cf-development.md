@@ -174,10 +174,8 @@ Follow existing patterns. Keep changes minimal and focused on task scope. Apply 
 
 **Rust crates (`.rs`):**
 
-- All files: Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check` after editing. Fix all issues before commit.
-- Error handling: Use `thiserror` for library errors, `anyhow` for application errors. Wrap errors with context.
-- Testing: `#[cfg(test)]` modules with `#[test]` functions. Use `tempfile` for temp dirs, `proptest` for property tests, `insta` for snapshots.
-- Coverage: Per-file threshold (`file_threshold`) and per-crate threshold (`crate_threshold`) configured in `codeflow-cli/config/testing/test-config.json`. Per-crate overrides via `crate_overrides` map. Defaults: 85% file, 85% crate (CLI crate overridden to 80%).
+- Load the [cf-rust-standards](../skills/cf-rust-standards/SKILL.md) skill for Rust-specific test patterns, lint/format commands, coverage tooling, and naming conventions.
+- Full reference: [cf-rust-standards](../skills/cf-rust-standards/SKILL.md)
 
 **Network operations:** For network-bound commands (npm install, curl, git push), load `cf-sandbox-standards` skill. Set `dangerouslyDisableSandbox: true` for network-bound commands. In PathFlow mode, delegate git network ops to cf-git-operations.
 
@@ -282,15 +280,13 @@ Run the test suite to verify no regressions:
 
 - `codeflow test --mode full --coverage`
 
-### Step 5b: Rust Quality Gate
+### Step 5b: Per-target Quality Gate
 
-**Before requesting commit**, run all three Rust quality checks. Fix any failures before proceeding:
+**Before requesting commit**, load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for any language in the changeset and run the lint and format checks it prescribes. Fix any failures before proceeding.
 
-1. `cargo fmt --all` (auto-fix formatting in the `codeflow-cli/` workspace)
-2. `cargo clippy --all-targets --all-features -- -D warnings` (zero warnings required)
-3. `codeflow test --mode full --coverage` (ALL tests must pass — zero failures required before commit)
+Then run `codeflow test --mode full --coverage` — ALL tests must pass (zero failures required before commit).
 
-If any check fails, fix the issue and re-run. Do NOT request a commit with clippy warnings, fmt diffs, or test failures.
+If any check fails, fix the issue and re-run. Do NOT request a commit with lint warnings, format diffs, or test failures.
 
 ### Step 5c: Run Tests and Write Draft Test Stats
 
@@ -300,7 +296,7 @@ If any check fails, fix the issue and re-run. Do NOT request a commit with clipp
 codeflow test --mode full --coverage
 ```
 
-This single command runs all suites (shell/Python, Rust) with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below 85% must be fixed before commit unless it has a configured exception in `codeflow-cli/config/testing/test-config.json`.
+This single command runs all configured test targets with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below its configured threshold must be fixed before commit unless it has a configured exception in `test-config.json`.
 
 ### Step 6: Request Commit
 
@@ -347,22 +343,21 @@ Rewriting criteria to match implementation instead of fixing implementation to m
 
 #### 1. Pass Status
 
-| Suite | Passed | Failed | Skipped |
-|-------|--------|--------|---------|
-| cargo test --workspace | {n} | 0 | 0 |
+| Target | Passed | Failed | Skipped |
+|--------|--------|--------|---------|
+| {target name} | {n} | 0 | 0 |
 
-#### 2. Workspace Coverage
+#### 2. Target Coverage
 
-| Crate | Coverage | Threshold | Status |
-|-------|----------|-----------|--------|
-| codeflow-core | {n}% | {n}% | PASS/FAIL |
-| codeflow-cli | {n}% | {n}% | PASS/FAIL |
+| Target | Coverage | Threshold | Status |
+|--------|----------|-----------|--------|
+| {target name} | {n}% | {n}% | PASS/FAIL |
 
 #### 3. Modified File Coverage
 
 | File | Coverage | Threshold | Status |
 |------|----------|-----------|--------|
-| {path} | {n}% | 85% | PASS/FAIL |
+| {path} | {n}% | {n}% | PASS/FAIL |
 
 **Code Path Audit:**
 
@@ -667,13 +662,13 @@ Before requesting commit, do a "would I accept this in review?" pass:
 
 - [ ] **No deferred issues:** Every issue identified during development has been fixed — nothing classified as "minor", "non-blocking", or deferred with a TODO
 - [ ] **Acceptance criteria:** Each numbered criterion from the task is met — verified by re-reading actual files/output
-- [ ] **Tests written:** Every new/modified `.sh` or `.py` file has a corresponding test file
+- [ ] **Tests written:** Every new/modified source file matching a configured test target has a corresponding test file
 - [ ] **Tests functional:** Tests exercise real code paths, not mocks of the code under test — assertions verify observable behavior
 - [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
 - [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
 - [ ] **Tests pass:** `codeflow test --mode full --coverage` passes with zero failures (actual output captured)
-- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; cargo clippy zero errors on all `.rs` files
+- [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; lint clean on all target-language files (load applicable standards skill)
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
 - [ ] **Shared lib usage:** Used existing shared utilities where applicable (check `.codeflow/scripts/security/protection/lib/` for protection-related functions)
 - [ ] **Source paths verified:** Every `source` or `import` statement resolves to an existing file
@@ -687,14 +682,16 @@ Before requesting commit, do a "would I accept this in review?" pass:
 
 ## References
 
-| Resource | Path | Purpose |
-|----------|------|---------|
-| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Shell script template, ShellCheck rules |
-| CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
-| PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
-| Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Protected resources, branch rules |
-| Test Runner | `codeflow test --mode full --coverage` | Unified test execution — all suites, full coverage |
-| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell test assertion library (40+ `assert_*` functions) |
-| Test Config | `.codeflow/testing/test-config.json` | Test registration |
-| Protection Lib | `.codeflow/scripts/security/protection/lib/` | Reusable shell protection functions |
+| Resource | Path | When to Load |
+|----------|------|-------------|
+| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Always |
+| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Load when working on shell targets |
+| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Load when working on Python targets |
+| Rust Standards | `.claude/skills/cf-rust-standards/SKILL.md` | Load when working on Rust targets |
+| CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, PathFlow phases |
+| PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Always — phase/stage/pipeline definitions |
+| Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Always — protected resources, branch rules |
+| Test Runner | `codeflow test --mode full --coverage` | Always — unified test execution, all suites, full coverage |
+| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell test assertion library (40+ `assert_*` functions) |
+| Test Config | `.codeflow/testing/test-config.json` | Always — test registration |
+| Protection Lib | `.codeflow/scripts/security/protection/lib/` | Always — reusable shell protection functions |

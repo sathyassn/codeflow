@@ -4,7 +4,7 @@
 //! - `GateCheck`: `PathFlow` sentinel gate enforcement
 //! - `TeamGuard`: Team dissolution protection
 //! - `EditWriteGuard`: File scope enforcement
-//! - `GhPrGuard`: Protected branch merge guard
+//! - `GhPrGuard`: Protected branch merge guard (implementation in `gh_pr_guard`)
 //! - `ProtectionGuard`: Tiered resource protection
 //! - `WebFetchGuard`: Domain validation for network access
 
@@ -49,20 +49,12 @@ fn git_commit_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)git\s+commit(?:\s|$)").expect("valid regex"))
 }
 
-fn gh_pr_merge_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+merge(?:\s|$)").expect("valid regex"))
-}
-
-fn pr_number_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"gh\s+pr\s+merge\s+(\d+)").expect("valid regex"))
-}
-
-fn gh_pr_create_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+create(?:\s|$)").expect("valid regex"))
-}
+// GhPrGuard regex helpers, DI trait, and handler implementation live in
+// the dedicated `gh_pr_guard` module. Re-exported here for backwards
+// compatibility with callers that reference `pre_tool_use::GhPrGuard`.
+pub use crate::hooks::gh_pr_guard::{
+    GhPrGuard, OsPRResolver, PRResolver, is_emoji, strip_zero_width,
+};
 
 // ---------------------------------------------------------------------------
 // Shared enforcement policy loading
@@ -1344,330 +1336,6 @@ impl HookHandler for EditWriteGuard {
 
     fn name(&self) -> &'static str {
         "edit-write-guard"
-    }
-
-    fn events(&self) -> &[HookEvent] {
-        &[HookEvent::PreToolUse]
-    }
-}
-
-// ---------------------------------------------------------------------------
-// GhPrGuard handler
-// ---------------------------------------------------------------------------
-
-/// Trait for resolving PR target branches (DI for testability).
-pub trait PRResolver: Send + Sync {
-    /// Resolve the target (base) branch for a given PR number.
-    /// Returns `None` if the PR cannot be resolved.
-    fn resolve_target_branch(&self, pr_number: &str) -> Option<String>;
-}
-
-/// Production resolver that calls `gh pr view`.
-pub struct OsPRResolver;
-
-impl PRResolver for OsPRResolver {
-    fn resolve_target_branch(&self, pr_number: &str) -> Option<String> {
-        let output = std::process::Command::new("gh")
-            .args([
-                "pr",
-                "view",
-                pr_number,
-                "--json",
-                "baseRefName",
-                "-q",
-                ".baseRefName",
-            ])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if branch.is_empty() {
-            None
-        } else {
-            Some(branch)
-        }
-    }
-}
-
-/// Strips zero-width Unicode characters that could be used to bypass pattern matching.
-fn strip_zero_width(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(*c as u32, 0x200B | 0x200C | 0x200D | 0xFEFF | 0x2060))
-        .collect()
-}
-
-/// Returns true if the character is in a common emoji Unicode range.
-fn is_emoji(c: char) -> bool {
-    matches!(c as u32,
-        0x00A9              // Copyright
-        | 0x00AE            // Registered
-        | 0x203C            // Double exclamation
-        | 0x2049            // Exclamation question
-        | 0x2122            // Trademark
-        | 0x2194..=0x2199   // Arrows
-        | 0x21A9..=0x21AA   // Curved arrows
-        | 0x231A..=0x231B   // Watch/hourglass
-        | 0x23E9..=0x23F3   // Media controls
-        | 0x24C2            // Circled M
-        | 0x25AA..=0x25FE   // Geometric shapes (includes play 0x25B6, reverse 0x25C0)
-        | 0x2600..=0x26FF   // Misc symbols
-        | 0x2700..=0x27BF   // Dingbats
-        | 0xFE00..=0xFE0F   // Variation selectors
-        | 0x1F000..=0x1F02F // Mahjong
-        | 0x1F0A0..=0x1F0FF // Playing cards
-        | 0x1F1E0..=0x1F1FF // Flags
-        | 0x1F300..=0x1F5FF // Misc symbols & pictographs
-        | 0x1F600..=0x1F64F // Emoticons
-        | 0x1F680..=0x1F6FF // Transport & map
-        | 0x1F900..=0x1F9FF // Supplemental symbols
-        | 0x1FA00..=0x1FA6F // Chess symbols
-        | 0x1FA70..=0x1FAFF // Symbols extended
-    )
-}
-
-/// Content requirements for specific PR sections.
-///
-/// After verifying that section headers exist, this validates that the content
-/// between headers is substantive (not just a header with nothing after it).
-fn validate_section_content(body: &str) -> Vec<String> {
-    let mut errors = Vec::new();
-
-    // Helper: extract content between a section header and the next header of
-    // same or higher level, or end of string.
-    let extract_section_content = |header: &str| -> String {
-        let header_level = header.chars().take_while(|&c| c == '#').count();
-        if let Some(start) = body.find(header) {
-            let after_header = &body[start + header.len()..];
-            let end = after_header.lines().skip(1).position(|line| {
-                let trimmed = line.trim();
-                if trimmed.starts_with('#') {
-                    let level = trimmed.chars().take_while(|&c| c == '#').count();
-                    level <= header_level
-                } else {
-                    false
-                }
-            });
-            match end {
-                Some(line_idx) => after_header
-                    .lines()
-                    .skip(1)
-                    .take(line_idx)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .trim()
-                    .to_string(),
-                None => after_header
-                    .lines()
-                    .skip(1)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .trim()
-                    .to_string(),
-            }
-        } else {
-            String::new()
-        }
-    };
-
-    // 1. "### 1. Overall Test Pass Status" must have a "Result:" line.
-    if body.contains("### 1. Overall Test Pass Status") {
-        let content = extract_section_content("### 1. Overall Test Pass Status");
-        if !content.contains("Result:") {
-            errors.push(
-                "Section '### 1. Overall Test Pass Status' missing 'Result:' content".to_string(),
-            );
-        }
-    }
-
-    // 2. "### 2. Overall Coverage" must have at least one "%" value.
-    if body.contains("### 2. Overall Coverage") {
-        let content = extract_section_content("### 2. Overall Coverage");
-        if !content.contains('%') {
-            errors
-                .push("Section '### 2. Overall Coverage' missing coverage percentage".to_string());
-        }
-    }
-
-    // 3. "#### Exempted Files" must have a markdown table ("|" characters).
-    if body.contains("#### Exempted Files") {
-        let content = extract_section_content("#### Exempted Files");
-        if !content.contains('|') {
-            errors.push("Section '#### Exempted Files' missing markdown table".to_string());
-        }
-    }
-
-    // 4. "### 3. Modified File Coverage" must have a markdown table.
-    if body.contains("### 3. Modified File Coverage") {
-        let content = extract_section_content("### 3. Modified File Coverage");
-        if !content.contains('|') {
-            errors
-                .push("Section '### 3. Modified File Coverage' missing markdown table".to_string());
-        }
-    }
-
-    errors
-}
-
-/// GitHub PR guard: blocks `gh pr merge` on protected branches
-/// and validates `gh pr create` body content.
-pub struct GhPrGuard<R: PRResolver = OsPRResolver> {
-    protected_branches: Vec<String>,
-    resolver: R,
-    pr_config: PrBodyConfig,
-    ai_patterns: Vec<String>,
-}
-
-impl GhPrGuard<OsPRResolver> {
-    #[must_use]
-    pub fn new(
-        protected_branches: Vec<String>,
-        pr_config: PrBodyConfig,
-        ai_patterns: Vec<String>,
-    ) -> Self {
-        Self {
-            protected_branches,
-            resolver: OsPRResolver,
-            pr_config,
-            ai_patterns,
-        }
-    }
-}
-
-impl<R: PRResolver> GhPrGuard<R> {
-    #[must_use]
-    pub fn with_resolver(
-        protected_branches: Vec<String>,
-        resolver: R,
-        pr_config: PrBodyConfig,
-        ai_patterns: Vec<String>,
-    ) -> Self {
-        Self {
-            protected_branches,
-            resolver,
-            pr_config,
-            ai_patterns,
-        }
-    }
-}
-
-impl<R: PRResolver> HookHandler for GhPrGuard<R> {
-    fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
-        let tool_name = input.tool_name.as_deref().unwrap_or("");
-
-        // Only check Bash tool calls.
-        if tool_name != "Bash" {
-            return Ok(HookOutput::Allow);
-        }
-
-        let command = input
-            .tool_input
-            .as_ref()
-            .and_then(|v| v.get("command"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        if command.is_empty() {
-            return Ok(HookOutput::Allow);
-        }
-
-        // --- PR merge guard: block `gh pr merge` on protected branches ---
-        if gh_pr_merge_re().is_match(command) {
-            if let Some(caps) = pr_number_re().captures(command) {
-                let pr_number = &caps[1];
-                if let Some(target_branch) = self.resolver.resolve_target_branch(pr_number) {
-                    for protected in &self.protected_branches {
-                        if match_branch_pattern(&target_branch, protected) {
-                            return Ok(HookOutput::Block {
-                                reason: format!(
-                                    "BLOCKED: Cannot merge PR #{pr_number} into protected branch '{target_branch}'.\n\
-                                     Protected branches require manual merge via GitHub UI or admin override.\n\
-                                     Matched protection pattern: {protected}\n\n\
-                                     MUST: Do not attempt to merge into protected branches via CLI.\n"
-                                ),
-                                category: Some(BlockCategory::GhPrGuard),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- PR body validation: validate `gh pr create` body content ---
-        if gh_pr_create_re().is_match(command) {
-            let mut errors: Vec<String> = Vec::new();
-
-            // Check --body flag is present (when require_body_flag is true).
-            if self.pr_config.require_body_flag && !command.contains("--body") {
-                errors.push("Missing --body flag: PR body is required".to_string());
-            }
-
-            // Check required sections in the command text.
-            for section in &self.pr_config.required_sections {
-                if !command.contains(section.as_str()) {
-                    errors.push(format!("Missing required PR section: '{section}'"));
-                }
-            }
-
-            // Check AI attribution patterns (case-insensitive).
-            // Strip zero-width Unicode chars to prevent bypass via invisible insertions.
-            let lower_cmd = strip_zero_width(&command.to_lowercase());
-            for pattern in &self.ai_patterns {
-                if lower_cmd.contains(&pattern.to_lowercase()) {
-                    errors.push(format!(
-                        "AI attribution detected in PR body: pattern '{pattern}'"
-                    ));
-                    break;
-                }
-            }
-
-            // Check emoji characters (if configured).
-            if self.pr_config.forbid_emoji {
-                for ch in command.chars() {
-                    if is_emoji(ch) {
-                        errors.push(format!("Emoji character detected in PR body: '{ch}'"));
-                        break;
-                    }
-                }
-            }
-
-            // Check section content completeness (not just header presence).
-            // Only run when required_sections includes test stats headers,
-            // indicating this project enforces test results in PRs.
-            if self
-                .pr_config
-                .required_sections
-                .iter()
-                .any(|s| s.contains("Test"))
-            {
-                errors.extend(validate_section_content(command));
-            }
-
-            if !errors.is_empty() {
-                return Ok(HookOutput::Block {
-                    reason: format!(
-                        "BLOCKED: PR body validation failed with {} error(s):\n{}\n\n\
-                         Required sections: {}\n\
-                         MUST: Fix the PR body and retry.\n",
-                        errors.len(),
-                        errors
-                            .iter()
-                            .map(|e| format!("  - {e}"))
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        self.pr_config.required_sections.join(", "),
-                    ),
-                    category: Some(BlockCategory::GhPrGuard),
-                });
-            }
-        }
-
-        Ok(HookOutput::Allow)
-    }
-
-    fn name(&self) -> &'static str {
-        "gh-pr-guard"
     }
 
     fn events(&self) -> &[HookEvent] {
@@ -4213,10 +3881,9 @@ mod tests {
         PrBodyConfig {
             required_sections: vec![
                 "## Summary".into(),
-                "## Test Stats".into(),
+                "## Test Results".into(),
                 "### 1. Overall Test Pass Status".into(),
                 "### 2. Overall Coverage".into(),
-                "#### Exempted Files".into(),
                 "### 3. Modified File Coverage".into(),
             ],
             require_body_flag: false,
@@ -4228,13 +3895,12 @@ mod tests {
     fn test_validate_section_content_complete_body_passes() {
         let body = "\
 ## Summary\nSome summary\n\
-## Test Stats\n\
+## Test Results\n\
 ### 1. Overall Test Pass Status\n- Result: 100 passed, 0 failed\n\
 ### 2. Overall Coverage\n- Workspace: 85%\n- CLI: 80%\n\
-#### Exempted Files\n| File | Coverage | Threshold | Reason |\n|---|---|---|---|\n| foo.rs | 50% | 50 | TUI |\n\
 ### 3. Modified File Coverage\n| File | Coverage | Threshold | Status |\n|---|---|---|---|\n| bar.rs | 90% | 85 | PASS |\n\
 ## Test plan\n- [x] All tests pass\n";
-        let errors = validate_section_content(body);
+        let errors = crate::hooks::gh_pr_guard::validate_test_results_section(body);
         assert!(errors.is_empty(), "expected no errors but got: {errors:?}");
     }
 
@@ -4243,31 +3909,26 @@ mod tests {
         // Has headers but no content -- simulates truncation.
         let body = "\
 ## Summary\nSome summary\n\
-## Test Stats\n\
+## Test Results\n\
 ### 1. Overall Test Pass Status\n\
 ### 2. Overall Coverage\n\
-#### Exempted Files\n\
 ### 3. Modified File Coverage\n";
-        let errors = validate_section_content(body);
+        let errors = crate::hooks::gh_pr_guard::validate_test_results_section(body);
         assert!(
             errors.iter().any(|e| e.contains("Result:")),
             "should flag missing Result: {errors:?}"
         );
         assert!(
-            errors.iter().any(|e| e.contains("coverage percentage")),
-            "should flag missing %: {errors:?}"
+            errors
+                .iter()
+                .any(|e| e.contains("Overall Coverage") && e.contains("'%'")),
+            "should flag missing % in coverage: {errors:?}"
         );
         assert!(
             errors
                 .iter()
-                .any(|e| e.contains("Exempted Files") && e.contains("table")),
-            "should flag missing exempted table: {errors:?}"
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("Modified File Coverage") && e.contains("table")),
-            "should flag missing modified table: {errors:?}"
+                .any(|e| e.contains("Modified File Coverage") && e.contains("'|'")),
+            "should flag missing table in modified file coverage: {errors:?}"
         );
     }
 
@@ -4276,29 +3937,26 @@ mod tests {
         // Has headers with some content but missing tables.
         let body = "\
 ## Summary\nSome summary\n\
-## Test Stats\n\
+## Test Results\n\
 ### 1. Overall Test Pass Status\n- Result: 50 passed\n\
 ### 2. Overall Coverage\n- Workspace: 85%\n\
-#### Exempted Files\nNo exemptions.\n\
 ### 3. Modified File Coverage\nAll files passing.\n\
 ## Test plan\n- Done\n";
-        let errors = validate_section_content(body);
-        // Result: and % are present, but tables are missing.
+        let errors = crate::hooks::gh_pr_guard::validate_test_results_section(body);
+        // Result: and % are present, but Modified File Coverage table is missing.
         assert!(
             !errors.iter().any(|e| e.contains("Result:")),
             "Result: should pass: {errors:?}"
         );
         assert!(
-            !errors.iter().any(|e| e.contains("coverage percentage")),
+            !errors.iter().any(|e| e.contains("Overall Coverage")),
             "% should pass: {errors:?}"
         );
         assert!(
-            errors.iter().any(|e| e.contains("Exempted Files")),
-            "should flag missing exempted table: {errors:?}"
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("Modified File Coverage")),
-            "should flag missing modified table: {errors:?}"
+            errors
+                .iter()
+                .any(|e| e.contains("Modified File Coverage") && e.contains("'|'")),
+            "should flag missing modified file coverage table: {errors:?}"
         );
     }
 
@@ -4309,10 +3967,9 @@ mod tests {
         // Body has all headers but zero content -- truncated.
         // Use real newlines (via HEREDOC-style command) so .lines() works.
         let body = "## Summary\ntext\n\
-                     ## Test Stats\n\
+                     ## Test Results\n\
                      ### 1. Overall Test Pass Status\n\
                      ### 2. Overall Coverage\n\
-                     #### Exempted Files\n\
                      ### 3. Modified File Coverage\n";
         let cmd = format!("gh pr create --title \"test\" --body \"$(cat <<'EOF'\n{body}\nEOF\n)\"");
         let input = HookInput {
@@ -4332,10 +3989,9 @@ mod tests {
         let handler = make_pr_guard_with_config(config, Vec::new());
         // Build a complete body with all required content and real newlines.
         let body = "## Summary\nSome summary\n\
-             ## Test Stats\n\
+             ## Test Results\n\
              ### 1. Overall Test Pass Status\n- Result: 100 passed\n\
              ### 2. Overall Coverage\n- Workspace: 85%\n\
-             #### Exempted Files\n| File | Cov | Threshold | Reason |\n|---|---|---|---|\n\
              ### 3. Modified File Coverage\n| File | Cov | Threshold | Status |\n|---|---|---|---|\n\
              ## Test plan\n- Done\n";
         let cmd = format!("gh pr create --title \"test\" --body \"$(cat <<'EOF'\n{body}\nEOF\n)\"");
@@ -4354,7 +4010,7 @@ mod tests {
     fn test_validate_section_content_no_test_sections_returns_empty() {
         // Body without any test stats sections -- no errors.
         let body = "## Summary\nJust a normal PR\n## Testing\nManual testing done.\n";
-        let errors = validate_section_content(body);
+        let errors = crate::hooks::gh_pr_guard::validate_test_results_section(body);
         assert!(
             errors.is_empty(),
             "no test sections should produce no errors: {errors:?}"

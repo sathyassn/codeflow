@@ -155,17 +155,17 @@ For each acceptance criterion:
 codeflow test --mode full --coverage
 ```
 
-This is the unified CLI entry point. It routes to all test suites (shell/Python, Go, Rust) with full-mode execution and coverage enforcement. All three suites must pass for WS-QA to issue a PASS verdict. This command is mandatory for every WS-QA run, not conditional on file scope.
+This is the unified CLI entry point. It routes to all configured test targets with full-mode execution and coverage enforcement. All targets must pass for WS-QA to issue a PASS verdict. This command is mandatory for every WS-QA run, not conditional on file scope.
 
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
 
 🔒 **ONE COMMAND — no raw test runners, no shell scripts directly:**
 
-`codeflow test --mode full --coverage` is the sole entry point. It routes internally to all suites (shell/Python, Rust) with coverage enforcement. Do NOT invoke `run-all-tests.sh`, `test-rust-cli.sh`, or `cargo llvm-cov` directly — the unified command handles all of this.
+`codeflow test --mode full --coverage` is the sole entry point. It routes internally to all configured test targets with coverage enforcement. Do NOT invoke individual test runners or language-specific coverage tools directly — the unified command handles all of this.
 
-Rust business packages: `codeflow-core`, `codeflow-cli`. Coverage below 85% per file is a build failure — treat as a FAIL finding. Exception lists are in `codeflow-cli/config/testing/test-config.json`.
+Coverage enforcement is per-target with per-file thresholds. Coverage below the configured threshold per file is a build failure — treat as a FAIL finding. Exception lists are in `test-config.json` (conventions.exceptions[]). Load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for target-specific coverage tooling details.
 
-🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full --coverage` output includes per-file coverage for all modified/created Rust files. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
+🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full --coverage` output includes per-file coverage for all modified/created source files matching configured test targets. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
 
 #### Step 3: Run Targeted Tests
 
@@ -198,20 +198,16 @@ bash .codeflow/testing/lib/test-coverage.sh --audit
 
 #### Step 5c: Cross-Reference File Scope Against Test Config
 
-🔒 Cross-reference `file_scope` from the task definition against `.codeflow/testing/test-config.json` — every `.sh` and `.py` source file in scope MUST have a registered test entry. Report gaps as findings.
+🔒 Cross-reference `file_scope` from the task definition against `.codeflow/testing/test-config.json` — every source file in scope matching a configured test target MUST have a registered test entry. Report gaps as findings.
 
-1. Extract the list of `.sh` and `.py` files from the task's `file_scope` (or changeset)
+1. Extract the list of source files matching configured test targets from the task's `file_scope` (or changeset)
 2. For each file, check that a corresponding entry exists in `.codeflow/testing/test-config.json`
 3. Files without test entries are reported as findings (MAJOR for newly-added files, MAJOR for pre-existing files in the changeset scope)
 
-#### Step 5d: Rust Quality Gate (BLOCKING)
+#### Step 5d: Per-target Quality Gates (BLOCKING)
 
-When the changeset includes Rust files, verify both produce zero errors:
+When the changeset includes language-specific files, load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) and run the lint and format checks it prescribes for that target. Failure of any prescribed check is an AUTOMATIC QA FAIL. Report the exact errors to cf-development for rework.
 
-- `cargo clippy --all-targets --all-features -- -D warnings` (in `codeflow-cli/`)
-- `cargo fmt --check --all` (in `codeflow-cli/`)
-
-Failure of either check is an AUTOMATIC QA FAIL. Report the exact errors to cf-development for rework.
 4. Config files (`.json`, `.yaml`) and template files (`.md`) are excluded from this check
 
 🔒 **STRICTLY NO NON-BLOCKING FINDINGS.** Every finding, regardless of severity, contributes to a FAIL verdict. There is no "pass with notes" or "informational only" category. If it is worth reporting, it is worth fixing. All findings block — CRITICAL, MAJOR, MINOR, and NOTE alike.
@@ -262,31 +258,30 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 #### 1. Overall Test Pass Status
 
-- Command: `cargo test --workspace --no-fail-fast`
+- Command: `codeflow test --mode full --coverage`
 - Result: {n} passed, 0 failed, 0 skipped
 - New tests added: {n}
 - Runs: {n} consecutive clean runs (minimum 2)
 
-| Suite | Passed | Failed | Skipped | Duration |
-|-------|--------|--------|---------|----------|
-| {suite name} | {n} | {n} | {n} | {time} |
+| Target | Mode | Passed | Failed | Skipped | Duration |
+|--------|------|--------|--------|---------|----------|
+| {target name} | {mode} | {n} | {n} | {n} | {time} |
 
 #### 2. Overall Coverage
 
 > Coverage data is produced by `codeflow test --mode full --coverage`. Do not run coverage commands directly.
 
-| Crate | Coverage | Threshold | Status |
-|-------|----------|-----------|--------|
-| codeflow-core | {n}% | {n}% | PASS/FAIL |
-| codeflow-cli | {n}% | {n}% | PASS/FAIL |
+| Target | Coverage | Threshold | Status |
+|--------|----------|-----------|--------|
+| {target name} | {n}% | {n}% | PASS/FAIL |
 
-##### Exempted Files (below 85%)
+##### Exempted Files (below threshold)
 
-All project-wide coverage exceptions from `codeflow-cli/config/testing/test-config.json` `conventions.exceptions[]`. List ALL entries, not just files modified in this session. Use "N/A" for coverage if the file did not appear in coverage data.
+All project-wide coverage exceptions from `test-config.json` `conventions.exceptions[]`. List ALL entries, not just files modified in this session. Use "N/A" for coverage if the file did not appear in coverage data.
 
 | File | Coverage | Configured Threshold | Reason |
 |------|----------|---------------------|--------|
-| {path} | {n}% or N/A | {n}% | {reason from codeflow-cli/config/testing/test-config.json} |
+| {path} | {n}% or N/A | {n}% | {reason from test-config.json} |
 
 #### 3. Modified File Coverage
 
@@ -319,9 +314,9 @@ QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 
 🔒 **Mandatory three-part coverage reporting:**
 
-1. **Overall Test Pass Status** — `cargo test --workspace --no-fail-fast` result with suite breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
-2. **Overall Coverage** — workspace-wide coverage for CLI crate and Core crate. Any file below 85% that is not in the configured exception list = QA FAIL. The Exempted Files table must list ALL entries from `codeflow-cli/config/testing/test-config.json` `conventions.exceptions[]` — not just files modified in this session — with coverage %, configured threshold, and reason.
-3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= 85%. Missing coverage data = QA FAIL.
+1. **Overall Test Pass Status** — `codeflow test --mode full --coverage` result with per-target breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
+2. **Overall Coverage** — per-target coverage across all configured test targets. Any file below its configured threshold that is not in the exception list = QA FAIL. The Exempted Files table must list ALL entries from `test-config.json` `conventions.exceptions[]` — not just files modified in this session — with coverage %, configured threshold, and reason.
+3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= the configured threshold. Missing coverage data = QA FAIL.
 
 Scoring guide: 95-100 = all acceptance criteria verified by passing tests with per-file coverage at threshold, zero open findings; 80-94 = criteria met but some test paths have thin coverage or one finding required a waiver; below 80 = known gaps, test failures, or coverage deficits remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.
 
@@ -489,10 +484,8 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 **Structural validation checklist (perform EVERY check for both WS-QA and WS-TEST):**
 
-**Check 1 — Test file existence:** For every source `.sh` and `.py` file in the changeset scope, verify a corresponding test file exists.
+**Check 1 — Test file existence:** For every source file in the changeset scope matching a configured test target, verify a corresponding test file exists. Load the applicable language standards skill (cf-shell-standards, cf-python-standards, cf-rust-standards) for the expected naming convention.
 
-- Shell: Source `cf-{name}.sh` → Test `test-cf-{name}.sh` or `test-{name}.sh` (check siblings for exact pattern)
-- Python: Source `{module}.py` → Test `test_{module}.py`
 - If test file is missing: **FAIL** — "Missing test file for `{source_file}`"
 
 **Check 2 — Test file naming:** For every test file in the changeset, run `Glob` on its parent directory to list sibling test files. Compare the new file's name against the sibling naming pattern.
@@ -602,7 +595,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 - [ ] 🔒 **Structural validation passed:** All 7 checks from Section 5.2 performed BEFORE test execution
 - [ ] 🔒 **Functional testing verified:** Tests exercise real code, not mocks of code under test (Section 5.5)
-- [ ] 🔒 **Full test suite executed:** `codeflow test --mode full --coverage` ran to completion — all three suites (shell/Python, Go, Rust) passed with coverage thresholds met
+- [ ] 🔒 **Full test suite executed:** `codeflow test --mode full --coverage` ran to completion — all configured test targets passed with coverage thresholds met
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails
@@ -631,21 +624,20 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Tests independent:** No ordering dependencies, proper setup/teardown, no shared mutable state
 - [ ] 🔒 **Shell tests executable:** `chmod +x` applied to all new `.sh` test files
 - [ ] 🔒 **Test suite passes:** `codeflow test --mode full --coverage` returns zero failures across all suites
-- [ ] 🔒 **Linting clean:** ShellCheck zero SC1xxx on `.sh` files; ruff zero errors on `.py` files
+- [ ] 🔒 **Linting clean:** Lint and format checks clean per the applicable language standards skill
 - [ ] 🔒 **Commit format ready:** Conventional commit message prepared for cf-git-operations
 - [ ] 🔒 **Scope compliance:** No changes outside assigned task scope
 
 ## References
 
-| Resource | Path | Purpose |
-|----------|------|---------|
-| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | ShellCheck rules for test scripts |
-| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | ruff/flake8 for test scripts |
-| CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, QA retry limits |
-| Test Runner | `codeflow test --mode full --coverage` | Unified test execution — all suites, full coverage |
-| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Shell assertion library (40+ functions) |
-| Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Isolated repo root for tests |
-| Test Config | `.codeflow/testing/test-config.json` | Test registration |
-| Rust Test Bridge | `.codeflow/testing/cli/rust/test-rust-cli.sh` | Build verification, unit tests, coverage enforcement |
-| Rust Test Config | `codeflow-cli/config/testing/test-config.json` | Rust coverage threshold, business packages, exceptions |
+| Resource | Path | When to Load |
+|----------|------|-------------|
+| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Always |
+| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Load when working on shell targets |
+| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Load when working on Python targets |
+| Rust Standards | `.claude/skills/cf-rust-standards/SKILL.md` | Load when working on Rust targets |
+| CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, QA retry limits |
+| Test Runner | `codeflow test --mode full --coverage` | Always — unified test execution, all suites, full coverage |
+| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell assertion library (40+ functions) |
+| Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Always — isolated repo root for tests |
+| Test Config | `.codeflow/testing/test-config.json` | Always — test registration |

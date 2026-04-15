@@ -163,7 +163,7 @@ Before applying review criteria, load the relevant standards skill for each file
 File under review:
 ├── *.sh              → Load cf-shell-standards skill, apply ShellCheck rules
 ├── *.py              → Load cf-python-standards skill, apply ruff/flake8 rules
-├── *.rs              → Apply cargo clippy + cargo fmt rules
+├── *.rs              → Load cf-rust-standards skill, apply clippy + fmt rules
 ├── *.md              → Load cf-markdown-standards skill, apply doc structure rules
 ├── *.json            → Validate schema structure, check for hardcoded values
 ├── Agent defs (.claude/agents/cf-*.md) → Apply agent 5-section format check + cf-markdown-standards
@@ -193,11 +193,11 @@ Execute the checklist for the assigned review mode.
 - [ ] **Acceptance criteria** -- PASS/FAIL per criterion from task spec
 - [ ] **Scope policy** -- Task has `scope_policy` and `file_scope` set; `scope_policy` matches work type (soft for standard autorun, hard for schema/security, permissive for interactive only); `file_scope` covers all files actually modified in the changeset (no modified files outside `file_scope` without a corresponding ScopeExpansion event or explicit permissive policy)
 - [ ] **Correctness** -- Logic paths produce expected results
-- [ ] **Style** -- ShellCheck for `.sh` ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md)), ruff/flake8 for `.py` ([cf-python-standards](../skills/cf-python-standards/SKILL.md)), cargo clippy + cargo fmt for `.rs`
+- [ ] **Style** -- Lint and format checks per the applicable language standards skill ([cf-shell-standards](../skills/cf-shell-standards/SKILL.md), [cf-python-standards](../skills/cf-python-standards/SKILL.md), [cf-rust-standards](../skills/cf-rust-standards/SKILL.md))
 - [ ] **Security** -- No hardcoded credentials, injection vulnerabilities, OWASP issues. Verify `dangerouslyDisableSandbox: true` is only used for legitimate network operations (see `cf-sandbox-standards` skill)
 - [ ] **Performance** -- No obvious inefficiencies
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
-  - [ ] Verify each `.sh`/`.py` file in the changeset has a corresponding test file in the PR (`test-{name}.sh` or `test_{name}.py`)
+  - [ ] Verify each source file in the changeset matching a configured test target has a corresponding test file (naming convention per the applicable language standards skill)
   - [ ] Verify the task's `tests` YAML field is populated with actual test file paths
   - [ ] Verify new tests are registered in `.codeflow/testing/test-config.json`
 - [ ] **Error handling** -- Failures handled gracefully, `set -euo pipefail` in shell
@@ -463,20 +463,15 @@ Check every numbered criterion from the task specification point-by-point. A cri
 - ANY test failure reported in the DEV Report = automatic CHANGES_REQUESTED. No "pre-existing" or "flaky" exemptions.
 - "Pre-existing", "flaky", or "not introduced by this changeset" are NOT valid exemptions. If a test failure appears anywhere, the developer must fix it.
 - **WS-REV does NOT re-run tests.** Instead, verify the DEV Report Test Stats block is fully populated with all three sections. A missing or incomplete Test Stats block = CHANGES_REQUESTED.
-- Verify the DEV Report contains all three draft test stat sections: (1) Pass Status table showing 0 failures, (2) Workspace Coverage table (codeflow-core and codeflow-cli rows), (3) Modified File Coverage table. Any missing section = CHANGES_REQUESTED.
+- Verify the DEV Report contains all three draft test stat sections: (1) Pass Status table showing 0 failures, (2) Target Coverage table (per-target rows), (3) Modified File Coverage table. Any missing section = CHANGES_REQUESTED.
 - Modified file coverage >= 85% for all files not in the configured exception list. Any FAIL row in Modified File Coverage = CHANGES_REQUESTED.
 - WS-QA will re-run independently and produce the authoritative verified stats. WS-REV's role is to confirm the developer ran tests, got clean results, and documented them.
 
 - Read existing test artifact: `codeflow test --report` (reviewer reads the artifact — do NOT re-execute the full suite)
 
-### Step 9b: Rust Quality Verification (CODE_REVIEW only)
+### Step 9b: Per-target Quality Verification (CODE_REVIEW only)
 
-When reviewing Rust code changes, verify these produce zero errors/warnings:
-
-- `cargo fmt --check --all` (in `codeflow-cli/` workspace) -- if diffs found: FAIL with `changes_requested`
-- `cargo clippy --all-targets --all-features -- -D warnings` -- if warnings found: FAIL with `changes_requested`
-
-If either check fails, report as a MAJOR finding in the Standards Compliance dimension.
+When reviewing language-specific files, load the applicable standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) and verify the lint and format checks it prescribes produce zero errors/warnings. If any prescribed check fails, report as a MAJOR finding in the Standards Compliance dimension.
 
 ### Step 10: Cross-Reference Standards
 
@@ -910,11 +905,12 @@ Beyond code correctness, verify the structural integrity of the changeset:
 
 ## References
 
-| Resource | Path | Purpose |
-|----------|------|---------|
-| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | ShellCheck rules for CODE_REVIEW |
-| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | ruff/flake8 rules for CODE_REVIEW |
-| Markdown Standards | `.claude/skills/cf-markdown-standards/SKILL.md` | Doc structure for DOCUMENTATION_REVIEW |
-| CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, rework limits |
-| Test Runner | `codeflow test --report` | Read existing test artifact (reviewer does not re-execute) |
+| Resource | Path | When to Load |
+|----------|------|-------------|
+| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Always |
+| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Load when working on shell targets |
+| Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Load when working on Python targets |
+| Rust Standards | `.claude/skills/cf-rust-standards/SKILL.md` | Load when working on Rust targets |
+| Markdown Standards | `.claude/skills/cf-markdown-standards/SKILL.md` | Load when reviewing documentation |
+| CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, rework limits |
+| Test Runner | `codeflow test --report` | Always — read existing test artifact (reviewer does not re-execute) |

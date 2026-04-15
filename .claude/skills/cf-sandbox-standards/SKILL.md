@@ -77,7 +77,7 @@ Quick Test:
 Edge Cases:
   - git commit: local-only (writes to local .git), no bypass
   - git stash: local-only, no bypass
-  - npm run / npm test: local-only (scripts), no bypass
+  - codeflow test: local-only (invokes configured test targets locally), no bypass
   - npm install: network (fetches packages), bypass required
   - pip install -e .: local-only (editable install), no bypass
   - pip install package-name: network (fetches from PyPI), bypass required

@@ -1,6 +1,6 @@
 ---
 description: "Run test suite and verify coverage"
-argument-hint: "[--coverage] [--type unit|integration|e2e|all]"
+argument-hint: "--mode <mode> [--coverage] [--only <target>] [--skip <target>] [--report]"
 ---
 
 # /cf-test Command
@@ -27,7 +27,7 @@ Apply cognitive operations throughout execution:
 **Usage:**
 
 ```text
-/cf-test [--coverage] [--type unit|integration|e2e|all]
+codeflow test --mode <mode> [--coverage] [--only <target>] [--skip <target>] [--report]
 ```
 
 **Use When:**
@@ -63,35 +63,40 @@ This command takes no positional arguments. Test scope is determined from the cu
 
 **Flags:**
 
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--coverage` | `-c` | Include coverage analysis in report | false |
-| `--type` | `-t` | Test type filter: `unit`, `integration`, `e2e`, `all` | `all` |
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--mode essential\|full` | Test depth: `essential` runs the critical subset; `full` runs all suites including slow integration | required |
+| `--coverage` | Enable coverage collection and enforcement against configured per-target thresholds | false |
+| `--only <target>` | Run only the named target (name must match a target in `test-config.json`) | all targets |
+| `--skip <target>` | Skip the named target and run all others | none skipped |
+| `--report` | Emit a structured CTRF report for downstream consumption | false |
 
 **Test Runner Mode Mapping:**
 
-| Flag Combination | Runner Mode | What Runs |
-|-----------------|-------------|-----------|
-| No flags | `standard` | CRITICAL + HIGH priority tests |
-| `--type unit` | `essential` | Core unit tests only |
-| `--type all` | `full` | All tests including slow integration |
-| `--coverage` | `standard` + coverage | Standard tests with coverage report |
-| `--type all --coverage` | `full` + coverage | Comprehensive with coverage |
+| Flag Combination | What Runs |
+|-----------------|-----------|
+| `--mode essential` | Essential subset per `test-config.json` modes |
+| `--mode full` | All configured suites including slow integration |
+| `--mode full --coverage` | All suites with per-target coverage enforcement |
+| `--mode full --coverage --report` | Full run + coverage + structured CTRF output |
 
 **Examples:**
 
 ```bash
-# Standard QA gate (default)
-/cf-test
+# Standard QA gate (default — full run with coverage)
+codeflow test --mode full --coverage
 
-# With coverage report
-/cf-test --coverage
+# Essential subset only (fast check during development)
+codeflow test --mode essential
 
-# Unit tests only
-/cf-test --type unit
+# Full run, single target
+codeflow test --mode full --only rust-core
 
-# Full comprehensive run with coverage
-/cf-test --type all --coverage
+# Full run, skip one target
+codeflow test --mode full --skip python-tools
+
+# Full run with coverage and structured report
+codeflow test --mode full --coverage --report
 ```
 
 ---

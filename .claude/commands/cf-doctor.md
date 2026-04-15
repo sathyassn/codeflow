@@ -173,11 +173,16 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 - Check expected tables exist (sessions, tasks, pathflow_events)
 - Verify database is not locked or corrupted
 
-**Check 3: Hook Subcommands**
+**Check 3: Hook Subcommands and Test Runner**
 
 - Verify all 21 hook entries in `.claude/settings.json` reference valid `codeflow hooks` subcommands
 - Check that the `codeflow` binary is on PATH and executable
 - Verify each hook subcommand responds without error (e.g., `codeflow hooks session-start init --help`)
+- Run `codeflow test doctor` to verify the test runner infrastructure:
+  - `test-config.json` exists and is valid
+  - All configured test targets have their required toolchain available
+  - Coverage tooling (if configured) is installed and accessible
+  - Reports any misconfigured or missing test targets
 
 **Check 4: Settings Files**
 
@@ -277,7 +282,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 | Orphaned sentinels | Remove orphaned files | `rm .state/sentinels/{orphan}` |
 | Missing runtime files | Create empty defaults | Manually initialize |
 | Database locked | Copy to backup, recreate | Rebuild from JSONL |
-| Missing `codeflow` binary | Verify Go CLI is built and on PATH | `cd codeflow-cli && go build ./cmd/codeflow/...` |
+| Missing `codeflow` binary | Verify Rust CLI is built and on PATH | `cd codeflow-cli && cargo build --release` |
 | Stale active-task.json | Remove file | Manual cleanup |
 
 **Repair safety:** All repairs are logged. Original files are backed up before modification. Destructive repairs (database rebuild) require explicit user confirmation even with `--repair`.
@@ -387,7 +392,7 @@ CodeFlow Health Check
 
   Directory structure     PASS
   Database health         PASS
-  Hook subcommands        PASS  (21/21 valid)
+  Hook subcommands        PASS  (21/21 valid, codeflow test doctor: all targets configured)
   Settings files          PASS
   PathFlow state          PASS
   Sentinel integrity      PASS

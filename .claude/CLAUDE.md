@@ -348,7 +348,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
 - **Test stats gate (BLOCKING):** Read the QA Report and verify all three mandatory sections are present and passing:
   1. **Overall Test Pass Status** — zero failures (produced by `codeflow test --mode full --coverage`), at least 2 consecutive clean runs
-  2. **Overall Coverage** — workspace-wide coverage for CLI and Core crates; any file below 85% that is not in the configured exception list is a rework trigger; the Exempted Files table must include ALL entries from test-config.json conventions.exceptions[], not just files modified in this session, with coverage %, configured threshold, and reason
+  2. **Overall Coverage** — per-target coverage for all configured test targets; any file below 85% that is not in the configured exception list is a rework trigger; the Exempted Files table must include ALL entries from test-config.json conventions.exceptions[], not just files modified in this session, with coverage %, configured threshold, and reason
   3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
   A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
 - **Delivery summary:** Read the `## Deliverables` section in the task markdown. Confirm Expected Outcome and Deployment fields are populated (no placeholders). If placeholders remain, request the stage teammate update before proceeding.
@@ -1255,7 +1255,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test --mode full --coverage` (2,400+ tests across shell/Python and Rust; the single authoritative command for all pipeline stages)
+- Test suite: run via `codeflow test --mode full --coverage` (the single authoritative command for all pipeline stages; routes to all configured test targets per `test-config.json`)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1270,36 +1270,60 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 8. Lead proceeds to PF7-END
 9. New session for new work
 
-**PR body MUST include test results.** The PR description must contain all three sections below, populated from the QA Report. PRs without test stats are incomplete and must not be created:
-
-The `## Test Stats` section MUST be populated by running `codeflow test --mode full --coverage` and embedding its structured output verbatim. Do NOT manually compose coverage numbers, thresholds, or exempted files — the command produces the authoritative data including all three numbered subsections and the Exempted Files table. On subsequent pushes to an open PR, cf-git-operations MUST re-run the command and update the PR body's `## Test Stats` section to reflect current state.
+**PR body MUST include test results.** The PR description must contain the `## Test Results` section below, populated verbatim from `codeflow test --mode full --coverage` structured output. PRs without test stats are incomplete and must not be created. Do NOT manually compose coverage numbers, thresholds, or exempted files — the command produces the authoritative data. On subsequent pushes to an open PR, cf-git-operations MUST re-run the command and update the PR body's `## Test Results` section to reflect current state.
 
 ```markdown
 ## Test Results
 
 ### 1. Overall Test Pass Status
-- Suite: `codeflow test --mode full --coverage`
-- Result: {n} passed, 0 failed, 0 skipped
-- New tests added: {n}
-- Runs: {n} consecutive clean
+
+| Target | Mode | Passed | Failed | Skipped | Duration |
+|--------|------|--------|--------|---------|----------|
+| {target} | full | {n} | 0 | 0 | {time} |
+| **Total** | | **{n}** | **0** | **0** | **{time}** |
+
+Runs: {n} consecutive clean.
 
 ### 2. Overall Coverage
-- Workspace: {n}%
-- CLI crate: {n}%
-- Core crate: {n}%
 
-#### Exempted Files (below 85%)
-All project-wide coverage exceptions from test-config.json conventions.exceptions[].
+| Target | Coverage | Per-rule summary |
+|--------|----------|-----------------|
+| {target} | {n}% | {rule summary} |
 
-| File | Coverage | Configured Threshold | Reason |
-|------|----------|---------------------|--------|
-| {path} | {n}% | {n}% | {reason from test-config.json} |
+#### Exempted Files (only when exceptions exist)
+
+| Target | File | Coverage | Configured Threshold | Reason |
+|--------|------|---------:|---------------------:|--------|
+| {target} | {path} | {n}% | {n}% | {reason from test-config.json} |
 
 ### 3. Modified File Coverage
-| File | Coverage | Threshold | Status |
-|------|----------|-----------|--------|
-| {path} | {n}% | 85% | PASS/FAIL |
+
+| Target | File | Coverage | Threshold | Status |
+|--------|------|---------:|----------:|--------|
+| {target} | {path} | {n}% | 85% | PASS/FAIL |
+
+### 4. Test Failures
+
+(only emitted when Failed > 0)
+
+| Target | Suite | Test | Message | File:Line |
+|--------|-------|------|---------|-----------|
+
+### 5. Slowest Tests (optional)
+
+| Target | Test | Duration |
+|--------|------|---------|
 ```
+
+When no test targets are configured, `codeflow test --mode full --coverage` emits a single line instead of the five sections:
+
+```markdown
+## Test Results
+
+No test targets configured. Run `codeflow test setup` to add targets.
+```
+
+This is informational, not an error — PRs with no configured targets still pass the PR-body gate.
 
 ### Merge Protection
 
@@ -1366,6 +1390,7 @@ These skills provide detailed standards and can be loaded by agents as needed:
 
 | Skill | Purpose | Primary Users |
 | --- | --- | --- |
+| `cf-rust-standards` | Rust development conventions, error handling, clippy, testing | cf-development, cf-quality-assurance, cf-review |
 | `cf-shell-standards` | Shell scripting conventions, formatting, error handling | cf-development, cf-git-operations |
 | `cf-python-standards` | Python scripting conventions, type hints, testing | cf-development, cf-quality-assurance |
 | `cf-markdown-standards` | Markdown formatting, templates (ADR, epic, task) | cf-planning, cf-documentation |
@@ -1437,7 +1462,7 @@ codeflow interactive list              # Show all interactive sessions (active +
 codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
 ```
 
-The unified `codeflow test --mode full --coverage` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). No raw `cargo test`, `cargo llvm-cov`, or shell scripts. It routes to all test suites (shell/Python, Rust) and enforces 85% per-file coverage threshold on business packages.
+The unified `codeflow test --mode full --coverage` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `test-config.json` and enforces first-match-wins per-target coverage rules.
 
 → See Section 9 for project file layout and Section 10 for data model
 
@@ -1457,12 +1482,14 @@ The unified `codeflow test --mode full --coverage` command is the ONLY authorize
 │   ├── cf-documentation.md           #   On-demand: documentation
 │   ├── cf-review.md                  #   On-demand: independent review
 │   └── cf-quality-assurance.md       #   On-demand: QA gate / test writer
-├── skills/                           # 1 active + 4 on-demand skills
+├── skills/                           # 1 active + 6 on-demand skills
 │   ├── cf-working-protocol/          #   Active: team lead cognitive procedures
+│   ├── cf-rust-standards/            #   On-demand: Rust development standards
 │   ├── cf-shell-standards/           #   On-demand: shell scripting standards
 │   ├── cf-python-standards/          #   On-demand: Python scripting standards
 │   ├── cf-markdown-standards/        #   On-demand: markdown documentation standards
-│   └── cf-sandbox-standards/         #   On-demand: sandbox bypass rules
+│   ├── cf-sandbox-standards/         #   On-demand: sandbox bypass rules
+│   └── cf-surrealdb-standards/       #   On-demand: SurrealDB development standards
 ├── hooks/                            # Hook scripts (project-specific hooks only)
 │   └── project/                      #   Project hook scripts (if any)
 ├── commands/                         # 14 slash command definitions (cf-*.md)

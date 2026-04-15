@@ -346,18 +346,20 @@ Do NOT include:
      ```
      Then send a message to the team lead: `"REBASE CONFLICT: Cannot rebase {branch} onto origin/{base}. Conflicting files: {file_list}. PR creation blocked."`
 
-5b. Read the task doc QA Report to extract Test Stats. The PR body MUST include a `## Test Stats` section copied from the QA Report. Do NOT create the PR without it. The section must contain all three parts (format produced by `codeflow test --report` from the QA artifact):
+5b. Run `codeflow test report show --format json` to extract the authoritative test results data. The PR body MUST include a `## Test Results` section. Do NOT create the PR without it. The section must contain at least the first three subsections below (4 and 5 are conditional/optional):
 
-   - **1. Pass Status** — overall test pass result with suite breakdown
-   - **2. Workspace Coverage** — crate-level percentages (workspace/CLI/Core) plus Exempted Files table
-   - **3. Modified File Coverage** — per-file table for files modified in the PR
+   - **### 1. Overall Test Pass Status** — table: Target, Mode, Passed, Failed, Skipped, Duration
+   - **### 2. Overall Coverage** — table: Target, Coverage %, Per-rule summary; `#### Exempted Files` nested beneath when exceptions exist
+   - **### 3. Modified File Coverage** — table: Target, File, Coverage %, Threshold, Status
+   - **### 4. Test Failures** — conditional: include only when failures exist
+   - **### 5. Slowest Tests** — optional: include when available
 
-   If the QA Report does not contain all three parts, stop and escalate to the team lead before creating the PR.
+   If the QA Report does not contain at least the first three subsections, stop and escalate to the team lead before creating the PR.
 
 5c. Execute PR creation:
 
    ```text
-   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}\n\n## Test Stats\n{test_stats_from_qa_report}')" --base {base}
+   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}\n\n## Test Results\n{test_results_from_qa_report}')" --base {base}
    ```
 
 5c. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
@@ -372,27 +374,27 @@ Do NOT include:
 
 **On PR creation (PF6-TSK-05):**
 
-1. Run `codeflow test --mode full --coverage` and capture the FULL structured output
+1. Run `codeflow test report show --format json` to get the authoritative structured test results
 2. Compose `## Summary` and `## Testing` sections using LLM judgment — describe what changed and how it was tested
-3. Embed the command's structured output VERBATIM as the `## Test Stats` section — do NOT manually type coverage numbers, thresholds, or exempted files. The command produces all three numbered subsections, the Exempted Files table, and the Modified File Coverage table.
+3. Embed the results as the `## Test Results` section — do NOT manually type coverage numbers, thresholds, or exempted files. The command produces all five subsections; include §1–§3 always, §4 when failures exist, §5 when available. The `#### Exempted Files` table renders under `### 2. Overall Coverage` only when exceptions exist.
 4. Add `## Test plan` with verification checklist
-5. Validate before submission: no emoji, no AI attribution, all required sections present (`## Summary`, `## Testing`, `## Test Stats`, `### 1. Overall Test Pass Status`, `### 2. Overall Coverage`, `#### Exempted Files`, `### 3. Modified File Coverage`)
+5. Validate before submission: no emoji, no AI attribution, all required sections present (`## Summary`, `## Testing`, `## Test Results`, `### 1. Overall Test Pass Status`, `### 2. Overall Coverage`, `### 3. Modified File Coverage`)
 
 **On subsequent pushes (rework, fixes) when PR exists:**
 
 1. Before pushing, check if a PR exists: `gh pr list --head <branch> --json number`
 2. If PR exists:
    a. Push the changes
-   b. Re-run `codeflow test --mode full --coverage` to get fresh stats
-   c. Update the `## Test Stats` section of the PR body via `gh api PATCH` with the fresh command output
+   b. Re-run `codeflow test report show --format json` to get fresh results
+   c. Update the `## Test Results` section of the PR body via `gh api PATCH` with the fresh output
    d. Preserve `## Summary`, `## Testing`, `## Test plan` sections unchanged unless the scope of work changed
 3. If no PR exists: push only — PR body will be composed at PF6-TSK-05
 
 **Forbidden:**
 
-- Manually typing coverage percentages — always use `codeflow test --mode full --coverage` output
+- Manually typing coverage percentages — always use `codeflow test report show --format json` output
 - Leaving PR body stale after pushing new commits to a branch with an open PR
-- Omitting the Exempted Files table (must include ALL entries from test-config.json conventions.exceptions[])
+- Using `## Test Stats` — the canonical heading is `## Test Results`
 - Using thresholds that differ from the command output
 - Adding emoji or AI attribution text to PR body
 
@@ -603,12 +605,12 @@ Before marking any operation complete, verify:
 
 ## References
 
-| Resource | Path | Purpose |
-|----------|------|---------|
-| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Cognitive procedures |
-| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Shell script conventions |
-| CLAUDE.md | `.claude/CLAUDE.md` | Team lead instructions, PathFlow phases |
-| Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Branch protection rules |
-| PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Phase/stage/pipeline definitions |
-| Parallel Work Config | `.codeflow/config/parallel-work/parallel-work-config.json` | Worktree, claims, TTL, sync settings |
-| Worktree CLI | `codeflow worktree setup/status/list/cleanup` | Worktree management via CLI |
+| Resource | Path | When to Load |
+|----------|------|-------------|
+| Working Protocol | `.claude/skills/cf-working-protocol/SKILL.md` | Always |
+| Shell Standards | `.claude/skills/cf-shell-standards/SKILL.md` | Load when working on shell targets |
+| CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, PathFlow phases |
+| Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Always — branch protection rules |
+| PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Always — phase/stage/pipeline definitions |
+| Parallel Work Config | `.codeflow/config/parallel-work/parallel-work-config.json` | Always — worktree, claims, TTL, sync settings |
+| Worktree CLI | `codeflow worktree setup/status/list/cleanup` | Always — worktree management via CLI |
