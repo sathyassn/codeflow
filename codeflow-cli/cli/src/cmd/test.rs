@@ -42,6 +42,16 @@ pub struct TestArgs {
     #[arg(long, value_enum)]
     pub mode: Option<TestMode>,
 
+    /// Legacy flag, accepted for backwards compatibility. Coverage is now
+    /// controlled by mode commands in test-config.json.
+    #[arg(long)]
+    pub coverage: bool,
+
+    /// Legacy flag, accepted for backwards compatibility. Use the `report show`
+    /// subcommand instead.
+    #[arg(long)]
+    pub report: bool,
+
     /// Output format.
     #[arg(long, value_enum, default_value = "human")]
     pub format: OutputFormat,
@@ -300,6 +310,8 @@ pub fn run(args: Option<TestArgs>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
     let args = args.unwrap_or(TestArgs {
         mode: None,
+        coverage: false,
+        report: false,
         format: OutputFormat::Human,
         only: None,
         skip: None,
@@ -1087,6 +1099,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let args = TestArgs {
             mode: None,
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1110,6 +1124,8 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1140,6 +1156,8 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1702,6 +1720,8 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1737,6 +1757,8 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1752,6 +1774,8 @@ mod tests {
     fn make_args_with_subcommand(sub: TestSubcommand) -> TestArgs {
         TestArgs {
             mode: None,
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2011,6 +2035,8 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: None,
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2040,6 +2066,8 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2073,6 +2101,8 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2104,6 +2134,8 @@ mod tests {
         // --only=a should skip the failing target b
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: Some("a".to_string()),
             skip: None,
@@ -2116,6 +2148,8 @@ mod tests {
         // --skip=b should also work
         let args = TestArgs {
             mode: Some(TestMode::Essential),
+            coverage: false,
+            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: Some("b".to_string()),
