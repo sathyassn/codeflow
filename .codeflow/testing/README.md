@@ -1,6 +1,10 @@
-# CodeFlow Testing Framework
+# CodeFlow Testing Framework — Shell Infrastructure
 
-The CodeFlow testing framework provides **config-driven test execution** with **coverage enforcement** for both Python and shell scripts. Tests are organized by priority levels, allowing you to run quick validations during development or comprehensive suites before merging.
+> **Generic Testing Framework:** For the language-agnostic, config-driven testing engine that supports Rust, Node.js, Python, Go, monorepo, and custom runners, see the **[Generic Testing Framework Guide](../docs/guides/generic-testing-framework.md)**. That guide covers `test-config.json` configuration, the coverage model, CLI reference, WS-QA integration, and the template library.
+>
+> This README covers the **shell-based structural checker infrastructure** that runs Python and shell tests for CodeFlow's own scripts and hook infrastructure. It is CodeFlow-project-specific and does not apply to generic project test configuration.
+
+The CodeFlow shell testing infrastructure provides **priority-based test execution** with **coverage enforcement** for both Python and shell scripts. Tests are organized by priority levels, allowing you to run quick validations during development or comprehensive suites before merging.
 
 ## Table of Contents
 
