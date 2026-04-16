@@ -479,7 +479,10 @@ fn run_new_engine(
         eprintln!("warning: failed to write test report: {e}");
     }
 
-    // Step 6: Exit code — fail if tests or thresholds failed
+    // Step 6: Emit ledger event
+    validation::emit_ledger_event(project_dir, &run_id, &post_data);
+
+    // Step 7: Exit code — fail if tests or thresholds failed
     if any_test_failure {
         anyhow::bail!("one or more test targets failed");
     }
@@ -1841,5 +1844,285 @@ mod tests {
         let output = doctor::format_json(&checks);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed.is_array());
+    }
+
+    // ── extract_report_from_event tests ─────────────────────────────────
+
+    #[test]
+    fn test_extract_report_from_event_with_counts() {
+        let event = serde_json::json!({
+            "total_passed": 10,
+            "total_failed": 2,
+        });
+        let report = extract_report_from_event(&event, "run-1");
+        assert_eq!(report.results.summary.passed, 10);
+        assert_eq!(report.results.summary.failed, 2);
+        assert_eq!(report.results.tests.len(), 12);
+    }
+
+    #[test]
+    fn test_extract_report_from_event_zero_counts() {
+        let event = serde_json::json!({});
+        let report = extract_report_from_event(&event, "run-0");
+        assert_eq!(report.results.summary.passed, 0);
+        assert_eq!(report.results.summary.failed, 0);
+        assert!(report.results.tests.is_empty());
+    }
+
+    #[test]
+    fn test_extract_report_from_event_passed_only() {
+        let event = serde_json::json!({
+            "total_passed": 5,
+        });
+        let report = extract_report_from_event(&event, "run-p");
+        assert_eq!(report.results.summary.passed, 5);
+        assert_eq!(report.results.summary.failed, 0);
+        assert_eq!(report.results.tests.len(), 5);
+        assert!(
+            report
+                .results
+                .tests
+                .iter()
+                .all(|t| { t.status == codeflow_core::testing::report::CtrfStatus::Passed })
+        );
+    }
+
+    // ── run_report_show tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_report_show_no_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_report_show(dir.path());
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("no test reports"),
+            "should fail when report dir missing"
+        );
+    }
+
+    #[test]
+    fn test_report_show_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".state/test-reports")).unwrap();
+        let result = run_report_show(dir.path());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no test report files"),
+            "should fail when report dir is empty"
+        );
+    }
+
+    #[test]
+    fn test_report_show_with_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join(".state/test-reports");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(
+            report_dir.join("run-001.json"),
+            r#"{"run_id":"run-001","targets":[]}"#,
+        )
+        .unwrap();
+        let result = run_report_show(dir.path());
+        assert!(result.is_ok());
+    }
+
+    // ── toggle_target tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_toggle_target_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{"schema_version":"1.0","targets":[]}"#,
+        )
+        .unwrap();
+        let result = toggle_target(&config_dir.join("test-config.json"), "nope", true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    // ── load_or_create_config tests ─────────────────────────────────────
+
+    #[test]
+    fn test_load_or_create_config_missing_creates_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent.json");
+        let config = load_or_create_config(&config_path).unwrap();
+        assert_eq!(config.schema_version, "1.0");
+        assert!(config.targets.is_empty());
+    }
+
+    #[test]
+    fn test_load_or_create_config_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("test-config.json");
+        std::fs::write(
+            &config_path,
+            r#"{"schema_version":"1.0","targets":[{"name":"t","runner":"custom","modes":{}}]}"#,
+        )
+        .unwrap();
+        let config = load_or_create_config(&config_path).unwrap();
+        assert_eq!(config.targets.len(), 1);
+        assert_eq!(config.targets[0].name, "t");
+    }
+
+    // ── find_target_mut tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_find_target_mut_found() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let mut config = load_or_create_config(&config_path).unwrap();
+        let t = find_target_mut(&mut config, "rust");
+        assert!(t.is_ok());
+        assert_eq!(t.unwrap().name, "rust");
+    }
+
+    #[test]
+    fn test_find_target_mut_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_config_with_target(dir.path());
+        let config_path = dir.path().join(".codeflow/config/testing/test-config.json");
+        let mut config = load_or_create_config(&config_path).unwrap();
+        let t = find_target_mut(&mut config, "missing");
+        assert!(t.is_err());
+        assert!(t.unwrap_err().to_string().contains("not found"));
+    }
+
+    // ── new engine pipeline tests ───────────────────────────────────────
+
+    #[test]
+    fn test_new_engine_no_targets_fresh_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{"schema_version":"1.0","targets":[]}"#,
+        )
+        .unwrap();
+        let args = TestArgs {
+            mode: None,
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_engine_passing_target_with_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "echo-test",
+                    "runner": "custom",
+                    "modes": {"essential": {"command": "echo pass"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok(), "echo-test should pass: {result:?}");
+
+        // Verify report was written
+        let report_dir = dir.path().join(".state/test-reports");
+        assert!(report_dir.exists(), "report dir should be created");
+    }
+
+    #[test]
+    fn test_new_engine_failing_target_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "fail-test",
+                    "runner": "custom",
+                    "modes": {"essential": {"command": "exit 1"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            format: OutputFormat::Human,
+            only: None,
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("failed"));
+    }
+
+    #[test]
+    fn test_new_engine_skip_and_only_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".codeflow/config/testing");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("test-config.json"),
+            r#"{
+                "schema_version": "1.0",
+                "targets": [
+                    {"name": "a", "runner": "custom", "modes": {"essential": {"command": "echo a"}}},
+                    {"name": "b", "runner": "custom", "modes": {"essential": {"command": "exit 1"}}}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        // --only=a should skip the failing target b
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            format: OutputFormat::Human,
+            only: Some("a".to_string()),
+            skip: None,
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok(), "only=a should skip b");
+
+        // --skip=b should also work
+        let args = TestArgs {
+            mode: Some(TestMode::Essential),
+            format: OutputFormat::Human,
+            only: None,
+            skip: Some("b".to_string()),
+            fail_fast: false,
+            subcommand: None,
+        };
+        let result = run_with_dir(dir.path(), &args);
+        assert!(result.is_ok(), "skip=b should skip b");
     }
 }

@@ -293,7 +293,7 @@ main() {
   "results": {
     "tool": {"name": "codeflow-shell-tests"},
     "summary": {
-      "tests": $total,
+      "total": $total,
       "passed": $passed_count,
       "failed": $failed_count,
       "pending": 0,

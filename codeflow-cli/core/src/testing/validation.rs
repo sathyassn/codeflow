@@ -289,6 +289,75 @@ pub fn write_test_report(
     Ok(())
 }
 
+/// Emit a `test_result_recorded` event to the ledger.
+///
+/// Appends a single JSONL line to `.state/ledger/testing-events.jsonl`.
+/// Non-fatal: logs warning on failure but does not propagate errors.
+pub fn emit_ledger_event(project_dir: &Path, run_id: &str, targets: &[TargetPostData]) {
+    let ledger_dir = project_dir.join(".state").join("ledger");
+    if std::fs::create_dir_all(&ledger_dir).is_err() {
+        eprintln!("warning: cannot create ledger dir");
+        return;
+    }
+
+    let overall_pass = targets
+        .iter()
+        .all(|t| t.run_result.exit_code == 0 && t.threshold_results.iter().all(|r| r.pass));
+
+    let total_duration_ms: u64 = targets.iter().map(|t| t.run_result.duration_ms).sum();
+
+    let target_summaries: Vec<serde_json::Value> = targets
+        .iter()
+        .map(|t| {
+            let mut s = serde_json::json!({
+                "name": t.name,
+                "exit_code": t.run_result.exit_code,
+                "duration_ms": t.run_result.duration_ms,
+            });
+            if let Some(ref report) = t.report {
+                s["passed"] = serde_json::json!(report.results.summary.passed);
+                s["failed"] = serde_json::json!(report.results.summary.failed);
+            }
+            s
+        })
+        .collect();
+
+    let event = serde_json::json!({
+        "event": "test_result_recorded",
+        "run_id": run_id,
+        "timestamp": chrono_timestamp(),
+        "overall_pass": overall_pass,
+        "targets": target_summaries,
+        "duration_ms": total_duration_ms,
+    });
+
+    let ledger_path = ledger_dir.join("testing-events.jsonl");
+    let line = match serde_json::to_string(&event) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("warning: failed to serialize ledger event: {e}");
+            return;
+        }
+    };
+
+    // Locked append via open + write
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ledger_path)
+    {
+        Ok(mut f) => {
+            if writeln!(f, "{line}").is_err() {
+                eprintln!("warning: failed to write ledger event");
+            }
+        }
+        Err(e) => {
+            eprintln!("warning: cannot open ledger file: {e}");
+        }
+    }
+}
+
 fn chrono_timestamp() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now()

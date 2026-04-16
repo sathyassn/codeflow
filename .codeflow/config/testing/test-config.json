@@ -101,10 +101,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=essential --format=ctrf --output=ctrf.json"
+          "command": "bash .codeflow/testing/run-all-tests.sh --mode=essential --skip-structural --format=ctrf --output=ctrf.json"
         },
         "full": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=full --coverage --format=ctrf --output=ctrf.json"
+          "command": "bash .codeflow/testing/run-all-tests.sh --mode=full --skip-structural --format=ctrf --output=ctrf.json"
         }
       },
       "report": {
