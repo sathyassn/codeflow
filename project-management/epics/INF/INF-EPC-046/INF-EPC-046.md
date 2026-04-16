@@ -70,6 +70,7 @@ Generalize CodeFlow's testing subsystem so downstream adopters on any stack (Nod
 | INF-TSK-046-004 | Claude artifact generalization | XL | complete | high |
 | INF-TSK-046-005 | Self-host migration + hardcode retirement | L | complete | high |
 | INF-TSK-046-006 | Post-migration cleanup + binary verification | S | todo | normal |
+| INF-TSK-046-007 | Generic Testing Framework documentation | M | todo | normal |
 
 ## Dependencies
 
