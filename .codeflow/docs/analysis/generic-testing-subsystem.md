@@ -43,6 +43,7 @@ Scope: 4 implementation tasks (TSK-002 through TSK-005), ~3,000 lines of new Rus
 - [20. Dual-Config Architecture](#20-dual-config-architecture)
 - [21. Zero-Coverage File Detection](#21-zero-coverage-file-detection)
 - [22. Parallel Worktree Path Safety](#22-parallel-worktree-path-safety)
+- [23. Dual-Config Convergence Plan](#23-dual-config-convergence-plan)
 
 ## 3. Problem Statement
 
@@ -1322,5 +1323,108 @@ When authoring or modifying `test-config.json` for a new target:
 - **`coverage.exceptions[].file` paths must be cwd-relative.** Exception matching uses the normalized path after stripping `cwd_dir`. For the Rust target with `cwd: "codeflow-cli"`, the exception path `core/src/autorun/worker.rs` is correct; `codeflow-cli/core/src/autorun/worker.rs` would NOT match.
 - **Do not reference `.state/` in artifact paths.** Test artifacts belong in the target's `cwd` subtree, not in `.state/`. The engine's ledger event and PR body use `.state/` internally, but those paths are managed by the engine, not by `test-config.json`.
 - **Parallel autorun safety is automatic** if these rules are followed. The worktree isolation is structural: as long as artifact paths are cwd-relative, multiple workers writing to the same `test-config.json` settings will write to their own worktree copies of those paths.
+
+[↑ TOC](#2-table-of-contents)
+
+## 23. Dual-Config Convergence Plan
+
+Section 20 documents the current dual-config state (shell structural checker at `.codeflow/testing/test-config.json` + `run-all-tests.sh` alongside the generic engine at `.codeflow/config/testing/test-config.json`). This section answers the forward-looking question: how do we get to a single config? The plan below is the convergence roadmap. It is a plan, not a specification — the actual retirement work lands in future tasks.
+
+### 23.1 Shell structural checker — responsibility inventory
+
+The legacy shell harness at `.codeflow/testing/` is not monolithic. It performs several distinct jobs, each with a different claim on retirement:
+
+| # | Responsibility | Source of truth | Consumed by |
+|---|----------------|----------------|-------------|
+| R1 | Priority-driven shell test execution (CRITICAL → HIGH → MEDIUM → LOW buckets) | `.codeflow/testing/test-config.json` `priorities.*.files[]` | `run-all-tests.sh` → `lib/test-runner.sh` via `list_categories`/`run_all_tests{_parallel}` |
+| R2 | Mode routing (essential/standard/full → which priority groups run) | `.codeflow/testing/test-config.json` `modes.*` | `run-all-tests.sh` → `lib/test-runner.sh:get_current_mode` |
+| R3 | Parallel category execution with `--jobs N` | `parallel.max_jobs` in shell config | `run-all-tests.sh` → `lib/test-parallel.sh:run_all_tests_parallel` |
+| R4 | Bidirectional test↔source structural coverage (`validate_structural_integrity`) | Hardcoded walk of source dirs + `.codeflow/testing/test-config.json` priority list | `run-all-tests.sh` (auto in standard/full) + CI `Run structural integrity check` step |
+| R5 | Category-based output (test discovery by directory) | `.codeflow/testing/test-config.json` `categories.*` | `list_categories`, `--category` flag |
+| R6 | Shell-coverage threshold enforcement (structural 85%, `kcov` informational) | `coverage_enforcement` block in shell config | `run-all-tests.sh --coverage` → `lib/test-coverage.sh:validate_coverage` |
+| R7 | Reporting (JSON/text/CTRF emit via `--report`, `--format=ctrf --output=...`) | `reporting` block + CLI flags | `lib/test-reporting.sh`, inline CTRF emit in `run-all-tests.sh` |
+| R8 | Test registration invariant — every new `.sh` test file MUST appear in `priorities.{LEVEL}.files[]`, enforced by author discipline (documented in `cf-development.md:263-275,539,575,602,669,696`) | Agent definitions + CLAUDE.md | Author workflow; no automated enforcement besides grep in reviews |
+
+### 23.2 Responsibility → generic engine capability map
+
+| # | Responsibility | Generic engine equivalent | Status |
+|---|----------------|---------------------------|--------|
+| R1 | Priority-driven shell execution | GAP — generic engine runs targets sequentially by declaration order; there is no `priorities.CRITICAL.files[]` analog | **BLOCKER** for full retirement |
+| R2 | Mode routing | `codeflow-cli/core/src/testing/config/mod.rs` `TargetModes` (`essential`/`full` variants) — but at target granularity, not file-set granularity | PARTIAL — sufficient for Rust target today; insufficient if shell tests need per-mode subset selection |
+| R3 | Parallel execution | `execution.parallel: bool` at config root — single knob across targets, not per-target `max_jobs` | PARTIAL — no `--jobs N` override |
+| R4 | Structural integrity (test↔source mapping) | GAP — generic engine validates config schema, path existence, and doctor probes; it does NOT check that every source file has a companion test file or vice versa | **BLOCKER** — this is the single invariant no other tool provides |
+| R5 | Category/directory-based test selection | Target-level `cwd` + runner command filter. No built-in `--category` analog, but glob patterns in `file_scope` serve a similar function | PARTIAL — adopters can simulate with multiple targets |
+| R6 | Shell coverage enforcement | `codeflow-cli/core/src/testing/threshold/mod.rs:evaluate_target_thresholds` — supports `lcov`/`cobertura`/`istanbul-summary`/`go-cover` but NOT the shell structural format (which is "does test file exist?" rather than "what percentage of lines executed?") | GAP — structural coverage is a different shape than quantitative coverage |
+| R7 | Reporting | `codeflow-cli/core/src/testing/report/mod.rs:write_canonical_report` → CTRF JSON + `codeflow test report show` for rendering; PR body via `render_full_pr_body` | COVERED — strictly better than shell JSON/text emit |
+| R8 | Test registration invariant | GAP — generic engine has no invariant equivalent; if shell tests move to a target, authors have to remember to add them to that target's discovered set | **BLOCKER** (soft) — loses a documented cf-development gate |
+
+### 23.3 Callers of the shell structural checker
+
+Enumerating every caller so retirement phases can be bounded by caller count:
+
+| # | Caller | Reference | Role |
+|---|--------|-----------|------|
+| C1 | CI workflow | `.github/workflows/test-suite.yml:66` (`validate_structural_integrity`) | Structural integrity check step (retained post-migration) |
+| C2 | CI workflow | `.github/workflows/test-suite.yml:69` (`bash .codeflow/testing/run-all-tests.sh --mode full`) | Test runner invocation — MIGRATED to `codeflow test --mode full` in this PR |
+| C3 | CI workflow | `.github/workflows/test-suite.yml:84` (reproduce hint in failure step) | Echo-only — MIGRATED in this PR |
+| C4 | Contributor docs | `CONTRIBUTING.md:70`, `AGENTS.md:61` | Human-facing quickstart references — UPDATED in this PR |
+| C5 | Agent definition | `.claude/agents/cf-development.md:263,275,539,575,602,669,696` | Test registration in `.codeflow/testing/test-config.json` (R8) — NOT migrated in this PR; the invariant still applies |
+| C6 | Pre-commit / pre-push hooks | None currently observed via grep — `codeflow git-hooks` (Rust) drives those; no direct `run-all-tests.sh` invocation in hook code | No caller; historical reference only |
+
+**Post-PR-#295 caller count:** after this PR merges, the only surviving callers are C1 (`validate_structural_integrity`) and C5 (agent-facing registration policy in `.codeflow/testing/test-config.json`). C2/C3/C4 are gone. That is the key inflection point: the generic engine runs every test; the shell harness exists only to enforce R4 (structural mapping) and to record R8 (the registration list).
+
+### 23.4 Decision questions
+
+**Q1: Coexistence vs displacement?**
+Displacement — not coexistence. The long-term direction is one config. The shell harness was a bootstrap necessity and is now narrower in scope than the generic engine. Permanent coexistence would force adopters of CodeFlow to maintain two configs for the same test surface, which violates the generic-testing promise. The transition is gradual because R4 (structural integrity) and R8 (registration invariant) need home in the generic engine before the shell harness can retire.
+
+**Q2: Minimum invariant set a successor must preserve?**
+
+1. **Structural integrity (R4):** every `.codeflow/testing/**/test-*.sh` has a corresponding source file, and every protection/hook source file has a test — bidirectional mapping. This is the single invariant no other tool provides, and dropping it creates a silent "source exists but no test" hole.
+2. **Test registration gate (R8):** new test files are visible to the test runner without an author editing a central file by hand — either by glob-based auto-discovery (preferred) OR by a CLI subcommand that updates the config on the author's behalf. Manual list editing is a known footgun.
+3. **CI signal parity:** CI must fail loudly on both a missing test case and a failing test case. Today the shell harness exits non-zero on either; the successor must too.
+4. **Claim enforcement integration:** the generic engine's `scope_policy`/`file_scope` model must continue to cover shell files. This is already true in `.codeflow/config/testing/test-config.json`, but any future shell-scripts target must keep it true.
+5. **PR body format parity:** canonical 5-section format remains the single source of truth (already guaranteed by the generic engine — retain, do not regress).
+
+**Q3: Risks of premature retirement?**
+
+1. **Silent coverage regression.** Deleting `.codeflow/testing/test-config.json` without first porting R4 means structural bugs land undetected (protection script added with no test, test added with no source).
+2. **Registration-gate loss.** Without R8 (or its successor), new shell tests can exist on disk but never run, producing green CI that hides broken invariants. This is the most insidious failure mode.
+3. **Author workflow friction.** cf-development's definition references `.codeflow/testing/test-config.json` in ≥7 places. Aggressive deletion before updating the agent definition turns every new shell test into a correction loop with reviewers.
+4. **Cross-repo adoption setback.** Downstream adopters who followed INF-EPC-046's "generic engine" messaging may have internalized that `codeflow test` is the only config they need. Retiring the shell harness before shipping a shell-scripts-target-with-structural-check means CodeFlow self-host is *less* representative of the generic promise, not more.
+5. **Recovery cost.** Restoring the shell harness after deletion is a `git revert` plus re-integration; not catastrophic, but it is a wasted session for whoever hits the regression.
+
+### 23.5 Retirement sequence (ordered phases, each with explicit exit criteria)
+
+**Phase 0 — CURRENT STATE (post-PR-#295 merge).** CI runs `codeflow test --mode full` as its primary test step; the structural integrity step remains separate; no shell harness callers remain in CI; contributor docs no longer point at `run-all-tests.sh`. **Exit criterion:** already satisfied on PR #295 merge.
+
+**Phase 1 — Teach the generic engine about structural integrity (R4).** Add a `structural` check concept to `.codeflow/config/testing/test-config.json` schema, probably as a `validation` block at config root or per-target. The check verifies test↔source mapping based on configurable rules (directory pairs, file naming conventions). Implementation target: `codeflow-cli/core/src/testing/validation/` (new submodule). **Exit criterion:** `codeflow test --mode full` fails when a protection script has no test, matching current `validate_structural_integrity` behavior on the same fixture; CI workflow's `Run structural integrity check` step is removed without loss of signal.
+
+**Phase 2 — Teach the generic engine about shell-test registration (R8).** Either (a) glob-based auto-discovery: the shell-scripts target declares `file_pattern: "**/test-*.sh"` under `cwd: .codeflow/testing` and the engine runs every matching file as a test case, or (b) a `codeflow test register --target shell-scripts --file ...` subcommand that updates the config on the author's behalf. Preferred is (a) — glob auto-discovery — because it eliminates the manual list entirely. **Exit criterion:** adding a new `test-xxx.sh` file under `.codeflow/testing/` makes it run on the next `codeflow test --mode full` without editing any config; cf-development.md is updated to remove the "register in `test-config.json`" instruction.
+
+**Phase 3 — Retire the shell harness.** With R4 and R8 covered by the generic engine, delete: `.codeflow/testing/run-all-tests.sh`, `.codeflow/testing/lib/test-runner.sh`, `.codeflow/testing/lib/test-parallel.sh`, `.codeflow/testing/lib/test-reporting.sh`, `.codeflow/testing/lib/test-discovery.sh`, `.codeflow/testing/lib/test-isolation.sh`, `.codeflow/testing/lib/test-test-coverage.sh`, and `.codeflow/testing/test-config.json` itself. Retain `.codeflow/testing/` as the test-file location only. Update cf-development.md and CLAUDE.md to remove references. **Exit criterion:** repo-wide grep for `run-all-tests.sh`, `validate_structural_integrity`, and `.codeflow/testing/test-config.json` returns zero hits outside git history; `codeflow test --mode full` runs the full shell-test suite with structural integrity enforcement and passes on a fixture that would previously have needed both harnesses.
+
+**Phase 4 — Retire remaining shell library files.** `lib/test-config.sh`, `lib/test-common.sh`, `lib/test-helpers.sh` are sourced only by the files deleted in Phase 3. After Phase 3 they are orphaned. Delete. **Exit criterion:** `.codeflow/testing/lib/` contains no files; directory removed.
+
+### 23.6 Draft follow-up task summaries (capability gaps)
+
+Every blocker in §23.2 becomes a task summary here. These are forward-looking notes, not standalone task files. cf-planning (or a future session) files these as real tasks when the team is ready to move past Phase 0.
+
+- **INF follow-up A — "Add structural integrity check to generic engine."** Scope: implement Phase 1 above. Target: `codeflow-cli/core/src/testing/validation/` (new submodule) + schema update + `codeflow test` wiring. Closes R4. Est: M.
+- **INF follow-up B — "Shell-test glob auto-discovery in generic engine."** Scope: add `file_pattern` or equivalent to the `shell-scripts` target so adding a `test-*.sh` file auto-runs without config edits. Closes R8. Est: S-M.
+- **INF follow-up C — "Retire .codeflow/testing/run-all-tests.sh and lib/"." Scope: Phase 3 deletion + agent def and CLAUDE.md updates. Blocked by A and B. Est: S.
+- **INF follow-up D — "Retire `.codeflow/testing/test-config.json`."** Scope: Phase 3 tail + grep invariants. Blocked by C. Est: XS.
+- **DOC follow-up E — "Update cf-development.md test-registration instructions."** Scope: once B lands, remove the 7 registration references in `cf-development.md`. Blocked by B. Est: XS.
+
+### 23.7 Out of scope for this plan (and this PR)
+
+This section enumerates what the plan deliberately does NOT commit to:
+
+- **No code changes to the shell checker.** `run-all-tests.sh`, `validate_structural_integrity`, and `lib/*` are not modified as part of this plan. Phase 1 is future work.
+- **No deletion of `.codeflow/testing/test-config.json`.** The file remains in place until Phase 3's exit criterion is met in a future session.
+- **No regression test changes.** No new tests added or existing tests removed by this plan. (Future phases add tests for the new structural-check capability; those belong to follow-up A.)
+- **No downstream-adopter breaking changes.** The `.codeflow/config/testing/test-config.json` schema is not modified by this plan. Phase 1 will add fields additively; adopters on schema 1.0 continue to work.
+- **No hook rewiring.** Pre-commit and pre-push hooks (driven by Rust `codeflow git-hooks`) are not touched.
+- **No ordering claim beyond Phase 3.** Phases 0-3 are sequential; Phase 4 follows 3. The plan does not commit to timing — follow-ups A-E are filed when team priorities allow.
 
 [↑ TOC](#2-table-of-contents)
