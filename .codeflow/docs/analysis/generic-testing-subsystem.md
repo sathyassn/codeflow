@@ -1154,7 +1154,7 @@ CodeFlow currently ships two `test-config.json` files that serve different subsy
 
 **When it is read:** Whenever a shell-based test runner is invoked directly — typically by the git pre-commit hook, CI pipelines calling `run-all-tests.sh`, or any direct invocation of scripts under `.codeflow/testing/`. The `codeflow test` binary does NOT read this file.
 
-**What it tests:** Shell scripts, security protection scripts, git hooks, consistency checks, and Rust CLI bridge tests (the `cli/rust/test-rust-cli.sh` bridge, which itself calls into the Rust crate test suite).
+**What it tests:** Shell scripts, security protection scripts, git hooks, and consistency checks. (The `cli/rust/test-rust-cli.sh` bridge that previously re-invoked the Rust crate suite was retired in INF-TSK-047-002 — see §20.5.)
 
 ### 20.2 `.codeflow/config/testing/test-config.json` (generic engine, canonical)
 
@@ -1201,6 +1201,36 @@ The shell structural checker is a **legacy holdover**. The roadmap calls for its
 3. **Retirement condition:** When `codeflow test --mode full` produces equivalent structural coverage results to the shell checker, remove `.codeflow/testing/test-config.json` and its schema, and update the pre-commit hook to invoke `codeflow test` exclusively.
 
 Until retirement, both files must be kept in sync for the test targets they share (the shell-scripts target). Changes to shell test file organization should be reflected in both configs.
+
+### 20.5 CI migration & partial legacy retirement (INF-TSK-047-001/002)
+
+**Status as of INF-EPC-047 delivery:** the CI Test Suite job at `.github/workflows/test-suite.yml` now runs the generic engine directly via `codeflow test --mode full`, replacing the previous `bash .codeflow/testing/run-all-tests.sh --mode full` invocation. The binary is built and cached by the `Install codeflow binary` step earlier in the job. The `Run structural integrity check` step is **retained** because `validate_structural_integrity` (bidirectional source↔test mapping + change-coverage check) has no equivalent in the generic engine yet; sourcing `.codeflow/testing/lib/test-coverage.sh` in a dedicated step gives it runtime identical to the pre-migration workflow without complicating the engine.
+
+**`rust-core` CI disposition:** unchanged — `rust-core` continues to run in CI via `codeflow test --mode full`. Pre-migration CI behavior is preserved: the same Rust test set runs under the same Ubuntu runner with the same mold/nextest toolchain. No target opts out of CI in this PR.
+
+**`ci_skip` capability added as infrastructure only.** The `TargetConfig` schema gains two new Option fields and the runner gains a filter + an `is_ci_environment()` helper. No target is currently configured to use them — this ships as forward-compatible infrastructure so a future target (or `rust-core` post-§23 convergence) can opt out of CI by setting `ci_skip: true` + a `ci_skip_reason` string. The filter triggers only when the environment has `CI=true` (GitHub Actions, GitLab CI, CircleCI, Buildkite convention) AND the target has `ci_skip: Some(true)`; both conditions satisfied → the target is removed from the run with a stderr line naming the target and reason so reviewers see the decision in job output. Non-CI environments ignore the flag entirely, so local dev runs the full matrix regardless. Three unit tests exercise honour-under-CI, ignore-outside-CI, and the `is_ci_environment()` truth-table (`true`/`1` truthy; `false`/`0`/empty/unset falsy; all `#[serial(env_vars)]` gated).
+
+**Legacy shell scaffolding — narrow retirement.** cf-planning's scoping found that `.codeflow/testing/lib/*` still hosts helpers sourced by ~20 live shell protection/CLI/git-hook tests that the generic engine does not yet cover, and `run-all-tests.sh` is still the shell-scripts target's runner. Full retirement of the shell harness is deferred to the follow-up that introduces a generic-engine native shell runner (tracked in §23 convergence plan). This PR retires only the file with zero surviving callers:
+
+| File | Surviving caller | Disposition |
+|------|-----------------|-------------|
+| `.codeflow/testing/cli/rust/test-rust-cli.sh` | (none — stub from INF-EPC-046) | **REMOVED** |
+| `.codeflow/testing/cli/rust/` + `cli/` (empty dirs after deletion) | (none) | **REMOVED** |
+| `.codeflow/testing/run-all-tests.sh` | generic-engine `shell-scripts` target (invoked via `codeflow test --mode full`) and direct local invocation | **RETAINED pending §23 follow-up** |
+| `.codeflow/testing/lib/test-runner.sh`, `test-parallel.sh`, `test-reporting.sh`, `test-config.sh`, `test-discovery.sh` | sourced transitively by run-all-tests.sh and the protection/CLI/git-hook test suites | **RETAINED pending §23 follow-up** |
+| `.codeflow/testing/lib/test-coverage.sh` | CI `Run structural integrity check` step (sourced inline) | **RETAINED** |
+| `.codeflow/testing/lib/test-common.sh` | 18+ active test files (consistency/*, scripts/git-hooks/*, scripts/security/*) | **RETAINED** |
+| `.codeflow/testing/lib/test-helpers.sh` | Same active test files as test-common.sh | **RETAINED** |
+| `.codeflow/testing/lib/test-isolation.sh` | test-cf-validate-shell.sh and other security tests | **RETAINED** |
+| `.codeflow/testing/lib/test-test-coverage.sh` | Self-test for test-coverage.sh | **RETAINED** |
+| `.codeflow/testing/test-config.json` | Shell structural-checker test priority index (driven by `test-coverage.sh`); CI structural-integrity step + pre-commit consistency check | **RETAINED** |
+| `.codeflow/testing/README.md` | Developer guide for shell-test authors | **RETAINED** |
+
+**Shell-scripts target command:** unchanged from pre-migration — still runs `bash .codeflow/testing/run-all-tests.sh …` with CTRF emission. The generic-engine dispatch through `codeflow test --mode full` invokes this target indirectly, so CI behavior for the shell suite is byte-equivalent.
+
+**Shell structural-checker config update:** `.codeflow/testing/test-config.json` had `cli/rust/test-rust-cli.sh` listed in `priorities.MEDIUM.files` and in `coverage_enforcement.orphan_exceptions`, plus a `categories.cli-rust` entry. All three references are removed to align with the deletion.
+
+**Deferred-retirement flag:** `run-all-tests.sh` + the 5 retained runner-library files (`test-runner.sh`, `test-parallel.sh`, `test-reporting.sh`, `test-config.sh`, `test-discovery.sh`) stay **retirement-ready** for the §23 convergence follow-up that introduces a generic-engine native shell runner (likely `codeflow test shell …`) with parallelism + CTRF parity. At that point the `shell-scripts` target command can be rewritten to use the new subcommand, and these 6 files can be removed.
 
 [↑ TOC](#2-table-of-contents)
 
