@@ -107,15 +107,11 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=essential --skip-structural --format=ctrf --output=ctrf.json"
+          "command": "set -e; for t in $(find .codeflow/testing -name 'test-*.sh' -type f -not -path '*/lib/*' -not -path '*/claude-hooks/*'); do echo \"== $t ==\"; bash \"$t\" || exit $?; done"
         },
         "full": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=full --skip-structural --format=ctrf --output=ctrf.json"
+          "command": "set -e; for t in $(find .codeflow/testing -name 'test-*.sh' -type f -not -path '*/lib/*' -not -path '*/claude-hooks/*'); do echo \"== $t ==\"; bash \"$t\" || exit $?; done"
         }
-      },
-      "report": {
-        "format": "ctrf",
-        "path": "ctrf.json"
       }
     }
   ]

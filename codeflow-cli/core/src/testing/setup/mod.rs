@@ -600,6 +600,8 @@ mod tests {
                 modes,
                 report: None,
                 coverage: None,
+                ci_skip: None,
+                ci_skip_reason: None,
             }],
         };
         let cfg_path = config_path(dir.path());
@@ -649,6 +651,8 @@ mod tests {
                 modes,
                 report: None,
                 coverage: None,
+                ci_skip: None,
+                ci_skip_reason: None,
             }],
         };
         let cfg_path = config_path(dir.path());

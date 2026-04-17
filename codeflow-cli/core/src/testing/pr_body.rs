@@ -488,6 +488,8 @@ mod tests {
             modes: BTreeMap::new(),
             report: None,
             coverage: None,
+            ci_skip: None,
+            ci_skip_reason: None,
         }
     }
 

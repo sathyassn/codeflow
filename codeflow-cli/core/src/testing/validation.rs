@@ -599,6 +599,8 @@ mod tests {
             } else {
                 None
             },
+            ci_skip: None,
+            ci_skip_reason: None,
         }
     }
 
@@ -1087,6 +1089,8 @@ mod tests {
                 rules: Vec::new(),
                 exceptions: Vec::new(),
             }),
+            ci_skip: None,
+            ci_skip_reason: None,
         };
 
         let post = TargetPostData {

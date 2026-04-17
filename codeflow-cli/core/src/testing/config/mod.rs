@@ -96,6 +96,18 @@ pub struct TargetConfig {
     /// Coverage configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CoverageConfig>,
+
+    /// When `true` and the process runs with `CI=true` in the environment, the
+    /// generic engine skips this target entirely. Lets a target opt out of the
+    /// CI wall-time budget while staying enabled for local dev.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_skip: Option<bool>,
+
+    /// Human-readable explanation of why `ci_skip` is set. Surfaces in the
+    /// runner's stderr output and in any ledger audit trail so reviewers can
+    /// see why a target did not run in CI. Expected when `ci_skip = Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_skip_reason: Option<String>,
 }
 
 /// Supported test runners.
@@ -261,7 +273,16 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
     // Check for unknown fields in targets
     if let Some(targets) = raw.get("targets").and_then(|t| t.as_array()) {
         let known_target_fields = [
-            "name", "enabled", "cwd", "env", "runner", "modes", "report", "coverage",
+            "name",
+            "enabled",
+            "cwd",
+            "env",
+            "runner",
+            "modes",
+            "report",
+            "coverage",
+            "ci_skip",
+            "ci_skip_reason",
         ];
         for (i, target) in targets.iter().enumerate() {
             if let Some(obj) = target.as_object() {
@@ -529,6 +550,8 @@ mod tests {
                 )]),
                 report: None,
                 coverage: None,
+                ci_skip: None,
+                ci_skip_reason: None,
             }],
         };
 

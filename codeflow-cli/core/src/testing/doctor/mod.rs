@@ -406,6 +406,8 @@ mod tests {
             )]),
             report: None,
             coverage: None,
+            ci_skip: None,
+            ci_skip_reason: None,
         }
     }
 

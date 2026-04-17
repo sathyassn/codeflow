@@ -72,6 +72,7 @@ pub fn run_all_targets(
     only: &[String],
     skip: &[String],
 ) -> Vec<Result<TargetRunResult, TestingError>> {
+    let in_ci = is_ci_environment();
     let filtered: Vec<&TargetConfig> = targets
         .iter()
         .filter(|t| t.enabled)
@@ -84,6 +85,21 @@ pub fn run_all_targets(
         })
         .filter(|t| !skip.iter().any(|s| s == &t.name))
         .filter(|t| t.modes.contains_key(mode))
+        .filter(|t| {
+            // ci_skip: targets opted out when running under CI. Log the skip
+            // so reviewers see the decision in job output; returning false
+            // removes the target from execution entirely.
+            if in_ci && t.ci_skip == Some(true) {
+                eprintln!(
+                    "[codeflow test] Skipping target '{}' in CI: {}",
+                    t.name,
+                    t.ci_skip_reason.as_deref().unwrap_or("ci_skip=true"),
+                );
+                false
+            } else {
+                true
+            }
+        })
         .collect();
 
     if parallel {
@@ -146,6 +162,23 @@ fn run_parallel(
             })
         })
         .collect()
+}
+
+/// Returns `true` when the process is running inside a CI environment.
+///
+/// Honours the de-facto standard `CI` environment variable: any non-empty
+/// value that is not the literal strings `"false"` or `"0"` is treated as
+/// "in CI". GitHub Actions, GitLab CI, CircleCI, and Buildkite all set
+/// `CI=true`; developers running locally typically leave it unset.
+#[must_use]
+pub fn is_ci_environment() -> bool {
+    match std::env::var("CI") {
+        Ok(v) => {
+            let v = v.trim();
+            !v.is_empty() && v != "false" && v != "0"
+        }
+        Err(_) => false,
+    }
 }
 
 fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, TestingError> {
@@ -268,6 +301,8 @@ mod tests {
             )]),
             report: None,
             coverage: None,
+            ci_skip: None,
+            ci_skip_reason: None,
         }
     }
 
@@ -496,6 +531,80 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let results = run_all_targets(&[target], "quick", dir.path(), false, false, &[], &[]);
         assert!(results.is_empty());
+    }
+
+    /// CI-environment opt-out: `ci_skip=true` targets must be skipped when
+    /// `CI=true`. Uses a `#[serial(env_vars)]`-gated `set_var` to toggle the
+    /// `CI` env without racing other tests.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_run_all_targets_ci_skip_honoured_under_ci() {
+        // SAFETY: test-only env var manipulation, gated by #[serial].
+        unsafe { std::env::set_var("CI", "true") };
+
+        let mut slow = make_target("slow", "echo slow");
+        slow.ci_skip = Some(true);
+        slow.ci_skip_reason = Some("integration tests exceed CI time budget".to_string());
+        let fast = make_target("fast", "echo fast");
+        let dir = tempfile::tempdir().unwrap();
+
+        let results = run_all_targets(&[slow, fast], "full", dir.path(), false, false, &[], &[]);
+
+        // SAFETY: cleanup before assertions so failure doesn't leak CI=true.
+        unsafe { std::env::remove_var("CI") };
+
+        assert_eq!(
+            results.len(),
+            1,
+            "ci_skip=true target must be skipped in CI"
+        );
+        assert_eq!(results[0].as_ref().unwrap().target_name, "fast");
+    }
+
+    /// `ci_skip=true` targets still run OUTSIDE CI (local dev loop).
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_run_all_targets_ci_skip_ignored_outside_ci() {
+        // SAFETY: test-only env var manipulation, gated by #[serial].
+        unsafe { std::env::remove_var("CI") };
+
+        let mut slow = make_target("slow", "echo slow");
+        slow.ci_skip = Some(true);
+        slow.ci_skip_reason = Some("slow in CI only".to_string());
+        let dir = tempfile::tempdir().unwrap();
+
+        let results = run_all_targets(&[slow], "full", dir.path(), false, false, &[], &[]);
+
+        assert_eq!(results.len(), 1, "ci_skip must not affect local runs");
+        assert_eq!(results[0].as_ref().unwrap().target_name, "slow");
+    }
+
+    /// `is_ci_environment` contract: treats truthy and non-empty values as CI,
+    /// but recognises the `false`/`0` conventions and unset state as non-CI.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_is_ci_environment_recognises_conventions() {
+        // SAFETY: test-only env var manipulation, gated by #[serial].
+        unsafe { std::env::remove_var("CI") };
+        assert!(!is_ci_environment(), "unset CI → false");
+
+        unsafe { std::env::set_var("CI", "") };
+        assert!(!is_ci_environment(), "empty CI → false");
+
+        unsafe { std::env::set_var("CI", "false") };
+        assert!(!is_ci_environment(), "CI=false → false");
+
+        unsafe { std::env::set_var("CI", "0") };
+        assert!(!is_ci_environment(), "CI=0 → false");
+
+        unsafe { std::env::set_var("CI", "true") };
+        assert!(is_ci_environment(), "CI=true → true");
+
+        unsafe { std::env::set_var("CI", "1") };
+        assert!(is_ci_environment(), "CI=1 → true");
+
+        // Cleanup.
+        unsafe { std::env::remove_var("CI") };
     }
 
     #[test]

@@ -157,6 +157,8 @@ fn build_rust_target() -> TargetConfig {
             }],
             exceptions: vec![],
         }),
+        ci_skip: None,
+        ci_skip_reason: None,
     }
 }
 
@@ -199,6 +201,8 @@ fn build_vitest_target() -> TargetConfig {
             }],
             exceptions: vec![],
         }),
+        ci_skip: None,
+        ci_skip_reason: None,
     }
 }
 
@@ -240,6 +244,8 @@ fn build_jest_target() -> TargetConfig {
             }],
             exceptions: vec![],
         }),
+        ci_skip: None,
+        ci_skip_reason: None,
     }
 }
 
@@ -283,6 +289,8 @@ fn build_go_target() -> TargetConfig {
             }],
             exceptions: vec![],
         }),
+        ci_skip: None,
+        ci_skip_reason: None,
     }
 }
 
@@ -324,6 +332,8 @@ fn build_python_target() -> TargetConfig {
             }],
             exceptions: vec![],
         }),
+        ci_skip: None,
+        ci_skip_reason: None,
     }
 }
 

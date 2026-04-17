@@ -672,6 +672,8 @@ fn run_config_subcommand(project_dir: &Path, command: &ConfigCommand) -> Result<
                 modes: mode_map,
                 report: None,
                 coverage: None,
+                ci_skip: None,
+                ci_skip_reason: None,
             });
 
             test_config::write_test_config(&config_path, &config)

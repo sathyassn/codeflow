@@ -32,8 +32,7 @@
         "scripts/git-hooks/test-commit-msg.sh",
         "scripts/git-hooks/test-prepare-commit-msg.sh",
         "scripts/git-hooks/test-post-commit.sh",
-        "scripts/git-hooks/test-pre-push.sh",
-        "cli/rust/test-rust-cli.sh"
+        "scripts/git-hooks/test-pre-push.sh"
       ]
     },
     "LOW": {
@@ -95,12 +94,6 @@
       "directory": "scripts/git-hooks",
       "description": "Git hook tests",
       "language": "bash"
-    },
-    "cli-rust": {
-      "directory": "cli/rust",
-      "description": "Rust CLI bridge tests (build, smoke, unit tests, coverage)",
-      "language": "rust",
-      "ci_skip": true
     }
   },
   "pre_commit": {
@@ -172,10 +165,6 @@
       {
         "pattern": "scripts/commands/*",
         "reason": "Command integration tests (test slash command infrastructure)"
-      },
-      {
-        "pattern": "cli/rust/test-rust-cli.sh",
-        "reason": "Bridge test for Rust CLI binary (no 1:1 shell source mapping — tests Rust crate code)"
       }
     ]
   },
