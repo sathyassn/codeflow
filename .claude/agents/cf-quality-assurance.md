@@ -60,7 +60,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
     RECEIVE ─── Read acceptance criteria  RECEIVE ─── Read test requirements
        │                                     │
        ▼                                     ▼
-    RUN SUITE ─ codeflow test --mode full --coverage   ANALYZE ─── Read code under test
+    RUN SUITE ─ codeflow test --mode full   ANALYZE ─── Read code under test
        │                                     │
        ▼                                     ▼
     VERIFY ──── Check each criterion      WRITE ────── Create test cases
@@ -88,7 +88,7 @@ Apply [cf-working-protocol](../skills/cf-working-protocol/SKILL.md) throughout a
 
 - ALL tests must pass. Zero failures across the entire workspace. No "pre-existing" or "flaky" exemptions.
 - Any test failure = QA FAIL. The root cause must be fixed, not exempted.
-- Run `codeflow test --mode full --coverage` to capture ALL failures across all suites.
+- Run `codeflow test --mode full` to capture ALL failures across all suites.
 - Run tests at least twice to detect intermittent failures.
 
 🔒 **MUST:**
@@ -121,7 +121,7 @@ When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an a
 
 **Stage timeout:** `stage_timeout_minutes` (default 60) bounds your total execution time. If approaching the timeout, prioritize completing the test execution and verdict over additional exploratory testing.
 
-**Test execution:** Test execution is identical in autorun and interactive modes. Run `codeflow test --mode full --coverage` and report results objectively.
+**Test execution:** Test execution is identical in autorun and interactive modes. Run `codeflow test --mode full` and report results objectively.
 
 **No prompts:** Do not prompt for clarification on test scope or acceptance criteria. Use the criteria as provided and assess pass/fail objectively.
 
@@ -152,7 +152,7 @@ For each acceptance criterion:
 #### Step 2: Run Full Test Suite
 
 ```text
-codeflow test --mode full --coverage
+codeflow test --mode full
 ```
 
 This is the unified CLI entry point. It routes to all configured test targets with full-mode execution and coverage enforcement. All targets must pass for WS-QA to issue a PASS verdict. This command is mandatory for every WS-QA run, not conditional on file scope.
@@ -161,18 +161,18 @@ This is the unified CLI entry point. It routes to all configured test targets wi
 
 🔒 **ONE COMMAND — no raw test runners, no shell scripts directly:**
 
-`codeflow test --mode full --coverage` is the sole entry point. It routes internally to all configured test targets with coverage enforcement. Do NOT invoke individual test runners or language-specific coverage tools directly — the unified command handles all of this.
+`codeflow test --mode full` is the sole entry point. It routes internally to all configured test targets with coverage enforcement. Do NOT invoke individual test runners or language-specific coverage tools directly — the unified command handles all of this.
 
 Coverage enforcement is per-target with per-file thresholds. Coverage below the configured threshold per file is a build failure — treat as a FAIL finding. Exception lists are in `test-config.json` (conventions.exceptions[]). Load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for target-specific coverage tooling details.
 
-🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full --coverage` output includes per-file coverage for all modified/created source files matching configured test targets. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
+🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full` output includes per-file coverage for all modified/created source files matching configured test targets. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
 
 #### Step 3: Run Targeted Tests
 
 If changes are scoped to specific components, pass the category flag through the unified command:
 
 ```text
-codeflow test --mode full --coverage --category {category}
+codeflow test --mode full --category {category}
 ```
 
 #### Step 4: Verify Acceptance Criteria
@@ -258,7 +258,7 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 #### 1. Overall Test Pass Status
 
-- Command: `codeflow test --mode full --coverage`
+- Command: `codeflow test --mode full`
 - Result: {n} passed, 0 failed, 0 skipped
 - New tests added: {n}
 - Runs: {n} consecutive clean runs (minimum 2)
@@ -269,7 +269,7 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 #### 2. Overall Coverage
 
-> Coverage data is produced by `codeflow test --mode full --coverage`. Do not run coverage commands directly.
+> Coverage data is produced by `codeflow test --mode full`. Do not run coverage commands directly.
 
 | Target | Coverage | Threshold | Status |
 |--------|----------|-----------|--------|
@@ -314,7 +314,7 @@ QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 
 🔒 **Mandatory three-part coverage reporting:**
 
-1. **Overall Test Pass Status** — `codeflow test --mode full --coverage` result with per-target breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
+1. **Overall Test Pass Status** — `codeflow test --mode full` result with per-target breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
 2. **Overall Coverage** — per-target coverage across all configured test targets. Any file below its configured threshold that is not in the exception list = QA FAIL. The Exempted Files table must list ALL entries from `test-config.json` `conventions.exceptions[]` — not just files modified in this session — with coverage %, configured threshold, and reason.
 3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= the configured threshold. Missing coverage data = QA FAIL.
 
@@ -595,7 +595,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 - [ ] 🔒 **Structural validation passed:** All 7 checks from Section 5.2 performed BEFORE test execution
 - [ ] 🔒 **Functional testing verified:** Tests exercise real code, not mocks of code under test (Section 5.5)
-- [ ] 🔒 **Full test suite executed:** `codeflow test --mode full --coverage` ran to completion — all configured test targets passed with coverage thresholds met
+- [ ] 🔒 **Full test suite executed:** `codeflow test --mode full` ran to completion — all configured test targets passed with coverage thresholds met
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails
@@ -623,7 +623,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Tests deterministic:** Ran twice, same results both times
 - [ ] 🔒 **Tests independent:** No ordering dependencies, proper setup/teardown, no shared mutable state
 - [ ] 🔒 **Shell tests executable:** `chmod +x` applied to all new `.sh` test files
-- [ ] 🔒 **Test suite passes:** `codeflow test --mode full --coverage` returns zero failures across all suites
+- [ ] 🔒 **Test suite passes:** `codeflow test --mode full` returns zero failures across all suites
 - [ ] 🔒 **Linting clean:** Lint and format checks clean per the applicable language standards skill
 - [ ] 🔒 **Commit format ready:** Conventional commit message prepared for cf-git-operations
 - [ ] 🔒 **Scope compliance:** No changes outside assigned task scope
@@ -637,7 +637,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Python Standards | `.claude/skills/cf-python-standards/SKILL.md` | Load when working on Python targets |
 | Rust Standards | `.claude/skills/cf-rust-standards/SKILL.md` | Load when working on Rust targets |
 | CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, QA retry limits |
-| Test Runner | `codeflow test --mode full --coverage` | Always — unified test execution, all suites, full coverage |
+| Test Runner | `codeflow test --mode full` | Always — unified test execution, all suites, full coverage |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell assertion library (40+ functions) |
 | Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Always — isolated repo root for tests |
 | Test Config | `.codeflow/testing/test-config.json` | Always — test registration |

@@ -40,6 +40,9 @@ Scope: 4 implementation tasks (TSK-002 through TSK-005), ~3,000 lines of new Rus
 - [17. Migration Plan](#17-migration-plan)
 - [18. Risks & Mitigations](#18-risks--mitigations)
 - [19. References](#19-references)
+- [20. Dual-Config Architecture](#20-dual-config-architecture)
+- [21. Zero-Coverage File Detection](#21-zero-coverage-file-detection)
+- [22. Parallel Worktree Path Safety](#22-parallel-worktree-path-safety)
 
 ## 3. Problem Statement
 
@@ -459,7 +462,7 @@ Modes are **optional per target**. A target that only defines `full` will be ski
 - `codeflow test --only <target>` runs only the named target (comma-separated for multiple).
 - `codeflow test --skip <target>` runs everything except the named target.
 - `codeflow test --mode <quick|essential|full>` selects the mode. Default: `essential`.
-- `codeflow test --coverage` enables coverage collection (orthogonal to mode; required alongside `--mode full` for the WS-QA gate).
+- Coverage collection is configured per-target in `.codeflow/config/testing/test-config.json` (`coverage.format`, `coverage.rules`, `coverage.exceptions`). Full-mode runs apply per-file thresholds automatically — there is no CLI flag to toggle coverage.
 
 [↑ TOC](#2-table-of-contents)
 
@@ -549,7 +552,7 @@ When only JUnit is available and not derived to CTRF, §4 still works (JUnit has
 
 ### 11.4 Authoring policy and output contract
 
-The PR body's Test Results section is **populated verbatim by `codeflow test --mode full --coverage` structured output**. Teammates do not compose coverage numbers by hand. When a subsequent push modifies the branch, cf-git-operations re-runs `codeflow test --mode full --coverage` and replaces the Test Results section in the open PR body. This is an invariant of the gh-pr-guard hook: PR body must contain `## Test Results` with all required sub-section headings present (or the single-line no-tests notice).
+The PR body's Test Results section is **populated verbatim by `codeflow test --mode full` structured output**. Teammates do not compose coverage numbers by hand. When a subsequent push modifies the branch, cf-git-operations re-runs `codeflow test --mode full` and replaces the Test Results section in the open PR body. This is an invariant of the gh-pr-guard hook: PR body must contain `## Test Results` with all required sub-section headings present (or the single-line no-tests notice).
 
 **Dual output contract** — the engine emits two orthogonal representations of every run:
 
@@ -581,7 +584,7 @@ cf-git-operations consumes the Markdown block, NOT the JSON — the Markdown is 
 ```text
 $ codeflow test
 No test targets configured. Run `codeflow test setup` to add targets.
-$ codeflow test --mode full --coverage
+$ codeflow test --mode full
 No test targets configured. Run `codeflow test setup` to add targets.
 ```
 
@@ -622,7 +625,7 @@ No test targets configured. Run `codeflow test setup` to add targets.
 
 ```text
 $ codeflow test --mode essential        # pnpm test runs in packages/web; CTRF parsed directly
-$ codeflow test --mode full --coverage  # adds coverage parsing; PR body populated
+$ codeflow test --mode full             # adds coverage parsing; PR body populated
 ```
 
 ### 12.3 Scenario C — Go (std test + go-ctrf-json-reporter)
@@ -700,7 +703,7 @@ Alternative: use `gotestsum --format=standard-verbose --junitfile=out.xml`, set 
 **Commands:**
 
 ```text
-$ codeflow test --mode full --coverage          # all three run in parallel
+$ codeflow test --mode full                     # all three run in parallel
 $ codeflow test --mode essential --only web     # only web target
 $ codeflow test --mode essential --skip tools   # api + web, skip tools
 ```
@@ -821,12 +824,15 @@ USAGE:
 
 OPTIONS:
     --mode <mode>         quick | essential | full  (default: essential)
-    --coverage            Enable coverage collection and enforcement
     --only <targets>      Comma-separated target names to run (exclusive of others)
     --skip <targets>      Comma-separated target names to skip
-    --report              Print the last saved report (exit immediately)
     --format <fmt>        Output format: human | json  (default: human)
     --fail-fast           Override config; stop on first target failure
+
+Coverage enforcement is driven by `.codeflow/config/testing/test-config.json`
+(`coverage.rules`, `coverage.exceptions`). `--mode full` applies per-file
+thresholds automatically; there is no CLI flag to toggle coverage. Saved
+reports are viewed via `codeflow test report show [--format human|json] [--run-id <id>]`.
 
 EXIT CODES:
     0   All targets passed, all coverage thresholds met
@@ -1037,7 +1043,7 @@ Added as acceptance criteria in TSK-002.
 
 ### 16.4 Autorun implications
 
-Autorun workers each run in their own worktree; each worker's `codeflow test --mode full --coverage` runs its target set in isolation. Concurrent workers do not share test-report state. Merge-queue PR creation reads each worker's ledger events to populate the PR body.
+Autorun workers each run in their own worktree; each worker's `codeflow test --mode full` runs its target set in isolation. Concurrent workers do not share test-report state. Merge-queue PR creation reads each worker's ledger events to populate the PR body.
 
 [↑ TOC](#2-table-of-contents)
 
@@ -1050,7 +1056,7 @@ Autorun workers each run in their own worktree; each worker's `codeflow test --m
 | 1 | TSK-002 | Engine lands: config loader, JUnit parser, CTRF model, coverage parsers, threshold engine, PR-body emitter, new `codeflow test` subcommands. Old `codeflow test` path remains as fallback during self-host migration. |
 | 2 | TSK-003 | Setup wizard + doctor + template library. |
 | 3 | TSK-004 | Claude artifact rewrite: CLAUDE.md, cf-quality-assurance, cf-development, cf-review, cf-git-operations, commands, gh-pr-guard target-awareness. |
-| 4 | TSK-005 | Self-host migration. Author CodeFlow's own `test-config.json` (Scenario F). Add `codeflow-cli/.config/nextest.toml` with a `full` profile and `junit.path` set. Migrate the six existing coverage exceptions 1:1 into the new config's `exceptions[]`. Run `codeflow test --mode full --coverage` and compare PR body output to the previous engine's output — byte-equivalent for the test-pass-status and coverage tables. Delete the old Rust-specific hardcodes from `TestValidator::full_validate`. Add `.state/test-reports/` and `.state/coverage/` to root `.gitignore`. |
+| 4 | TSK-005 | Self-host migration. Author CodeFlow's own `test-config.json` (Scenario F). Add `codeflow-cli/.config/nextest.toml` with a `full` profile and `junit.path` set. Migrate the six existing coverage exceptions 1:1 into the new config's `exceptions[]`. Run `codeflow test --mode full` and compare PR body output to the previous engine's output — byte-equivalent for the test-pass-status and coverage tables. Delete the old Rust-specific hardcodes from `TestValidator::full_validate`. Add `.state/test-reports/` and `.state/coverage/` to root `.gitignore`. |
 
 ### 17.2 Rollback posture
 
@@ -1117,5 +1123,204 @@ The current `codeflow-cli/config/testing/test-config.json` moves to `.codeflow/c
 - **Shadow testing architecture (prior art):** [./shadow-testing-architecture.md](./shadow-testing-architecture.md)
 - **Worktree path resolution:** `codeflow-cli/core/src/worktree/paths.rs` — `WorktreePaths`
 - **Current Rust test-config:** `codeflow-cli/config/testing/test-config.json` — to be replaced
+
+[↑ TOC](#2-table-of-contents)
+
+## 20. Dual-Config Architecture
+
+CodeFlow currently ships two `test-config.json` files that serve different subsystems. Understanding both is essential for contributors adding test coverage or modifying the testing infrastructure.
+
+### 20.1 `.codeflow/testing/test-config.json` (shell structural checker)
+
+**Location:** `.codeflow/testing/test-config.json`
+
+**Schema version:** `2.0.0` (local schema at `.codeflow/testing/test-config.schema.json`)
+
+**Purpose:** Controls the shell-based structural checker — a priority-driven test orchestrator that invokes individual `.sh` test scripts. This config is read and executed exclusively by the Bash scripts in `.codeflow/testing/`, primarily `run-all-tests.sh`.
+
+**Schema shape (top-level keys):**
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `priorities` | object | Groupings of test scripts by CRITICAL / HIGH / MEDIUM / LOW |
+| `modes` | object | Which priority groups run under `essential`, `standard`, or `full` |
+| `categories` | object | Directory-to-description mapping for test script organization |
+| `pre_commit` | object | Pre-commit hook behavior (default mode, env override, consistency check) |
+| `cli` | object | CLI-level overrides (allow priority filter, mode override) |
+| `parallel` | object | Parallel job limit and progress style |
+| `coverage_enforcement` | object | Shell-level coverage: structural threshold (85%), `kcov` is informational only |
+| `reporting` | object | Output directory, formats, retention days |
+
+**When it is read:** Whenever a shell-based test runner is invoked directly — typically by the git pre-commit hook, CI pipelines calling `run-all-tests.sh`, or any direct invocation of scripts under `.codeflow/testing/`. The `codeflow test` binary does NOT read this file.
+
+**What it tests:** Shell scripts, security protection scripts, git hooks, consistency checks, and Rust CLI bridge tests (the `cli/rust/test-rust-cli.sh` bridge, which itself calls into the Rust crate test suite).
+
+### 20.2 `.codeflow/config/testing/test-config.json` (generic engine, canonical)
+
+**Location:** `.codeflow/config/testing/test-config.json`
+
+**Schema version:** `1.0` (JSON Schema at `.codeflow/schemas/test-config.schema.json`)
+
+**Purpose:** The declarative configuration for the generic testing engine — the one read and executed by the `codeflow test` CLI binary (implemented in `codeflow-cli/core/src/testing/`). This is the canonical post-migration config introduced by INF-EPC-046 (PR #293).
+
+**Schema shape (top-level keys):**
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `schema_version` | string | Required; must be `1.0`; engine rejects unknown versions |
+| `execution` | object | `parallel` (bool) and `fail_fast` (bool) across targets |
+| `defaults` | object | Default `coverage[]` rules applied when a target omits them |
+| `targets` | array | Ordered list of test targets; each fully specifies its runner, modes, report, and coverage config |
+
+**When it is read:** By `codeflow test [--mode <m>]` (the Rust CLI binary). The config is loaded by `codeflow-cli/core/src/testing/config/mod.rs` at invocation time and drives the entire pipeline: runner dispatch, report parsing, coverage threshold evaluation, and PR body generation. Coverage enforcement is driven by config rules, not a CLI flag.
+
+**What it tests:** Rust workspace (via cargo nextest + llvm-cov), shell scripts (via `run-all-tests.sh` as a `custom` runner target), and any additional targets added by adopters.
+
+### 20.3 Why both exist
+
+The two configs coexist because they target architecturally separate concerns:
+
+| Dimension | Shell structural checker (`.codeflow/testing/test-config.json`) | Generic engine (`.codeflow/config/testing/test-config.json`) |
+|-----------|----------------------------------------------------------------|--------------------------------------------------------------|
+| Caller | `bash run-all-tests.sh` | `codeflow test` CLI binary |
+| Language | Bash (interpreted) | Rust (compiled) |
+| Test scope | Shell scripts, hooks, consistency | Multi-target, multi-language |
+| Coverage | Structural: "does every script have a test file?" | Quantitative: per-file line-hit thresholds via lcov/cobertura/etc. |
+| Report format | Custom JSON (priority-driven result set) | CTRF-shaped canonical model |
+| Protection | Unprotected (shell caller reads it) | Protected: `.codeflow/config/**` in `enforcement-policy.json` — all mutations via `codeflow test config` CLI |
+
+The shell checker predates the generic engine. It filled the gap during CodeFlow's bootstrap era when a compiled test engine did not exist. The generic engine (INF-EPC-046) is the strategic replacement.
+
+### 20.4 Convergence plan
+
+The shell structural checker is a **legacy holdover**. The roadmap calls for its responsibilities to be absorbed into the generic engine:
+
+1. **Near term (current epic, completed):** The generic engine covers the Rust and shell-script test targets via `test-config.json`. The shell checker continues to run for structural coverage and git-hook integration.
+2. **Medium term:** Once the generic engine gains coverage-format support for shell coverage reports (or a reliable structural-check target), the shell checker can be retired. This requires the `run-all-tests.sh` output to be consumable by the generic engine (e.g., as a CTRF emitter).
+3. **Retirement condition:** When `codeflow test --mode full` produces equivalent structural coverage results to the shell checker, remove `.codeflow/testing/test-config.json` and its schema, and update the pre-commit hook to invoke `codeflow test` exclusively.
+
+Until retirement, both files must be kept in sync for the test targets they share (the shell-scripts target). Changes to shell test file organization should be reflected in both configs.
+
+[↑ TOC](#2-table-of-contents)
+
+## 21. Zero-Coverage File Detection
+
+### 21.1 Behavior
+
+Files with no coverage data in the coverage report (e.g., absent from `lcov.info`) are **silently skipped** by the threshold engine. They do not appear in `ThresholdResult` output, are not counted as passing or failing, and do not appear in the PR body's Modified File Coverage table.
+
+This behavior originates in `codeflow-cli/core/src/testing/validation.rs` in the `parse_target_coverage` function. The function checks whether the coverage file path exists before parsing:
+
+```rust
+// validation.rs — parse_target_coverage
+let cov_path = match &run_result.coverage_path {
+    Some(p) if p.exists() => p,
+    _ => return Ok(Vec::new()),  // <-- empty vec if file absent
+};
+```
+
+An absent file returns an empty `Vec<FileCoverage>`. The threshold engine in `codeflow-cli/core/src/testing/threshold/mod.rs` (`evaluate_file_thresholds`) iterates only over files present in that vec:
+
+```rust
+// threshold/mod.rs — evaluate_file_thresholds
+for cov in coverages {
+    // files absent from lcov.info are never in `coverages`
+    // → no ThresholdResult is generated for them
+}
+```
+
+The consequence: a production file that is never executed by any test will not appear in `lcov.info`. The threshold engine will not generate a failing `ThresholdResult` for it. The file is invisible to coverage enforcement.
+
+### 21.2 Workaround
+
+To make a zero-coverage file visible to enforcement, add it to the `exceptions` list in `.codeflow/config/testing/test-config.json` with an explicit `threshold: 0`:
+
+```json
+{
+  "file": "core/src/my_new_module.rs",
+  "threshold": 0,
+  "reason": "No tests written yet — module is unreachable until TSK-XXX wires it in",
+  "remove_when": "First test for this module is written"
+}
+```
+
+This records the deliberate absence in the PR body's Exempted Files section and signals reviewers that coverage is intentionally deferred. Use `codeflow test exceptions add` rather than editing the config directly:
+
+```bash
+codeflow test exceptions add \
+  --target rust-core \
+  --file core/src/my_new_module.rs \
+  --threshold 0 \
+  --reason "No tests written yet — module is unreachable until TSK-XXX wires it in" \
+  --remove-when "First test for this module is written"
+```
+
+### 21.3 Author guidance
+
+The silent-skip behavior creates a coverage blind spot: a production file can exist, contain logic, and receive zero test coverage without triggering any enforcement failure. Authors must be diligent:
+
+- **New modules:** Add a zero-threshold exception immediately when a new source file is created if tests are deferred. This makes the absence explicit and visible in PRs.
+- **Exceptions are temporary:** Every exception must have a concrete `remove_when` condition. Exceptions without a removal path accumulate silently and erode the value of coverage enforcement over time.
+- **Exception audit:** `codeflow test exceptions list` shows all current exceptions across all targets. Review this list during epic planning to identify exceptions ready for removal.
+- **Zero is not free:** A `threshold: 0` exception is not a statement that the file needs no tests — it is a statement that tests are deferred and the exception will be removed when tests are added.
+
+The user directive on coverage exceptions applies: exhaust coverage before lowering thresholds. Add tests for all pure functions in a file before recording an exception for the remaining untestable paths.
+
+[↑ TOC](#2-table-of-contents)
+
+## 22. Parallel Worktree Path Safety
+
+### 22.1 Guarantee
+
+`report.path` and `coverage.path` values in `.codeflow/config/testing/test-config.json` are resolved **relative to the target's `cwd`**, which is itself resolved relative to the **per-worktree project root** (`project_dir`). This means every test artifact path is local to the worktree that ran the test — not to any shared `.state/` directory.
+
+Two concurrent autorun workers running `codeflow test --mode full` in separate worktrees:
+
+- Produce coverage files at `<worktree-A>/<cwd>/lcov.info` and `<worktree-B>/<cwd>/lcov.info` respectively.
+- Produce report files at `<worktree-A>/<cwd>/target/nextest/full/junit.xml` and `<worktree-B>/<cwd>/target/nextest/full/junit.xml` respectively.
+- Never read or write each other's artifacts.
+
+### 22.2 Resolution logic
+
+The path resolution is implemented in `codeflow-cli/core/src/testing/runner/mod.rs`:
+
+```rust
+// runner/mod.rs — run_target
+let cwd = resolve_cwd(project_dir, target.cwd.as_deref())?;
+
+let report_path = target.report.as_ref().map(|r| cwd.join(&r.path));
+let coverage_path = target.coverage.as_ref().map(|c| cwd.join(&c.path));
+```
+
+Where `cwd` is `project_dir / target.cwd`. In worktree mode, `project_dir` is the per-worktree root (the path in `.git-worktrees/worktree-{SID}/`). This means:
+
+- `project_dir` is worktree-local and unique per session.
+- `cwd` is `project_dir + target.cwd` — still worktree-local.
+- All artifact paths derived from `cwd` are therefore per-worktree, never shared.
+
+The `parse_target_coverage` function in `validation.rs` receives `run_result.coverage_path` (already fully resolved by the runner) and strips the `cwd_dir` prefix for exception matching:
+
+```rust
+// validation.rs — parse_target_coverage (path normalization)
+if let Some(cwd_dir) = run_result.coverage_path.as_ref().and_then(|p| p.parent()) {
+    for cov in &mut coverages {
+        if let Ok(relative) = std::path::Path::new(&cov.path).strip_prefix(cwd_dir) {
+            cov.path = relative.to_string_lossy().to_string();
+        }
+    }
+}
+```
+
+This normalization converts absolute paths from the coverage tool (e.g., `llvm-cov` reports absolute source paths) to paths relative to the target `cwd`. Exception entries in `test-config.json` must use these cwd-relative paths (e.g., `core/src/autorun/worker.rs`, not an absolute path).
+
+### 22.3 Author guidance for `test-config.json` adopters
+
+When authoring or modifying `test-config.json` for a new target:
+
+- **`report.path` must be relative to the target's `cwd`.** Do not use absolute paths or paths that reach outside the `cwd` subtree. `../` traversal is rejected by `codeflow test doctor`.
+- **`coverage.path` must be relative to the target's `cwd`.** The coverage file is generated by the test runner command in `cwd`; declare its output path accordingly. For the Rust target, `lcov.info` is generated in `codeflow-cli/` (the `cwd`), so `coverage.path: "lcov.info"` resolves to `<worktree>/codeflow-cli/lcov.info`.
+- **`coverage.exceptions[].file` paths must be cwd-relative.** Exception matching uses the normalized path after stripping `cwd_dir`. For the Rust target with `cwd: "codeflow-cli"`, the exception path `core/src/autorun/worker.rs` is correct; `codeflow-cli/core/src/autorun/worker.rs` would NOT match.
+- **Do not reference `.state/` in artifact paths.** Test artifacts belong in the target's `cwd` subtree, not in `.state/`. The engine's ledger event and PR body use `.state/` internally, but those paths are managed by the engine, not by `test-config.json`.
+- **Parallel autorun safety is automatic** if these rules are followed. The worktree isolation is structural: as long as artifact paths are cwd-relative, multiple workers writing to the same `test-config.json` settings will write to their own worktree copies of those paths.
 
 [↑ TOC](#2-table-of-contents)

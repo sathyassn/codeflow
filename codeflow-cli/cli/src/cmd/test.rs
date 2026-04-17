@@ -42,16 +42,6 @@ pub struct TestArgs {
     #[arg(long, value_enum)]
     pub mode: Option<TestMode>,
 
-    /// Legacy flag, accepted for backwards compatibility. Coverage is now
-    /// controlled by mode commands in test-config.json.
-    #[arg(long)]
-    pub coverage: bool,
-
-    /// Legacy flag, accepted for backwards compatibility. Use the `report show`
-    /// subcommand instead.
-    #[arg(long)]
-    pub report: bool,
-
     /// Output format.
     #[arg(long, value_enum, default_value = "human")]
     pub format: OutputFormat,
@@ -310,8 +300,6 @@ pub fn run(args: Option<TestArgs>) -> Result<()> {
     let project_dir = helpers::detect_project_dir()?;
     let args = args.unwrap_or(TestArgs {
         mode: None,
-        coverage: false,
-        report: false,
         format: OutputFormat::Human,
         only: None,
         skip: None,
@@ -399,6 +387,21 @@ fn run_new_engine(
         }
     }
 
+    // Detect changed files relative to the configured base ref.
+    // Base ref resolution (first non-empty wins):
+    //   1. CODEFLOW_COVERAGE_BASE_REF env var (operator override)
+    //   2. `git merge-base HEAD origin/main` (branch-wide diff from default-branch fork point)
+    //   3. Literal "HEAD~1" (last-commit fallback when no origin/main or git unavailable)
+    // On any git error during the `diff --name-only` call itself,
+    // `detect_changed_files` returns an empty vec — Section 3 (Modified File
+    // Coverage) then renders as "no modified files detected", which is the
+    // correct degraded behaviour for fresh repos or detached HEAD.
+    let base_ref = std::env::var("CODEFLOW_COVERAGE_BASE_REF")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| validation::default_base_ref(project_dir));
+    let changed_files = validation::detect_changed_files(project_dir, &base_ref);
+
     // Step 1: Run all targets
     let results = runner::run_all_targets(
         &config.targets,
@@ -443,7 +446,11 @@ fn run_new_engine(
         }
     }
 
-    // Steps 2-3: Parse reports + coverage, evaluate thresholds
+    // Steps 2-3: Parse reports + coverage, evaluate thresholds.
+    // `parse_target_coverage` returns an empty vec when the coverage artifact
+    // is missing (e.g., `essential` mode, fresh setup, coverage disabled),
+    // producing graceful degradation in the rendered PR body ("no coverage
+    // data collected") rather than a hard error.
     let mut post_data: Vec<validation::TargetPostData> = Vec::new();
     let mut any_threshold_failure = false;
 
@@ -456,11 +463,15 @@ fn run_new_engine(
         let file_coverages = validation::parse_target_coverage(target_config, run_result)
             .map_err(|e| anyhow::anyhow!("coverage parse error for {}: {e}", target_config.name))?;
 
-        // Evaluate thresholds (empty changed_files — PR body handles modified files separately)
+        // Evaluate thresholds — `changed_files` feeds `ChangedFiles`-scoped
+        // rules and Section 3 of the rendered PR body.
         let threshold_results =
-            validation::evaluate_target_thresholds(target_config, &file_coverages, &[]);
+            validation::evaluate_target_thresholds(target_config, &file_coverages, &changed_files);
 
-        if threshold_results.iter().any(|r| !r.pass) {
+        if threshold_results
+            .iter()
+            .any(|r| !r.pass && !r.exception_applied)
+        {
             any_threshold_failure = true;
         }
 
@@ -475,8 +486,8 @@ fn run_new_engine(
         });
     }
 
-    // Step 4: Render PR body
-    let pr_body = validation::render_full_pr_body(&post_data, &[], 1);
+    // Step 4: Render PR body (Section 3 picks up per-file rows for changed files)
+    let pr_body = validation::render_full_pr_body(&post_data, &changed_files, 1);
     println!("{pr_body}");
 
     // Step 5: Write test report
@@ -491,8 +502,8 @@ fn run_new_engine(
         eprintln!("warning: failed to write test report: {e}");
     }
 
-    // Step 6: Emit ledger event
-    validation::emit_ledger_event(project_dir, &run_id, &post_data);
+    // Step 6: Emit ledger event (includes per-target coverage audit fields)
+    validation::emit_ledger_event(project_dir, &run_id, &post_data, &changed_files);
 
     // Step 7: Exit code — fail if tests or thresholds failed
     if any_test_failure {
@@ -523,10 +534,9 @@ fn run_new_engine(
 /// Report subcommand dispatch.
 fn run_report_subcommand(project_dir: &Path, command: &ReportCommand) -> Result<()> {
     match command {
-        ReportCommand::Show {
-            run_id: _,
-            format: _,
-        } => run_report_show(project_dir),
+        ReportCommand::Show { run_id, format } => {
+            run_report_show(project_dir, run_id.as_deref(), format)
+        }
         ReportCommand::Convert {
             from,
             to,
@@ -1049,24 +1059,119 @@ fn toggle_target(config_path: &Path, target: &str, enabled: bool) -> Result<()> 
     Ok(())
 }
 
-/// Print the last saved test report.
-fn run_report_show(project_dir: &Path) -> Result<()> {
+/// Print a saved test report.
+///
+/// When `run_id` is `Some`, the matching `{run_id}.json` is loaded; otherwise
+/// the most recently modified `.json` report is used. The `format` argument
+/// controls presentation: `Json` emits the raw report as indented JSON,
+/// `Human` emits a readable per-target table.
+fn run_report_show(project_dir: &Path, run_id: Option<&str>, format: &OutputFormat) -> Result<()> {
     let report_dir = project_dir.join(".state").join("test-reports");
     if !report_dir.exists() {
         anyhow::bail!("no test reports found at {}", report_dir.display());
     }
-    // Find the most recent report file
-    let mut entries: Vec<_> = std::fs::read_dir(&report_dir)?
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
-        .collect();
-    entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
-    let latest = entries
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("no test report files found"))?;
-    let content = std::fs::read_to_string(latest.path())?;
-    println!("{content}");
+
+    let report_path = if let Some(id) = run_id {
+        let path = report_dir.join(format!("{id}.json"));
+        if !path.exists() {
+            anyhow::bail!(
+                "no test report found for run-id '{id}' at {}",
+                path.display()
+            );
+        }
+        path
+    } else {
+        let mut entries: Vec<_> = std::fs::read_dir(&report_dir)?
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        entries
+            .sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+        entries
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no test report files found"))?
+            .path()
+    };
+
+    let content = std::fs::read_to_string(&report_path)?;
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("failed to parse report at {}: {e}", report_path.display()))?;
+
+    match format {
+        OutputFormat::Json => {
+            let pretty = serde_json::to_string_pretty(&parsed)?;
+            println!("{pretty}");
+        }
+        OutputFormat::Human => {
+            render_report_human(&parsed);
+        }
+    }
+
     Ok(())
+}
+
+/// Render a test report summary as a human-readable table.
+fn render_report_human(report: &serde_json::Value) {
+    let run_id = report
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
+    let timestamp = report
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
+
+    println!("Test report");
+    println!("  run_id:    {run_id}");
+    println!("  timestamp: {timestamp}");
+    println!();
+
+    let targets = report
+        .get("targets")
+        .and_then(|v| v.as_array())
+        .map_or(&[][..], Vec::as_slice);
+
+    if targets.is_empty() {
+        println!("  (no target data)");
+        return;
+    }
+
+    println!(
+        "{:<20} {:>8} {:>8} {:>10} {:>10} {:>10}",
+        "Target", "Exit", "Duration", "Passed", "Failed", "Coverage"
+    );
+    println!("{}", "-".repeat(70));
+
+    for t in targets {
+        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("<?>");
+        let exit = t
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        let duration_ms = t
+            .get("duration_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let passed = t
+            .get("summary")
+            .and_then(|s| s.get("passed"))
+            .and_then(serde_json::Value::as_u64)
+            .map_or_else(|| "--".to_string(), |n| n.to_string());
+        let failed = t
+            .get("summary")
+            .and_then(|s| s.get("failed"))
+            .and_then(serde_json::Value::as_u64)
+            .map_or_else(|| "--".to_string(), |n| n.to_string());
+        let coverage = t
+            .get("coverage_percent")
+            .and_then(serde_json::Value::as_f64)
+            .map_or_else(|| "N/A".to_string(), |p| format!("{p:.1}%"));
+
+        println!(
+            "{name:<20} {exit:>8} {:>7.1}s {passed:>10} {failed:>10} {coverage:>10}",
+            duration_ms as f64 / 1000.0
+        );
+    }
 }
 
 /// Convert between report formats.
@@ -1099,8 +1204,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1124,8 +1227,6 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1156,8 +1257,6 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1720,8 +1819,6 @@ mod tests {
 
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1757,8 +1854,6 @@ mod tests {
 
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1774,8 +1869,6 @@ mod tests {
     fn make_args_with_subcommand(sub: TestSubcommand) -> TestArgs {
         TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -1916,7 +2009,7 @@ mod tests {
     #[test]
     fn test_report_show_no_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_report_show(dir.path());
+        let result = run_report_show(dir.path(), None, &OutputFormat::Human);
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains("no test reports"),
@@ -1928,7 +2021,7 @@ mod tests {
     fn test_report_show_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".state/test-reports")).unwrap();
-        let result = run_report_show(dir.path());
+        let result = run_report_show(dir.path(), None, &OutputFormat::Human);
         assert!(result.is_err());
         assert!(
             result
@@ -1940,17 +2033,87 @@ mod tests {
     }
 
     #[test]
-    fn test_report_show_with_report() {
+    fn test_report_show_with_report_human() {
         let dir = tempfile::tempdir().unwrap();
         let report_dir = dir.path().join(".state/test-reports");
         std::fs::create_dir_all(&report_dir).unwrap();
         std::fs::write(
             report_dir.join("run-001.json"),
-            r#"{"run_id":"run-001","targets":[]}"#,
+            r#"{"run_id":"run-001","timestamp":"2026-04-16","targets":[]}"#,
         )
         .unwrap();
-        let result = run_report_show(dir.path());
-        assert!(result.is_ok());
+        let result = run_report_show(dir.path(), None, &OutputFormat::Human);
+        assert!(result.is_ok(), "human format should succeed: {result:?}");
+    }
+
+    #[test]
+    fn test_report_show_with_report_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join(".state/test-reports");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(
+            report_dir.join("run-002.json"),
+            r#"{"run_id":"run-002","targets":[{"name":"rust","exit_code":0,"duration_ms":1500}]}"#,
+        )
+        .unwrap();
+        let result = run_report_show(dir.path(), None, &OutputFormat::Json);
+        assert!(result.is_ok(), "json format should succeed: {result:?}");
+    }
+
+    #[test]
+    fn test_report_show_run_id_filter_hits() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join(".state/test-reports");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(
+            report_dir.join("run-a.json"),
+            r#"{"run_id":"run-a","targets":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            report_dir.join("run-b.json"),
+            r#"{"run_id":"run-b","targets":[]}"#,
+        )
+        .unwrap();
+        // Should find the specific run by id, not the most recent one.
+        let result = run_report_show(dir.path(), Some("run-a"), &OutputFormat::Json);
+        assert!(result.is_ok(), "run-id filter should succeed: {result:?}");
+    }
+
+    #[test]
+    fn test_report_show_run_id_filter_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join(".state/test-reports");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(
+            report_dir.join("run-a.json"),
+            r#"{"run_id":"run-a","targets":[]}"#,
+        )
+        .unwrap();
+        let result = run_report_show(dir.path(), Some("run-missing"), &OutputFormat::Human);
+        assert!(result.is_err(), "missing run-id must return error");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no test report found for run-id 'run-missing'"),
+            "error must mention the missing run-id"
+        );
+    }
+
+    #[test]
+    fn test_report_show_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join(".state/test-reports");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("bad.json"), "not json").unwrap();
+        let result = run_report_show(dir.path(), None, &OutputFormat::Json);
+        assert!(result.is_err(), "invalid JSON must surface a parse error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("failed to parse report"),
+            "error must mention parse failure; got: {msg}"
+        );
     }
 
     // ── toggle_target tests ─────────────────────────────────────────────
@@ -2035,8 +2198,6 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: None,
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2066,8 +2227,6 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2101,8 +2260,6 @@ mod tests {
         .unwrap();
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: None,
@@ -2134,8 +2291,6 @@ mod tests {
         // --only=a should skip the failing target b
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: Some("a".to_string()),
             skip: None,
@@ -2148,8 +2303,6 @@ mod tests {
         // --skip=b should also work
         let args = TestArgs {
             mode: Some(TestMode::Essential),
-            coverage: false,
-            report: false,
             format: OutputFormat::Human,
             only: None,
             skip: Some("b".to_string()),

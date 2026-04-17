@@ -224,7 +224,7 @@ pub fn validate_test_results_section(body: &str) -> Vec<String> {
     {
         errors.push(
             "legacy PR body format detected ('## Test Stats'); regenerate via \
-             `codeflow test --mode full --coverage`"
+             `codeflow test --mode full`"
                 .to_string(),
         );
         return errors;
@@ -495,7 +495,7 @@ mod tests {
 
 ## Test Results
 ### 1. Overall Test Pass Status
-- Suite: `codeflow test --mode full --coverage`
+- Suite: `codeflow test --mode full`
 - Result: 500 passed, 0 failed
 
 ### 2. Overall Coverage
@@ -596,7 +596,7 @@ mod tests {
         let errors = validate_test_results_section(body);
         assert!(!errors.is_empty(), "legacy ## Test Stats should fail");
         assert!(
-            errors[0].contains("codeflow test --mode full --coverage"),
+            errors[0].contains("codeflow test --mode full"),
             "error must reference regeneration command; got: {:?}",
             errors[0]
         );

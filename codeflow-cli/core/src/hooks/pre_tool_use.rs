@@ -788,8 +788,9 @@ impl GateCheck {
             }
         }
 
-        // Test validation gate: run `codeflow test --mode full --coverage`
-        // and block push if tests fail or coverage thresholds are not met.
+        // Test validation gate: run `codeflow test --mode full` and block
+        // push if tests fail or coverage thresholds are not met. Coverage is
+        // driven by `test-config.json` mode commands, not a flag.
         if let Some(block) = self.check_test_validation_gate() {
             return block;
         }
@@ -824,7 +825,7 @@ impl GateCheck {
         HookOutput::Allow
     }
 
-    /// Run `codeflow test --mode full --coverage` as a subprocess.
+    /// Run `codeflow test --mode full` as a subprocess.
     /// Returns `Some(Block)` if tests fail; `None` if they pass.
     /// Gracefully skips if the codeflow binary cannot be located.
     fn check_test_validation_gate(&self) -> Option<HookOutput> {
@@ -839,7 +840,7 @@ impl GateCheck {
         }
 
         let output = std::process::Command::new(&exe)
-            .args(["test", "--mode", "full", "--coverage"])
+            .args(["test", "--mode", "full"])
             .current_dir(&self.project_dir)
             .output()
             .ok()?;

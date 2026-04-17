@@ -1,6 +1,6 @@
 ---
 description: "Run test suite and verify coverage"
-argument-hint: "--mode <mode> [--coverage] [--only <target>] [--skip <target>] [--report]"
+argument-hint: "--mode <mode> [--only <target>] [--skip <target>]"
 ---
 
 # /cf-test Command
@@ -27,8 +27,10 @@ Apply cognitive operations throughout execution:
 **Usage:**
 
 ```text
-codeflow test --mode <mode> [--coverage] [--only <target>] [--skip <target>] [--report]
+codeflow test --mode <mode> [--only <target>] [--skip <target>]
 ```
+
+Coverage is driven entirely by `.codeflow/config/testing/test-config.json` per-target rules; there is no CLI flag to toggle it.
 
 **Use When:**
 
@@ -66,25 +68,23 @@ This command takes no positional arguments. Test scope is determined from the cu
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--mode essential\|full` | Test depth: `essential` runs the critical subset; `full` runs all suites including slow integration | required |
-| `--coverage` | Enable coverage collection and enforcement against configured per-target thresholds | false |
 | `--only <target>` | Run only the named target (name must match a target in `test-config.json`) | all targets |
 | `--skip <target>` | Skip the named target and run all others | none skipped |
-| `--report` | Emit a structured CTRF report for downstream consumption | false |
+
+Coverage collection, per-target thresholds, and report format are configured per-target in `.codeflow/config/testing/test-config.json`. There is no CLI flag to toggle coverage — the engine reads `coverage.format`/`coverage.rules`/`report.format` and applies them automatically. A `full` mode run always produces the canonical 5-section PR body; the `report show` subcommand renders saved reports in human or JSON form.
 
 **Test Runner Mode Mapping:**
 
 | Flag Combination | What Runs |
 |-----------------|-----------|
 | `--mode essential` | Essential subset per `test-config.json` modes |
-| `--mode full` | All configured suites including slow integration |
-| `--mode full --coverage` | All suites with per-target coverage enforcement |
-| `--mode full --coverage --report` | Full run + coverage + structured CTRF output |
+| `--mode full` | All configured suites with coverage enforcement + PR-body rendering |
 
 **Examples:**
 
 ```bash
-# Standard QA gate (default — full run with coverage)
-codeflow test --mode full --coverage
+# Standard QA gate (full run with coverage per test-config.json)
+codeflow test --mode full
 
 # Essential subset only (fast check during development)
 codeflow test --mode essential
@@ -95,8 +95,9 @@ codeflow test --mode full --only rust-core
 # Full run, skip one target
 codeflow test --mode full --skip python-tools
 
-# Full run with coverage and structured report
-codeflow test --mode full --coverage --report
+# Inspect the saved report after a run (human table or JSON)
+codeflow test report show --format human
+codeflow test report show --format json
 ```
 
 ---
@@ -117,7 +118,7 @@ codeflow test --mode full --coverage --report
 |-----------|---------|
 | cf-quality-assurance | Test execution and verdict delivery |
 | cf-knowledge-layer | Acceptance criteria lookup, verdict recording |
-| Test runner | `codeflow test --mode full --coverage` |
+| Test runner | `codeflow test --mode full` |
 
 ---
 
@@ -131,7 +132,7 @@ Phase: PF4-EXECUTE | Stage: WS-QA | Teammate: cf-quality-assurance
 /cf-test invoked
     |
     v
-Parse flags (--coverage, --type)
+Parse flags (--mode, --only, --skip)
     |
     v
 Verify WS-REV approved                              [cf-knowledge-layer]
@@ -181,9 +182,8 @@ Next: /cf-ship       Next: /cf-develop
 
 **Step 1: Parse Flags**
 
-- Parse `--coverage` flag (boolean)
-- Parse `--type` flag (unit/integration/e2e/all, default: all)
-- Map to test runner mode (essential/standard/full)
+- Parse `--mode`, `--only`, `--skip` flags (coverage is driven by `test-config.json`, not a CLI flag)
+- Map to test runner mode (essential / full)
 
 **Step 2: Verify Review Approval**
 
@@ -215,9 +215,8 @@ Next: /cf-ship       Next: /cf-develop
     - Mode: WS-QA (read-only verification, source code is NOT to be modified)
     - Acceptance criteria (specific, testable items)
     - Changed files list (for targeted testing)
-    - Test runner mode: `standard` / `essential` / `full`
-    - Coverage flag: include coverage report if requested
-    - `"Run tests using: codeflow test --mode full --coverage"`
+    - Test runner mode: `essential` / `full` (coverage enforcement is always applied in `full` mode per test-config.json — no separate flag to toggle)
+    - `"Run tests using: codeflow test --mode full"`
     - `"Deliver verdict using standard QA verdict format. If FAIL, send specific failure details to cf-development."`
 - Wait for teammate completion message
 
@@ -243,7 +242,7 @@ Next: /cf-ship       Next: /cf-develop
 - Show QA verdict (PASS or FAIL)
 - Show test results: passed/total, failed count, skipped count
 - Show acceptance criteria checklist (met/unmet)
-- Show coverage report (if `--coverage` flag used)
+- Show coverage report (always included in `--mode full` via test-config.json)
 - Show next steps:
   - Pass: "All tests passing. Proceed to PR creation with `/cf-ship`"
   - Fail: "Failures routed to cf-development for fixes. Re-run `/cf-test` after fixes (retry {n}/2)"
@@ -258,7 +257,7 @@ Next: /cf-ship       Next: /cf-develop
 | cf-quality-assurance | qa-quality-gate | Test execution and verdict delivery |
 | cf-quality-assurance | verdict-format | Structured PASS/FAIL report |
 | cf-quality-assurance | retry-behavior | Rework routing on FAIL |
-| cf-quality-assurance | test-runner-modes | Mode selection (essential/standard/full) |
+| cf-quality-assurance | test-runner-modes | Mode selection (essential / full) |
 | cf-knowledge-layer | query-stage-status | Verify WS-REV approved |
 | cf-knowledge-layer | query-acceptance-criteria | Load testable criteria |
 | cf-knowledge-layer | record-verdict | Store QA verdict in WorkGraph |
@@ -294,7 +293,7 @@ Next: /cf-ship       Next: /cf-develop
   - test_passed: count
   - test_failed: count
   - test_total: count
-  - coverage_pct: percentage (if `--coverage` used)
+  - coverage_pct: percentage (always populated for `--mode full` runs)
   - retry: retry iteration number
 
 ### 7.2 Retry Tracking
@@ -361,14 +360,14 @@ ON "Flaky test detected":
 Output:
 
 ```text
-QA Gate: Running standard test suite
+QA Gate: Running essential test suite
 Mode: WS-QA (read-only verification)
-Runner: standard (CRITICAL + HIGH priority)
+Runner: essential (critical subset per test-config.json)
 
 ## QA Verdict
 Verdict: PASS
 Test Results: 547/547 passed, 0 failed, 3 skipped
-Runner Mode: standard
+Runner Mode: essential
 
 Acceptance Criteria:
   [x] OAuth2 provider configuration loads correctly
@@ -380,16 +379,16 @@ Regressions: None detected
 Next: All tests passing. Proceed to PR creation with /cf-ship
 ```
 
-**Example 2: Full Run with Coverage**
+**Example 2: Full Run (coverage enforced automatically via test-config.json)**
 
 ```bash
-/cf-test --type all --coverage
+/cf-test --mode full
 ```
 
 Output:
 
 ```text
-QA Gate: Running full test suite with coverage
+QA Gate: Running full test suite (coverage via test-config.json)
 Mode: WS-QA (read-only verification)
 Runner: full (all priorities)
 
@@ -414,9 +413,9 @@ Next: All tests passing. Proceed to PR creation with /cf-ship
 Output:
 
 ```text
-QA Gate: Running standard test suite
+QA Gate: Running essential test suite
 Mode: WS-QA (read-only verification)
-Runner: standard
+Runner: essential
 
 ## QA Verdict
 Verdict: FAIL
@@ -453,7 +452,7 @@ Next: Fix issues, then re-run /cf-test (retry 1/2)
 - [cf-development agent](../agents/cf-development.md)
 - [cf-working-protocol skill](../skills/cf-working-protocol/SKILL.md)
 - [PathFlow configuration](../../.codeflow/config/pathflow/pathflow-config.json)
-- [Test runner](codeflow test --mode full --coverage) — unified CLI entry point for all suites
+- [Test runner](codeflow test --mode full) — unified CLI entry point for all suites
 - [cf-develop command](cf-develop.md)
 - [cf-review command](cf-review.md)
 - [cf-ship command](cf-ship.md)

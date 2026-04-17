@@ -198,9 +198,10 @@ pub fn render_full_pr_body(
     let modified_file_results: Vec<(String, String, f64, u32, bool)> = targets
         .iter()
         .flat_map(|t| {
+            let scoped = strip_target_cwd_prefix(changed_files, t.target_config.cwd.as_deref());
             t.threshold_results
                 .iter()
-                .filter(|r| changed_files.contains(&r.file))
+                .filter(|r| scoped.iter().any(|f| f == &r.file))
                 .map(|r| {
                     (
                         t.name.clone(),
@@ -210,10 +211,42 @@ pub fn render_full_pr_body(
                         r.pass,
                     )
                 })
+                .collect::<Vec<_>>()
         })
         .collect();
 
     pr_body::render_pr_body(&pr_targets, &modified_file_results, consecutive_clean_runs)
+}
+
+/// Normalise `changed_files` (project-root-relative per `git diff`) to the
+/// target's cwd-relative format so the filter against `ThresholdResult.file`
+/// (which `parse_target_coverage` already stripped to cwd-relative paths)
+/// produces real matches rather than an empty intersection.
+///
+/// Behaviour:
+/// - `target_cwd = None` (target runs at project root) → pass-through.
+/// - File lives under `target_cwd/…` → returned with prefix stripped.
+/// - File lives OUTSIDE `target_cwd/…` → dropped (not in target's scope).
+///
+/// Section 3 (Modified File Coverage) is per-target by design: a docs-only
+/// file changed at the repo root is not a covered artifact for the rust-core
+/// target, so excluding it here is semantically correct.
+fn strip_target_cwd_prefix(changed_files: &[String], target_cwd: Option<&str>) -> Vec<String> {
+    let Some(cwd_rel) = target_cwd else {
+        return changed_files.to_vec();
+    };
+    if cwd_rel.is_empty() || cwd_rel == "." {
+        return changed_files.to_vec();
+    }
+    let prefix = if cwd_rel.ends_with('/') {
+        cwd_rel.to_string()
+    } else {
+        format!("{cwd_rel}/")
+    };
+    changed_files
+        .iter()
+        .filter_map(|f| f.strip_prefix(&prefix).map(String::from))
+        .collect()
 }
 
 /// Write the canonical test report to `.state/test-reports/`.
@@ -293,7 +326,17 @@ pub fn write_test_report(
 ///
 /// Appends a single JSONL line to `.state/ledger/testing-events.jsonl`.
 /// Non-fatal: logs warning on failure but does not propagate errors.
-pub fn emit_ledger_event(project_dir: &Path, run_id: &str, targets: &[TargetPostData]) {
+///
+/// The event payload includes a per-target coverage audit: overall coverage
+/// percentage, per-rule threshold pass/fail counts, exception applications,
+/// and per-file results for modified files. This provides a complete audit
+/// trail for coverage decisions — not just test pass/fail.
+pub fn emit_ledger_event(
+    project_dir: &Path,
+    run_id: &str,
+    targets: &[TargetPostData],
+    changed_files: &[String],
+) {
     let ledger_dir = project_dir.join(".state").join("ledger");
     if std::fs::create_dir_all(&ledger_dir).is_err() {
         eprintln!("warning: cannot create ledger dir");
@@ -308,18 +351,7 @@ pub fn emit_ledger_event(project_dir: &Path, run_id: &str, targets: &[TargetPost
 
     let target_summaries: Vec<serde_json::Value> = targets
         .iter()
-        .map(|t| {
-            let mut s = serde_json::json!({
-                "name": t.name,
-                "exit_code": t.run_result.exit_code,
-                "duration_ms": t.run_result.duration_ms,
-            });
-            if let Some(ref report) = t.report {
-                s["passed"] = serde_json::json!(report.results.summary.passed);
-                s["failed"] = serde_json::json!(report.results.summary.failed);
-            }
-            s
-        })
+        .map(|t| build_target_ledger_summary(t, changed_files))
         .collect();
 
     let event = serde_json::json!({
@@ -329,6 +361,7 @@ pub fn emit_ledger_event(project_dir: &Path, run_id: &str, targets: &[TargetPost
         "overall_pass": overall_pass,
         "targets": target_summaries,
         "duration_ms": total_duration_ms,
+        "changed_files": changed_files,
     });
 
     let ledger_path = ledger_dir.join("testing-events.jsonl");
@@ -355,6 +388,141 @@ pub fn emit_ledger_event(project_dir: &Path, run_id: &str, targets: &[TargetPost
         Err(e) => {
             eprintln!("warning: cannot open ledger file: {e}");
         }
+    }
+}
+
+/// Build a per-target ledger summary with coverage audit fields.
+fn build_target_ledger_summary(
+    target: &TargetPostData,
+    changed_files: &[String],
+) -> serde_json::Value {
+    let mut s = serde_json::json!({
+        "name": target.name,
+        "exit_code": target.run_result.exit_code,
+        "duration_ms": target.run_result.duration_ms,
+    });
+    if let Some(ref report) = target.report {
+        s["passed"] = serde_json::json!(report.results.summary.passed);
+        s["failed"] = serde_json::json!(report.results.summary.failed);
+        s["skipped"] = serde_json::json!(report.results.summary.skipped);
+    }
+
+    // Coverage audit: per-target overall percentage, per-file threshold pass/fail.
+    let total_lines_found: u64 = target.file_coverages.iter().map(|c| c.lines_found).sum();
+    let total_lines_hit: u64 = target.file_coverages.iter().map(|c| c.lines_hit).sum();
+    let coverage_percent = if total_lines_found > 0 {
+        Some(total_lines_hit as f64 / total_lines_found as f64 * 100.0)
+    } else {
+        None
+    };
+    s["coverage_percent"] =
+        coverage_percent.map_or(serde_json::Value::Null, serde_json::Value::from);
+
+    let threshold_passes = target.threshold_results.iter().filter(|r| r.pass).count();
+    let threshold_failures = target
+        .threshold_results
+        .iter()
+        .filter(|r| !r.pass && !r.exception_applied)
+        .count();
+    let exception_applications = target
+        .threshold_results
+        .iter()
+        .filter(|r| r.exception_applied)
+        .count();
+    s["threshold_passes"] = serde_json::json!(threshold_passes);
+    s["threshold_failures"] = serde_json::json!(threshold_failures);
+    s["exception_applications"] = serde_json::json!(exception_applications);
+
+    // Per-file results for the modified-file audit trail.
+    // `changed_files` arrives as project-root-relative paths from `git diff`;
+    // `ThresholdResult.file` is cwd-relative. Strip the target's cwd prefix
+    // so the two path formats align and the filter produces real matches.
+    let scoped_changed =
+        strip_target_cwd_prefix(changed_files, target.target_config.cwd.as_deref());
+    let modified_file_results: Vec<serde_json::Value> = target
+        .threshold_results
+        .iter()
+        .filter(|r| scoped_changed.iter().any(|f| f == &r.file))
+        .map(|r| {
+            serde_json::json!({
+                "file": r.file,
+                "coverage_percent": r.coverage_percent,
+                "threshold": r.threshold,
+                "pass": r.pass,
+                "exception_applied": r.exception_applied,
+            })
+        })
+        .collect();
+    s["modified_file_results"] = serde_json::json!(modified_file_results);
+
+    s
+}
+
+/// Detect files changed relative to a base git ref.
+///
+/// Runs `git diff --name-only {base_ref}` in `project_dir` and returns the
+/// resulting file list (one path per entry, relative to the repo root).
+/// Returns an empty vec on any git error — the caller treats "no changed
+/// files" as a non-fatal condition (e.g., fresh repo, detached HEAD).
+///
+/// The `base_ref` is typically `HEAD~1` but can be any ref (branch, tag,
+/// merge-base marker) the caller configures.
+#[must_use]
+pub fn detect_changed_files(project_dir: &Path, base_ref: &str) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", base_ref])
+        .current_dir(project_dir)
+        .output();
+
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Resolve the default base ref for branch-wide changed-file detection.
+///
+/// Returns `git merge-base HEAD origin/main` when the command succeeds and
+/// emits a non-empty SHA. Falls back to `HEAD~1` when:
+/// - `origin/main` is not available (fresh clone, disconnected work, fork).
+/// - `git` is missing from PATH.
+/// - The merge-base SHA is empty (detached HEAD with no common ancestor).
+///
+/// The merge-base is preferred because it represents the divergence point
+/// from the default branch — i.e., the set of files that have changed
+/// on the working branch since it forked off. `HEAD~1` only compares
+/// against the immediately preceding commit, which under-reports on any
+/// branch longer than a single commit.
+///
+/// Callers can override this by setting `CODEFLOW_COVERAGE_BASE_REF`.
+#[must_use]
+pub fn default_base_ref(project_dir: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["merge-base", "HEAD", "origin/main"])
+        .current_dir(project_dir)
+        .output();
+
+    let Ok(out) = output else {
+        return "HEAD~1".to_string();
+    };
+    if !out.status.success() {
+        return "HEAD~1".to_string();
+    }
+
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        "HEAD~1".to_string()
+    } else {
+        sha
     }
 }
 
@@ -623,5 +791,349 @@ mod tests {
         let exc_result = results.iter().find(|r| r.file == "untestable.rs").unwrap();
         assert!(exc_result.pass);
         assert!(exc_result.exception_applied);
+    }
+
+    #[test]
+    fn test_parse_target_coverage_missing_file_returns_empty() {
+        // AC 23: essential-mode graceful degradation — a missing coverage
+        // artifact must NOT be an error; callers rely on the empty vec to
+        // render "N/A" in Section 2 instead of aborting the run.
+        let target = make_target("rust", true);
+        let run_result = make_run_result("rust"); // coverage_path is None
+        let result = parse_target_coverage(&target, &run_result);
+        assert!(result.is_ok(), "missing coverage must not error");
+        assert!(
+            result.unwrap().is_empty(),
+            "missing coverage yields empty vec"
+        );
+    }
+
+    #[test]
+    fn test_parse_target_coverage_nonexistent_path_returns_empty() {
+        let target = make_target("rust", true);
+        let mut run_result = make_run_result("rust");
+        run_result.coverage_path = Some(std::path::PathBuf::from(
+            "/nonexistent/path/that/cannot/exist.info",
+        ));
+        let result = parse_target_coverage(&target, &run_result);
+        assert!(result.is_ok(), "nonexistent coverage path must not error");
+        assert!(
+            result.unwrap().is_empty(),
+            "nonexistent path yields empty vec"
+        );
+    }
+
+    #[test]
+    fn test_build_target_ledger_summary_includes_coverage_audit() {
+        // AC 26: ledger event per-target payload must include coverage_percent,
+        // threshold_passes, threshold_failures, exception_applications, and
+        // per-file modified_file_results for changed files.
+        let target = make_target("rust", true);
+        let post = TargetPostData {
+            name: "rust".to_string(),
+            mode: "full".to_string(),
+            run_result: make_run_result("rust"),
+            report: Some(make_report()),
+            file_coverages: vec![FileCoverage {
+                path: "src/main.rs".to_string(),
+                lines_found: 100,
+                lines_hit: 90,
+                percent: 90.0,
+            }],
+            threshold_results: vec![
+                threshold::ThresholdResult {
+                    file: "src/main.rs".to_string(),
+                    coverage_percent: 90.0,
+                    threshold: 85,
+                    pass: true,
+                    rule_scope: CoverageScope::PerFile,
+                    exception_applied: false,
+                },
+                threshold::ThresholdResult {
+                    file: "untestable.rs".to_string(),
+                    coverage_percent: 0.0,
+                    threshold: 0,
+                    pass: true,
+                    rule_scope: CoverageScope::PerFile,
+                    exception_applied: true,
+                },
+                threshold::ThresholdResult {
+                    file: "failing.rs".to_string(),
+                    coverage_percent: 50.0,
+                    threshold: 85,
+                    pass: false,
+                    rule_scope: CoverageScope::PerFile,
+                    exception_applied: false,
+                },
+            ],
+            target_config: target,
+        };
+
+        let changed_files = vec!["src/main.rs".to_string()];
+        let summary = build_target_ledger_summary(&post, &changed_files);
+
+        assert_eq!(summary["name"], "rust");
+        assert_eq!(summary["passed"], 2);
+        assert_eq!(summary["failed"], 0);
+        assert!(
+            (summary["coverage_percent"].as_f64().unwrap() - 90.0).abs() < f64::EPSILON,
+            "coverage_percent mismatch"
+        );
+        assert_eq!(summary["threshold_passes"], 2);
+        assert_eq!(summary["threshold_failures"], 1);
+        assert_eq!(summary["exception_applications"], 1);
+        let modified = summary["modified_file_results"].as_array().unwrap();
+        assert_eq!(modified.len(), 1, "only src/main.rs is in changed_files");
+        assert_eq!(modified[0]["file"], "src/main.rs");
+        assert_eq!(modified[0]["pass"], true);
+    }
+
+    #[test]
+    fn test_build_target_ledger_summary_no_coverage() {
+        let target = make_target("shell", false);
+        let post = TargetPostData {
+            name: "shell".to_string(),
+            mode: "full".to_string(),
+            run_result: make_run_result("shell"),
+            report: Some(make_report()),
+            file_coverages: Vec::new(),
+            threshold_results: Vec::new(),
+            target_config: target,
+        };
+
+        let summary = build_target_ledger_summary(&post, &[]);
+        assert_eq!(summary["name"], "shell");
+        assert!(summary["coverage_percent"].is_null());
+        assert_eq!(summary["threshold_passes"], 0);
+        assert_eq!(summary["threshold_failures"], 0);
+        assert_eq!(summary["exception_applications"], 0);
+    }
+
+    #[test]
+    fn test_emit_ledger_event_writes_file_with_coverage_fields() {
+        // End-to-end: the ledger file should contain the new audit fields.
+        let dir = tempfile::tempdir().unwrap();
+        let target = make_target("rust", true);
+        let post = TargetPostData {
+            name: "rust".to_string(),
+            mode: "full".to_string(),
+            run_result: make_run_result("rust"),
+            report: Some(make_report()),
+            file_coverages: vec![FileCoverage {
+                path: "src/lib.rs".to_string(),
+                lines_found: 100,
+                lines_hit: 92,
+                percent: 92.0,
+            }],
+            threshold_results: vec![threshold::ThresholdResult {
+                file: "src/lib.rs".to_string(),
+                coverage_percent: 92.0,
+                threshold: 85,
+                pass: true,
+                rule_scope: CoverageScope::PerFile,
+                exception_applied: false,
+            }],
+            target_config: target,
+        };
+
+        emit_ledger_event(dir.path(), "run-xyz", &[post], &["src/lib.rs".to_string()]);
+
+        let ledger_path = dir.path().join(".state/ledger/testing-events.jsonl");
+        assert!(ledger_path.exists(), "ledger file must be written");
+        let content = std::fs::read_to_string(&ledger_path).unwrap();
+        let event: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(event["event"], "test_result_recorded");
+        assert_eq!(event["run_id"], "run-xyz");
+        assert_eq!(event["overall_pass"], true);
+        let targets = event["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(
+            (targets[0]["coverage_percent"].as_f64().unwrap() - 92.0).abs() < f64::EPSILON,
+            "coverage_percent must be present in ledger event"
+        );
+        assert_eq!(targets[0]["threshold_passes"], 1);
+        assert_eq!(targets[0]["threshold_failures"], 0);
+        let modified = targets[0]["modified_file_results"].as_array().unwrap();
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0]["file"], "src/lib.rs");
+        let changed = event["changed_files"].as_array().unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0], "src/lib.rs");
+    }
+
+    #[test]
+    fn test_detect_changed_files_invalid_ref_returns_empty() {
+        // AC 22: detect_changed_files must degrade gracefully on git errors
+        // (invalid ref, not a repo, etc.) instead of panicking or erroring.
+        let dir = tempfile::tempdir().unwrap();
+        // Not a git repo, so any ref errors — expect empty vec, not panic.
+        let files = detect_changed_files(dir.path(), "HEAD~1");
+        assert!(files.is_empty(), "non-repo directory yields empty vec");
+    }
+
+    #[test]
+    fn test_detect_changed_files_in_real_repo() {
+        // Run against the actual project dir — if HEAD~1 exists, we should
+        // get something (or empty if there are no changes). Either way,
+        // must not panic.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let _files = detect_changed_files(&cwd, "HEAD~1");
+        // No assertion on content — just that the call completes without panic.
+    }
+
+    #[test]
+    fn test_default_base_ref_falls_back_outside_repo() {
+        // AC 22: outside a git repo (no `origin/main`, no `git`), the helper
+        // must fall back to the literal `HEAD~1` string rather than panicking
+        // or returning an empty string that would break callers.
+        let dir = tempfile::tempdir().unwrap();
+        let resolved = default_base_ref(dir.path());
+        assert_eq!(
+            resolved, "HEAD~1",
+            "non-repo directory must fall back to HEAD~1"
+        );
+    }
+
+    #[test]
+    fn test_default_base_ref_in_real_repo() {
+        // End-to-end smoke test: when invoked in the actual repo, the helper
+        // either returns the merge-base SHA (40-char hex) or falls back to
+        // "HEAD~1" if `origin/main` isn't configured (fresh clone). Either
+        // outcome is non-empty and must be accepted by downstream callers.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let resolved = default_base_ref(&cwd);
+        assert!(!resolved.is_empty(), "resolved base ref must not be empty");
+        // Either a 40-char hex SHA (merge-base success) or the literal fallback.
+        let is_sha = resolved.len() == 40 && resolved.chars().all(|c| c.is_ascii_hexdigit());
+        let is_fallback = resolved == "HEAD~1";
+        assert!(
+            is_sha || is_fallback,
+            "resolved base ref must be 40-char hex SHA or \"HEAD~1\"; got: {resolved}"
+        );
+    }
+
+    /// AC 22 regression: `changed_files` arrives project-root-relative from
+    /// `git diff`; `ThresholdResult.file` is cwd-relative; the filter must
+    /// align them via `strip_target_cwd_prefix`. Without the prefix strip,
+    /// Section 3 (Modified File Coverage) renders empty even when the branch
+    /// changed 20+ Rust files, because the two path formats never intersect.
+    #[test]
+    fn test_strip_target_cwd_prefix_aligns_path_formats() {
+        let changed = vec![
+            "codeflow-cli/cli/src/cmd/test.rs".to_string(),
+            "codeflow-cli/core/src/testing/validation.rs".to_string(),
+            ".claude/CLAUDE.md".to_string(),
+            "project-management/epics/INF/INF-EPC-046/tasks/foo.md".to_string(),
+        ];
+
+        // Target cwd = "codeflow-cli" (matches the project's own rust-core
+        // target config). Files under that tree must be returned with the
+        // prefix stripped; files outside must be dropped.
+        let scoped = strip_target_cwd_prefix(&changed, Some("codeflow-cli"));
+        assert_eq!(
+            scoped,
+            vec![
+                "cli/src/cmd/test.rs".to_string(),
+                "core/src/testing/validation.rs".to_string(),
+            ],
+            "in-scope files must be returned cwd-relative; out-of-scope must be dropped"
+        );
+
+        // Target with no cwd (runs at project root) → pass-through, no strip.
+        let passthrough = strip_target_cwd_prefix(&changed, None);
+        assert_eq!(
+            passthrough, changed,
+            "None cwd must pass through without modification"
+        );
+
+        // Empty string and "." both mean "project root".
+        assert_eq!(strip_target_cwd_prefix(&changed, Some("")), changed);
+        assert_eq!(strip_target_cwd_prefix(&changed, Some(".")), changed);
+    }
+
+    /// End-to-end guard: drive `render_full_pr_body` with the same shape
+    /// that produced the empty Section 3 in ledger run-1776436469266 — a
+    /// target whose `cwd = "codeflow-cli"` holds a cwd-relative threshold
+    /// result, while `changed_files` is project-root-relative. After the
+    /// fix, the per-target filter must find the match.
+    #[test]
+    fn test_render_full_pr_body_finds_modified_files_under_target_cwd() {
+        use crate::testing::config::{
+            CoverageConfig, CoverageFormat, CoverageScope, ModeCommand, RunnerType, TargetConfig,
+        };
+        use crate::testing::runner::TargetRunResult;
+        use std::collections::BTreeMap;
+
+        let mut modes = BTreeMap::new();
+        modes.insert(
+            "full".to_string(),
+            ModeCommand {
+                command: "cargo test".to_string(),
+            },
+        );
+
+        let target_cfg = TargetConfig {
+            name: "rust-core".to_string(),
+            enabled: true,
+            cwd: Some("codeflow-cli".to_string()),
+            env: BTreeMap::new(),
+            runner: RunnerType::Cargo,
+            modes,
+            report: None,
+            coverage: Some(CoverageConfig {
+                format: CoverageFormat::Lcov,
+                path: "lcov.info".to_string(),
+                transform: None,
+                rules: Vec::new(),
+                exceptions: Vec::new(),
+            }),
+        };
+
+        let post = TargetPostData {
+            name: "rust-core".to_string(),
+            mode: "full".to_string(),
+            run_result: TargetRunResult {
+                target_name: "rust-core".to_string(),
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration_ms: 1000,
+                report_path: None,
+                coverage_path: None,
+            },
+            report: None,
+            file_coverages: Vec::new(),
+            threshold_results: vec![threshold::ThresholdResult {
+                file: "cli/src/cmd/test.rs".to_string(),
+                coverage_percent: 92.5,
+                threshold: 85,
+                pass: true,
+                rule_scope: CoverageScope::PerFile,
+                exception_applied: false,
+            }],
+            target_config: target_cfg,
+        };
+
+        let changed_files = vec![
+            "codeflow-cli/cli/src/cmd/test.rs".to_string(),
+            ".claude/CLAUDE.md".to_string(),
+        ];
+
+        // Also assert the ledger summary path matches — same filter runs there.
+        let summary = build_target_ledger_summary(&post, &changed_files);
+        let modified = summary["modified_file_results"].as_array().unwrap();
+        assert_eq!(
+            modified.len(),
+            1,
+            "ledger summary must include exactly the in-scope modified file; got: {modified:?}"
+        );
+        assert_eq!(modified[0]["file"], "cli/src/cmd/test.rs");
+
+        // Full PR body render must also surface the same file in Section 3.
+        let body = render_full_pr_body(&[post], &changed_files, 1);
+        assert!(
+            body.contains("cli/src/cmd/test.rs"),
+            "PR body Section 3 must list the modified file; got body:\n{body}"
+        );
     }
 }

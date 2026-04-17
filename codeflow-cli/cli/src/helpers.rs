@@ -14,7 +14,14 @@ use crate::exit::{EXIT_HOOK_BLOCK, EXIT_SUCCESS, ExitError};
 /// Resolution order:
 /// 1. `CODEFLOW_WORKTREE_PATH` environment variable (worktree-aware)
 /// 2. `CF_PROJECT_ROOT` environment variable
-/// 3. Walk up from current directory looking for `.claude/` or `.codeflow/`
+/// 3. Walk up from current directory looking for a directory that contains
+///    BOTH `.claude/` AND `.codeflow/` markers.
+///
+/// The real project root always has both markers — `codeflow init` creates
+/// them together. Requiring both prevents stray sub-directories (e.g., a
+/// stale `cli/.codeflow/` artifact from a past misdirected `setup --auto`)
+/// from hijacking walk-up and being returned as the "project root", which
+/// would then perpetuate writes into the same sub-directory.
 ///
 /// Returns the absolute path to the project root.
 pub fn detect_project_dir() -> Result<PathBuf> {
@@ -41,11 +48,12 @@ pub fn detect_project_dir() -> Result<PathBuf> {
         }
     }
 
-    // 3. Walk up from current directory.
+    // 3. Walk up from current directory looking for a directory with BOTH
+    //    markers. See the function doc for why the AND match is required.
     let cwd = std::env::current_dir().context("getting current directory")?;
     let mut dir = cwd.as_path();
     let project_root = loop {
-        if dir.join(".claude").is_dir() || dir.join(".codeflow").is_dir() {
+        if dir.join(".claude").is_dir() && dir.join(".codeflow").is_dir() {
             break dir.to_path_buf();
         }
         match dir.parent() {
@@ -90,8 +98,13 @@ fn read_worktree_path_from_pid_file(project_root: &Path) -> Option<String> {
 ///
 /// Resolution order:
 /// 1. `CF_PROJECT_ROOT` environment variable (if absolute and exists)
-/// 2. Walk up from current directory looking for `.claude/` or `.codeflow/`,
-///    then resolve through `WorktreeManager::resolve_effective_root`
+/// 2. Walk up from current directory looking for a directory with BOTH
+///    `.claude/` AND `.codeflow/`, then resolve through
+///    `WorktreeManager::resolve_effective_root`.
+///
+/// The AND match mirrors [`detect_project_dir`] — stray sub-directories
+/// containing only one marker (e.g., an orphaned `cli/.codeflow/` from a
+/// misdirected past run) must not be returned as the "project root".
 pub fn detect_project_root() -> Result<PathBuf> {
     // Fast path: CF_PROJECT_ROOT (absolute path to main repo).
     if let Ok(root) = std::env::var("CF_PROJECT_ROOT") {
@@ -100,11 +113,11 @@ pub fn detect_project_root() -> Result<PathBuf> {
             return Ok(codeflow_core::worktree::WorktreeManager::resolve_effective_root(&p));
         }
     }
-    // Walk up from current directory.
+    // Walk up from current directory looking for both markers.
     let cwd = std::env::current_dir().context("getting current directory")?;
     let mut dir = cwd.as_path();
     let candidate = loop {
-        if dir.join(".claude").is_dir() || dir.join(".codeflow").is_dir() {
+        if dir.join(".claude").is_dir() && dir.join(".codeflow").is_dir() {
             break dir.to_path_buf();
         }
         match dir.parent() {
@@ -954,5 +967,108 @@ mod tests {
         };
         let json = serde_json::to_string_pretty(&input).expect("serialize");
         insta::assert_snapshot!(json);
+    }
+
+    // ─── AND-match walk-up regression tests (AC 5 fix) ───────────────────────
+
+    /// A directory containing ONLY `.codeflow/` (no `.claude/`) must NOT be
+    /// returned by the walk-up — the walk must continue past it and find the
+    /// canonical root with BOTH markers. This prevents the stale-dir
+    /// regeneration cycle where `cli/.codeflow/` (an orphaned artifact) would
+    /// previously be returned as "project root", perpetuating writes into the
+    /// same sub-directory on every subsequent `detect_project_dir()` call.
+    #[test]
+    #[serial(env_vars)]
+    fn test_detect_project_dir_skips_dir_with_only_codeflow_marker() {
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let root = tempfile::tempdir().unwrap();
+        // Canonical project root — has BOTH markers.
+        std::fs::create_dir_all(root.path().join(".claude")).unwrap();
+        std::fs::create_dir_all(root.path().join(".codeflow")).unwrap();
+        // Nested orphaned sub-dir — has ONLY .codeflow/, no .claude/.
+        let nested = root.path().join("codeflow-cli").join("cli");
+        std::fs::create_dir_all(nested.join(".codeflow")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&nested).unwrap();
+
+        let result = detect_project_dir();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "detect should succeed: {result:?}");
+        let resolved = result.unwrap().canonicalize().unwrap();
+        let canonical_root = root.path().canonicalize().unwrap();
+        assert_eq!(
+            resolved, canonical_root,
+            "walk-up must skip nested dir with only .codeflow/ and reach canonical root"
+        );
+    }
+
+    /// Fresh project — neither marker anywhere — falls through to cwd.
+    /// This is the bootstrap case (first `codeflow init` run).
+    #[test]
+    #[serial(env_vars)]
+    fn test_detect_project_dir_fresh_project_falls_through_to_cwd() {
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let dir = tempfile::tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = detect_project_dir();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        // With no markers anywhere on the ancestor chain, walk-up falls
+        // through to cwd. This is the documented bootstrap contract —
+        // `codeflow init` relies on it.
+        //
+        // We compare via canonicalize() so macOS /private/var/... ↔
+        // /var/... symlink differences don't cause spurious mismatches.
+        let resolved = result.unwrap().canonicalize().unwrap();
+        let expected = dir.path().canonicalize().unwrap();
+        assert_eq!(resolved, expected);
+    }
+
+    /// A directory with `.claude/` only (no `.codeflow/`) must also be
+    /// skipped by the walk-up. Legitimate `codeflow init` creates both
+    /// together, so a lone `.claude/` indicates a partial or corrupted
+    /// state — do not anchor walk-up there.
+    #[test]
+    #[serial(env_vars)]
+    fn test_detect_project_dir_skips_dir_with_only_claude_marker() {
+        let _guard = EnvGuard::new(&["CODEFLOW_WORKTREE_PATH", "CF_PROJECT_ROOT"]);
+        // SAFETY: Test-only env var manipulation.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
+
+        let root = tempfile::tempdir().unwrap();
+        // Canonical root — both markers.
+        std::fs::create_dir_all(root.path().join(".claude")).unwrap();
+        std::fs::create_dir_all(root.path().join(".codeflow")).unwrap();
+        // Nested partial state — only .claude/.
+        let nested = root.path().join("sub");
+        std::fs::create_dir_all(nested.join(".claude")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&nested).unwrap();
+
+        let result = detect_project_dir();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let resolved = result.unwrap().canonicalize().unwrap();
+        let canonical_root = root.path().canonicalize().unwrap();
+        assert_eq!(
+            resolved, canonical_root,
+            "walk-up must skip nested dir with only .claude/ and reach canonical root"
+        );
     }
 }

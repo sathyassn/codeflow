@@ -112,3 +112,9 @@ coverage/
 # Generic testing engine ephemeral artifacts (per-worktree)
 .state/test-reports/
 .state/coverage/
+
+# Ephemeral test artifacts produced by per-target runners
+# (dropped into target cwd; never committed)
+lcov.info
+ctrf.json
+*.junit.xml

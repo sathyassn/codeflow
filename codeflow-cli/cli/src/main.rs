@@ -369,8 +369,21 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // NOTE: `dispatch(Command::Init)` internally calls `RealCommandRunner`,
+    // which reads the process cwd and walks up to find a `.claude/` marker.
+    // Without isolation, the test would resolve the repo worktree root and
+    // overwrite the real `.codeflow/config/testing/test-config.json`. We
+    // redirect cwd to a tempdir for the duration of this test to keep the
+    // repo state untouched. `#[serial(env_vars)]` matches the serial key
+    // used by other cwd/env-mutating tests in the codebase so they all
+    // serialise against the same global-state lock.
     #[tokio::test]
+    #[serial_test::serial(env_vars)]
     async fn test_dispatch_init() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let original = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(tmp.path()).expect("set_current_dir");
+
         let result = dispatch(Command::Init {
             existing: false,
             join: false,
@@ -378,6 +391,10 @@ mod tests {
             yes: false,
         })
         .await;
+
+        // Restore cwd before the tempdir drops or another test observes the state.
+        let _ = std::env::set_current_dir(&original);
+
         assert!(result.is_ok());
     }
 

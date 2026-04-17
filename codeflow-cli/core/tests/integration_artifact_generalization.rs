@@ -225,7 +225,7 @@ fn gh_pr_guard_module_rejects_legacy_test_stats() {
         "legacy ## Test Stats body must produce errors"
     );
     assert!(
-        errors[0].contains("codeflow test --mode full --coverage"),
+        errors[0].contains("codeflow test --mode full"),
         "error must reference regeneration command; got: {:?}",
         errors[0]
     );

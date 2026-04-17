@@ -70,17 +70,33 @@ pub fn workspace_root() -> PathBuf {
 
 /// Resolve path to the Rust binary, failing with a clear message if missing.
 ///
+/// Uses Cargo's built-in `CARGO_BIN_EXE_codeflow` env var (set at compile time
+/// by cargo for integration tests that depend on the `codeflow` binary). This
+/// works across all cargo invocation styles — `cargo test`, `cargo nextest`,
+/// `cargo llvm-cov nextest` — because cargo always produces the binary before
+/// linking the test harness, regardless of target directory layout.
+///
+/// Falls back to walking from `CARGO_MANIFEST_DIR` for robustness if the env
+/// var is missing (which would only happen if tests are invoked without cargo).
+///
 /// # Panics
 ///
-/// Panics with build instructions if the binary is missing.
+/// Panics with build instructions if the binary cannot be located at all.
 pub fn resolve_binaries() -> BinaryPaths {
-    let root = workspace_root();
-
-    let rust_binary = root
-        .join("codeflow-cli")
-        .join("target")
-        .join("debug")
-        .join("codeflow");
+    // Cargo sets CARGO_BIN_EXE_<name> for every binary in the crate's package
+    // that an integration test depends on. The value is the absolute path to
+    // the compiled binary in the active target directory (debug or llvm-cov).
+    let rust_binary = option_env!("CARGO_BIN_EXE_codeflow")
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| {
+            // Fallback for non-cargo invocation contexts.
+            workspace_root()
+                .join("codeflow-cli")
+                .join("target")
+                .join("debug")
+                .join("codeflow")
+        });
 
     assert!(
         rust_binary.exists(),

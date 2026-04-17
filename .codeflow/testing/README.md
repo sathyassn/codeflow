@@ -35,7 +35,7 @@ codeflow test
 codeflow test --coverage
 
 # Run full test suite before creating a PR
-codeflow test --mode full --coverage
+codeflow test --mode full
 ```
 
 ---
@@ -52,7 +52,7 @@ All commands are run from the **project root**. This section provides a quick lo
 | Run essential tests only | `codeflow test --mode essential` |
 | Run full test suite | `codeflow test --mode full` |
 | Run with coverage check | `codeflow test --coverage` |
-| Full suite + coverage | `codeflow test --mode full --coverage` |
+| Full suite + coverage | `codeflow test --mode full` |
 | Verbose output | `codeflow test --verbose` |
 
 ### Running Specific Tests
@@ -234,7 +234,7 @@ codeflow test [options] [file]
 
 ```bash
 codeflow test                              # Standard mode
-codeflow test --mode full --coverage       # Full suite with coverage
+codeflow test --mode full       # Full suite with coverage
 codeflow test scripts/db/test_schema.py    # Single file
 codeflow test --list --mode full           # List all test files
 ```
@@ -614,7 +614,7 @@ For CI pipelines, use strict mode to enforce coverage thresholds:
 
 ```bash
 # In CI pipeline
-codeflow test --mode full --coverage
+codeflow test --mode full
 .codeflow/testing/run-coverage.sh --strict
 ```
 

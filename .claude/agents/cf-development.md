@@ -278,13 +278,13 @@ Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": 
 
 Run the test suite to verify no regressions:
 
-- `codeflow test --mode full --coverage`
+- `codeflow test --mode full`
 
 ### Step 5b: Per-target Quality Gate
 
 **Before requesting commit**, load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for any language in the changeset and run the lint and format checks it prescribes. Fix any failures before proceeding.
 
-Then run `codeflow test --mode full --coverage` — ALL tests must pass (zero failures required before commit).
+Then run `codeflow test --mode full` — ALL tests must pass (zero failures required before commit).
 
 If any check fails, fix the issue and re-run. Do NOT request a commit with lint warnings, format diffs, or test failures.
 
@@ -293,7 +293,7 @@ If any check fails, fix the issue and re-run. Do NOT request a commit with lint 
 **Before requesting commit**, run the unified test command and record draft test stats in the DEV Report. This is mandatory — do not skip.
 
 ```bash
-codeflow test --mode full --coverage
+codeflow test --mode full
 ```
 
 This single command runs all configured test targets with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below its configured threshold must be fixed before commit unless it has a configured exception in `test-config.json`.
@@ -667,7 +667,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
 - [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
-- [ ] **Tests pass:** `codeflow test --mode full --coverage` passes with zero failures (actual output captured)
+- [ ] **Tests pass:** `codeflow test --mode full` passes with zero failures (actual output captured)
 - [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; lint clean on all target-language files (load applicable standards skill)
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
 - [ ] **Shared lib usage:** Used existing shared utilities where applicable (check `.codeflow/scripts/security/protection/lib/` for protection-related functions)
@@ -691,7 +691,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 | CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, PathFlow phases |
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Always — phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Always — protected resources, branch rules |
-| Test Runner | `codeflow test --mode full --coverage` | Always — unified test execution, all suites, full coverage |
+| Test Runner | `codeflow test --mode full` | Always — unified test execution, all suites, full coverage |
 | Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell test assertion library (40+ `assert_*` functions) |
 | Test Config | `.codeflow/testing/test-config.json` | Always — test registration |
 | Protection Lib | `.codeflow/scripts/security/protection/lib/` | Always — reusable shell protection functions |

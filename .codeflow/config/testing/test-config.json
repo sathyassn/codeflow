@@ -91,6 +91,12 @@
             "threshold": 0,
             "reason": "Integration test file — compiled as a separate test binary, not instrumented by llvm-cov unit coverage. llvm-cov reports N/A because integration tests run in their own binary outside the library instrumentation scope.",
             "remove_when": "Coverage tooling supports cross-binary instrumentation"
+          },
+          {
+            "file": "core/tests/integration_self_host_parity.rs",
+            "threshold": 0,
+            "reason": "Integration test file — compiled as a separate test binary, not instrumented by llvm-cov unit coverage. llvm-cov reports N/A because integration tests run in their own binary outside the library instrumentation scope.",
+            "remove_when": "Coverage tooling supports cross-binary instrumentation"
           }
         ]
       }

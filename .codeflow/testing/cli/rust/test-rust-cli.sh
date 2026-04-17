@@ -2,10 +2,20 @@
 set -euo pipefail
 
 # test-rust-cli.sh -- Bridge test script for the Rust CLI.
-# Runs build verification, binary smoke tests, Rust unit tests, and coverage enforcement.
+#
+# Historical: This script used to run `cargo build`, smoke tests, `cargo nextest
+# run --workspace`, AND coverage enforcement. Post INF-EPC-046 the generic
+# testing engine owns the full Rust test run + coverage via the `rust-core`
+# target in `.codeflow/config/testing/test-config.json`.
+#
+# Current role (INF-TSK-046-006 onward): build + smoke only. This verifies
+# the binary is still producible and behaves correctly at the CLI boundary.
+# Nested `cargo nextest run --workspace` inside shell-scripts caused lock
+# contention against the outer `cargo llvm-cov nextest` invocation — the
+# flake this fix addresses.
 
 readonly SCRIPT_NAME="test-rust-cli"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="2.0.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -14,18 +24,6 @@ readonly TESTING_DIR
 REPO_ROOT="$(cd "$TESTING_DIR/../.." && pwd)"
 readonly REPO_ROOT
 readonly RS_DIR="$REPO_ROOT/codeflow-cli"
-readonly CONFIG_FILE="$RS_DIR/config/testing/test-config.json"
-
-# Read coverage settings from config (fallback to defaults if jq unavailable)
-if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
-    COVERAGE_THRESHOLD=$(jq -r '.coverage.threshold' "$CONFIG_FILE")
-    BUSINESS_PKGS=$(jq -r '.coverage.business_packages | join(" ")' "$CONFIG_FILE")
-else
-    COVERAGE_THRESHOLD=85
-    BUSINESS_PKGS="codeflow-core"
-fi
-readonly COVERAGE_THRESHOLD
-readonly BUSINESS_PKGS
 
 # Source test framework
 # shellcheck source=../../lib/test-common.sh
@@ -98,160 +96,6 @@ run_smoke_tests() {
     fi
 }
 
-run_unit_tests() {
-    test_section "Rust unit tests"
-
-    if command -v cargo-nextest &>/dev/null; then
-        if (cd "$RS_DIR" && cargo nextest run --workspace 2>&1); then
-            test_pass "cargo nextest run --workspace passes"
-        else
-            test_fail "cargo nextest run --workspace failed"
-            return 1
-        fi
-    else
-        if (cd "$RS_DIR" && cargo test --workspace 2>&1); then
-            test_pass "cargo test --workspace passes"
-        else
-            test_fail "cargo test --workspace failed"
-            return 1
-        fi
-    fi
-    return 0
-}
-
-run_coverage_enforcement() {
-    test_section "Coverage enforcement"
-
-    # macOS SIP kills LLVM-instrumented binaries that link native C libraries
-    # (openssl via git2, surrealdb). Coverage enforcement runs in CI (Linux)
-    # where SIP does not apply. Skip locally on macOS.
-    if [[ "$(uname)" == "Darwin" ]]; then
-        echo "  SKIP: macOS SIP blocks LLVM coverage instrumentation. Coverage enforced in CI."
-        return 0
-    fi
-
-    if ! cargo llvm-cov --version &>/dev/null; then
-        test_fail "cargo-llvm-cov not installed — coverage enforcement requires it"
-        return 1
-    fi
-
-    # Build coverage args scoped to business packages.
-    local cov_args=()
-    if command -v cargo-nextest &>/dev/null; then
-        cov_args+=("nextest")
-    fi
-    for pkg in $BUSINESS_PKGS; do
-        cov_args+=("--package" "$pkg")
-    done
-    cov_args+=("--no-cfg-coverage")
-
-    echo "  Business packages: $BUSINESS_PKGS"
-    echo "  Threshold: ${COVERAGE_THRESHOLD}%"
-
-    # Run coverage and capture JSON output for per-file analysis
-    local cov_json="${TMPDIR:-/tmp}/codeflow-rust-cov-$$.json"
-    if ! (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" --json 2>/dev/null > "$cov_json"); then
-        test_fail "Coverage run failed"
-        rm -f "$cov_json"
-        return 1
-    fi
-
-    # Aggregate check
-    if (cd "$RS_DIR" && cargo llvm-cov "${cov_args[@]}" --fail-under-lines "$COVERAGE_THRESHOLD" 2>&1); then
-        test_pass "Aggregate coverage meets ${COVERAGE_THRESHOLD}% threshold"
-    else
-        test_fail "Aggregate coverage below ${COVERAGE_THRESHOLD}% threshold"
-    fi
-
-    # Per-file enforcement (requires jq)
-    if ! command -v jq &>/dev/null; then
-        echo "  WARN: jq not found — skipping per-file enforcement (aggregate-only)"
-        rm -f "$cov_json"
-        return 0
-    fi
-
-    if [[ ! -s "$cov_json" ]]; then
-        echo "  WARN: Empty coverage JSON — skipping per-file enforcement"
-        rm -f "$cov_json"
-        return 0
-    fi
-
-    # Load per-file exception thresholds from config.
-    # Config stores exceptions as: { "file": "crate/src/path.rs", "threshold": N }
-    # Build a lookup: exception_files[i]="file_suffix" exception_thresholds[i]=N
-    local -a exception_files=()
-    local -a exception_thresholds=()
-    if [[ -f "$CONFIG_FILE" ]]; then
-        local exc_count
-        exc_count=$(jq -r '.conventions.exceptions | length' "$CONFIG_FILE" 2>/dev/null) || exc_count=0
-        for ((i = 0; i < exc_count; i++)); do
-            local exc_file exc_threshold
-            exc_file=$(jq -r ".conventions.exceptions[$i].file // empty" "$CONFIG_FILE" 2>/dev/null)
-            exc_threshold=$(jq -r ".conventions.exceptions[$i].threshold // empty" "$CONFIG_FILE" 2>/dev/null)
-            if [[ -n "$exc_file" && -n "$exc_threshold" ]]; then
-                exception_files+=("$exc_file")
-                exception_thresholds+=("$exc_threshold")
-            fi
-        done
-    fi
-
-    # Parse per-file coverage and enforce threshold
-    local per_file_fail=false
-    local file_count=0
-    local fail_count=0
-
-    while IFS=$'\t' read -r filename pct; do
-        # Skip files outside business packages.
-        # Package names (e.g. "codeflow-core") map to directory paths
-        # (e.g. "core/src/"). llvm-cov outputs absolute paths on CI
-        # and relative paths locally, so we match on the directory suffix.
-        local in_business=false
-        for pkg in $BUSINESS_PKGS; do
-            # Map package name to directory path component:
-            #   codeflow-core -> /core/src/
-            #   codeflow-cli  -> /cli/src/
-            local dir_component="${pkg#codeflow-}"
-            if [[ "$filename" == *"/${dir_component}/src/"* ]]; then
-                in_business=true
-                break
-            fi
-        done
-        [[ "$in_business" == "false" ]] && continue
-
-        file_count=$((file_count + 1))
-
-        # Determine effective threshold: check per-file exceptions first
-        local effective_threshold="$COVERAGE_THRESHOLD"
-        for ((i = 0; i < ${#exception_files[@]}; i++)); do
-            if [[ "$filename" == *"${exception_files[$i]}" ]]; then
-                effective_threshold="${exception_thresholds[$i]}"
-                break
-            fi
-        done
-
-        # Compare (integer truncation for threshold comparison)
-        local pct_int="${pct%.*}"
-        # Handle edge case where pct_int is empty (0% files)
-        pct_int="${pct_int:-0}"
-
-        if [[ "$pct_int" -lt "$effective_threshold" ]]; then
-            # Extract short path (crate/src/...) for readability
-            local short_name="${filename##*/codeflow-cli/}"
-            echo "  FAIL: ${short_name} — ${pct}% (below ${effective_threshold}%)"
-            per_file_fail=true
-            fail_count=$((fail_count + 1))
-        fi
-    done < <(jq -r '.data[0].files[] | "\(.filename)\t\(.summary.lines.percent)"' "$cov_json" 2>/dev/null)
-
-    rm -f "$cov_json"
-
-    if [[ "$per_file_fail" == "true" ]]; then
-        test_fail "Per-file coverage: ${fail_count}/${file_count} files below ${COVERAGE_THRESHOLD}% threshold"
-    else
-        test_pass "Per-file coverage: all ${file_count} files meet ${COVERAGE_THRESHOLD}% threshold"
-    fi
-}
-
 cleanup() {
     # Clean up instrumentation data but preserve build artifacts to avoid
     # cold-start rebuilds (OpenSSL vendored build fails under llvm instrumentation
@@ -307,19 +151,11 @@ main() {
     # Ensure cleanup runs on exit
     trap cleanup EXIT
 
-    # Run test sections
+    # Run test sections. Unit tests + coverage were removed in v2.0.0 —
+    # the generic testing engine's `rust-core` target owns those runs now
+    # (see .codeflow/config/testing/test-config.json).
     run_build_test
     run_smoke_tests
-
-    # Run unit tests; skip coverage enforcement if they fail
-    local unit_tests_passed=true
-    if ! run_unit_tests; then
-        unit_tests_passed=false
-    fi
-
-    if [[ "$unit_tests_passed" == "true" ]]; then
-        run_coverage_enforcement
-    fi
 
     # Summary
     print_test_summary

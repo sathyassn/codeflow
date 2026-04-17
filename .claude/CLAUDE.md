@@ -347,7 +347,7 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
 - Verify task markdown criteria matrix: the `### Criteria Status` table should show all criteria as DONE/PASS across completed stages, with no `--` remaining in evaluated columns
 - **Confidence gate (BLOCKING):** Read the `### Confidence Score` subsection in the task markdown `## Stage Reports` section. Every pipeline stage that executed must report a score of 95 or higher. A score below 95 from any stage is a rework trigger -- return to the relevant stage teammate before marking PF5-TSK-02 complete.
 - **Test stats gate (BLOCKING):** Read the QA Report and verify all three mandatory sections are present and passing:
-  1. **Overall Test Pass Status** — zero failures (produced by `codeflow test --mode full --coverage`), at least 2 consecutive clean runs
+  1. **Overall Test Pass Status** — zero failures (produced by `codeflow test --mode full`), at least 2 consecutive clean runs
   2. **Overall Coverage** — per-target coverage for all configured test targets; any file below 85% that is not in the configured exception list is a rework trigger; the Exempted Files table must include ALL entries from test-config.json conventions.exceptions[], not just files modified in this session, with coverage %, configured threshold, and reason
   3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
   A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
@@ -610,7 +610,7 @@ When a file requires staging (see table above), teammates use this procedure:
 | WS-DOCS | cf-documentation | `"Read .claude/agents/cf-documentation.md for your instructions, then document: {topic}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Update: {files}. Follow project doc standards. Before STAGE-COMPLETE, update Criteria Status and DOCS Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
 | WS-SEC | cf-security | `"Read .claude/agents/cf-security.md for your instructions, then run WS-SEC security scan on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Scan all code changes in the changeset against OWASP Top 10, secret detection, input validation, and concurrency security. Before STAGE-COMPLETE, update Criteria Status SEC column and SEC Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
 | WS-REV | cf-review | `"Read .claude/agents/cf-review.md for your instructions, then review the work on branch {branch}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Mode: {CODE_REVIEW/DESIGN_REVIEW/DOCUMENTATION_REVIEW/TEST_REVIEW}. Focus: {scope}. Before STAGE-COMPLETE, update Criteria Status REV column and REV Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
-| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: codeflow test --mode full --coverage. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
+| WS-QA | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then run QA gate. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Acceptance criteria: {criteria}. Run: codeflow test --mode full. Before STAGE-COMPLETE, update Criteria Status QA column and QA Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
 | WS-TEST | cf-quality-assurance | `"Read .claude/agents/cf-quality-assurance.md for your instructions, then implement tests for: {component}. Task doc: project-management/epics/{area}/{epic}/tasks/{task}.md. Target: {coverage}. Framework: {shell/pytest}. Before STAGE-COMPLETE, update Criteria Status and TEST Report in the task doc. Your confidence score must be ≥95% or rework will be required before PF5-VERIFY passes."` |
 
 ### Task Specification Quality
@@ -1255,7 +1255,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test --mode full --coverage` (the single authoritative command for all pipeline stages; routes to all configured test targets per `test-config.json`)
+- Test suite: run via `codeflow test --mode full` (the single authoritative command for all pipeline stages; routes to all configured test targets per `test-config.json`)
 - All test changes verified before marking stage complete
 
 ### PR Workflow
@@ -1270,7 +1270,7 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 8. Lead proceeds to PF7-END
 9. New session for new work
 
-**PR body MUST include test results.** The PR description must contain the `## Test Results` section below, populated verbatim from `codeflow test --mode full --coverage` structured output. PRs without test stats are incomplete and must not be created. Do NOT manually compose coverage numbers, thresholds, or exempted files — the command produces the authoritative data. On subsequent pushes to an open PR, cf-git-operations MUST re-run the command and update the PR body's `## Test Results` section to reflect current state.
+**PR body MUST include test results.** The PR description must contain the `## Test Results` section below, populated verbatim from `codeflow test --mode full` structured output. PRs without test stats are incomplete and must not be created. Do NOT manually compose coverage numbers, thresholds, or exempted files — the command produces the authoritative data. On subsequent pushes to an open PR, cf-git-operations MUST re-run the command and update the PR body's `## Test Results` section to reflect current state.
 
 ```markdown
 ## Test Results
@@ -1315,7 +1315,7 @@ Runs: {n} consecutive clean.
 |--------|------|---------|
 ```
 
-When no test targets are configured, `codeflow test --mode full --coverage` emits a single line instead of the five sections:
+When no test targets are configured, `codeflow test --mode full` emits a single line instead of the five sections:
 
 ```markdown
 ## Test Results
@@ -1447,7 +1447,7 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ### CLI
 
 ```text
-codeflow test --mode full --coverage   # Run all suites with coverage enforcement (authoritative for all pipeline stages)
+codeflow test --mode full   # Run all suites with coverage enforcement (authoritative for all pipeline stages)
 codeflow test                          # Run test suite (default: essential mode, for quick checks only)
 codeflow doctor                        # Diagnose infrastructure
 codeflow worktree list                 # List active worktrees
@@ -1462,7 +1462,7 @@ codeflow interactive list              # Show all interactive sessions (active +
 codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
 ```
 
-The unified `codeflow test --mode full --coverage` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `test-config.json` and enforces first-match-wins per-target coverage rules.
+The unified `codeflow test --mode full` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `test-config.json` and enforces first-match-wins per-target coverage rules.
 
 → See Section 9 for project file layout and Section 10 for data model
 

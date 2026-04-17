@@ -187,7 +187,7 @@ Mechanisms available in codebase:
 ### Automated
 
 - [ ] {Test or script that validates the change}
-- [ ] Test coverage validation passes (`codeflow test --mode full --coverage`)
+- [ ] Test coverage validation passes (`codeflow test --mode full`)
 
 ### Manual
 
@@ -413,7 +413,7 @@ Runs: {n} consecutive clean.
 
 #### 1. Overall Test Pass Status
 
-- Command: `codeflow test --mode full --coverage`
+- Command: `codeflow test --mode full`
 - Result: {n} passed, 0 failed, 0 skipped
 - New tests added: {n}
 - Runs: {n} consecutive clean runs (minimum 2)
@@ -425,7 +425,7 @@ Runs: {n} consecutive clean.
 
 #### 2. Overall Coverage
 
-> Run `codeflow test --mode full --coverage` to generate. Data sourced from structured output per target.
+> Run `codeflow test --mode full` to generate. Data sourced from structured output per target.
 
 | Target | Coverage | Per-rule summary |
 |--------|----------|-----------------|
@@ -480,7 +480,7 @@ All project-wide coverage exceptions from test-config.json conventions.exception
 > **Standard Requirements (all tasks):**
 >
 > **Testing:** MANDATORY 85%+ per-file code coverage via
-> `codeflow test --mode full --coverage`. Test placement
+> `codeflow test --mode full`. Test placement
 > follows the conventions of the target language (e.g.,
 > inline modules for Rust, test files for Python/shell).
 > Exceptions require documented technical justification

@@ -71,6 +71,9 @@ pub fn run_interactive(
 /// Returns `SetupError` on I/O or config-write failure.
 pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     let config_path = config_path(project_dir);
+    if has_populated_config(&config_path) {
+        return Err(SetupError::ConfigExists(config_path));
+    }
     let detected = detect::detect_stacks(project_dir);
 
     let config = TestConfig {
@@ -208,6 +211,15 @@ pub fn get_template_list(project_dir: &Path) -> Result<Vec<(String, String)>, Se
 pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
     let config_path = config_path(project_dir);
 
+    // Idempotence guard: never overwrite an existing populated config.
+    // `codeflow init` may be re-run on a configured project; the minimal
+    // scaffold must not clobber a real configuration (see INF-TSK-046-006
+    // AC 5 — accidental invocation from misdirected cwd previously wiped
+    // the canonical worktree config).
+    if has_populated_config(&config_path) {
+        return Ok(());
+    }
+
     // Ensure parent directories exist
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -224,6 +236,23 @@ pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
 
     write_config(&config_path, &config)?;
     Ok(())
+}
+
+/// Returns `true` if `path` exists and parses as a `TestConfig` with at least
+/// one target. Used as a safety gate by `write_minimal_config` and `run_auto`
+/// to prevent accidental overwrite of a real, populated configuration.
+///
+/// Parse or I/O failures are treated as "not populated" (fail-open): a
+/// corrupted or unreadable file should be replaceable, and the callers'
+/// own write step will fail with a clear error if the real issue is I/O.
+fn has_populated_config(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(existing) = serde_json::from_str::<TestConfig>(&content) else {
+        return false;
+    };
+    !existing.targets.is_empty()
 }
 
 fn read_template_description(path: &Path) -> String {
@@ -243,11 +272,47 @@ fn read_template_description(path: &Path) -> String {
 }
 
 fn config_path(project_dir: &Path) -> std::path::PathBuf {
-    project_dir
+    canonicalize_project_dir(project_dir)
         .join(".codeflow")
         .join("config")
         .join("testing")
         .join("test-config.json")
+}
+
+/// Normalise a candidate project directory to avoid writing config into a
+/// nested sub-directory when an ancestor is the real project root.
+///
+/// **Why this exists:** a test or CLI invocation with a cwd inside the project
+/// tree (e.g., running `codeflow init` from `codeflow-cli/cli/`) previously
+/// caused `write_minimal_config` to create a stale `.codeflow/config/testing/`
+/// hierarchy in the sub-directory. Downstream tooling then fell back to that
+/// subtree as the "project root", corrupting the generic testing engine's
+/// config lookup and polluting the worktree with duplicate state.
+///
+/// Resolution rule: if any ancestor of `project_dir` already contains a
+/// `.claude/` directory (the canonical codeflow project-root marker), prefer
+/// the nearest such ancestor as the effective project root. Fresh projects
+/// (no `.claude/` on any ancestor) retain the caller's `project_dir` as-is —
+/// this is the documented `codeflow init` creation path.
+///
+/// Ancestor check is bounded by filesystem root, so the walk always terminates.
+fn canonicalize_project_dir(project_dir: &Path) -> std::path::PathBuf {
+    // Caller's own `.claude/` takes priority — this is a fresh or canonical root.
+    if project_dir.join(".claude").is_dir() {
+        return project_dir.to_path_buf();
+    }
+
+    // Walk ancestors until we find `.claude/` or run out of parents.
+    let mut cursor = project_dir;
+    while let Some(parent) = cursor.parent() {
+        if parent.join(".claude").is_dir() {
+            return parent.to_path_buf();
+        }
+        cursor = parent;
+    }
+
+    // No ancestor marker — caller is a fresh project being initialised.
+    project_dir.to_path_buf()
 }
 
 fn template_path(project_dir: &Path, name: &str) -> Result<std::path::PathBuf, SetupError> {
@@ -311,6 +376,83 @@ mod tests {
         assert_eq!(
             path,
             std::path::PathBuf::from("/repo/.codeflow/config/testing/test-config.json")
+        );
+    }
+
+    #[test]
+    fn canonicalize_project_dir_uses_ancestor_with_claude_marker() {
+        // Simulates the bug where a caller inside a sub-directory of the
+        // project (e.g., cargo-invoked tools with cwd=`codeflow-cli/cli/`)
+        // would write a stale `.codeflow/` subtree at the nested path.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("codeflow-cli").join("cli");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+
+        let canonical = canonicalize_project_dir(&nested);
+        assert_eq!(
+            canonical,
+            root.to_path_buf(),
+            "nested path must resolve to the ancestor project root"
+        );
+
+        // config_path built from the nested dir must write to root/.codeflow/
+        let cfg = config_path(&nested);
+        assert_eq!(
+            cfg,
+            root.join(".codeflow/config/testing/test-config.json"),
+            "config_path must rebase onto the canonical project root"
+        );
+    }
+
+    #[test]
+    fn canonicalize_project_dir_preserves_caller_when_claude_is_on_self() {
+        // If `project_dir` is itself the canonical root (has .claude/), we
+        // must NOT walk up any further — otherwise `codeflow init` on an
+        // existing project would incorrectly rebase onto a grandparent.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+
+        let canonical = canonicalize_project_dir(root);
+        assert_eq!(canonical, root.to_path_buf());
+    }
+
+    #[test]
+    fn canonicalize_project_dir_fresh_project_has_no_ancestor() {
+        // Fresh project during `codeflow init`: no `.claude/` anywhere.
+        // The caller's directory is used as-is so init can bootstrap.
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = canonicalize_project_dir(dir.path());
+        assert_eq!(canonical, dir.path().to_path_buf());
+    }
+
+    #[test]
+    fn run_auto_rejects_nested_project_dir_when_ancestor_has_claude() {
+        // End-to-end: run_auto called with a nested path writes config at
+        // the canonical root, NOT at the nested path. Prevents the stale
+        // `codeflow-cli/cli/.codeflow/` regeneration observed in INF-TSK-046-006.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("codeflow-cli").join("cli");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+
+        let result = run_auto(&nested).unwrap();
+        assert!(matches!(result, SetupResult::Written));
+
+        let nested_cfg = nested.join(".codeflow/config/testing/test-config.json");
+        let canonical_cfg = root.join(".codeflow/config/testing/test-config.json");
+        assert!(
+            !nested_cfg.exists(),
+            "BUG: nested config must NOT be created at {}",
+            nested_cfg.display()
+        );
+        assert!(
+            canonical_cfg.exists(),
+            "config must be created at canonical root {}",
+            canonical_cfg.display()
         );
     }
 
@@ -422,6 +564,109 @@ mod tests {
         let config = config::load_test_config(&config_path(dir.path())).unwrap();
         assert_eq!(config.schema_version, "1.0");
         assert!(config.targets.is_empty());
+    }
+
+    /// Regression: `codeflow init` must not overwrite a project that already
+    /// has a populated `test-config.json`. INF-TSK-046-006 AC 5 — a misdirected
+    /// unit test invocation previously clobbered the canonical worktree config
+    /// (7361-byte populated → 213-byte empty template). The guard is checked by
+    /// inspecting `targets.len() > 0` in the existing file.
+    #[test]
+    fn write_minimal_config_is_idempotent_for_populated_config() {
+        use crate::testing::config::{ModeCommand, RunnerType, TargetConfig, TestConfig};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+
+        let mut modes = std::collections::BTreeMap::new();
+        modes.insert(
+            "full".to_string(),
+            ModeCommand {
+                command: "cargo test".to_string(),
+            },
+        );
+        let populated = TestConfig {
+            description: Some("pre-existing config".to_string()),
+            schema_ref: None,
+            schema_version: "1.0".to_string(),
+            execution: config::ExecutionConfig::default(),
+            defaults: config::DefaultsConfig::default(),
+            targets: vec![TargetConfig {
+                name: "rust-core".to_string(),
+                enabled: true,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                runner: RunnerType::Cargo,
+                modes,
+                report: None,
+                coverage: None,
+            }],
+        };
+        let cfg_path = config_path(dir.path());
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        config::write_test_config(&cfg_path, &populated).unwrap();
+        let before = std::fs::read(&cfg_path).unwrap();
+
+        write_minimal_config(dir.path()).expect("idempotent on populated");
+
+        let after = std::fs::read(&cfg_path).unwrap();
+        assert_eq!(
+            before, after,
+            "write_minimal_config must not overwrite a populated test-config.json"
+        );
+    }
+
+    /// `run_auto` must refuse to clobber a populated config — same invariant
+    /// as `write_minimal_config`. Returns `SetupError::ConfigExists` so the
+    /// caller can surface a clear error and, optionally, re-invoke with a
+    /// template-style `--force` in future.
+    #[test]
+    fn run_auto_refuses_to_overwrite_populated_config() {
+        use crate::testing::config::{ModeCommand, RunnerType, TargetConfig, TestConfig};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+
+        let mut modes = std::collections::BTreeMap::new();
+        modes.insert(
+            "full".to_string(),
+            ModeCommand {
+                command: "cargo test".to_string(),
+            },
+        );
+        let populated = TestConfig {
+            description: None,
+            schema_ref: None,
+            schema_version: "1.0".to_string(),
+            execution: config::ExecutionConfig::default(),
+            defaults: config::DefaultsConfig::default(),
+            targets: vec![TargetConfig {
+                name: "shell-scripts".to_string(),
+                enabled: true,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                runner: RunnerType::Custom,
+                modes,
+                report: None,
+                coverage: None,
+            }],
+        };
+        let cfg_path = config_path(dir.path());
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        config::write_test_config(&cfg_path, &populated).unwrap();
+        let before = std::fs::read(&cfg_path).unwrap();
+
+        let err = run_auto(dir.path()).expect_err("populated config should block run_auto");
+        assert!(
+            matches!(err, SetupError::ConfigExists(_)),
+            "expected ConfigExists, got {err:?}"
+        );
+
+        let after = std::fs::read(&cfg_path).unwrap();
+        assert_eq!(
+            before, after,
+            "run_auto must not mutate a populated test-config.json"
+        );
     }
 
     #[test]
