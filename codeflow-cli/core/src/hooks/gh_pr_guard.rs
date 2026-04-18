@@ -29,7 +29,11 @@ pub(crate) fn pr_number_re() -> &'static Regex {
 
 pub(crate) fn gh_pr_create_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+create(?:\s|$)").expect("valid regex"))
+    RE.get_or_init(|| {
+        // Match both `gh pr create` and `gh pr edit <N>` — both set the PR body
+        // and therefore need the same body-validation invariants.
+        Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+(?:create|edit)(?:\s|$)").expect("valid regex")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,159 @@ pub fn is_emoji(c: char) -> bool {
         | 0x1FA00..=0x1FA6F // Chess symbols
         | 0x1FA70..=0x1FAFF // Symbols extended
     )
+}
+
+// ---------------------------------------------------------------------------
+// --body-file path extraction + body content resolution
+// ---------------------------------------------------------------------------
+
+/// Extract the value of `--body-file=<path>` or `--body-file <path>` from a
+/// shell command string. Returns `None` when the flag is absent.
+///
+/// Understood forms:
+/// - `--body-file=/path/to/file.md`
+/// - `--body-file /path/to/file.md`
+/// - `--body-file "/path with spaces.md"`
+/// - `--body-file '/path with spaces.md'`
+///
+/// The function is deliberately conservative: it walks the command as tokens,
+/// respecting matched single and double quotes so an inline `--body-file` that
+/// appears INSIDE a quoted string (e.g. documentation in a heredoc) is not
+/// misread as an actual flag.
+#[must_use]
+pub fn extract_body_file_path(command: &str) -> Option<String> {
+    let tokens = tokenise_shell(command);
+    let mut iter = tokens.into_iter();
+    while let Some(tok) = iter.next() {
+        if let Some(val) = tok.strip_prefix("--body-file=") {
+            return Some(val.to_string());
+        }
+        if tok == "--body-file" {
+            return iter.next();
+        }
+    }
+    None
+}
+
+/// Tokenise a shell command respecting single- and double-quoted strings.
+/// Unclosed quotes are tolerated: the partial token is returned as-is.
+fn tokenise_shell(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut iter = command.chars().peekable();
+
+    while let Some(c) = iter.next() {
+        match c {
+            '\\' if !in_single => {
+                // Bash backslash escapes everywhere except inside single quotes.
+                // Preserve the next char literally so `--body-file "\"foo\""` survives.
+                if let Some(next) = iter.next() {
+                    current.push(next);
+                }
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Failure modes for [`load_body_content`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum BodyLoadError {
+    /// Command provides neither `--body` nor `--body-file`.
+    MissingBodyFlag,
+    /// `--body-file=-` explicitly rejected (stdin not supported).
+    StdinNotSupported,
+    /// File path does not exist or cannot be read.
+    FileUnreadable(String),
+    /// File contents are not valid UTF-8.
+    NotUtf8(String),
+}
+
+impl std::fmt::Display for BodyLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingBodyFlag => write!(f, "Missing --body or --body-file flag"),
+            Self::StdinNotSupported => write!(
+                f,
+                "--body-file=- (stdin) is not supported by the hook validator; \
+                 use --body-file with a real file path"
+            ),
+            Self::FileUnreadable(msg) => write!(f, "--body-file unreadable: {msg}"),
+            Self::NotUtf8(path) => {
+                write!(f, "--body-file contents are not valid UTF-8: {path}")
+            }
+        }
+    }
+}
+
+/// Resolve the PR body content for validation.
+///
+/// Resolution order:
+/// 1. `--body-file <path>` — read and return the file's text content.
+/// 2. `--body "..."` / `--body=...` — return the original command (the inline
+///    body is embedded there; existing substring matchers search it directly).
+/// 3. Neither present → [`BodyLoadError::MissingBodyFlag`].
+///
+/// Returning the raw command in case (2) preserves backward compatibility with
+/// every existing test and validator that scans `command.contains(...)`.
+///
+/// # Errors
+///
+/// Returns [`BodyLoadError::StdinNotSupported`] when the caller passes
+/// `--body-file=-`, [`BodyLoadError::FileUnreadable`] when the file cannot be
+/// opened or read, [`BodyLoadError::NotUtf8`] when the file's bytes are not
+/// valid UTF-8, or [`BodyLoadError::MissingBodyFlag`] when neither `--body`
+/// nor `--body-file` appears in the command.
+pub fn load_body_content(command: &str) -> Result<String, BodyLoadError> {
+    if let Some(path) = extract_body_file_path(command) {
+        if path == "-" {
+            return Err(BodyLoadError::StdinNotSupported);
+        }
+        match std::fs::read(&path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => Ok(s),
+                Err(_) => Err(BodyLoadError::NotUtf8(path)),
+            },
+            Err(e) => Err(BodyLoadError::FileUnreadable(format!("{path}: {e}"))),
+        }
+    } else if has_inline_body_flag(command) {
+        Ok(command.to_string())
+    } else {
+        Err(BodyLoadError::MissingBodyFlag)
+    }
+}
+
+/// True when the command uses the inline `--body <text>` or `--body=<text>`
+/// form (as distinct from `--body-file …`).
+fn has_inline_body_flag(command: &str) -> bool {
+    // A bare `--body` (with optional `=value`) but explicitly NOT `--body-file`.
+    // We scan tokens to avoid false positives when `--body-file` is present.
+    let tokens = tokenise_shell(command);
+    let mut saw_inline = false;
+    for tok in &tokens {
+        if tok == "--body" || tok.starts_with("--body=") {
+            saw_inline = true;
+        }
+    }
+    saw_inline
 }
 
 // ---------------------------------------------------------------------------
@@ -367,23 +524,48 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
             }
         }
 
-        // --- PR body validation ---
+        // --- PR body validation (gh pr create / gh pr edit) ---
         if gh_pr_create_re().is_match(command) {
             let mut errors: Vec<String> = Vec::new();
 
-            if self.pr_config.require_body_flag && !command.contains("--body") {
-                errors.push("Missing --body flag: PR body is required".to_string());
-            }
+            // Resolve body content — either from --body-file <path> or from the
+            // command itself (inline --body). Any resolution failure becomes a
+            // block reason so the PR can't be created/edited with an empty or
+            // unreadable body.
+            let body_content = match load_body_content(command) {
+                Ok(body) => body,
+                Err(BodyLoadError::MissingBodyFlag) => {
+                    if self.pr_config.require_body_flag {
+                        errors.push(
+                            "Missing --body or --body-file flag: PR body is required".to_string(),
+                        );
+                    }
+                    // Fall back to command-as-body for the remaining checks — this
+                    // preserves historical behaviour for configurations that don't
+                    // require the flag.
+                    command.to_string()
+                }
+                Err(other) => {
+                    return Ok(HookOutput::Block {
+                        reason: format!(
+                            "BLOCKED: PR body validation failed:\n  - {other}\n\n\
+                             MUST: Provide --body \"…\" or --body-file <path> pointing \
+                             at a readable UTF-8 file.\n"
+                        ),
+                        category: Some(BlockCategory::GhPrGuard),
+                    });
+                }
+            };
 
             for section in &self.pr_config.required_sections {
-                if !command.contains(section.as_str()) {
+                if !body_content.contains(section.as_str()) {
                     errors.push(format!("Missing required PR section: '{section}'"));
                 }
             }
 
-            let lower_cmd = strip_zero_width(&command.to_lowercase());
+            let lower_body = strip_zero_width(&body_content.to_lowercase());
             for pattern in &self.ai_patterns {
-                if lower_cmd.contains(&pattern.to_lowercase()) {
+                if lower_body.contains(&pattern.to_lowercase()) {
                     errors.push(format!(
                         "AI attribution detected in PR body: pattern '{pattern}'"
                     ));
@@ -392,7 +574,7 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
             }
 
             if self.pr_config.forbid_emoji {
-                for ch in command.chars() {
+                for ch in body_content.chars() {
                     if is_emoji(ch) {
                         errors.push(format!("Emoji character detected in PR body: '{ch}'"));
                         break;
@@ -406,7 +588,7 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
                 .iter()
                 .any(|s| s.contains("Test"))
             {
-                errors.extend(validate_test_results_section(command));
+                errors.extend(validate_test_results_section(&body_content));
             }
 
             if !errors.is_empty() {
@@ -510,6 +692,19 @@ mod tests {
         .to_string()
     }
 
+    /// Canonical body content (what a valid --body-file would hold).
+    fn canonical_body_content() -> &'static str {
+        "\n## Summary\n- Add new feature\n\
+         \n## Testing\n- Ran full test suite\n\
+         \n## Test Results\n### 1. Overall Test Pass Status\n\
+         - Suite: `codeflow test --mode full`\n\
+         - Result: 500 passed, 0 failed\n\
+         \n### 2. Overall Coverage\n- Workspace: 92%\n- CLI crate: 90%\n\
+         \n### 3. Modified File Coverage\n| File | Coverage | Threshold | Status |\n\
+         |------|----------|-----------|--------|\n\
+         | src/lib.rs | 94% | 85% | PASS |\n"
+    }
+
     // AC #20a: valid 3-target body passes
     #[test]
     fn valid_canonical_body_passes() {
@@ -599,6 +794,228 @@ mod tests {
             errors[0].contains("codeflow test --mode full"),
             "error must reference regeneration command; got: {:?}",
             errors[0]
+        );
+    }
+
+    // --- --body-file support ---
+
+    /// `gh pr edit` matches the regex so `--body-file` on edit also validates.
+    #[test]
+    fn gh_pr_edit_triggers_body_validation() {
+        assert!(gh_pr_create_re().is_match("gh pr edit 295 --body ''"));
+        assert!(gh_pr_create_re().is_match("gh pr edit 295 --body-file body.md"));
+    }
+
+    #[test]
+    fn extract_body_file_path_space_form() {
+        let cmd = "gh pr create --title t --body-file /tmp/body.md";
+        assert_eq!(
+            extract_body_file_path(cmd),
+            Some("/tmp/body.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_body_file_path_equals_form() {
+        let cmd = "gh pr create --title t --body-file=/tmp/body.md";
+        assert_eq!(
+            extract_body_file_path(cmd),
+            Some("/tmp/body.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_body_file_path_with_spaces() {
+        let cmd = "gh pr create --title t --body-file \"/tmp/body file.md\"";
+        assert_eq!(
+            extract_body_file_path(cmd),
+            Some("/tmp/body file.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_body_file_path_absent() {
+        let cmd = "gh pr create --title t --body 'inline body'";
+        assert_eq!(extract_body_file_path(cmd), None);
+    }
+
+    /// Valid body in a file → guard allows.
+    #[test]
+    fn body_file_with_canonical_content_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        std::fs::write(&body_path, canonical_body_content()).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file {}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "--body-file with canonical content must pass: {result:?}"
+        );
+    }
+
+    /// `--body-file=<path>` form is parsed identically.
+    #[test]
+    fn body_file_equals_form_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        std::fs::write(&body_path, canonical_body_content()).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file={}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        assert_eq!(result.exit_code(), 0, "--body-file= form must pass");
+    }
+
+    /// File missing a required section → guard blocks with the section-level error.
+    #[test]
+    fn body_file_missing_required_section_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        let partial = "## Summary\n- x\n## Testing\n- y\n";
+        std::fs::write(&body_path, partial).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file {}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "missing required section in body-file must block"
+        );
+        if let HookOutput::Block { reason, .. } = result {
+            assert!(
+                reason.contains("## Test Results"),
+                "block reason must name missing section; got: {reason}"
+            );
+        }
+    }
+
+    /// AI attribution inside the file → blocked (regression parity with inline).
+    #[test]
+    fn body_file_with_ai_attribution_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        let with_ai = format!(
+            "{}\n\nGenerated with Claude Code\n",
+            canonical_body_content()
+        );
+        std::fs::write(&body_path, with_ai).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file {}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "AI attribution in body-file must block"
+        );
+    }
+
+    /// Emoji inside the file → blocked (regression parity with inline).
+    #[test]
+    fn body_file_with_emoji_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        let with_emoji = format!("{}\n\u{1F680}\n", canonical_body_content());
+        std::fs::write(&body_path, with_emoji).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file {}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "emoji in body-file must block"
+        );
+    }
+
+    /// Nonexistent path → blocked with an unreadable-file message.
+    #[test]
+    fn body_file_nonexistent_path_blocks() {
+        let cmd = "gh pr create --title \"feat: x\" --body-file /nonexistent/does-not-exist.md";
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(cmd)).unwrap();
+        if let HookOutput::Block { reason, .. } = result {
+            assert!(
+                reason.contains("--body-file unreadable"),
+                "block must name unreadable-file error; got: {reason}"
+            );
+        } else {
+            panic!("nonexistent body-file path must block");
+        }
+    }
+
+    /// `--body-file=-` explicitly rejected.
+    #[test]
+    fn body_file_stdin_rejected() {
+        let cmd = "gh pr create --title \"feat: x\" --body-file=-";
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(cmd)).unwrap();
+        if let HookOutput::Block { reason, .. } = result {
+            assert!(
+                reason.contains("stdin"),
+                "block must reject --body-file=-; got: {reason}"
+            );
+        } else {
+            panic!("--body-file=- must block");
+        }
+    }
+
+    /// Non-UTF8 file content → blocked.
+    #[test]
+    fn body_file_non_utf8_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let body_path = dir.path().join("body.md");
+        // Invalid UTF-8 byte sequence.
+        std::fs::write(&body_path, [0xFF, 0xFE, 0xFD]).unwrap();
+        let cmd = format!(
+            "gh pr create --title \"feat: x\" --body-file {}",
+            body_path.display()
+        );
+
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(&cmd)).unwrap();
+        if let HookOutput::Block { reason, .. } = result {
+            assert!(
+                reason.contains("not valid UTF-8"),
+                "block must name non-UTF8 error; got: {reason}"
+            );
+        } else {
+            panic!("non-UTF8 body-file must block");
+        }
+    }
+
+    /// Inline `--body` path remains unchanged (regression guard).
+    #[test]
+    fn inline_body_still_validates() {
+        let cmd = r#"gh pr create --title "feat" --body "
+## Summary
+- x
+
+## Testing
+- y
+""#;
+        // This command lacks the Test Results section → must block via inline path.
+        let guard = make_guard_with_resolver(NullResolver);
+        let result = guard.handle(make_input(cmd)).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "inline --body path must still validate required sections"
         );
     }
 }
