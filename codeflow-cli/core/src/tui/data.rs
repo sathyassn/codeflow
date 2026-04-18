@@ -70,6 +70,10 @@ pub struct SessionView {
     pub phase: Option<String>,
     pub work_type: Option<String>,
     pub task_id: Option<String>,
+    /// Formatted task identifier (e.g. `INF-TSK-046-008`). Preferred over
+    /// `task_id` for display; callers use `format_task_id_for_display` to
+    /// render the TUI's TASK column.
+    pub task_format_id: Option<String>,
     pub team_name: Option<String>,
     pub pid: i64,
     pub worktree_path: Option<String>,
@@ -391,19 +395,35 @@ pub async fn fetch_session_views_with_keep_last(
             -1
         };
 
-        // Resolve task_id: prefer DB value, fall back to active-task.json.
-        let task_id = s.task_id.clone().or_else(|| {
-            let wt = s.worktree_path.as_deref().filter(|p| !p.is_empty())?;
-            let at_path = std::path::Path::new(wt).join(".state/runtime/active-task.json");
-            let data = std::fs::read_to_string(at_path).ok()?;
-            let v: serde_json::Value = serde_json::from_str(&data).ok()?;
-            let tid = v.get("task_id")?.as_str()?;
-            if tid.is_empty() {
-                None
-            } else {
-                Some(tid.to_string())
-            }
-        });
+        // Resolve task_id + task_format_id: prefer DB values, fall back to
+        // active-task.json on disk. Both reads are idempotent and safe to miss.
+        let (task_id, task_format_id) = {
+            let disk = s
+                .worktree_path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .and_then(|wt| {
+                    let path = std::path::Path::new(wt).join(".state/runtime/active-task.json");
+                    let data = std::fs::read_to_string(path).ok()?;
+                    serde_json::from_str::<serde_json::Value>(&data).ok()
+                });
+            let disk_task_id = disk.as_ref().and_then(|v| {
+                v.get("task_id")
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            });
+            let disk_format_id = disk.as_ref().and_then(|v| {
+                v.get("task_format_id")
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            });
+            (
+                s.task_id.clone().or(disk_task_id),
+                s.task_format_id.clone().or(disk_format_id),
+            )
+        };
 
         views.push(SessionView {
             session_id: s.session_id.clone(),
@@ -412,6 +432,7 @@ pub async fn fetch_session_views_with_keep_last(
             phase,
             work_type: s.work_type.clone(),
             task_id,
+            task_format_id,
             team_name: s.team_name.clone(),
             pid: s.pid,
             worktree_path: s.worktree_path.clone(),
@@ -492,6 +513,34 @@ pub fn abbreviate_session_id(sid: &str) -> String {
         format!("{}...{}", &sid[..10], &sid[sid.len() - 5..])
     } else {
         sid.to_string()
+    }
+}
+
+/// Render the TUI TASK column for one session or task.
+///
+/// Precedence (per INF-TSK-047-001 AC #1):
+/// 1. If `task_format_id` is present, render it verbatim
+///    (e.g. `INF-TSK-046-008`).
+/// 2. Else if `task_id` is present, render it as a truncated ULID
+///    of the form `{first 8}…{last 5}` (e.g. `task-01K…MHH`). Falls
+///    through to the full id when it is already short enough.
+/// 3. Else render `--`.
+#[must_use]
+pub fn format_task_id_for_display(task_format_id: Option<&str>, task_id: Option<&str>) -> String {
+    if let Some(fmt) = task_format_id.filter(|s| !s.is_empty()) {
+        return fmt.to_string();
+    }
+    match task_id.filter(|s| !s.is_empty()) {
+        Some(raw) if raw.chars().count() > 14 => {
+            // char-safe truncation; avoids panic on non-ASCII though callers
+            // always pass ASCII ULIDs.
+            let chars: Vec<char> = raw.chars().collect();
+            let head: String = chars.iter().take(8).collect();
+            let tail: String = chars.iter().skip(chars.len() - 5).collect();
+            format!("{head}…{tail}")
+        }
+        Some(raw) => raw.to_string(),
+        None => "--".to_string(),
     }
 }
 
@@ -866,6 +915,7 @@ mod tests {
             phase: Some("PF4".to_string()),
             work_type: Some("FEAT".to_string()),
             task_id: Some("TSK-001".to_string()),
+            task_format_id: None,
             team_name: Some("team-1".to_string()),
             pid: 12345,
             worktree_path: Some("/tmp/wt".to_string()),
@@ -1034,6 +1084,7 @@ mod tests {
             phase: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -1126,6 +1177,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1157,6 +1210,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1182,6 +1237,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),
@@ -1669,6 +1726,52 @@ mod tests {
         assert_eq!(deduped.len(), names.len(), "duplicates in {names:?}");
     }
 
+    // -----------------------------------------------------------------------
+    // format_task_id_for_display — INF-TSK-047-001 AC #1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_task_id_prefers_format_id() {
+        let out = format_task_id_for_display(Some("INF-TSK-046-008"), Some("task-01KABC"));
+        assert_eq!(out, "INF-TSK-046-008");
+    }
+
+    #[test]
+    fn test_format_task_id_truncates_long_ulid() {
+        // Classic ULID-shaped task id: 26 chars after the `task-` prefix.
+        let ulid = "task-01KPHCP81KGS3PKG06TZRAKMHH";
+        let out = format_task_id_for_display(None, Some(ulid));
+        // First 8 chars + ellipsis + last 5 chars.
+        assert_eq!(out, "task-01K…AKMHH");
+    }
+
+    #[test]
+    fn test_format_task_id_short_ulid_passthrough() {
+        // Anything <= 14 chars passes through unchanged (already fits the
+        // TASK column width).
+        let short = "task-abcd";
+        let out = format_task_id_for_display(None, Some(short));
+        assert_eq!(out, "task-abcd");
+    }
+
+    #[test]
+    fn test_format_task_id_no_task_returns_dashes() {
+        assert_eq!(format_task_id_for_display(None, None), "--");
+    }
+
+    #[test]
+    fn test_format_task_id_empty_strings_count_as_none() {
+        // Empty format_id falls through to task_id; empty task_id falls
+        // through to `--`.
+        assert_eq!(format_task_id_for_display(Some(""), None), "--");
+        assert_eq!(format_task_id_for_display(None, Some("")), "--");
+        // Empty format_id + valid task_id returns the task_id rendering.
+        assert_eq!(
+            format_task_id_for_display(Some(""), Some("task-01KPHCP81KGS3PKG06TZRAKMHH")),
+            "task-01K…AKMHH"
+        );
+    }
+
     /// When the config file is absent, the helper falls back to the
     /// historical stage set so the TUI still renders.
     #[test]
@@ -1740,6 +1843,8 @@ mod tests {
             branch: Some("feat/test".to_string()),
             work_type: Some("FEAT".to_string()),
             task_id: Some("TSK-001".to_string()),
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: Some("team-1".to_string()),
             source_cli: "codeflow".to_string(),
@@ -1764,6 +1869,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".to_string(),

@@ -27,6 +27,16 @@ pub struct InteractiveSession {
     pub work_type: Option<String>,
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Formatted task ID (e.g., `INF-TSK-046-008`) when known, for display in TUIs.
+    /// Sourced from `active-task.json` alongside `task_id`, or back-filled via
+    /// `generate_task_format_id` when missing. Distinct from `task_id` (ULID PK).
+    #[serde(default)]
+    pub task_format_id: Option<String>,
+    /// Last completed PathFlow phase (e.g., `pf-4`) persisted in the DB so it
+    /// survives worktree cleanup. Lets the status TUI show a meaningful phase
+    /// for stale sessions whose worktree sentinels are gone.
+    #[serde(default)]
+    pub last_phase: Option<String>,
     #[serde(default)]
     pub team_name: Option<String>,
     /// tmux session name when launched via tmux (e.g., `codeflow-ses-xxx`).

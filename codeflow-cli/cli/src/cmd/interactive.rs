@@ -1225,7 +1225,7 @@ fn render_session_table(
     )>,
     show_all: bool,
 ) {
-    use codeflow_core::tui::data::abbreviate_session_id;
+    use codeflow_core::tui::data::{abbreviate_session_id, format_task_id_for_display};
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
     use ratatui::layout::Constraint;
@@ -1245,7 +1245,10 @@ fn render_session_table(
                 .filter(|s| show_all || !s.hidden)
                 .map(|s| {
                     let sid_display = abbreviate_session_id(&s.session_id);
-                    let task_id = s.task_id.as_deref().unwrap_or("--");
+                    let task_display = format_task_id_for_display(
+                        s.task_format_id.as_deref(),
+                        s.task_id.as_deref(),
+                    );
                     let status_badge = session_status_badge(&s.status);
                     let phase_badge = PhaseBadge::new(s.phase.as_deref());
                     let duration = DurationCell::new(Some(s.duration_secs));
@@ -1253,7 +1256,7 @@ fn render_session_table(
                     let work_type = s.work_type.as_deref().unwrap_or("--");
 
                     Row::new(vec![
-                        Cell::from(task_id.to_string()),
+                        Cell::from(task_display),
                         Cell::from(sid_display),
                         Cell::from(branch.to_string()),
                         Cell::from(work_type.to_string()),
@@ -2335,6 +2338,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2367,6 +2372,8 @@ mod tests {
             branch: Some("fix/test".into()),
             work_type: Some("FIX".into()),
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: Some("team-1".into()),
             source_cli: "codeflow".into(),
@@ -2389,6 +2396,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2411,6 +2420,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2443,6 +2454,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2475,6 +2488,8 @@ mod tests {
             branch: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
+            last_phase: None,
             tmux_session: None,
             team_name: None,
             source_cli: "codeflow".into(),
@@ -2563,6 +2578,7 @@ mod tests {
             phase: None,
             work_type: None,
             task_id: None,
+            task_format_id: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -2587,6 +2603,7 @@ mod tests {
             phase: Some("PF4".into()),
             work_type: Some("FEAT".into()),
             task_id: None,
+            task_format_id: None,
             team_name: Some("team-1".into()),
             pid: 42,
             worktree_path: None,
@@ -2614,6 +2631,7 @@ mod tests {
                 phase: None,
                 work_type: None,
                 task_id: None,
+                task_format_id: None,
                 team_name: None,
                 pid: 1,
                 worktree_path: None,
@@ -2629,6 +2647,7 @@ mod tests {
                 phase: None,
                 work_type: None,
                 task_id: None,
+                task_format_id: None,
                 team_name: None,
                 pid: 2,
                 worktree_path: None,

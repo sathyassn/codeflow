@@ -2204,7 +2204,7 @@ fn render_table(
     state: &mut ratatui::widgets::TableState,
     view: Option<&codeflow_core::tui::data::BatchView>,
 ) {
-    use codeflow_core::tui::data::abbreviate_session_id;
+    use codeflow_core::tui::data::{abbreviate_session_id, format_task_id_for_display};
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge, StatusBadge};
     use ratatui::layout::Constraint;
@@ -2231,9 +2231,18 @@ fn render_table(
                         .as_deref()
                         .map_or_else(|| "--".to_string(), abbreviate_session_id);
                     let work_type = task.work_type.as_deref().unwrap_or("--");
+                    // Autorun batches supply format-style task_ids already
+                    // (e.g. `INF-TSK-046-008`); `format_task_id_for_display`
+                    // treats any string starting with `task-` as a raw ULID
+                    // needing truncation, anything else as a format_id.
+                    let task_display = if task.task_id.starts_with("task-") {
+                        format_task_id_for_display(None, Some(&task.task_id))
+                    } else {
+                        format_task_id_for_display(Some(&task.task_id), None)
+                    };
 
                     Row::new(vec![
-                        Cell::from(task.task_id.clone()),
+                        Cell::from(task_display),
                         Cell::from(session_display),
                         Cell::from(task.branch.as_deref().unwrap_or("--").to_string()),
                         Cell::from(work_type.to_string()),

@@ -627,18 +627,49 @@ fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, ses
         })
         .unwrap_or_default();
 
-    // Read task_id from active-task.json (worktree-aware).
-    let task_id = {
+    // Read task_id + task_format_id from active-task.json (worktree-aware).
+    // The file is written by `codeflow state set-active-task` and carries
+    // both the ULID PK and its formatted display ID. Either, both, or
+    // neither may be present.
+    let (task_id, task_format_id) = {
         let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
         let path = crate::session::active_task_path_resolved(project_dir, worktree_path.as_deref());
-        std::fs::read_to_string(path)
+        let parsed: Option<serde_json::Value> = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok());
+        let tid = parsed
+            .as_ref()
+            .and_then(|v| v.get("task_id")?.as_str().map(String::from))
+            .filter(|s| !s.is_empty());
+        let fid = parsed
+            .as_ref()
+            .and_then(|v| v.get("task_format_id")?.as_str().map(String::from))
+            .filter(|s| !s.is_empty());
+        (tid, fid)
+    };
+
+    // Read last_completed_phase from pathflow-session-status.json so the
+    // TUI can show a meaningful PHASE column for stale sessions whose
+    // worktree sentinels may no longer exist.
+    let last_phase = {
+        let status_path = session_dir.join("pathflow-session-status.json");
+        std::fs::read_to_string(&status_path)
             .ok()
             .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
-            .and_then(|v| v.get("task_id")?.as_str().map(String::from))
+            .and_then(|v| {
+                v.get("last_completed_phase")
+                    .and_then(|p| p.as_str())
+                    .map(String::from)
+            })
             .filter(|s| !s.is_empty())
     };
 
-    if work_type.is_empty() && branch.is_empty() && task_id.is_none() {
+    if work_type.is_empty()
+        && branch.is_empty()
+        && task_id.is_none()
+        && task_format_id.is_none()
+        && last_phase.is_none()
+    {
         return;
     }
 
@@ -651,12 +682,15 @@ fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, ses
             .query(
                 "UPDATE interactive_session SET \
                  branch = $branch, work_type = $work_type, \
-                 task_id = $task_id, updated_at = $now \
+                 task_id = $task_id, task_format_id = $task_format_id, \
+                 last_phase = $last_phase, updated_at = $now \
                  WHERE session_id = $sid AND status = 'active'",
             )
             .bind(("branch", branch))
             .bind(("work_type", work_type))
             .bind(("task_id", task_id))
+            .bind(("task_format_id", task_format_id))
+            .bind(("last_phase", last_phase))
             .bind(("now", now))
             .bind(("sid", sid))
             .await
@@ -2775,6 +2809,90 @@ mod tests {
             let br_values: Vec<String> = br_result.take(0).unwrap_or_default();
             assert_eq!(br_values.len(), 1, "expected 1 session record");
             assert_eq!(br_values[0], "fix/test-branch");
+        });
+    }
+
+    #[test]
+    fn test_update_interactive_session_fields_writes_task_format_id_and_last_phase() {
+        // Verifies INF-TSK-047-001 AC #1 and #3: when active-task.json
+        // carries task_format_id and pathflow-session-status.json carries
+        // last_completed_phase, both must land in the DB columns.
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Git branch required by the function (trim to empty is fine).
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "fix/tui-task-id"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // active-task.json in the default (non-worktree) path carries both
+        // the ULID and its format_id.
+        let runtime_dir = dir.path().join(".state/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("active-task.json"),
+            r#"{"task_id":"task-01KPHCP81KGS3PKG06TZRAKMHH","task_format_id":"INF-TSK-047-001"}"#,
+        )
+        .unwrap();
+
+        let session_dir = dir.path().join(".state/session/ses-fmtid-test/pathflow");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"work_type":"FIX","status":"pf-in-progress","last_completed_phase":"pf-4"}"#,
+        )
+        .unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            store
+                .db()
+                .query(
+                    "CREATE interactive_session SET \
+                     session_id = 'ses-fmtid-test', pid = 1234, status = 'active', \
+                     source_cli = 'codeflow', managed = true, \
+                     created_at = '2026-04-08T00:00:00Z' \
+                     RETURN NONE;",
+                )
+                .await
+                .unwrap();
+        });
+
+        update_interactive_session_fields(dir.path(), &session_dir, "ses-fmtid-test");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            let mut res = store
+                .db()
+                .query(
+                    "SELECT VALUE task_format_id FROM interactive_session \
+                     WHERE session_id = 'ses-fmtid-test'",
+                )
+                .await
+                .unwrap();
+            let vals: Vec<String> = res.take(0).unwrap_or_default();
+            assert_eq!(vals, vec!["INF-TSK-047-001".to_string()]);
+
+            let mut res2 = store
+                .db()
+                .query(
+                    "SELECT VALUE last_phase FROM interactive_session \
+                     WHERE session_id = 'ses-fmtid-test'",
+                )
+                .await
+                .unwrap();
+            let phase_vals: Vec<String> = res2.take(0).unwrap_or_default();
+            assert_eq!(phase_vals, vec!["pf-4".to_string()]);
         });
     }
 
