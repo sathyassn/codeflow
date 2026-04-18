@@ -336,22 +336,18 @@ pub async fn fetch_session_views_with_keep_last(
 
     let mut views = Vec::with_capacity(sessions.len());
     let mut summary = SessionSummary::default();
+    // Collect sessions whose DB status says `active` but whose PID is dead,
+    // so the promotion UPDATE can fire after the view is computed rather
+    // than blocking the render path. Per INF-TSK-047-001 AC #6 the inline
+    // UPDATE was a known stall source under DB contention.
+    let mut stale_promotions: Vec<String> = Vec::new();
 
     for s in &sessions {
         // PID liveness override: detect dead sessions still marked "active".
         let effective_status = if s.status.to_string() == "active" {
             let pid_u32 = u32::try_from(s.pid).unwrap_or(0);
             if pid_u32 > 0 && !crate::session::process::is_process_alive(pid_u32) {
-                // Transition to stale in DB (best-effort, don't block TUI on failure).
-                let _ = store
-                    .db()
-                    .query(
-                        "UPDATE interactive_session SET status = 'stale', \
-                         completed_at = time::now(), updated_at = time::now() \
-                         WHERE session_id = $sid AND status = 'active'",
-                    )
-                    .bind(("sid", s.session_id.clone()))
-                    .await;
+                stale_promotions.push(s.session_id.clone());
                 "stale".to_string()
             } else {
                 s.status.to_string()
@@ -479,6 +475,34 @@ pub async fn fetch_session_views_with_keep_last(
         }
     }
     summary.hidden_count = terminal_seen.saturating_sub(keep_last);
+
+    // Promote dead-PID-active sessions to stale AFTER the view is computed.
+    // Use tokio::spawn so the write happens off the render thread — under
+    // DB contention this previously stalled the TUI for multiple seconds
+    // (INF-TSK-047-001 AC #6). If no tokio runtime is available (sync
+    // caller, e.g. text-mode CLI), fall back to the inline await.
+    if !stale_promotions.is_empty() {
+        let store_clone = store.clone();
+        let ids = stale_promotions;
+        let promote = async move {
+            for sid in ids {
+                let _ = store_clone
+                    .db()
+                    .query(
+                        "UPDATE interactive_session SET status = 'stale', \
+                         completed_at = time::now(), updated_at = time::now() \
+                         WHERE session_id = $sid AND status = 'active'",
+                    )
+                    .bind(("sid", sid))
+                    .await;
+            }
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(promote);
+        } else {
+            promote.await;
+        }
+    }
 
     Ok((views, summary))
 }

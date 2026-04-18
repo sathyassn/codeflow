@@ -1649,6 +1649,14 @@ async fn run_status_watch(
     drop(init_store);
     let mut status_message: Option<(String, std::time::Instant)> = None;
 
+    // Auto-refresh decoupling (INF-TSK-047-001 AC #6): input polls every
+    // 100 ms for snappy key handling; data fetch runs at the user-configured
+    // `interval_secs` cadence. This prevents a slow DB fetch from freezing
+    // the render thread for multiple seconds.
+    let poll_interval = Duration::from_millis(100);
+    let fetch_interval = Duration::from_secs(interval_secs.max(1));
+    let mut last_fetch = std::time::Instant::now();
+
     loop {
         // Preserve selection index across refreshes (for whichever view is active).
         match view {
@@ -1829,9 +1837,8 @@ async fn run_status_watch(
             }
         })?;
 
-        // Event handling with user-configurable tick interval.
-        let tick = Duration::from_secs(interval_secs.max(1));
-        if event::poll(tick)? {
+        // Event handling — poll at 100 ms so keys respond immediately.
+        if event::poll(poll_interval)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Ctrl+C always quits.
@@ -2060,25 +2067,32 @@ async fn run_status_watch(
             }
         }
 
-        // Refresh data every tick (re-open store for cross-process visibility).
-        let refresh_store = match open_store(project_dir).await {
-            Ok(s) => s,
-            Err(_) => continue, // keep stale data on error
-        };
-        match view {
-            AutorunView::BatchList => {
-                batch_list = fetch_batch_list(refresh_store.as_ref())
-                    .await
-                    .unwrap_or_default();
-            }
-            AutorunView::BatchDetail(ref sid) => {
-                match fetch_batch_view(refresh_store.as_ref(), project_dir, Some(sid.as_str()))
-                    .await
-                {
-                    Ok(v) => last_view = v,
-                    Err(e) => eprintln!("warn: fetch failed: {e}"),
+        // Refresh data only once per `fetch_interval` so the render thread
+        // is not blocked every 100 ms on DB round-trips. The store is
+        // re-opened for cross-process visibility.
+        if last_fetch.elapsed() >= fetch_interval {
+            if let Ok(refresh_store) = open_store(project_dir).await {
+                match view {
+                    AutorunView::BatchList => {
+                        batch_list = fetch_batch_list(refresh_store.as_ref())
+                            .await
+                            .unwrap_or_default();
+                    }
+                    AutorunView::BatchDetail(ref sid) => {
+                        match fetch_batch_view(
+                            refresh_store.as_ref(),
+                            project_dir,
+                            Some(sid.as_str()),
+                        )
+                        .await
+                        {
+                            Ok(v) => last_view = v,
+                            Err(e) => eprintln!("warn: fetch failed: {e}"),
+                        }
+                    }
                 }
             }
+            last_fetch = std::time::Instant::now();
         }
     }
 

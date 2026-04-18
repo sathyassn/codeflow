@@ -923,6 +923,14 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
         }
     };
 
+    // Auto-refresh decoupling (INF-TSK-047-001 AC #6): input polls every
+    // 100 ms for snappy key handling; data fetch runs at the user-configured
+    // `interval_secs` cadence. This way a selection change redraws the UI
+    // without waiting for the next DB round-trip.
+    let poll_interval = Duration::from_millis(100);
+    let fetch_interval = Duration::from_secs(interval_secs.max(1));
+    let mut last_fetch = std::time::Instant::now();
+
     loop {
         // Compute filtered view count for navigation bounds.
         let visible_count = last_data.as_ref().map_or(0, |(views, _)| {
@@ -949,7 +957,7 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             let chunks = Layout::vertical([
                 Constraint::Length(2), // header
                 Constraint::Min(5),    // table
-                Constraint::Length(6), // detail
+                Constraint::Length(8), // detail — 5 content lines + 2 border + 1 padding
                 Constraint::Length(1), // keybinding bar
             ])
             .split(area);
@@ -996,9 +1004,8 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             frame.render_widget(Paragraph::new(bar_line), chunks[3]);
         })?;
 
-        // Event handling.
-        let tick = Duration::from_secs(interval_secs.max(1));
-        if event::poll(tick)? {
+        // Event handling — poll at 100 ms so keys respond immediately.
+        if event::poll(poll_interval)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
@@ -1123,14 +1130,24 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             }
         }
 
-        // Refresh data every tick (re-open store for cross-process visibility).
-        let refresh_store = match open_store(project_dir).await {
-            Ok(s) => s,
-            Err(_) => continue, // keep last_data on error
-        };
-        match fetch_session_views_with_keep_last(&refresh_store, project_dir, keep_last).await {
-            Ok(d) => last_data = Some(d),
-            Err(e) => eprintln!("warn: fetch failed: {e}"),
+        // Refresh data only once per `fetch_interval` so the render thread
+        // is not blocked every 100 ms on a DB round-trip. The store is
+        // re-opened for cross-process visibility.
+        if last_fetch.elapsed() >= fetch_interval {
+            match open_store(project_dir).await {
+                Ok(refresh_store) => {
+                    match fetch_session_views_with_keep_last(&refresh_store, project_dir, keep_last)
+                        .await
+                    {
+                        Ok(d) => last_data = Some(d),
+                        Err(e) => eprintln!("warn: fetch failed: {e}"),
+                    }
+                }
+                Err(_) => {
+                    // Keep last_data on error; try again next cycle.
+                }
+            }
+            last_fetch = std::time::Instant::now();
         }
     }
 
@@ -1336,7 +1353,9 @@ fn render_session_detail(
     area: ratatui::layout::Rect,
     session: Option<&codeflow_core::tui::data::SessionView>,
 ) {
+    use codeflow_core::tui::data::format_task_id_for_display;
     use codeflow_core::tui::theme;
+    use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
     use ratatui::style::Style;
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Paragraph};
@@ -1347,6 +1366,28 @@ fn render_session_detail(
         } else {
             "alive"
         };
+
+        // Task display: formatted ID first, ULID-truncated fallback, plus
+        // the raw ULID in parentheses when it is known AND distinct from
+        // the formatted ID (so operators can copy it verbatim).
+        let task_primary =
+            format_task_id_for_display(s.task_format_id.as_deref(), s.task_id.as_deref());
+        let task_secondary = s
+            .task_id
+            .as_deref()
+            .filter(|id| {
+                // Only show the ULID suffix when we displayed a format_id
+                // (otherwise the primary IS the ULID, so no need to repeat).
+                s.task_format_id.as_deref().is_some_and(|f| !f.is_empty())
+                    && !id.is_empty()
+                    && *id != task_primary
+            })
+            .map(|id| format!(" ({id})"))
+            .unwrap_or_default();
+
+        let status_span = session_status_badge(&s.status);
+        let phase_span = PhaseBadge::new(s.phase.as_deref()).to_span();
+        let duration_span = DurationCell::new(Some(s.duration_secs)).to_span();
 
         vec![
             Line::from(vec![
@@ -1380,6 +1421,21 @@ fn render_session_detail(
                 Span::raw("  "),
                 Span::styled("Type: ", Style::new().fg(theme::BLUE_ACCENT)),
                 Span::raw(s.work_type.as_deref().unwrap_or("--").to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled("Task: ", Style::new().fg(theme::BLUE_ACCENT)),
+                Span::raw(task_primary),
+                Span::styled(task_secondary, theme::dim()),
+            ]),
+            Line::from(vec![
+                Span::styled("Status: ", Style::new().fg(theme::BLUE_ACCENT)),
+                status_span,
+                Span::raw("  "),
+                Span::styled("Phase: ", Style::new().fg(theme::BLUE_ACCENT)),
+                phase_span,
+                Span::raw("  "),
+                Span::styled("Duration: ", Style::new().fg(theme::BLUE_ACCENT)),
+                duration_span,
             ]),
         ]
     } else {
