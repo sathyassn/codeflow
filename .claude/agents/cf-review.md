@@ -199,7 +199,7 @@ Execute the checklist for the assigned review mode.
 - [ ] **Testing** -- Unit tests exist, cover positive and negative paths, no regressions
   - [ ] Verify each source file in the changeset matching a configured test target has a corresponding test file (naming convention per the applicable language standards skill)
   - [ ] Verify the task's `tests` YAML field is populated with actual test file paths
-  - [ ] Verify new tests are registered in `.codeflow/testing/test-config.json`
+  - [ ] Verify new tests are registered in `.codeflow/config/testing/test-config.json`
 - [ ] **Error handling** -- Failures handled gracefully, `set -euo pipefail` in shell
 - [ ] **Scope** -- No unrelated modifications or scope creep
 - [ ] **Documentation** -- Complex logic has comments, public functions have docstrings
@@ -778,7 +778,7 @@ If the file is in the wrong location, flag as MAJOR with the correct location.
 
 **Step 3: Registration validation**
 
-- For every new test file: Read `.codeflow/testing/test-config.json`. Search for the test path (relative to `.codeflow/testing/`) in the `priorities.{LEVEL}.files` arrays. If missing, flag as MAJOR.
+- For every new test file: Read `.codeflow/config/testing/test-config.json`. Verify the test file is referenced under the applicable target's `test_files` or `structural.mappings` section. If missing, flag as MAJOR.
 - For every new hook script: Read `.claude/settings.json`. Search for the script path under the correct event type. If missing, flag as MAJOR.
 
 **Step 4: Source/import path resolution**
@@ -815,7 +815,7 @@ If the file is in the wrong location, flag as MAJOR with the correct location.
 ### Assumptions Audited
 | # | Assumption | Source | Verified? | Evidence |
 |---|-----------|--------|-----------|----------|
-| 1 | test-helpers.sh at ../../lib/ relative to test | test-new-feature.sh:4 | YES | Glob confirmed .codeflow/testing/lib/test-helpers.sh exists |
+| 1 | helper path relative to test file resolves correctly | test-new-feature.sh:4 | YES | Glob confirmed helper exists at resolved path |
 | 2 | assert_contains takes 3 args (haystack, needle, msg) | test-new-feature.sh:12 | YES | Read test-helpers.sh — signature matches |
 | 3 | Test goes in scripts/state/ directory | test-new-feature.sh location | FAILED | Sibling check shows tests for this category go in scripts/pathflow/ |
 | 4 | ... | ... | ... | ... |

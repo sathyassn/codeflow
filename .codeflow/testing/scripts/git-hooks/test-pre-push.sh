@@ -8,8 +8,8 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../lib/test-helpers.sh
-source "$TEST_DIR/../../lib/test-helpers.sh"
+# shellcheck source=../../helpers.sh
+source "$TEST_DIR/../../helpers.sh"
 
 HOOK="$REPO_ROOT/.codeflow/scripts/git-hooks/pre-push"
 GO_BIN="codeflow"

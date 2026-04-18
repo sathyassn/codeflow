@@ -1,9 +1,12 @@
-//! Validate command: validate task and epic markdown frontmatter.
+//! Validate command: validate task and epic markdown frontmatter, plus the
+//! canonical test config schema.
 //!
 //! Subcommands:
 //! - `codeflow validate epic <file>` -- validate a single epic file
 //! - `codeflow validate task <file>` -- validate a single task file
 //! - `codeflow validate all` -- recursively validate all epics/tasks
+//! - `codeflow validate test-config <file>` -- validate test-config.json against
+//!   the canonical schema (structural + tags fields supported)
 //!
 //! Exits with code 0 on success, 1 on validation errors.
 
@@ -29,6 +32,14 @@ pub enum ValidateCommand {
     },
     /// Recursively validate all epics and tasks in project-management/
     All,
+    /// Validate a test-config.json file against the canonical schema.
+    /// Rejects unsupported `schema_version`, unknown target fields, and
+    /// duplicate target names; surfaces per-target issues from the serde
+    /// deserializer.
+    TestConfig {
+        /// Path to the test-config.json file
+        file: PathBuf,
+    },
 }
 
 pub fn run(cmd: ValidateCommand) -> Result<()> {
@@ -56,7 +67,25 @@ pub fn run(cmd: ValidateCommand) -> Result<()> {
             }
         }
         ValidateCommand::All => run_all(&opts),
+        ValidateCommand::TestConfig { file } => run_test_config(&file),
     }
+}
+
+/// Validate a `test-config.json` file against the canonical schema.
+///
+/// Delegates to `codeflow_core::testing::config::load_test_config`, which
+/// enforces: `schema_version` required and in supported set; unknown target
+/// fields rejected; duplicate target names rejected; full serde
+/// deserialization of structural/tags/test_files blocks.
+///
+/// Returns `Err` on validation failure so the CLI's standard error-handling
+/// path produces a non-zero exit code; stderr gets the specific message.
+fn run_test_config(file: &Path) -> Result<()> {
+    codeflow_core::testing::config::load_test_config(file)
+        .map(|_| {
+            println!("{}: ok", file.display());
+        })
+        .map_err(|e| anyhow::anyhow!("validate test-config {}: {e}", file.display()))
 }
 
 fn print_results(
@@ -205,6 +234,50 @@ mod tests {
             file: PathBuf::from("/nonexistent/task.md"),
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_test_config_subcommand_parses() {
+        let cli = TestCli::try_parse_from(["test", "test-config", "/tmp/test-config.json"]);
+        assert!(cli.is_ok(), "should parse validate test-config <file>");
+    }
+
+    #[test]
+    fn test_validate_test_config_accepts_valid_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.json");
+        std::fs::write(&path, r#"{"schema_version":"1.0","targets":[]}"#).unwrap();
+        // Build the subcommand and run it — should return Ok and print ok.
+        let result = run_test_config(&path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_test_config_with_structural_and_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "schema_version": "1.0",
+                "targets": [{
+                    "name": "shell",
+                    "runner": "custom",
+                    "modes": {"full": {"command": "true"}},
+                    "tags": ["critical"],
+                    "structural": {
+                        "source_glob": ["src/*.sh"],
+                        "test_glob": ["tests/test-*.sh"],
+                        "pattern_map": [
+                            {"source": "^src/(.+)\\.sh$", "test": "tests/test-$1.sh"}
+                        ]
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let result = run_test_config(&path);
+        assert!(result.is_ok());
     }
 
     #[test]

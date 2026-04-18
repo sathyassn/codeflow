@@ -108,6 +108,132 @@ pub struct TargetConfig {
     /// see why a target did not run in CI. Expected when `ci_skip = Some(true)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_skip_reason: Option<String>,
+
+    /// Optional structural integrity configuration. When present, the
+    /// `codeflow test structural-check` subcommand validates bidirectional
+    /// source↔test mapping for this target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structural: Option<StructuralConfig>,
+
+    /// Target-level tags applied to every test file in this target.
+    /// Additional per-file tags are merged (union) from `test_files`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<Tag>,
+
+    /// Explicit per-file test entries with optional tag metadata.
+    /// Used by runners that enumerate test files directly (e.g. shell-scripts).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_files: Vec<TestFileEntry>,
+}
+
+/// Priority tag for a test target or individual test file.
+///
+/// Variants are declared in descending priority order. The derived `Ord`
+/// follows declaration order so `Critical < High < Medium < Low`, which lets
+/// tools show or sort by priority without extra plumbing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tag {
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+impl Tag {
+    /// Parse a tag from a string (case-insensitive). Returns None for unknown tags.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "critical" => Some(Self::Critical),
+            "high" => Some(Self::High),
+            "medium" => Some(Self::Medium),
+            "low" => Some(Self::Low),
+            _ => None,
+        }
+    }
+
+    /// Lowercase string form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+}
+
+impl std::fmt::Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// An explicit test file entry.
+///
+/// When a target declares `test_files`, the runner operates on those specific
+/// paths in addition to (or instead of) the commands in `modes`. Each entry
+/// may carry its own tag set which is merged with the target-level tags.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestFileEntry {
+    /// Path to the test file, relative to target `cwd` or repo root.
+    pub path: String,
+    /// Per-file tags (merged with target-level tags; final set is the union).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<Tag>,
+}
+
+/// Structural integrity configuration.
+///
+/// Enables bidirectional source↔test mapping validation.
+/// All fields are optional — a target with no `structural` block skips the check.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StructuralConfig {
+    /// Glob patterns identifying source files that must have a matching test.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_glob: Vec<String>,
+    /// Glob patterns identifying test files that must map back to a source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_glob: Vec<String>,
+    /// Ordered regex rules mapping source paths to expected test paths.
+    /// The first matching rule wins; capture groups `$1`..`$9` are substituted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pattern_map: Vec<PatternMapEntry>,
+    /// Optional exclusion rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusions: Option<StructuralExclusions>,
+}
+
+/// A single source→test mapping rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatternMapEntry {
+    /// Regex matched against the source path.
+    pub source: String,
+    /// Replacement template producing the expected test path.
+    pub test: String,
+}
+
+/// Structural check exclusion rules.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StructuralExclusions {
+    /// Source files/globs that do not require a test.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_test_required: Vec<ExclusionEntry>,
+    /// Test files/globs permitted to have no matching source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_allowed: Vec<ExclusionEntry>,
+}
+
+/// A single exclusion entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExclusionEntry {
+    /// Glob pattern matched against the repo-relative path.
+    pub pattern: String,
+    /// Why this entry is excluded; surfaced in structural-check reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Supported test runners.
@@ -283,6 +409,9 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
             "coverage",
             "ci_skip",
             "ci_skip_reason",
+            "structural",
+            "tags",
+            "test_files",
         ];
         for (i, target) in targets.iter().enumerate() {
             if let Some(obj) = target.as_object() {
@@ -552,6 +681,9 @@ mod tests {
                 coverage: None,
                 ci_skip: None,
                 ci_skip_reason: None,
+                structural: None,
+                tags: Vec::new(),
+                test_files: Vec::new(),
             }],
         };
 
@@ -623,6 +755,178 @@ mod tests {
                 assert_eq!(version, "");
             }
             other => panic!("expected UnsupportedSchemaVersion, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn test_tag_serde_roundtrip() {
+        for (json, expected) in [
+            ("\"critical\"", Tag::Critical),
+            ("\"high\"", Tag::High),
+            ("\"medium\"", Tag::Medium),
+            ("\"low\"", Tag::Low),
+        ] {
+            let parsed: Tag = serde_json::from_str(json).unwrap();
+            assert_eq!(parsed, expected);
+            let back = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(back, json);
+        }
+    }
+
+    #[test]
+    fn test_tag_parse() {
+        assert_eq!(Tag::parse("critical"), Some(Tag::Critical));
+        assert_eq!(Tag::parse("CRITICAL"), Some(Tag::Critical));
+        assert_eq!(Tag::parse("High"), Some(Tag::High));
+        assert_eq!(Tag::parse("medium"), Some(Tag::Medium));
+        assert_eq!(Tag::parse("low"), Some(Tag::Low));
+        assert_eq!(Tag::parse("other"), None);
+        assert_eq!(Tag::parse(""), None);
+    }
+
+    #[test]
+    fn test_tag_display_and_as_str() {
+        assert_eq!(Tag::Critical.as_str(), "critical");
+        assert_eq!(format!("{}", Tag::High), "high");
+        assert_eq!(format!("{}", Tag::Medium), "medium");
+        assert_eq!(format!("{}", Tag::Low), "low");
+    }
+
+    #[test]
+    fn test_load_config_with_target_level_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "bash -c true"}},
+                "tags": ["critical", "high"]
+            }]
+        }"#,
+        );
+        let config = load_test_config(&path).unwrap();
+        assert_eq!(config.targets[0].tags, vec![Tag::Critical, Tag::High]);
+    }
+
+    #[test]
+    fn test_load_config_with_test_files_and_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "test_files": [
+                    {"path": "t/a.sh", "tags": ["critical"]},
+                    {"path": "t/b.sh", "tags": ["medium", "low"]},
+                    {"path": "t/c.sh"}
+                ]
+            }]
+        }"#,
+        );
+        let config = load_test_config(&path).unwrap();
+        let files = &config.targets[0].test_files;
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].path, "t/a.sh");
+        assert_eq!(files[0].tags, vec![Tag::Critical]);
+        assert_eq!(files[1].tags, vec![Tag::Medium, Tag::Low]);
+        assert!(files[2].tags.is_empty());
+    }
+
+    #[test]
+    fn test_load_config_with_structural_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "structural": {
+                    "source_glob": [".codeflow/scripts/**/*.sh"],
+                    "test_glob": [".codeflow/testing/scripts/**/test-*.sh"],
+                    "pattern_map": [
+                        {
+                            "source": "^\\.codeflow/scripts/([^/]+)/([^/]+)\\.sh$",
+                            "test": ".codeflow/testing/scripts/$1/test-$2.sh"
+                        }
+                    ],
+                    "exclusions": {
+                        "no_test_required": [{"pattern": ".codeflow/scripts/lib/*", "reason": "lib modules"}],
+                        "orphan_allowed": [{"pattern": "fixtures/framework/*"}]
+                    }
+                }
+            }]
+        }"#,
+        );
+        let config = load_test_config(&path).unwrap();
+        let s = config.targets[0].structural.as_ref().unwrap();
+        assert_eq!(s.source_glob, vec![".codeflow/scripts/**/*.sh"]);
+        assert_eq!(s.test_glob, vec![".codeflow/testing/scripts/**/test-*.sh"]);
+        assert_eq!(s.pattern_map.len(), 1);
+        let exclusions = s.exclusions.as_ref().unwrap();
+        assert_eq!(exclusions.no_test_required.len(), 1);
+        assert_eq!(
+            exclusions.no_test_required[0].pattern,
+            ".codeflow/scripts/lib/*"
+        );
+        assert_eq!(
+            exclusions.no_test_required[0].reason.as_deref(),
+            Some("lib modules")
+        );
+        assert_eq!(exclusions.orphan_allowed.len(), 1);
+        assert!(exclusions.orphan_allowed[0].reason.is_none());
+    }
+
+    #[test]
+    fn test_load_config_with_invalid_tag_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "tags": ["bogus"]
+            }]
+        }"#,
+        );
+        let err = load_test_config(&path).unwrap_err();
+        assert!(matches!(err, TestingError::ConfigInvalid { .. }));
+    }
+
+    #[test]
+    fn test_load_config_unknown_field_structural_still_rejected_if_misspelled() {
+        // `structurall` is not a known field; ensure misspellings still rejected.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "structurall": {}
+            }]
+        }"#,
+        );
+        let err = load_test_config(&path).unwrap_err();
+        match err {
+            TestingError::ConfigInvalid { message, .. } => {
+                assert!(message.contains("structurall"), "got: {message}");
+            }
+            other => panic!("expected ConfigInvalid, got: {other}"),
         }
     }
 }

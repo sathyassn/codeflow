@@ -121,7 +121,21 @@ The default strategy is squash merge. Automated merge is reserved for non-protec
 | cf-git-operations | PR validation, merge execution, branch cleanup |
 | cf-knowledge-layer | Task completion, work status update, event logging |
 
-### 3.5 Pre-Merge Validation
+### 3.5 Test & Structural Gate
+
+`/cf-ship` assumes the preceding `/cf-test` (WS-QA) stage has run `codeflow test --mode full` and produced a passing report. Before the team lead dispatches merge, confirm:
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Full test suite | `codeflow test --mode full` | All targets pass, coverage thresholds met |
+| Structural integrity | `codeflow test structural-check --format human` | No missing or orphaned mappings for targets with a `structural` block |
+| CI parity | `.github/workflows/test-suite.yml` CI job | `doctor` → `structural-check` → `--mode full` all green |
+
+**Tag-filtered runs do not gate the ship.** If a prior stage (e.g. `/cf-review` spot-checks) invoked `codeflow test --only-tag critical` or `--skip-tag low`, those filtered runs are diagnostic, not canonical. The only ship-gating run is `codeflow test --mode full` with no tag filters — this ensures the full set of `test_files` executes regardless of per-file priority tags.
+
+See `.claude/commands/cf-test.md` for the full `structural-check` and `--only-tag`/`--skip-tag` reference.
+
+### 3.6 Pre-Merge Validation
 
 **Before dispatching merge to cf-git-operations:**
 

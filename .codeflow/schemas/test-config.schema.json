@@ -13,7 +13,7 @@
     "schema_version": {
       "type": "string",
       "enum": ["1.0"],
-      "description": "Schema version. Currently only '1.0' is supported."
+      "description": "Schema version. '1.0' supported. Optional 'structural' and 'tags' fields added 2026-04 are non-breaking additions."
     },
     "execution": {
       "type": "object",
@@ -106,6 +106,32 @@
         },
         "coverage": {
           "$ref": "#/$defs/coverage_config"
+        },
+        "structural": {
+          "$ref": "#/$defs/structural_config"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Target-level tags applied to every test file in this target. Individual test files may override or augment via the 'test_files' array.",
+          "items": {
+            "$ref": "#/$defs/tag"
+          }
+        },
+        "test_files": {
+          "type": "array",
+          "description": "Explicit per-file test entries with optional tag metadata. Used by runners that enumerate test files directly (e.g. shell-scripts).",
+          "items": {
+            "$ref": "#/$defs/test_file_entry"
+          }
+        },
+        "ci_skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the target is skipped in CI runs (set by CODEFLOW_CI=1 or GITHUB_ACTIONS=true)."
+        },
+        "ci_skip_reason": {
+          "type": "string",
+          "description": "Human-readable justification for ci_skip."
         }
       },
       "additionalProperties": false
@@ -229,6 +255,108 @@
         "remove_when": {
           "type": "string",
           "description": "Condition under which the exception should be removed."
+        }
+      },
+      "additionalProperties": false
+    },
+    "tag": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "description": "Test priority tag used by --only-tag / --skip-tag filters."
+    },
+    "test_file_entry": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the test file, relative to target cwd or repo root."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags that apply to this file in addition to the target-level tags.",
+          "items": {
+            "$ref": "#/$defs/tag"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "structural_config": {
+      "type": "object",
+      "description": "Optional structural integrity check. When absent, the target skips the check.",
+      "properties": {
+        "source_glob": {
+          "type": "array",
+          "description": "Glob patterns identifying source files that must have a matching test.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "test_glob": {
+          "type": "array",
+          "description": "Glob patterns identifying test files that must map to a source.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pattern_map": {
+          "type": "array",
+          "description": "Ordered regex rules mapping source paths to expected test paths.",
+          "items": {
+            "$ref": "#/$defs/pattern_map_entry"
+          }
+        },
+        "exclusions": {
+          "type": "object",
+          "description": "Optional exclusion rules.",
+          "properties": {
+            "no_test_required": {
+              "type": "array",
+              "description": "Source files/globs that do not require a test.",
+              "items": {
+                "$ref": "#/$defs/exclusion_entry"
+              }
+            },
+            "orphan_allowed": {
+              "type": "array",
+              "description": "Test files/globs permitted to have no matching source.",
+              "items": {
+                "$ref": "#/$defs/exclusion_entry"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern_map_entry": {
+      "type": "object",
+      "required": ["source", "test"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Regex matching a source path. Capture groups are referenced by $1..$9 in the 'test' replacement."
+        },
+        "test": {
+          "type": "string",
+          "description": "Replacement template producing the expected test path."
+        }
+      },
+      "additionalProperties": false
+    },
+    "exclusion_entry": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern matched against the repo-relative path."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this entry is excluded; surfaced in structural-check reports."
         }
       },
       "additionalProperties": false

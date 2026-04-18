@@ -362,13 +362,13 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-DOCS` in your fina
 | Claim Type | Example | Verification Method |
 |-----------|---------|-------------------|
 | File path | "The hook is at `.claude/hooks/codeflow/pre-tool-use/cf-pre-tool-use-security.sh`" | `Glob` the exact path — does the file exist? |
-| Script name | "Run `run-all-tests.sh`" | `Glob("**/run-all-tests.sh")` — where exactly is it? |
-| Function name | "Use `assert_hook_blocks()` to test hooks" | `Grep("assert_hook_blocks", path=".codeflow/testing/lib/")` — does it exist? What's the signature? |
+| Script name | "Run `cf-protect-resources.sh`" | `Glob("**/cf-protect-resources.sh")` — where exactly is it? |
+| Function name | "Use `validate_structural_integrity()` in the engine" | `Grep("validate_structural_integrity", path="codeflow-cli/core/src/testing/")` — does it exist? What's the signature? |
 | Config key/structure | "Set `coverage_enforcement.enabled` to true" | `Read` the config file — does this key exist at this nesting level? |
 | Behavioral claim | "The pathflow-gate hook blocks Edit before PF3" | `Read` the hook script — verify it checks for pf-3 sentinel and blocks Edit tool |
 | Count | "22 hook scripts" | `Glob(".claude/hooks/codeflow/**/*.sh")` — count the actual results |
-| Directory structure | "Tests are organized in `scripts/`, `claude-hooks/`, etc." | `Bash("ls .codeflow/testing/")` — verify actual directories match |
-| Command syntax | "`bash .codeflow/testing/run-all-tests.sh --mode full`" | `Read` the script — verify `--mode` flag is accepted |
+| Directory structure | "Tests are organized under `.codeflow/testing/`" | `Bash("ls .codeflow/testing/")` — verify actual directories match |
+| Command syntax | "`codeflow test --mode full`" | `Read` the CLI command implementation — verify the `--mode` flag and `full` variant are accepted |
 | Variable/constant name | "The `SESSION_ID` variable holds..." | `Grep("SESSION_ID", path="{file}")` — verify exact name |
 | Cross-reference | "As described in Section 5 of CLAUDE.md..." | `Read` CLAUDE.md — does Section 5 actually cover what you claim? |
 

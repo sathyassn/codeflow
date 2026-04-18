@@ -6,5 +6,6 @@ pub mod pr_body;
 pub mod report;
 pub mod runner;
 pub mod setup;
+pub mod structural;
 pub mod threshold;
 pub mod validation;

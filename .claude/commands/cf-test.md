@@ -70,6 +70,8 @@ This command takes no positional arguments. Test scope is determined from the cu
 | `--mode essential\|full` | Test depth: `essential` runs the critical subset; `full` runs all suites including slow integration | required |
 | `--only <target>` | Run only the named target (name must match a target in `test-config.json`) | all targets |
 | `--skip <target>` | Skip the named target and run all others | none skipped |
+| `--only-tag <tags>` | Run only targets tagged with these priority tags (comma-separated: `critical`, `high`, `medium`, `low`). Composes with `--only` (AND). Targets without tags are excluded when this flag is non-empty. | all tags |
+| `--skip-tag <tags>` | Skip targets tagged with these priority tags (comma-separated). Composes with `--skip` (AND). Wins over `--only-tag` on conflict. | none skipped |
 
 Coverage collection, per-target thresholds, and report format are configured per-target in `.codeflow/config/testing/test-config.json`. There is no CLI flag to toggle coverage — the engine reads `coverage.format`/`coverage.rules`/`report.format` and applies them automatically. A `full` mode run always produces the canonical 5-section PR body; the `report show` subcommand renders saved reports in human or JSON form.
 
@@ -79,6 +81,21 @@ Coverage collection, per-target thresholds, and report format are configured per
 |-----------------|-----------|
 | `--mode essential` | Essential subset per `test-config.json` modes |
 | `--mode full` | All configured suites with coverage enforcement + PR-body rendering |
+
+**`structural-check` Subcommand:**
+
+The `structural-check` subcommand runs the bidirectional structural integrity check on every target that declares a `structural` block in the config. It verifies that every source file maps to a test file and vice versa. Exits 1 when any finding is reported.
+
+```text
+codeflow test structural-check [--format human|json] [--only <target>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--format human\|json` | Output format | `human` |
+| `--only <target>` | Limit to a single target by name | all targets with structural blocks |
+
+Use `structural-check` as a pre-commit validation step to catch missing test files or orphaned test files before running the full suite.
 
 **Examples:**
 
@@ -94,6 +111,21 @@ codeflow test --mode full --only rust-core
 
 # Full run, skip one target
 codeflow test --mode full --skip python-tools
+
+# Run only critical and high priority targets
+codeflow test --mode full --only-tag critical,high
+
+# Run all targets except low priority
+codeflow test --mode full --skip-tag low
+
+# Run only high priority targets within a specific target
+codeflow test --mode full --only rust-core --only-tag high
+
+# Structural integrity check (all targets with structural blocks)
+codeflow test structural-check
+
+# Structural check for a single target, JSON output
+codeflow test structural-check --only rust-core --format json
 
 # Inspect the saved report after a run (human table or JSON)
 codeflow test report show --format human

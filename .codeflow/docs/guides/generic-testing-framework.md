@@ -3,6 +3,7 @@ title: Generic Testing Framework — User Guide
 type: guide
 status: current
 created: 2026-04-16
+updated: 2026-04-18
 ---
 
 # Generic Testing Framework
@@ -29,6 +30,9 @@ created: 2026-04-16
 - [10. Template Library](#10-template-library)
 - [11. Troubleshooting](#11-troubleshooting)
 - [12. CI Integration](#12-ci-integration)
+- [13. Structural Check](#13-structural-check)
+- [14. Test Tags](#14-test-tags)
+- [15. Adopter Migration (Dual-Config to Single-Config)](#15-adopter-migration-dual-config-to-single-config)
 
 <!-- /TOC -->
 
@@ -64,7 +68,7 @@ CodeFlow's original testing subsystem hard-coded `cargo test`, `cargo llvm-cov`,
 | Ledger audit trail for test history | `test_result_recorded` event emitted per run |
 | Stack-locked Claude artifacts | Agents call only `codeflow test`, never runner commands |
 
-**Cross-references:** [ADR-001](../adr/ADR-001-generic-testing-subsystem.md) · [Design doc §12 (Usage Scenarios)](../analysis/generic-testing-subsystem.md) · [CLAUDE.md §7](../../../.claude/CLAUDE.md) · [cf-quality-assurance](../../../.claude/agents/cf-quality-assurance.md)
+**Cross-references:** [ADR-001](../adr/ADR-001-generic-testing-subsystem.md) · [ADR-002](../adr/ADR-002-testing-consolidation.md) · [Design doc §12 (Usage Scenarios)](../analysis/generic-testing-subsystem.md) · [CLAUDE.md §7](../../../.claude/CLAUDE.md) · [cf-quality-assurance](../../../.claude/agents/cf-quality-assurance.md)
 
 ---
 
@@ -778,16 +782,34 @@ The `runner: custom` type is the escape hatch for any test framework not listed 
   "runner": "custom",
   "modes": {
     "essential": {
-      "command": "bash .codeflow/testing/run-all-tests.sh --mode=essential --skip-structural --format=ctrf --output=ctrf.json"
+      "command": "bash -c 'for f in .codeflow/testing/**/*-critical.sh; do bash \"$f\" || exit 1; done'"
     },
     "full": {
-      "command": "bash .codeflow/testing/run-all-tests.sh --mode=full --skip-structural --format=ctrf --output=ctrf.json"
+      "command": "bash -c 'for f in .codeflow/testing/**/*.sh; do bash \"$f\" || exit 1; done'"
     }
   },
   "report": {
     "format": "ctrf",
     "path": "ctrf.json"
-  }
+  },
+  "structural": {
+    "source_glob": [".codeflow/hooks/codeflow/**/*.sh"],
+    "test_glob": [".codeflow/testing/**/test-*.sh"],
+    "pattern_map": [
+      {
+        "source_pattern": "hooks/codeflow/{category}/{name}.sh",
+        "test_pattern": "testing/{category}/test-{name}.sh"
+      }
+    ],
+    "exclusions": {
+      "source_patterns": ["**/lib/**"]
+    }
+  },
+  "test_files": [
+    { "path": ".codeflow/testing/pre-tool-use/test-gate-check.sh", "tags": ["critical"] },
+    { "path": ".codeflow/testing/post-tool-use/test-sentinel-write.sh", "tags": ["critical"] },
+    { "path": ".codeflow/testing/pre-tool-use/test-gh-pr-guard.sh", "tags": ["high"] }
+  ]
 }
 ```
 
@@ -795,7 +817,9 @@ The `runner: custom` type is the escape hatch for any test framework not listed 
 
 - Shell commands are run via `sh -c "..."` in the target's `cwd`
 - The command is responsible for producing the report file at `report.path`
-- No coverage is configured for this target — coverage is optional
+- The `structural` block enforces bidirectional source↔test mapping (see [§13](#13-structural-check))
+- The `test_files` array registers individual test files with priority tags (see [§14](#14-test-tags))
+- No coverage is configured for this target — coverage is optional for `runner: custom`
 - `runner: custom` has no extension-affinity filter for modified-file routing (all file extensions pass through)
 
 **Template:** `hooks-escape-hatch.json`
@@ -907,7 +931,7 @@ Source: `codeflow-cli/core/src/testing/coverage/` (lcov.rs, cobertura.rs, istanb
 
 Files with 0% line coverage that are not present in the coverage artifact (e.g., a source file never imported by any test) are **silently skipped** by the threshold engine. The engine only evaluates files that appear in the parsed coverage data. This is a known limitation: if a file has zero tests, it produces no coverage data, so no threshold violation fires.
 
-To catch completely uncovered files, use a structural checker (like the shell-scripts target's `run-all-tests.sh --validate-coverage`) or enforce at the runner level.
+To catch completely uncovered files, configure a `structural` block on the target (see [§13](#13-structural-check)) to enforce bidirectional source↔test mapping. This does not measure line coverage but guarantees every source file has at least one test file.
 
 ---
 
@@ -933,6 +957,8 @@ codeflow test [OPTIONS]
 | `--format <FORMAT>` | Output format: `human` (default) or `json`. |
 | `--only <TARGETS>` | Run only the named targets, comma-separated. |
 | `--skip <TARGETS>` | Skip the named targets, comma-separated. |
+| `--only-tag <TAGS>` | Run only test files tagged with at least one of these tags, comma-separated (see [§14](#14-test-tags)). |
+| `--skip-tag <TAGS>` | Exclude test files tagged with at least one of these tags, comma-separated. |
 | `--fail-fast` | Stop on first target failure. |
 
 **Exit codes:**
@@ -1174,6 +1200,47 @@ Removes test artifacts from `.state/test-reports/` and `.state/coverage/`.
 |--------|-------------|
 | `--artifacts` | Remove test artifacts (default: true). |
 | `--yes` | Skip confirmation prompt. |
+
+---
+
+### 7h. `codeflow test structural-check`
+
+**Synopsis:**
+
+```
+codeflow test structural-check [--format human|json] [--only <TARGET>]
+```
+
+Runs the structural integrity check for all targets that have a `structural` block configured. Returns immediately with no output for targets without a `structural` block.
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--format human\|json` | `human` | Output format. `human` renders a readable table; `json` emits one `StructuralResult` object per target. |
+| `--only <TARGET>` | (all targets) | Restrict to a single named target. |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | All structural checks passed (or no targets have a `structural` block). |
+| `1` | One or more targets failed: missing test files or orphaned test files detected. |
+
+**Examples:**
+
+```bash
+# Check all targets
+codeflow test structural-check
+
+# Check only the shell-scripts target
+codeflow test structural-check --only shell-scripts
+
+# JSON output for CI artifact upload
+codeflow test structural-check --format json
+```
+
+See [§13](#13-structural-check) for the full structural check reference including config schema, output format, and integration with `codeflow test --mode full`.
 
 ---
 
@@ -1652,28 +1719,11 @@ Error: unsupported schema_version "2.0"; supported: 1.0
 
 [^ back to top](#generic-testing-framework)
 
-### 12a. Two-Path Architecture
+### 12a. CodeFlow's CI Architecture
 
-CodeFlow uses a two-path architecture for testing:
+CodeFlow uses `codeflow test --mode full` as the single test execution command both locally and in CI. The shell harness (`run-all-tests.sh`) was retired in INF-TSK-046-008; structural integrity is now enforced inside `codeflow test --mode full` via the `structural` block on the `shell-scripts` target.
 
-```text
-LOCAL (developer machine)             CI (GitHub Actions)
-─────────────────────────             ──────────────────────────────
-codeflow test --mode full             bash .codeflow/testing/run-all-tests.sh
-     │                                       │
-     │  Generic Testing Engine               │  Shell-based runner
-     │  (config-driven, any stack)           │  (Python + shell tests only)
-     │  Reads test-config.json               │  No Rust tests in CI
-     │                                       │
-     v                                       v
-  .state/test-reports/               GitHub Actions log output
-  .state/coverage/                   (no persistent artifacts)
-  ledger events
-```
-
-**Why two paths?** Rust tests run locally — they are too slow for CI (16 min cold build vs 2 min with cache, and coverage instrumentation adds more time). CI runs the shell and Python test suite only. See Section 12c for the `ci_skip` mechanism.
-
-**Future convergence:** As CI infrastructure improves and caching reduces Rust build times, the plan is for CI to call `codeflow test --mode full` directly. The chicken-and-egg tradeoff: `codeflow` binary must be built before it can be called by CI, but the binary is one of the things CI validates.
+**Why Rust tests don't run in CI:** Rust tests require `cargo llvm-cov` with LLVM instrumentation overhead. The full Rust test suite with coverage takes 15–20 minutes on a cold CI build (2 minutes with cache). CI builds the `codeflow` binary with `--profile ci` (optimized for build speed, not performance) to verify compilation, but runs only the shell and Python targets via `codeflow test --mode full`. Rust tests run locally before every PR.
 
 ### 12b. CodeFlow's Own CI Setup
 
@@ -1690,13 +1740,12 @@ jobs/test steps:
   5. Install mold linker (Linux)
   6. Cache Rust build (Swatinem/rust-cache, key: "ci", workspace: codeflow-cli)
   7. Install codeflow binary (cargo build --profile ci → $HOME/.cargo/bin/codeflow)
-  8. Run structural integrity check (validate_structural_integrity from test-coverage.sh)
-  9. Run test suite (bash .codeflow/testing/run-all-tests.sh --mode full)
+  8. Run test suite (codeflow test --mode full --skip rust-core)
 ```
 
-**Why `cargo build` in CI?** Step 7 builds the `codeflow` binary with `--profile ci` (optimized for build speed, not performance). This serves as a structural integrity checker — if the Rust code does not compile, CI fails. The binary is also needed by step 8 for any `codeflow` invocations within the shell test suite.
+**Step 7** builds the `codeflow` binary with `--profile ci`. This verifies Rust compilation and produces the binary needed for step 8.
 
-**Why `run-all-tests.sh` and not `codeflow test`?** The shell test suite predates the generic testing engine and runs Python + shell tests via a shell orchestrator. Migrating it to `test-config.json` is tracked as future work.
+**Step 8** runs `codeflow test --mode full --skip rust-core`. The `shell-scripts` and `python` targets run. The `rust-core` target is skipped in CI because it requires the full LLVM coverage instrumentation overhead. Structural integrity for the shell-scripts target runs inside this invocation via the `structural` block — no separate CI step is needed.
 
 **Cache behavior:**
 
@@ -1705,17 +1754,7 @@ jobs/test steps:
 - Cache miss (new dependencies or Rust toolchain change): build step takes approximately 16 minutes
 - Cache key includes the `ci` shared-key and Rust toolchain hash
 
-### 12c. ci_skip Mechanism
-
-CodeFlow's test suite has categories marked with a `ci_skip` annotation in `test-config.json`. Rust tests are `ci_skip: true` because:
-
-1. They require `cargo llvm-cov` which requires LLVM instrumentation overhead
-2. Full Rust test suite including coverage takes 15-20 minutes
-3. CI cache misses are expensive; Rust tests are run locally before every PR
-
-`run-all-tests.sh` reads the `ci_skip` annotations per category. When running in CI (`CI=true` environment variable), skipped categories are omitted. This ensures CI completes in reasonable time while local runs cover the full suite.
-
-### 12d. SKIP_RUST_BUILD Variable
+### 12c. SKIP_RUST_BUILD Variable
 
 The `build-release` job has a condition:
 
@@ -1725,7 +1764,7 @@ if: vars.SKIP_RUST_BUILD != 'true'
 
 Setting the GitHub repository variable `SKIP_RUST_BUILD=true` disables cross-platform release builds (macOS aarch64, macOS x86_64, Linux x86_64). This is useful during rapid iteration when binaries are not needed for every PR.
 
-### 12e. Wiring `codeflow test` into Your Own CI
+### 12d. Wiring `codeflow test` into Your Own CI
 
 If your project uses the Generic Testing Framework and you want CI to call `codeflow test` directly:
 
@@ -1776,7 +1815,7 @@ If your CI supports CTRF report uploads:
   # then upload ctrf-report.json to your CI reporting tool
 ```
 
-### 12f. Diagram: CI vs Local Test Path
+### 12e. Diagram: CI vs Local Test Path
 
 ```text
 Developer (local)                    GitHub Actions (CI)
@@ -1788,19 +1827,20 @@ git commit && git push               on: pull_request / push/main
        │                             2. Install cargo-nextest, llvm-cov
        │                             3. Restore Rust build cache (~2m hit)
        │                             4. Build codeflow binary (CI profile)
-       │                             5. Structural integrity check (shell)
-       │                             6. bash run-all-tests.sh --mode full
-       │                                (Python + shell tests, no Rust)
+       │                             5. codeflow test --mode full --skip rust-core
+       │                                (shell-scripts + python targets only)
+       │                                (structural check runs inside codeflow test)
        │                                         │
        v                                         v
 codeflow test --mode full             CI passes / fails
- ├─ rust-core target (Rust)          (build + shell/Python tests only)
- │   cargo llvm-cov nextest
+ ├─ rust-core target (Rust)          (build + shell/python tests only)
+ │   cargo llvm-cov nextest           structural integrity via structural block
  │   Parse JUnit → CTRF
  │   Evaluate per_file coverage
  │   Render PR body sections
  └─ shell-scripts target (custom)
-     bash run-all-tests.sh full
+     runs test_files[] entries
+     structural check: source↔test map
      Parse CTRF output
      No coverage configured
           │
@@ -1812,4 +1852,314 @@ codeflow test --mode full             CI passes / fails
 
 ---
 
-*This guide documents the Generic Testing Framework as implemented in INF-EPC-046. For the decision record, see [ADR-001](../adr/ADR-001-generic-testing-subsystem.md). For the design analysis, see [Design Doc](../analysis/generic-testing-subsystem.md).*
+## 13. Structural Check
+
+[^ back to top](#generic-testing-framework)
+
+The structural check enforces a bidirectional mapping between source files and test files within a target. It closes the "silent no-test hole": a source file added without a test file is caught at run time, before CI, without requiring developers to remember a manual checklist.
+
+For the full technical reference, see [Design doc §24](../analysis/generic-testing-subsystem.md).
+
+### 13a. When to use it
+
+Use the `structural` block when:
+
+- Your target has source files that must each have a corresponding test file (one-to-one or one-to-many)
+- You want to catch "orphaned" test files (test files whose source has been deleted)
+- You want to replace a separate structural integrity CI step with built-in enforcement
+
+Do not use it for targets where there is no source↔test mapping requirement (e.g., a target that just runs linters).
+
+### 13b. Config schema
+
+The `structural` block is optional and per-target:
+
+```json
+{
+  "name": "shell-scripts",
+  "runner": "custom",
+  "structural": {
+    "source_glob": [".codeflow/hooks/codeflow/**/*.sh"],
+    "test_glob": [".codeflow/testing/**/test-*.sh"],
+    "pattern_map": [
+      {
+        "source_pattern": "hooks/codeflow/{category}/{name}.sh",
+        "test_pattern": "testing/{category}/test-{name}.sh"
+      }
+    ],
+    "exclusions": {
+      "source_patterns": ["**/lib/**"],
+      "test_patterns": ["**/fixtures/**"]
+    }
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `source_glob` | Yes | Globs identifying source files (relative to project root) |
+| `test_glob` | Yes | Globs identifying test files (relative to project root) |
+| `pattern_map` | Yes | Rules mapping source path patterns to expected test path patterns |
+| `exclusions.source_patterns` | No | Source paths matching these globs are excluded |
+| `exclusions.test_patterns` | No | Test paths matching these globs are excluded |
+
+### 13c. Running structural checks
+
+**As part of `codeflow test --mode full`** (default — no extra step needed):
+
+```bash
+codeflow test --mode full
+```
+
+If any target's structural check fails, the run exits non-zero and reports the failing target. The target's runner is not invoked for that target.
+
+**Standalone check** (faster, skips test execution):
+
+```bash
+codeflow test structural-check
+
+# Single target only
+codeflow test structural-check --only shell-scripts
+
+# JSON output
+codeflow test structural-check --format json
+```
+
+### 13d. Interpreting output
+
+Human output when checks pass:
+
+```text
+Target: shell-scripts
+  Sources scanned: 24   Tests scanned: 24   Sources excluded: 2   Tests excluded: 0
+  Result: PASS
+```
+
+Human output when checks fail:
+
+```text
+Target: shell-scripts
+  Sources scanned: 24   Tests scanned: 22   Sources excluded: 2   Tests excluded: 0
+
+  MISSING (source has no test):
+    hooks/codeflow/post-tool-use/new-hook.sh
+      → expected: testing/post-tool-use/test-new-hook.sh
+
+  ORPHAN (test has no matching source):
+    testing/pre-tool-use/test-old-hook.sh
+      → no corresponding source file found
+
+  Result: FAIL (1 missing, 1 orphan)
+```
+
+**MISSING** means a source file exists but no test file was found at the expected mapped path. Create the test file.
+
+**ORPHAN** means a test file exists but no source file matches it. Either the source was deleted (remove the test) or the naming convention drifted (rename the test).
+
+---
+
+## 14. Test Tags
+
+[^ back to top](#generic-testing-framework)
+
+Test tags let you annotate individual test files with a priority label and filter test runs to a subset of files without editing the config. This is the generic engine's replacement for the legacy `priorities.CRITICAL.files[]` model from the retired shell harness.
+
+For the full technical reference, see [Design doc §25](../analysis/generic-testing-subsystem.md).
+
+### 14a. Tag values
+
+| Tag | Serialized as | When to use |
+|-----|--------------|-------------|
+| `critical` | `"critical"` | Enforcement gates, security, data integrity invariants |
+| `high` | `"high"` | Primary user-facing behavior |
+| `medium` | `"medium"` | Secondary behavior, edge cases, regression guards |
+| `low` | `"low"` | Cosmetic output, optional features, rarely-exercised paths |
+
+### 14b. Declaring tags in config
+
+Tags are per-file inside a target's `test_files` array:
+
+```json
+{
+  "name": "shell-scripts",
+  "runner": "custom",
+  "test_files": [
+    { "path": ".codeflow/testing/pre-tool-use/test-gate-check.sh", "tags": ["critical"] },
+    { "path": ".codeflow/testing/post-tool-use/test-sentinel-write.sh", "tags": ["critical"] },
+    { "path": ".codeflow/testing/pre-tool-use/test-gh-pr-guard.sh", "tags": ["high"] },
+    { "path": ".codeflow/testing/post-tool-use/test-checkpoint-register.sh", "tags": ["medium"] },
+    { "path": ".codeflow/testing/session/test-session-start.sh", "tags": ["low"] }
+  ]
+}
+```
+
+A file with no `tags` (or `"tags": []`) is untagged. Untagged files run in normal (unfiltered) runs but are excluded when `--only-tag` is non-empty.
+
+### 14c. Filtering runs
+
+```bash
+# Run only critical tests
+codeflow test --only-tag critical
+
+# Run critical and high tests
+codeflow test --only-tag critical,high
+
+# Run all tests except low-priority
+codeflow test --skip-tag low
+
+# Combine: only critical, but not if also tagged medium (unusual edge case)
+codeflow test --only-tag critical --skip-tag medium
+```
+
+### 14d. Composition rules
+
+When both `--only-tag` and `--skip-tag` are specified:
+
+1. `--only-tag` restricts the candidate set (untagged files are excluded)
+2. `--skip-tag` removes from that set
+3. Skip wins over only — if a file has a tag in both lists, it is excluded
+
+### 14e. Interaction with `--mode`
+
+Tag filters and `--mode` are orthogonal:
+
+```bash
+# Critical tests only, full mode (coverage enforced for those tests)
+codeflow test --mode full --only-tag critical
+
+# Critical tests only, essential mode (quick smoke check)
+codeflow test --mode essential --only-tag critical
+```
+
+---
+
+## 15. Adopter Migration (Dual-Config to Single-Config)
+
+[^ back to top](#generic-testing-framework)
+
+If your project previously ran tests through a separate shell harness (a `run-all-tests.sh` style runner plus a legacy `test-config.json` or `priorities` file), this section walks through migrating to the single-config model. This is the same migration CodeFlow self-host went through in INF-TSK-046-008.
+
+For the decision record, see [ADR-002](../adr/ADR-002-testing-consolidation.md).
+
+### Step 1: Confirm the canonical config exists
+
+```bash
+codeflow test config show
+```
+
+If no config exists, run setup first:
+
+```bash
+codeflow test setup --auto
+# or apply the custom-runner template
+codeflow test setup --template hooks-escape-hatch.json
+```
+
+### Step 2: Add a custom runner target for your shell tests
+
+If your shell tests are not yet in the canonical config, add them:
+
+```bash
+codeflow test config add-target \
+  --name shell-scripts \
+  --runner custom \
+  --mode essential="bash -c 'for f in .codeflow/testing/**/*-critical.sh; do bash \"\$f\" || exit 1; done'" \
+  --mode full="bash -c 'for f in .codeflow/testing/**/*.sh; do bash \"\$f\" || exit 1; done'"
+```
+
+Then set the report config:
+
+```bash
+codeflow test config set-report \
+  --target shell-scripts \
+  --format ctrf \
+  --path ctrf.json
+```
+
+### Step 3: Register your test files with tags
+
+For each test file in your shell suite, add it to the `test_files` array. Use `codeflow test config` to add entries or edit `.codeflow/config/testing/test-config.json` through the CLI:
+
+```bash
+# There is no single-file add-test-file subcommand; edit via codeflow test config
+codeflow test config show
+# Manually add test_files entries for your shell-scripts target, then validate
+codeflow test doctor
+```
+
+A minimal `test_files` entry:
+
+```json
+{ "path": ".codeflow/testing/pre-tool-use/test-gate-check.sh", "tags": ["critical"] }
+```
+
+### Step 4: Add structural checking (optional but recommended)
+
+If your shell tests have a source↔test mapping convention, add a `structural` block to catch files that drift out of sync:
+
+```json
+"structural": {
+  "source_glob": [".codeflow/hooks/codeflow/**/*.sh"],
+  "test_glob": [".codeflow/testing/**/test-*.sh"],
+  "pattern_map": [
+    {
+      "source_pattern": "hooks/codeflow/{category}/{name}.sh",
+      "test_pattern": "testing/{category}/test-{name}.sh"
+    }
+  ]
+}
+```
+
+Verify the structural config before deleting the old harness:
+
+```bash
+codeflow test structural-check --only shell-scripts
+```
+
+### Step 5: Verify the full suite runs correctly
+
+```bash
+codeflow test --mode full
+```
+
+If this passes and the output matches what your old harness produced, the migration is complete.
+
+### Step 6: Delete the old harness
+
+Once step 5 passes on at least two consecutive runs, delete:
+
+- The primary runner script (e.g., `run-all-tests.sh`)
+- Any `lib/` shell helper files used only by that script
+- The legacy config file (e.g., `.codeflow/testing/test-config.json`)
+- The harness README
+
+Verify after deletion:
+
+```bash
+codeflow test --mode full
+codeflow test structural-check
+```
+
+### Step 7: Update CI
+
+Replace any CI step that invokes the old runner with a single `codeflow test --mode full` invocation. Remove any separate structural integrity step — it now runs inside `codeflow test`.
+
+```yaml
+# Before
+- name: Run structural integrity check
+  run: bash .codeflow/testing/validate-structural.sh
+- name: Run test suite
+  run: bash .codeflow/testing/run-all-tests.sh --mode full
+
+# After
+- name: Run test suite
+  run: codeflow test --mode full
+```
+
+### Step 8: Update contributor documentation
+
+Search for references to the old runner command in `CONTRIBUTING.md`, `AGENTS.md`, agent definitions, and any onboarding docs. Replace with `codeflow test --mode full`.
+
+---
+
+*This guide documents the Generic Testing Framework as of INF-EPC-046. For the original adoption decision, see [ADR-001](../adr/ADR-001-generic-testing-subsystem.md). For the consolidation decision (single-config model), see [ADR-002](../adr/ADR-002-testing-consolidation.md). For the design analysis, see [Design Doc](../analysis/generic-testing-subsystem.md).*

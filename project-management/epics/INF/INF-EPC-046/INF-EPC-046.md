@@ -3,7 +3,7 @@ id: "epic-01KP0WRNT08J88E09QGQ6185BP"
 format_id: "INF-EPC-046"
 title: "Generic Testing Subsystem — decouple CodeFlow testing from Rust self-host"
 summary: "Generalize CodeFlow testing subsystem so downstream adopters on any stack (Node/Go/Python/Rust/mixed monorepos) can configure it via declarative config without per-stack code. Canonical internal model: CTRF-shaped with JUnit input adapter. Strip Rust-specific assumptions from Claude artifacts, the codeflow test CLI, and test-config.json. Migrate CodeFlow self-host as first adopter."
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "PLAN"
 domain: "GENL"
@@ -71,9 +71,9 @@ Generalize CodeFlow's testing subsystem so downstream adopters on any stack (Nod
 | INF-TSK-046-005 | Self-host migration + hardcode retirement | L | complete | high |
 | INF-TSK-046-006 | Post-migration cleanup + binary verification | S | todo | normal |
 | INF-TSK-046-007 | Generic Testing Framework documentation | M | complete | normal |
-| INF-TSK-046-008 | Full consolidation: retire legacy shell testing scaffolding, converge on generic engine | L | todo | normal |
+| INF-TSK-046-008 | Full consolidation: retire legacy shell testing scaffolding, converge on generic engine | L | complete | normal |
 
-**Rollup:** 7/8 tasks complete; 1 in_progress (INF-TSK-046-008). Epic re-opened (status: complete → in_progress) on 2026-04-16 after §23 convergence plan (commit 4deb873f) identified outstanding dual-config retirement + structural-check port + tag-support work that closes every remaining link of the chain in a single consolidation task.
+**Rollup:** 8/8 tasks complete. Epic complete 2026-04-18.
 
 ## Dependencies
 

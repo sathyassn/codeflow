@@ -157,22 +157,37 @@ codeflow test --mode full
 
 This is the unified CLI entry point. It routes to all configured test targets with full-mode execution and coverage enforcement. All targets must pass for WS-QA to issue a PASS verdict. This command is mandatory for every WS-QA run, not conditional on file scope.
 
+**Tag-based filtering:** When a task specifies a subset of targets by priority tag, use `--only-tag` or `--skip-tag`:
+
+```text
+codeflow test --mode full --only-tag critical,high
+codeflow test --mode full --skip-tag low
+```
+
+Tags: `critical`, `high`, `medium`, `low`. `--only-tag` and `--skip-tag` compose with `--only`/`--skip` (AND logic). `--skip-tag` wins over `--only-tag` on conflict. Targets without tags are excluded when `--only-tag` is non-empty.
+
 **Network access:** If tests require network access (e.g., integration tests fetching external resources), load `cf-sandbox-standards` skill and set `dangerouslyDisableSandbox: true` for network-bound test commands.
 
 🔒 **ONE COMMAND — no raw test runners, no shell scripts directly:**
 
 `codeflow test --mode full` is the sole entry point. It routes internally to all configured test targets with coverage enforcement. Do NOT invoke individual test runners or language-specific coverage tools directly — the unified command handles all of this.
 
-Coverage enforcement is per-target with per-file thresholds. Coverage below the configured threshold per file is a build failure — treat as a FAIL finding. Exception lists are in `test-config.json` (conventions.exceptions[]). Load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for target-specific coverage tooling details.
+Coverage enforcement is per-target with per-file thresholds. Coverage below the configured threshold per file is a build failure — treat as a FAIL finding. Exception lists are in `.codeflow/config/testing/test-config.json` (conventions.exceptions[]). Load the applicable language standards skill (cf-rust-standards, cf-python-standards, cf-shell-standards) for target-specific coverage tooling details.
 
 🔒 **MANDATORY per-file coverage (BLOCKING GATE):** The `codeflow test --mode full` output includes per-file coverage for all modified/created source files matching configured test targets. Include this table in the QA Report. Any file below 85% line coverage is an AUTOMATIC QA FAIL — set verdict to FAIL, send `STAGE-COMPLETE: WS-QA — FAIL` to the team lead, and send detailed rework findings to cf-development listing each file below threshold with its current coverage and what needs to be covered. Coverage reporting is NOT optional — a QA Report without a per-file coverage table is INCOMPLETE and the verdict is automatically FAIL.
 
 #### Step 3: Run Targeted Tests
 
-If changes are scoped to specific components, pass the category flag through the unified command:
+If changes are scoped to specific components, pass the target flag through the unified command:
 
 ```text
-codeflow test --mode full --category {category}
+codeflow test --mode full --only {target-name}
+```
+
+To filter by tag when only critical/high priority tests are needed for a targeted check:
+
+```text
+codeflow test --mode full --only-tag critical,high --only {target-name}
 ```
 
 #### Step 4: Verify Acceptance Criteria
@@ -185,23 +200,25 @@ Check each criterion against test results and code inspection (read-only). Mark 
 
 Compare test results against the expected baseline. Any previously-passing test that now fails is a regression.
 
-#### Step 5b: Verify Test Coverage
+#### Step 5b: Verify Structural Integrity
 
-Run the coverage validation to ensure no gaps were introduced:
+Run the structural check to ensure config and test file registration are consistent:
 
 ```text
-bash .codeflow/testing/lib/test-coverage.sh --audit
+codeflow test structural-check
 ```
 
-- **Clean:** Note coverage status in verdict as passing.
-- **Gaps found:** Report as findings in the verdict. All coverage gaps in the changeset scope are blocking — both newly-added and pre-existing scripts in scope. Escalate to team lead if pre-existing gaps require scope expansion.
+Use `--only <target>` to limit to a specific target, or `--format json` for machine-readable output.
+
+- **All pass:** Note structural check status in verdict as passing.
+- **Findings:** Report as findings in the verdict. All structural check findings in the changeset scope are blocking — both newly-added and pre-existing targets in scope. Escalate to team lead if pre-existing findings require scope expansion.
 
 #### Step 5c: Cross-Reference File Scope Against Test Config
 
-🔒 Cross-reference `file_scope` from the task definition against `.codeflow/testing/test-config.json` — every source file in scope matching a configured test target MUST have a registered test entry. Report gaps as findings.
+🔒 Cross-reference `file_scope` from the task definition against `.codeflow/config/testing/test-config.json` — every source file in scope matching a configured test target MUST have a registered test entry. Report gaps as findings.
 
 1. Extract the list of source files matching configured test targets from the task's `file_scope` (or changeset)
-2. For each file, check that a corresponding entry exists in `.codeflow/testing/test-config.json`
+2. For each file, check that a corresponding entry exists in `.codeflow/config/testing/test-config.json`
 3. Files without test entries are reported as findings (MAJOR for newly-added files, MAJOR for pre-existing files in the changeset scope)
 
 #### Step 5d: Per-target Quality Gates (BLOCKING)
@@ -336,26 +353,15 @@ Use Read, Glob, and Grep to understand the implementation, inputs, outputs, edge
 
 #### Step 3: Write Tests
 
-**Shell tests:** Framework: custom assertion library at `.codeflow/testing/lib/test-helpers.sh`. Isolation: source `.codeflow/testing/lib/test-isolation.sh`.
+**Shell tests:** Load `cf-shell-standards` skill for the current assertion library patterns. Read sibling test files in the target directory to identify the local conventions before writing new tests — conventions may differ by test suite location.
 
-| Assertion | Purpose | Signature |
-|-----------|---------|-----------|
-| `assert_equals` | Value equality | `assert_equals "expected" "actual" "msg"` |
-| `assert_contains` | String containment | `assert_contains "haystack" "needle" "msg"` |
-| `assert_file_exists` | File presence | `assert_file_exists "path" "msg"` |
-| `assert_file_contains` | File content | `assert_file_contains "path" "needle" "msg"` |
-| `assert_exit_code` | Exit code check | `assert_exit_code expected "cmd" "msg"` |
-| `assert_hook_blocks` | Hook rejection | `assert_hook_blocks "hook_path" "stdin_json"` |
-| `assert_hook_allows` | Hook permission | `assert_hook_allows "hook_path" "stdin_json"` |
-
-Shell test template:
+Shell test template (minimal skeleton — verify against siblings):
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$TEST_DIR/../../lib/test-helpers.sh"
-source "$TEST_DIR/../../lib/test-isolation.sh"
+# Source helpers from path verified against sibling test files
 
 test_descriptive_behavior() {
     local result
@@ -374,7 +380,7 @@ Execute all new tests. Re-run to confirm determinism. Ensure no order dependenci
 
 #### Step 5: Register Tests
 
-Update `.codeflow/testing/test-config.json` with new test entries.
+Update `.codeflow/config/testing/test-config.json` with new test entries.
 
 #### Step 6: Request Commit
 
@@ -492,17 +498,16 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 - If name doesn't match siblings: **FAIL** — "Test file `{name}` doesn't match sibling pattern `{pattern}` in `{directory}`"
 
-**Check 3 — Test file location:** For every test file, verify it is in the correct directory under `.codeflow/testing/`:
+**Check 3 — Test file location:** For every test file, verify it is in the correct directory per the test target's configuration in `.codeflow/config/testing/test-config.json`:
 
-- Source in `.codeflow/scripts/{area}/` → Test in `.codeflow/testing/scripts/{area}/`
 - Rust source in `codeflow-cli/core/src/` or `codeflow-cli/cli/src/` → Test in same module or `tests/` directory
+- Shell source → check `test_files` patterns in the applicable target definition
 - If test is in wrong directory: **FAIL** — "Test file `{test}` should be in `{correct_dir}`, not `{current_dir}`"
 
-**Check 4 — test-config.json registration:** Read `.codeflow/testing/test-config.json`. For every new test file:
+**Check 4 — test-config.json registration:** Read `.codeflow/config/testing/test-config.json`. For every new test file:
 
-- Search for the test path (relative to `.codeflow/testing/`) in the `priorities.{LEVEL}.files` arrays.
-- Verify the path format: `scripts/state/test-foo.sh` (correct) vs `.codeflow/testing/scripts/state/test-foo.sh` (wrong — includes parent prefix).
-- If not found: **FAIL** — "Test file `{test}` not registered in test-config.json"
+- Verify the test file is referenced under the applicable target's `test_files` or `structural.mappings` entries.
+- If not found: **FAIL** — "Test file `{test}` not registered in `.codeflow/config/testing/test-config.json`"
 
 **Check 5 — settings.json registration (hooks only):** If the changeset includes new hook scripts, read `.claude/settings.json`. For each new hook:
 
@@ -526,8 +531,8 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 **Verify the test infrastructure itself is sound:**
 
 1. **Test runner availability:** Verify `codeflow` binary is available in PATH (`which codeflow`).
-2. **Test helper availability:** Verify `test-helpers.sh` exists at `.codeflow/testing/lib/test-helpers.sh`.
-3. **Test isolation availability:** Verify `test-isolation.sh` exists at `.codeflow/testing/lib/test-isolation.sh`.
+2. **Test config availability:** Verify `.codeflow/config/testing/test-config.json` exists and is parseable (`codeflow test doctor`).
+3. **Structural check:** Run `codeflow test structural-check` and verify all targets report pass.
 4. **Test count verification:** After running the suite, check the total test count. If 3 test files were added but only 0-2 tests reported, investigate why — some tests may be silently skipped or not discovered.
 5. **No silent skips:** Check test output for "skipped" counts. If tests are skipped without documented reason, investigate.
 
@@ -567,10 +572,11 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 
 **test-config.json bidirectional check:**
 
-- Direction 1: Every new test file → has a matching entry in test-config.json (correct path, correct priority).
+Config path: `.codeflow/config/testing/test-config.json`
+
+- Direction 1: Every new test file → has a matching entry in test-config.json under the applicable target.
 - Direction 2: Every new entry in test-config.json → references a test file that actually exists at that path.
-- Path format: Must be relative to `.codeflow/testing/` (e.g., `scripts/state/test-foo.sh`).
-- Priority: CRITICAL for data layer, HIGH for workflow/security, MEDIUM for utilities/hooks/libs, LOW for support.
+- Path format: Must match the target's `test_files` glob or explicit path convention.
 
 **settings.json bidirectional check (hooks only):**
 
@@ -584,8 +590,8 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Assumption Type | Example | Verification Method |
 |----------------|---------|-------------------|
 | "Test runner will discover this file" | Verify test-config.json registration | Read test-config.json, search for path |
-| "The helper function exists" | Verify function in test-helpers.sh | Grep for function name in `.codeflow/testing/lib/` |
-| "The helper takes these arguments" | Verify function signature | Read the function definition |
+| "The helper function exists" | Verify function in actual helper file | Grep for function name in the helper sourced by sibling test files |
+| "The helper takes these arguments" | Verify function signature | Read the function definition in the actual helper file |
 | "This directory is the right location" | Verify against sibling files | Glob the directory, compare patterns |
 | "This test name follows convention" | Verify against siblings | Glob sibling test files, compare names |
 | "The source file is at this path" | Verify file exists | Glob the exact path |
@@ -599,7 +605,7 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Non-zero test count:** Test output confirms tests actually ran (count > 0)
 - [ ] 🔒 **Each acceptance criterion:** Individual PASS/FAIL with evidence from test output or file inspection
 - [ ] 🔒 **Regression check:** No previously-passing test now fails
-- [ ] 🔒 **Coverage audit:** `test-coverage.sh --structural` executed, results included in verdict
+- [ ] 🔒 **Structural check:** `codeflow test structural-check` executed, all targets pass, results included in verdict
 - [ ] 🔒 **File scope cross-reference:** Every source file in task scope has test coverage in test-config.json
 - [ ] 🔒 **Config bidirectional check:** test-config.json entries point to existing files AND new files have entries
 - [ ] 🔒 **Structural FAIL if warranted:** Any structural check failure → FAIL verdict regardless of test pass rate
@@ -614,8 +620,8 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 - [ ] 🔒 **Convention research done:** Read sibling test files in target directory BEFORE writing new tests
 - [ ] 🔒 **Test naming verified:** Every test file name matches sibling convention (verified by Glob)
 - [ ] 🔒 **Test placement verified:** Every test file is in the correct directory (verified by Glob on parent)
-- [ ] 🔒 **Test registered:** Every new test file listed in `.codeflow/testing/test-config.json` with correct relative path and appropriate priority
-- [ ] 🔒 **Path format correct:** Registration paths are relative to `.codeflow/testing/` (no prefix duplication)
+- [ ] 🔒 **Test registered:** Every new test file referenced in `.codeflow/config/testing/test-config.json` under the applicable target
+- [ ] 🔒 **Path format correct:** Registration paths match the target's `test_files` pattern conventions (no duplication of parent prefix)
 - [ ] 🔒 **Source paths resolve:** Every `source` and `import` in test files resolves to an existing file
 - [ ] 🔒 **Minimum coverage:** Each test file has at least one positive, one negative, and one edge case
 - [ ] 🔒 **Tests functional:** Tests exercise real code paths — mocks only for external dependencies, never for code under test
@@ -638,6 +644,5 @@ When your work stage is complete, include `STAGE-COMPLETE: WS-QA` (quality gate 
 | Rust Standards | `.claude/skills/cf-rust-standards/SKILL.md` | Load when working on Rust targets |
 | CLAUDE.md | `.claude/CLAUDE.md` | Always — team lead instructions, QA retry limits |
 | Test Runner | `codeflow test --mode full` | Always — unified test execution, all suites, full coverage |
-| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell assertion library (40+ functions) |
-| Test Isolation | `.codeflow/testing/lib/test-isolation.sh` | Always — isolated repo root for tests |
-| Test Config | `.codeflow/testing/test-config.json` | Always — test registration |
+| Structural Check | `codeflow test structural-check` | Always — config/file registration integrity |
+| Test Config | `.codeflow/config/testing/test-config.json` | Always — canonical test configuration |

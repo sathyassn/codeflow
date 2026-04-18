@@ -67,7 +67,13 @@ Valid types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `style`
 Run the test suite:
 
 ```bash
-./.codeflow/testing/run-all-tests.sh
+codeflow test --mode full
+```
+
+Structural integrity (source↔test mapping) runs via:
+
+```bash
+codeflow test structural-check
 ```
 
 ## Questions?

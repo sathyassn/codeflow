@@ -55,10 +55,11 @@ This file provides instructions for AI tools other than Claude Code (e.g., Copil
 
 ## Testing
 
-Test files are located in `.codeflow/testing/`. Run tests with:
+Test configuration lives at `.codeflow/config/testing/test-config.json`. Test
+bodies live under `.codeflow/testing/`. Run the full suite with:
 
 ```bash
-./codeflow/testing/run-all-tests.sh
+codeflow test --mode full
 ```
 
 ## Important Files

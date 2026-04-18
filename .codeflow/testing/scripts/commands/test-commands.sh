@@ -36,9 +36,8 @@ Examples:
 EOF
 }
 
-# Source test framework
-source "$TESTING_DIR/lib/test-common.sh"
-source "$TESTING_DIR/lib/test-helpers.sh"
+# Source minimal test helpers (full framework retired in INF-TSK-046-008).
+source "$TESTING_DIR/helpers.sh"
 
 # ============================================================================
 # CONSTANTS

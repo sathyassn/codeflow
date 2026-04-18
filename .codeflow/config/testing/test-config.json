@@ -1,5 +1,5 @@
 {
-  "_description": "Rust project with cargo nextest, JUnit report via derive_from, and lcov coverage.",
+  "_description": "CodeFlow canonical test config. Single source of truth for all test targets. Shell tests use per-file tag metadata (critical/high/medium/low) and are executed via `codeflow test shell-exec`, not the retired `run-all-tests.sh`.",
   "$schema": ".codeflow/schemas/test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
@@ -109,16 +109,147 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=essential --skip-structural --format=ctrf --output=ctrf.json"
+          "command": "codeflow test shell-exec --target shell-scripts --only-tag critical --output ctrf.json"
         },
         "full": {
-          "command": "bash .codeflow/testing/run-all-tests.sh --mode=full --skip-structural --format=ctrf --output=ctrf.json"
+          "command": "codeflow test shell-exec --target shell-scripts --output ctrf.json"
         }
       },
       "report": {
         "format": "ctrf",
         "path": "ctrf.json"
-      }
+      },
+      "structural": {
+        "source_glob": [
+          ".codeflow/scripts/**/*.sh",
+          ".codeflow/scripts/**/*.py",
+          ".claude/hooks/codeflow/**/*.sh"
+        ],
+        "test_glob": [
+          ".codeflow/testing/scripts/**/test-*.sh",
+          ".codeflow/testing/scripts/**/test_*.py",
+          ".codeflow/testing/claude-hooks/**/test-*.sh",
+          ".codeflow/testing/consistency/test-*.sh"
+        ],
+        "pattern_map": [
+          {
+            "source": "^\\.codeflow/scripts/([^/]+)/([^/]+)/([^/]+)\\.sh$",
+            "test": ".codeflow/testing/scripts/$1/$2/test-$3.sh"
+          },
+          {
+            "source": "^\\.codeflow/scripts/([^/]+)/([^/]+)\\.sh$",
+            "test": ".codeflow/testing/scripts/$1/test-$2.sh"
+          },
+          {
+            "source": "^\\.claude/hooks/codeflow/([^/]+)/([^/]+)\\.sh$",
+            "test": ".codeflow/testing/claude-hooks/$1/test-$2.sh"
+          }
+        ],
+        "exclusions": {
+          "no_test_required": [
+            {
+              "pattern": ".codeflow/scripts/shell-lib/*",
+              "reason": "Shell library modules — no 1:1 test mapping; covered indirectly by scripts that source them."
+            },
+            {
+              "pattern": ".codeflow/scripts/codeflow_py_lib/*",
+              "reason": "Python library modules — no 1:1 test mapping."
+            },
+            {
+              "pattern": ".codeflow/scripts/security/protection/lib/*",
+              "reason": "Protection lib modules — sourced by cf-protect-resources.sh and its siblings; covered indirectly by the parent-script tests (test-cf-protection-{common,core,ops,verify}.sh)."
+            }
+          ],
+          "orphan_allowed": [
+            {
+              "pattern": ".codeflow/testing/consistency/*",
+              "reason": "Cross-cutting consistency checks (settings sync, config invariants); no single source script."
+            },
+            {
+              "pattern": ".codeflow/testing/scripts/git-hooks/*",
+              "reason": "Git hook scripts have no .sh extension (commit-msg, pre-commit, etc.) — they are invoked by git's hook mechanism, not by import, so source_glob does not match them."
+            },
+            {
+              "pattern": ".codeflow/testing/scripts/commands/*",
+              "reason": "Command integration tests exercise CLI command infrastructure rather than a single 1:1 source script."
+            },
+            {
+              "pattern": ".codeflow/testing/scripts/security/protection/test-cf-protection-*.sh",
+              "reason": "Protection lib tests (test-cf-protection-{common,core,ops,verify}.sh) exercise modules under .codeflow/scripts/security/protection/lib/ that are excluded from source_glob via the matching no_test_required entry."
+            }
+          ]
+        }
+      },
+      "test_files": [
+        {
+          "path": ".codeflow/testing/consistency/test-settings-sync.sh",
+          "tags": ["critical"]
+        },
+        {
+          "path": ".codeflow/testing/consistency/test-config-consistency.sh",
+          "tags": ["critical"]
+        },
+        {
+          "path": ".codeflow/testing/consistency/test-pathflow-task-tracker-config.sh",
+          "tags": ["critical"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-protect-resources.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-protection-common.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-protection-core.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-protection-ops.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-protection-verify.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-promote-protection.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/protection/test-cf-reload-protection.sh",
+          "tags": ["high"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/commands/test-commands.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/security/validation/test-cf-validate-shell.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/git-hooks/test-pre-commit.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/git-hooks/test-commit-msg.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/git-hooks/test-prepare-commit-msg.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/git-hooks/test-post-commit.sh",
+          "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/git-hooks/test-pre-push.sh",
+          "tags": ["medium"]
+        }
+      ]
     }
   ]
 }

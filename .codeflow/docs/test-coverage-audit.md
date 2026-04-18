@@ -241,7 +241,7 @@ The following were excluded per user request:
 - `.venv/` - Python virtual environment
 - `.git/hooks/*.sample` - Git sample hooks (not project code)
 - Test files themselves (`.codeflow/testing/`)
-- Test framework libraries (`.codeflow/testing/lib/`)
+- Testing subsystem engine (Rust: `codeflow-cli/core/src/testing/`; Shell test bodies: `.codeflow/testing/scripts/`, `.codeflow/testing/claude-hooks/`, `.codeflow/testing/consistency/`, `.codeflow/testing/benchmarks/`)
 
 ---
 

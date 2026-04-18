@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::testing::config::{
-    CoverageConfig, CoverageFormat, CoverageRule, CoverageScope, ModeCommand, ReportConfig,
-    ReportFormat, RunnerType, TargetConfig,
+    CoverageConfig, CoverageFormat, CoverageRule, CoverageScope, ModeCommand, PatternMapEntry,
+    ReportConfig, ReportFormat, RunnerType, StructuralConfig, TargetConfig,
 };
 
 /// A detected stack with its best-guess target configuration.
@@ -159,6 +159,9 @@ fn build_rust_target() -> TargetConfig {
         }),
         ci_skip: None,
         ci_skip_reason: None,
+        structural: None,
+        tags: Vec::new(),
+        test_files: Vec::new(),
     }
 }
 
@@ -203,6 +206,9 @@ fn build_vitest_target() -> TargetConfig {
         }),
         ci_skip: None,
         ci_skip_reason: None,
+        structural: Some(js_ts_structural()),
+        tags: Vec::new(),
+        test_files: Vec::new(),
     }
 }
 
@@ -246,6 +252,9 @@ fn build_jest_target() -> TargetConfig {
         }),
         ci_skip: None,
         ci_skip_reason: None,
+        structural: Some(js_ts_structural()),
+        tags: Vec::new(),
+        test_files: Vec::new(),
     }
 }
 
@@ -291,6 +300,9 @@ fn build_go_target() -> TargetConfig {
         }),
         ci_skip: None,
         ci_skip_reason: None,
+        structural: Some(go_structural()),
+        tags: Vec::new(),
+        test_files: Vec::new(),
     }
 }
 
@@ -334,6 +346,71 @@ fn build_python_target() -> TargetConfig {
         }),
         ci_skip: None,
         ci_skip_reason: None,
+        structural: Some(python_structural()),
+        tags: Vec::new(),
+        test_files: Vec::new(),
+    }
+}
+
+// -------------------------------------------------------------------------
+// Structural-check helpers per detected stack.
+//
+// Each helper returns a best-effort `StructuralConfig` that a majority of
+// adopters can keep unchanged. Emitters can still replace the defaults
+// post-setup. Rust is deliberately omitted (structural = None) because
+// `cargo nextest` colocates tests under `#[cfg(test)] mod tests`, not in
+// sibling test files — a 1:1 source↔test pattern map does not fit.
+// -------------------------------------------------------------------------
+
+fn js_ts_structural() -> StructuralConfig {
+    StructuralConfig {
+        source_glob: vec!["src/**/*.ts".to_string(), "src/**/*.tsx".to_string()],
+        test_glob: vec![
+            "src/**/*.test.ts".to_string(),
+            "src/**/*.test.tsx".to_string(),
+            "tests/**/*.test.ts".to_string(),
+        ],
+        pattern_map: vec![PatternMapEntry {
+            source: r"^src/(.+)\.tsx?$".to_string(),
+            test: "src/$1.test.ts".to_string(),
+        }],
+        exclusions: None,
+    }
+}
+
+fn go_structural() -> StructuralConfig {
+    StructuralConfig {
+        source_glob: vec!["**/*.go".to_string()],
+        test_glob: vec!["**/*_test.go".to_string()],
+        pattern_map: vec![PatternMapEntry {
+            source: r"^(.+)\.go$".to_string(),
+            test: "$1_test.go".to_string(),
+        }],
+        exclusions: None,
+    }
+}
+
+fn python_structural() -> StructuralConfig {
+    // pytest convention: test files live under `tests/` as `test_<name>.py`.
+    // Two ordered rules, first-match-wins:
+    //   1. nested package: `src/pkg/mod.py` → `tests/pkg/test_mod.py`
+    //   2. flat module:    `src/foo.py`     → `tests/test_foo.py`
+    // Both templates produce paths whose filenames start with `test_`, so
+    // they satisfy `test_glob`. Adopters can retune after setup.
+    StructuralConfig {
+        source_glob: vec!["src/**/*.py".to_string()],
+        test_glob: vec!["tests/**/test_*.py".to_string()],
+        pattern_map: vec![
+            PatternMapEntry {
+                source: r"^src/(.+)/([^/]+)\.py$".to_string(),
+                test: "tests/$1/test_$2.py".to_string(),
+            },
+            PatternMapEntry {
+                source: r"^src/([^/]+)\.py$".to_string(),
+                test: "tests/test_$1.py".to_string(),
+            },
+        ],
+        exclusions: None,
     }
 }
 

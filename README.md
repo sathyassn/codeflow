@@ -61,6 +61,52 @@ claude
   ledger/          # JSONL event logs
 ```
 
+## Testing
+
+CodeFlow uses a single CLI entry point for all test execution. Configure targets once; the engine handles runners, coverage, and reporting.
+
+**Run the full suite:**
+
+```bash
+codeflow test --mode full
+```
+
+**Quick example: Rust workspace config** (`.codeflow/config/testing/test-config.json`):
+
+```json
+{
+  "targets": [
+    {
+      "name": "rust-core",
+      "runner": "cargo",
+      "path": "codeflow-cli",
+      "coverage": {
+        "format": "llvm-cov",
+        "rules": { "type": "per_file", "threshold": 85 }
+      }
+    }
+  ]
+}
+```
+
+**Common commands:**
+
+```bash
+# Run only critical and high priority targets
+codeflow test --mode full --only-tag critical,high
+
+# Run a single target
+codeflow test --mode full --only rust-core
+
+# Structural integrity check (verifies source-to-test mappings)
+codeflow test structural-check
+
+# Show last run report
+codeflow test report show
+```
+
+For the complete guide including multi-target configs, coverage exceptions, tag-based filtering, and CI integration, see [Generic Testing Framework Guide](.codeflow/docs/guides/generic-testing-framework.md).
+
 ## Documentation
 
 - [PROJECT.md](PROJECT.md) - Full project context

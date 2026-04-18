@@ -54,6 +54,16 @@ pub struct TestArgs {
     #[arg(long)]
     pub skip: Option<String>,
 
+    /// Run only targets tagged with these priority tags (critical, high,
+    /// medium, low). Comma-separated. Composes with --only (AND).
+    #[arg(long)]
+    pub only_tag: Option<String>,
+
+    /// Skip targets tagged with these priority tags. Comma-separated.
+    /// Composes with --skip (AND); wins over --only-tag on conflict.
+    #[arg(long)]
+    pub skip_tag: Option<String>,
+
     /// Stop on first target failure.
     #[arg(long, default_value_t = false)]
     pub fail_fast: bool,
@@ -123,6 +133,33 @@ pub enum TestSubcommand {
         /// Output format.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
+    },
+    /// Run the bidirectional structural integrity check on every target that
+    /// declares a `structural` block.
+    StructuralCheck {
+        /// Output format.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+        /// Limit to a single target by name.
+        #[arg(long)]
+        only: Option<String>,
+    },
+    /// Execute every `test_files` entry of a shell-runner target and emit a
+    /// CTRF report. Direct replacement for any external shell orchestrator.
+    ShellExec {
+        /// Target name to execute. Must have `runner: custom` and at least
+        /// one entry in `test_files`.
+        #[arg(long)]
+        target: String,
+        /// CTRF JSON output path. Defaults to the target's `report.path`.
+        #[arg(long)]
+        output: Option<String>,
+        /// Only run files tagged with this tag. Comma-separated.
+        #[arg(long)]
+        only_tag: Option<String>,
+        /// Skip files tagged with this tag. Comma-separated.
+        #[arg(long)]
+        skip_tag: Option<String>,
     },
 }
 
@@ -303,6 +340,8 @@ pub fn run(args: Option<TestArgs>) -> Result<()> {
         format: OutputFormat::Human,
         only: None,
         skip: None,
+        only_tag: None,
+        skip_tag: None,
         fail_fast: false,
         subcommand: None,
     });
@@ -334,6 +373,21 @@ fn run_with_dir(project_dir: &Path, args: &TestArgs) -> Result<()> {
                 *force,
             ),
             TestSubcommand::Doctor { format } => run_doctor(project_dir, format),
+            TestSubcommand::StructuralCheck { format, only } => {
+                run_structural_check(project_dir, format, only.as_deref())
+            }
+            TestSubcommand::ShellExec {
+                target,
+                output,
+                only_tag,
+                skip_tag,
+            } => run_shell_exec(
+                project_dir,
+                target,
+                output.as_deref(),
+                only_tag.as_deref(),
+                skip_tag.as_deref(),
+            ),
         };
     }
 
@@ -377,6 +431,8 @@ fn run_new_engine(
         .as_ref()
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
+    let only_tags: Vec<test_config::Tag> = parse_tag_list(args.only_tag.as_deref(), "--only-tag")?;
+    let skip_tags: Vec<test_config::Tag> = parse_tag_list(args.skip_tag.as_deref(), "--skip-tag")?;
 
     for target in &config.targets {
         if target.enabled && !target.modes.contains_key(mode) {
@@ -411,6 +467,8 @@ fn run_new_engine(
         args.fail_fast,
         &only,
         &skip,
+        &only_tags,
+        &skip_tags,
     );
 
     // Collect successful run results paired with their target config
@@ -674,6 +732,9 @@ fn run_config_subcommand(project_dir: &Path, command: &ConfigCommand) -> Result<
                 coverage: None,
                 ci_skip: None,
                 ci_skip_reason: None,
+                structural: None,
+                tags: Vec::new(),
+                test_files: Vec::new(),
             });
 
             test_config::write_test_config(&config_path, &config)
@@ -1023,7 +1084,300 @@ fn run_doctor(project_dir: &Path, format: &OutputFormat) -> Result<()> {
     Ok(())
 }
 
+/// Outcome of [`run_structural_check_inner`] used by callers that want to
+/// decide the exit behaviour themselves (tests, hooks).
+#[derive(Debug)]
+pub(crate) struct StructuralCheckOutcome {
+    /// Rendered output (human text or JSON with trailing newline).
+    pub rendered: String,
+    /// True when every target passed.
+    pub all_pass: bool,
+}
+
+/// Load the canonical config, run the structural check, and render the
+/// output — WITHOUT writing to stdout or calling `std::process::exit`.
+/// Separating IO from business logic lets us unit-test the handler.
+pub(crate) fn run_structural_check_inner(
+    project_dir: &Path,
+    format: &OutputFormat,
+    only: Option<&str>,
+) -> Result<StructuralCheckOutcome> {
+    use codeflow_core::testing::structural;
+
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("testing")
+        .join("test-config.json");
+
+    let config = test_config::load_test_config(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let targets: Vec<_> = if let Some(name) = only {
+        config
+            .targets
+            .iter()
+            .filter(|t| t.name == name)
+            .cloned()
+            .collect()
+    } else {
+        config.targets.clone()
+    };
+
+    if let Some(name) = only {
+        if targets.is_empty() {
+            anyhow::bail!("target '{name}' not found in config");
+        }
+    }
+
+    let results = structural::validate_all(&targets, project_dir)
+        .map_err(|e| anyhow::anyhow!("structural check failed: {e}"))?;
+
+    let all_pass = results.iter().all(|r| r.pass);
+
+    let rendered = match format {
+        OutputFormat::Human => structural::format_human_all(&results),
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&results)
+                .map_err(|e| anyhow::anyhow!("json serialize: {e}"))?;
+            format!("{json}\n")
+        }
+    };
+
+    Ok(StructuralCheckOutcome { rendered, all_pass })
+}
+
+/// Run the bidirectional structural integrity check.
+///
+/// Loads the canonical config, filters to targets that declare a `structural`
+/// block (optionally narrowed by `--only <name>`), and emits the result in
+/// either human-readable or JSON form. Exits non-zero when any target fails.
+fn run_structural_check(
+    project_dir: &Path,
+    format: &OutputFormat,
+    only: Option<&str>,
+) -> Result<()> {
+    let outcome = run_structural_check_inner(project_dir, format, only)?;
+    print!("{}", outcome.rendered);
+    if !outcome.all_pass {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Outcome of [`run_shell_exec_inner`], split from the stdout/exit side so
+/// we can unit-test the business logic.
+#[derive(Debug)]
+pub(crate) struct ShellExecOutcome {
+    /// Parsed CTRF report as written to disk.
+    pub report: codeflow_core::testing::report::CanonicalTestReport,
+    /// Output file path (absolute).
+    pub output_path: std::path::PathBuf,
+    /// True when every executed test passed.
+    pub all_pass: bool,
+}
+
+/// Execute every `test_files` entry in the named target and write a CTRF
+/// report. Returns the outcome without touching stdout or exiting.
+pub(crate) fn run_shell_exec_inner(
+    project_dir: &Path,
+    target_name: &str,
+    output: Option<&str>,
+    only_tag: Option<&str>,
+    skip_tag: Option<&str>,
+) -> Result<ShellExecOutcome> {
+    use codeflow_core::testing::report::{CanonicalTestReport, CtrfStatus, CtrfTest};
+    use std::process::Command;
+    use std::time::Instant;
+
+    let only_tags = parse_tag_list(only_tag, "--only-tag")?;
+    let skip_tags = parse_tag_list(skip_tag, "--skip-tag")?;
+
+    let config_path = project_dir
+        .join(".codeflow")
+        .join("config")
+        .join("testing")
+        .join("test-config.json");
+    let config = test_config::load_test_config(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let target = config
+        .targets
+        .iter()
+        .find(|t| t.name == target_name)
+        .ok_or_else(|| anyhow::anyhow!("target '{target_name}' not found in config"))?;
+
+    if target.test_files.is_empty() {
+        anyhow::bail!(
+            "target '{target_name}' has no test_files configured; shell-exec requires an enumerated list"
+        );
+    }
+
+    // Compute effective CWD (same resolution as runner but without the
+    // private helper — we duplicate minimally to avoid exposing it).
+    let cwd = match target.cwd.as_deref() {
+        Some(c) if !c.is_empty() && c != "." => project_dir.join(c),
+        _ => project_dir.to_path_buf(),
+    };
+
+    // Resolve the output path. CLI `--output` wins; else the target's
+    // `report.path`; else default to `ctrf.json` under cwd.
+    let output_rel = output
+        .or_else(|| target.report.as_ref().map(|r| r.path.as_str()))
+        .unwrap_or("ctrf.json");
+    let output_path = cwd.join(output_rel);
+
+    // Collect entries honouring per-file tag filters.
+    let mut selected: Vec<&test_config::TestFileEntry> = Vec::new();
+    for entry in &target.test_files {
+        // Union of target-level tags + per-file tags defines the "effective"
+        // tag set for this file.
+        let mut tags = target.tags.clone();
+        tags.extend(entry.tags.iter().copied());
+        // skip wins over only — same semantics as the target-level filter.
+        if !skip_tags.is_empty() && tags.iter().any(|t| skip_tags.contains(t)) {
+            continue;
+        }
+        if !only_tags.is_empty() && !tags.iter().any(|t| only_tags.contains(t)) {
+            continue;
+        }
+        selected.push(entry);
+    }
+
+    // Execute each file.
+    let mut results: Vec<CtrfTest> = Vec::with_capacity(selected.len());
+    for entry in &selected {
+        let start = Instant::now();
+        let mut cmd = Command::new("bash");
+        cmd.arg(&entry.path).current_dir(&cwd);
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                results.push(CtrfTest {
+                    name: entry.path.clone(),
+                    status: CtrfStatus::Failed,
+                    duration: start.elapsed().as_millis() as f64,
+                    suite: None,
+                    message: Some(format!("spawn failed: {e}")),
+                    trace: None,
+                    tags: entry.tags.iter().map(ToString::to_string).collect(),
+                    flaky: false,
+                });
+                continue;
+            }
+        };
+        let duration_ms = start.elapsed().as_millis() as f64;
+        let exit_code = output.status.code().unwrap_or(-1);
+        let status = if exit_code == 0 {
+            CtrfStatus::Passed
+        } else {
+            CtrfStatus::Failed
+        };
+        let message = if exit_code == 0 {
+            None
+        } else {
+            let tail = String::from_utf8_lossy(&output.stderr);
+            let tail_trimmed: String = tail
+                .lines()
+                .rev()
+                .take(10)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(format!("exit {exit_code}\n{tail_trimmed}"))
+        };
+        let trace = if exit_code == 0 {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&output.stdout).to_string())
+        };
+        results.push(CtrfTest {
+            name: entry.path.clone(),
+            status,
+            duration: duration_ms,
+            suite: Some(target_name.to_string()),
+            message,
+            trace,
+            tags: entry.tags.iter().map(ToString::to_string).collect(),
+            flaky: false,
+        });
+    }
+
+    let all_pass = results.iter().all(|t| t.status == CtrfStatus::Passed);
+    let report = CanonicalTestReport::new(&format!("codeflow-shell-exec:{target_name}"), results);
+
+    // Ensure parent exists.
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("failed to create report parent directory: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(&report)
+        .map_err(|e| anyhow::anyhow!("json serialize: {e}"))?;
+    std::fs::write(&output_path, json).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to write CTRF report to {}: {e}",
+            output_path.display()
+        )
+    })?;
+
+    Ok(ShellExecOutcome {
+        report,
+        output_path,
+        all_pass,
+    })
+}
+
+/// CLI entry point for `codeflow test shell-exec`. Exits non-zero on any
+/// test failure.
+fn run_shell_exec(
+    project_dir: &Path,
+    target_name: &str,
+    output: Option<&str>,
+    only_tag: Option<&str>,
+    skip_tag: Option<&str>,
+) -> Result<()> {
+    let outcome = run_shell_exec_inner(project_dir, target_name, output, only_tag, skip_tag)?;
+    let summary = &outcome.report.results.summary;
+    eprintln!(
+        "[codeflow test shell-exec] {}: {} passed, {} failed, {} skipped (report: {})",
+        target_name,
+        summary.passed,
+        summary.failed,
+        summary.skipped,
+        outcome.output_path.display(),
+    );
+    if !outcome.all_pass {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Parse a comma-separated list of tag names into typed [`Tag`] values.
+///
+/// Whitespace is trimmed; empty slots are silently dropped. Any unrecognised
+/// tag name surfaces as `anyhow::Error` so the CLI fails cleanly instead of
+/// silently ignoring a typo like `--only-tag critcial`.
+fn parse_tag_list(raw: Option<&str>, flag: &str) -> Result<Vec<test_config::Tag>> {
+    let mut tags = Vec::new();
+    let Some(s) = raw else {
+        return Ok(tags);
+    };
+    for chunk in s.split(',') {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tag = test_config::Tag::parse(trimmed).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{flag}: unknown tag '{trimmed}'. valid tags: critical, high, medium, low"
+            )
+        })?;
+        tags.push(tag);
+    }
+    Ok(tags)
+}
 
 fn load_or_create_config(path: &Path) -> Result<test_config::TestConfig> {
     if path.exists() {
@@ -1209,6 +1563,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -1232,6 +1588,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -1262,6 +1620,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -1824,6 +2184,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -1859,6 +2221,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -1874,6 +2238,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: Some(sub),
         }
@@ -2203,6 +2569,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -2232,6 +2600,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -2265,6 +2635,8 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -2296,6 +2668,8 @@ mod tests {
             format: OutputFormat::Human,
             only: Some("a".to_string()),
             skip: None,
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
@@ -2308,10 +2682,339 @@ mod tests {
             format: OutputFormat::Human,
             only: None,
             skip: Some("b".to_string()),
+            only_tag: None,
+            skip_tag: None,
             fail_fast: false,
             subcommand: None,
         };
         let result = run_with_dir(dir.path(), &args);
         assert!(result.is_ok(), "skip=b should skip b");
+    }
+
+    // --- structural-check subcommand tests -------------------------------
+
+    fn write_canonical_config(root: &Path, body: &str) {
+        let cfg = root.join(".codeflow").join("config").join("testing");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("test-config.json"), body).unwrap();
+    }
+
+    #[test]
+    fn structural_inner_reports_pass_when_sources_have_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("src/alpha.sh"), "# alpha").unwrap();
+        std::fs::write(root.join("tests/test-alpha.sh"), "# test").unwrap();
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "structural": {
+                    "source_glob": ["src/*.sh"],
+                    "test_glob": ["tests/test-*.sh"],
+                    "pattern_map": [
+                        {"source": "^src/(.+)\\.sh$", "test": "tests/test-$1.sh"}
+                    ]
+                }
+            }]
+        }"#,
+        );
+
+        let outcome = run_structural_check_inner(root, &OutputFormat::Human, None).unwrap();
+        assert!(outcome.all_pass);
+        assert!(outcome.rendered.contains("PASS"));
+    }
+
+    #[test]
+    fn structural_inner_reports_fail_when_test_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/alpha.sh"), "# alpha").unwrap();
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "structural": {
+                    "source_glob": ["src/*.sh"],
+                    "test_glob": ["tests/test-*.sh"],
+                    "pattern_map": [
+                        {"source": "^src/(.+)\\.sh$", "test": "tests/test-$1.sh"}
+                    ]
+                }
+            }]
+        }"#,
+        );
+
+        let outcome = run_structural_check_inner(root, &OutputFormat::Human, None).unwrap();
+        assert!(!outcome.all_pass);
+        assert!(outcome.rendered.contains("MISSING"));
+    }
+
+    #[test]
+    fn structural_inner_only_filter_errors_on_unknown_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_canonical_config(root, r#"{"schema_version":"1.0","targets":[]}"#);
+        let err =
+            run_structural_check_inner(root, &OutputFormat::Human, Some("ghost")).unwrap_err();
+        assert!(err.to_string().contains("ghost"));
+    }
+
+    #[test]
+    fn structural_inner_json_output_is_array() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_canonical_config(root, r#"{"schema_version":"1.0","targets":[]}"#);
+        let outcome = run_structural_check_inner(root, &OutputFormat::Json, None).unwrap();
+        assert!(outcome.all_pass);
+        assert!(outcome.rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn parse_tag_list_none_returns_empty() {
+        let out = parse_tag_list(None, "--only-tag").unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_tag_list_single_value() {
+        let out = parse_tag_list(Some("critical"), "--only-tag").unwrap();
+        assert_eq!(out, vec![test_config::Tag::Critical]);
+    }
+
+    #[test]
+    fn parse_tag_list_comma_separated() {
+        let out = parse_tag_list(Some("critical,high, low"), "--only-tag").unwrap();
+        assert_eq!(
+            out,
+            vec![
+                test_config::Tag::Critical,
+                test_config::Tag::High,
+                test_config::Tag::Low
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_tag_list_skips_empty_segments() {
+        let out = parse_tag_list(Some(",critical,,,high,"), "--only-tag").unwrap();
+        assert_eq!(
+            out,
+            vec![test_config::Tag::Critical, test_config::Tag::High]
+        );
+    }
+
+    #[test]
+    fn parse_tag_list_rejects_unknown_tag() {
+        let err = parse_tag_list(Some("critical,typo"), "--skip-tag").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("--skip-tag"), "got: {msg}");
+        assert!(msg.contains("typo"), "got: {msg}");
+    }
+
+    #[test]
+    fn parse_tag_list_case_insensitive() {
+        let out = parse_tag_list(Some("CRITICAL,High"), "--only-tag").unwrap();
+        assert_eq!(
+            out,
+            vec![test_config::Tag::Critical, test_config::Tag::High]
+        );
+    }
+
+    // --- shell-exec subcommand tests ------------------------------------
+
+    fn write_passing_test(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+    }
+
+    fn write_failing_test(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, "#!/usr/bin/env bash\nexit 1\n").unwrap();
+    }
+
+    #[test]
+    fn shell_exec_runs_all_files_and_emits_ctrf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_passing_test(root, "a.sh");
+        write_passing_test(root, "b.sh");
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "report": {"format": "ctrf", "path": "ctrf.json"},
+                "test_files": [
+                    {"path": "a.sh"},
+                    {"path": "b.sh"}
+                ]
+            }]
+        }"#,
+        );
+
+        let outcome = run_shell_exec_inner(root, "shell", None, None, None).unwrap();
+        assert!(outcome.all_pass);
+        assert_eq!(outcome.report.results.summary.passed, 2);
+        assert_eq!(outcome.report.results.summary.failed, 0);
+        assert!(outcome.output_path.exists());
+        // Report name prefix identifies the tool.
+        assert!(outcome.report.results.tool.name.contains("shell"));
+    }
+
+    #[test]
+    fn shell_exec_surfaces_failing_test_in_ctrf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_passing_test(root, "a.sh");
+        write_failing_test(root, "b.sh");
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "test_files": [
+                    {"path": "a.sh"},
+                    {"path": "b.sh"}
+                ]
+            }]
+        }"#,
+        );
+
+        let outcome = run_shell_exec_inner(root, "shell", Some("out.json"), None, None).unwrap();
+        assert!(!outcome.all_pass);
+        assert_eq!(outcome.report.results.summary.passed, 1);
+        assert_eq!(outcome.report.results.summary.failed, 1);
+    }
+
+    #[test]
+    fn shell_exec_only_tag_filters_critical_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_passing_test(root, "crit.sh");
+        write_passing_test(root, "low.sh");
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "test_files": [
+                    {"path": "crit.sh", "tags": ["critical"]},
+                    {"path": "low.sh", "tags": ["low"]}
+                ]
+            }]
+        }"#,
+        );
+
+        let outcome = run_shell_exec_inner(root, "shell", None, Some("critical"), None).unwrap();
+        assert_eq!(outcome.report.results.summary.total, 1);
+        assert_eq!(outcome.report.results.tests[0].name, "crit.sh");
+    }
+
+    #[test]
+    fn shell_exec_skip_tag_removes_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_passing_test(root, "crit.sh");
+        write_passing_test(root, "low.sh");
+
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}},
+                "test_files": [
+                    {"path": "crit.sh", "tags": ["critical"]},
+                    {"path": "low.sh", "tags": ["low"]}
+                ]
+            }]
+        }"#,
+        );
+
+        let outcome = run_shell_exec_inner(root, "shell", None, None, Some("critical")).unwrap();
+        assert_eq!(outcome.report.results.summary.total, 1);
+        assert_eq!(outcome.report.results.tests[0].name, "low.sh");
+    }
+
+    #[test]
+    fn shell_exec_unknown_target_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_canonical_config(root, r#"{"schema_version":"1.0","targets":[]}"#);
+        let err = run_shell_exec_inner(root, "nope", None, None, None).unwrap_err();
+        assert!(err.to_string().contains("nope"));
+    }
+
+    #[test]
+    fn shell_exec_empty_test_files_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "shell",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}}
+            }]
+        }"#,
+        );
+        let err = run_shell_exec_inner(root, "shell", None, None, None).unwrap_err();
+        assert!(err.to_string().contains("test_files"));
+    }
+
+    #[test]
+    fn structural_inner_skips_targets_without_structural_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_canonical_config(
+            root,
+            r#"{
+            "schema_version": "1.0",
+            "targets": [{
+                "name": "plain",
+                "runner": "custom",
+                "modes": {"full": {"command": "true"}}
+            }]
+        }"#,
+        );
+        let outcome = run_structural_check_inner(root, &OutputFormat::Human, None).unwrap();
+        assert!(outcome.all_pass);
+        assert!(outcome.rendered.contains("no targets"));
     }
 }

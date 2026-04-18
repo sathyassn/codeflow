@@ -1255,8 +1255,10 @@ Claude Code's sandbox blocks network operations by default. Use `dangerouslyDisa
 
 - Unit tests: written by cf-development during WS-DEV (tightly coupled to code)
 - Integration/acceptance tests: written/verified by cf-quality-assurance during WS-QA
-- Test suite: run via `codeflow test --mode full` (the single authoritative command for all pipeline stages; routes to all configured test targets per `test-config.json`)
+- Test suite: run via `codeflow test --mode full` (the single authoritative command for all pipeline stages; routes to all configured test targets per `.codeflow/config/testing/test-config.json`)
 - All test changes verified before marking stage complete
+- Structural integrity check: `codeflow test structural-check` — validates source-to-test file mappings; exits 1 on findings; use `--only <target>` to limit scope; `--format json` for machine-readable output
+- Tag-based filtering: `--only-tag <csv>` runs only targets with matching priority tags (`critical`, `high`, `medium`, `low`); `--skip-tag <csv>` excludes matching targets; both compose with `--only`/`--skip` (AND logic); `--skip-tag` wins on conflict; untagged targets excluded when `--only-tag` is non-empty
 
 ### PR Workflow
 
@@ -1447,8 +1449,11 @@ Hooks fire automatically at lifecycle points. Configured in `.claude/settings.js
 ### CLI
 
 ```text
-codeflow test --mode full   # Run all suites with coverage enforcement (authoritative for all pipeline stages)
+codeflow test --mode full              # Run all suites with coverage enforcement (authoritative for all pipeline stages)
 codeflow test                          # Run test suite (default: essential mode, for quick checks only)
+codeflow test --only-tag critical,high # Run only critical and high priority targets
+codeflow test --skip-tag low           # Skip low priority targets
+codeflow test structural-check         # Validate source-to-test file mappings (exits 1 on findings)
 codeflow doctor                        # Diagnose infrastructure
 codeflow worktree list                 # List active worktrees
 codeflow worktree cleanup              # Clean up stale worktrees
@@ -1462,7 +1467,7 @@ codeflow interactive list              # Show all interactive sessions (active +
 codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
 ```
 
-The unified `codeflow test --mode full` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `test-config.json` and enforces first-match-wins per-target coverage rules.
+The unified `codeflow test --mode full` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `.codeflow/config/testing/test-config.json` and enforces first-match-wins per-target coverage rules.
 
 → See Section 9 for project file layout and Section 10 for data model
 

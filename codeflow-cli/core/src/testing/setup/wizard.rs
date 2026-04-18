@@ -239,6 +239,9 @@ pub fn run_add_target_wizard(
         coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
+        structural: None,
+        tags: Vec::new(),
+        test_files: Vec::new(),
     };
 
     let _ = repo_root;
@@ -433,6 +436,9 @@ mod tests {
             coverage: None,
             ci_skip: None,
             ci_skip_reason: None,
+            structural: None,
+            tags: Vec::new(),
+            test_files: Vec::new(),
         };
         let result = customize_target(&prompts, target).unwrap();
         assert_eq!(result.modes["essential"].command, "cargo test");
@@ -460,6 +466,9 @@ mod tests {
             coverage: None,
             ci_skip: None,
             ci_skip_reason: None,
+            structural: None,
+            tags: Vec::new(),
+            test_files: Vec::new(),
         };
         let result = customize_target(&prompts, target).unwrap();
         assert_eq!(result.modes["essential"].command, "custom-essential");

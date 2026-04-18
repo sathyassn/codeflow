@@ -8,7 +8,7 @@ area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
 is_ongoing: false
-file_scope: ["codeflow-cli/", ".codeflow/scripts/db/", ".codeflow/testing/cli/", ".codeflow/testing/test-config.json"]
+file_scope: ["codeflow-cli/", ".codeflow/scripts/db/", ".codeflow/config/testing/test-config.json"]
 priority: high
 pr_number: null
 external_id: null

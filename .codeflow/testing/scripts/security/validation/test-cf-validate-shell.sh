@@ -8,7 +8,13 @@ set -euo pipefail
 
 # Setup
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$TEST_DIR/../../../lib/test-isolation.sh"
+# REAL_REPO_ROOT: the real repo root (git toplevel), distinct from any
+# isolated sandbox a test may create. Legacy lib/test-isolation.sh retired
+# in INF-TSK-046-008; derive both REAL_REPO_ROOT and TEST_TMPDIR directly.
+REAL_REPO_ROOT="$(git -C "$TEST_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")"
+# Honour TMPDIR if set (sandboxed environments restrict mktemp(1) paths).
+TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/cf-validate-shell-test.XXXXXX")"
+trap 'rm -rf "$TEST_TMPDIR"' EXIT
 SCRIPT="$REAL_REPO_ROOT/.codeflow/scripts/security/validation/cf-validate-shell.sh"
 
 # Test counter

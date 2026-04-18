@@ -51,12 +51,9 @@ readonly SETTINGS_LOCAL="$REPO_ROOT/.claude/settings.local.json"
 # Hooks directory (codeflow uses subdirectories per event type)
 readonly HOOKS_DIR="$REPO_ROOT/.claude/hooks/codeflow"
 
-# Source test helpers
-if [[ -f "$REPO_ROOT/.codeflow/testing/lib/test-helpers.sh" ]]; then
-    # shellcheck source=../lib/test-helpers.sh
-    source "$REPO_ROOT/.codeflow/testing/lib/test-helpers.sh"
-else
-    # Minimal fallback
+# Minimal self-contained test harness. The legacy shell test-framework was
+# retired in INF-TSK-046-008; this file runs standalone under bash.
+if true; then
     TEST_PASS_COUNT=0
     TEST_FAIL_COUNT=0
     TEST_SKIP_COUNT=0

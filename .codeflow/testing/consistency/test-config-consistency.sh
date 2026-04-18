@@ -21,13 +21,59 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-# Source test helpers
-if [[ -f "$REPO_ROOT/.codeflow/testing/lib/test-helpers.sh" ]]; then
-    source "$REPO_ROOT/.codeflow/testing/lib/test-helpers.sh"
-else
-    echo "ERROR: test-helpers.sh not found" >&2
-    exit 1
-fi
+# Minimal self-contained test harness. The legacy shell test-framework was
+# retired in INF-TSK-046-008; this file now runs standalone.
+TEST_PASS_COUNT=0
+TEST_FAIL_COUNT=0
+TEST_SKIP_COUNT=0
+TEST_TOTAL_COUNT=0
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+BOLD='\033[1m'
+test_pass() { ((TEST_PASS_COUNT++)) || true; ((TEST_TOTAL_COUNT++)) || true; echo -e "  ${GREEN}✓${NC} $1"; }
+test_fail() { ((TEST_FAIL_COUNT++)) || true; ((TEST_TOTAL_COUNT++)) || true; echo -e "  ${RED}✗${NC} $1${2:+ - }${2:-}"; }
+test_skip() { ((TEST_SKIP_COUNT++)) || true; ((TEST_TOTAL_COUNT++)) || true; echo -e "  ${YELLOW}○${NC} $1${2:+ (}${2}${2:+)}"; }
+test_section() { echo ""; echo -e "${BOLD}=== $1 ===${NC}"; }
+# assert_equals <expected> <actual> <description>
+assert_equals() {
+    local expected="$1" actual="$2" desc="$3"
+    if [[ "$expected" == "$actual" ]]; then
+        test_pass "$desc"
+    else
+        test_fail "$desc" "expected '$expected', got '$actual'"
+    fi
+}
+# assert_success <command-string> <description>
+assert_success() {
+    local cmd="$1" desc="$2"
+    if eval "$cmd" >/dev/null 2>&1; then
+        test_pass "$desc"
+    else
+        test_fail "$desc" "command failed: $cmd"
+    fi
+}
+# assert_failure <command-string> <description>
+assert_failure() {
+    local cmd="$1" desc="$2"
+    if ! eval "$cmd" >/dev/null 2>&1; then
+        test_pass "$desc"
+    else
+        test_fail "$desc" "command unexpectedly succeeded: $cmd"
+    fi
+}
+print_test_summary() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${BOLD}Test Summary${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "  ${GREEN}Passed:${NC}  $TEST_PASS_COUNT"
+    echo -e "  ${RED}Failed:${NC}  $TEST_FAIL_COUNT"
+    echo -e "  ${YELLOW}Skipped:${NC} $TEST_SKIP_COUNT"
+    echo -e "  Total:   $TEST_TOTAL_COUNT"
+    [[ $TEST_FAIL_COUNT -eq 0 ]]
+}
 
 # Paths
 CONFIG_FILE="$REPO_ROOT/.codeflow/config/enforcement/enforcement-policy.json"

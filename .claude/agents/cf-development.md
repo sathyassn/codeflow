@@ -260,19 +260,13 @@ For EVERY function, handler, match arm, or script block you created or modified,
 
 🔒 **TASK TESTS FIELD: You MUST update the task's `tests` field in the task markdown YAML frontmatter with the paths of test files you create/update (relative to `.codeflow/testing/`).**
 
-🔒 **TEST REGISTRATION: You MUST register new test files in `.codeflow/testing/test-config.json` under the appropriate priority category. Unregistered tests are invisible to the test runner and will be flagged at review.**
+🔒 **TEST REGISTRATION: You MUST register new test files in `.codeflow/config/testing/test-config.json` under the appropriate target. Unregistered tests are invisible to the test runner and will be flagged at review.**
 
-Create or update unit tests for all new/changed logic.
-
-| Code File Type | Test File Pattern | Test Location | Discovery |
-|---------------|------------------|---------------|-----------|
-| `.codeflow/scripts/{area}/*.sh` | `test-{name}.sh` | `.codeflow/testing/scripts/{area}/` | `Glob(".codeflow/testing/scripts/{area}/test-*.sh")` |
-| `.claude/hooks/codeflow/{event}/*.sh` | `test-cf-{event}-{name}.sh` | `.codeflow/testing/claude-hooks/{event}/` | `Glob(".codeflow/testing/claude-hooks/{event}/test-*.sh")` |
-| `.codeflow/config/**/*.json` | `test-{feature}.sh` | `.codeflow/testing/consistency/` | `Glob(".codeflow/testing/consistency/test-*.sh")` |
+Create or update unit tests for all new/changed logic. Check sibling test files in the target directory to identify naming conventions and helper patterns before writing new tests.
 
 Each test file: minimum one positive case, one negative/error case, one edge case.
 
-Register new tests in `.codeflow/testing/test-config.json`: `{ "{script_path}": { "test_file": "{test_path}", "type": "shell|python", "critical": true|false } }`
+Register new tests in `.codeflow/config/testing/test-config.json` under the applicable target's `test_files` or `structural.mappings` section.
 
 ### Step 5: Self-Test
 
@@ -296,7 +290,7 @@ If any check fails, fix the issue and re-run. Do NOT request a commit with lint 
 codeflow test --mode full
 ```
 
-This single command runs all configured test targets with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below its configured threshold must be fixed before commit unless it has a configured exception in `test-config.json`.
+This single command runs all configured test targets with full coverage enforcement and produces a structured markdown artifact. Paste the output into the **Test Stats (draft)** block in the DEV Report (see Step 7). WS-QA will re-run independently and overwrite with verified data — your job is to produce a passing baseline. Any modified file below its configured threshold must be fixed before commit unless it has a configured exception in `.codeflow/config/testing/test-config.json`.
 
 ### Step 6: Request Commit
 
@@ -536,7 +530,7 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 2. Verify criteria integrity: Read the `acceptance:` frontmatter field in the task markdown. Confirm EVERY criterion is UNCHANGED from the original task assignment. If any criterion text was modified during implementation, revert it immediately before signaling STAGE-COMPLETE.
 3. Run the test suite. Confirm zero regressions with actual output, not assumed pass.
 3. Verify every new file I created is in the correct directory by checking sibling files with `Glob`.
-4. Verify every new test file is registered in `.codeflow/testing/test-config.json`.
+4. Verify every new test file is registered in `.codeflow/config/testing/test-config.json`.
 
 ### 5.2 Project Convention Compliance
 
@@ -572,7 +566,7 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 
 | New Artifact | Must Register In | Registration Format |
 |-------------|-----------------|-------------------|
-| New test file (shell or python) | `.codeflow/testing/test-config.json` | Add path (relative to `.codeflow/testing/`) under appropriate priority in `priorities.{LEVEL}.files` |
+| New test file (shell or python) | `.codeflow/config/testing/test-config.json` | Add entry under applicable target's `test_files` or `structural.mappings` |
 | New hook script | `.claude/settings.json` | Add hook entry under appropriate event matcher with `command` path and `timeout` |
 | New CLI command | `.claude/commands/` | Create command markdown file |
 
@@ -585,11 +579,11 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 | Assumption Type | Example of Failure | Verification Method |
 |----------------|-------------------|-------------------|
 | File existence | "The test helper is at `lib/test-helpers.sh`" | `Glob("**/test-helpers.sh")` — verify actual path |
-| Directory existence | "Tests go in `scripts/hooks/`" | `Glob(".codeflow/testing/scripts/hooks/")` — does it exist? |
-| Naming convention | "Hook tests are named `test-hook-*.sh`" | `Glob(".codeflow/testing/claude-hooks/**/test-*.sh")` — check actual pattern |
-| Function signature | "assert_equals takes 2 args" | `Read` the function definition in test-helpers.sh |
-| Config schema | "test-config.json has a `tests` array" | `Read` the actual config file — it uses `priorities.{LEVEL}.files` |
-| Source path in test | "`source ../../lib/test-helpers.sh`" | Count directory levels from test file to lib — verify with `ls` |
+| Directory existence | "Tests go in `scripts/hooks/`" | Check sibling test files in target directory via `Glob` |
+| Naming convention | "Hook tests are named `test-hook-*.sh`" | `Glob` the test directory to see actual siblings |
+| Function signature | "assert_equals takes 2 args" | `Read` the function definition in the actual helper file sourced by siblings |
+| Config schema | "test-config.json has a `tests` array" | `Read` `.codeflow/config/testing/test-config.json` — verify actual structure |
+| Source path in test | "`source ../../lib/test-helpers.sh`" | Count the `../` segments from the test file's actual location |
 | Variable name | "The variable is called `SESSION_ID`" | `Grep` for the actual variable name in the source file |
 | Import path | "`use codeflow_core::hooks::pipeline`" | `Glob("codeflow-cli/core/src/hooks/pipeline.rs")` — does the module exist? |
 
@@ -599,15 +593,14 @@ Before reporting STAGE-COMPLETE, self-verify against ALL acceptance criteria fro
 
 **Before requesting commit, verify ALL wiring is complete:**
 
-1. **test-config.json registration:** For every new test file created, verify an entry exists in `.codeflow/testing/test-config.json` under the correct priority category. The path must be relative to `.codeflow/testing/` (e.g., `scripts/state/test-new-feature.sh`, NOT `.codeflow/testing/scripts/state/test-new-feature.sh`).
+1. **test-config.json registration:** For every new test file created, verify an entry exists in `.codeflow/config/testing/test-config.json` under the applicable target's `test_files` or `structural.mappings` section.
 
 2. **settings.json hook registration:** If you created a new hook script, verify it has an entry in `.claude/settings.json` under the correct event type with the correct matcher pattern. Cross-check: the `matcher` regex must match the tool names the hook should fire on.
 
 3. **Source path resolution in tests:** For every `source` statement in a shell test, verify the relative path resolves correctly:
    - Count the `../` segments from the test file's actual location.
-   - Common pattern: test files at `.codeflow/testing/scripts/{area}/test-*.sh` source helpers with `source "$TEST_DIR/../../lib/test-helpers.sh"`.
-   - Hook test files at `.codeflow/testing/claude-hooks/{event}/test-*.sh` source helpers with `source "$TEST_DIR/../../lib/test-helpers.sh"`.
-   - Verify by checking: does `test-helpers.sh` actually exist at that resolved path?
+   - Read sibling test files to discover the actual helper path used in the project — do not assume a path.
+   - Verify by checking: does the helper actually exist at that resolved path?
 
 4. **Import resolution in Python:** For every `import` or `from` statement, verify the module path resolves. Run `python -c "import {module}"` or check the directory structure.
 
@@ -666,7 +659,7 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Tests functional:** Tests exercise real code paths, not mocks of the code under test — assertions verify observable behavior
 - [ ] **Test naming:** Test file names match project conventions in their specific directory (verified by Glob on sibling files)
 - [ ] **Test location:** Test files are in the correct directory under `.codeflow/testing/` (verified by checking sibling test files)
-- [ ] **Test registration:** Every new test file has an entry in `.codeflow/testing/test-config.json` under the correct priority
+- [ ] **Test registration:** Every new test file has an entry in `.codeflow/config/testing/test-config.json` under the applicable target
 - [ ] **Tests pass:** `codeflow test --mode full` passes with zero failures (actual output captured)
 - [ ] **Linting:** ShellCheck zero SC1xxx errors on all `.sh` files; lint clean on all target-language files (load applicable standards skill)
 - [ ] **No hardcoded secrets:** No credentials, tokens, or absolute local machine paths in source
@@ -692,6 +685,5 @@ Before requesting commit, do a "would I accept this in review?" pass:
 | PathFlow Config | `.codeflow/config/pathflow/pathflow-config.json` | Always — phase/stage/pipeline definitions |
 | Enforcement Policy | `.codeflow/config/enforcement/enforcement-policy.json` | Always — protected resources, branch rules |
 | Test Runner | `codeflow test --mode full` | Always — unified test execution, all suites, full coverage |
-| Test Helpers | `.codeflow/testing/lib/test-helpers.sh` | Always — shell test assertion library (40+ `assert_*` functions) |
-| Test Config | `.codeflow/testing/test-config.json` | Always — test registration |
+| Test Config | `.codeflow/config/testing/test-config.json` | Always — canonical test configuration |
 | Protection Lib | `.codeflow/scripts/security/protection/lib/` | Always — reusable shell protection functions |

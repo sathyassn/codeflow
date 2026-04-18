@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use crate::testing::config::TargetConfig;
+use crate::testing::config::{Tag, TargetConfig};
 use crate::testing::error::TestingError;
 
 /// Result of running a single target's test command.
@@ -62,7 +62,13 @@ pub fn run_target(
 }
 
 /// Run all enabled targets for a mode, sequentially or in parallel.
+///
+/// Tag filtering composes with target-name filtering: a target is included
+/// when it passes BOTH the name filter (`only`/`skip`) AND the tag filter
+/// (`only_tags`/`skip_tags`). A target is considered "tagged T" when T appears
+/// in the union of its target-level `tags` and any of its `test_files` tags.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn run_all_targets(
     targets: &[TargetConfig],
     mode: &str,
@@ -71,6 +77,8 @@ pub fn run_all_targets(
     fail_fast: bool,
     only: &[String],
     skip: &[String],
+    only_tags: &[Tag],
+    skip_tags: &[Tag],
 ) -> Vec<Result<TargetRunResult, TestingError>> {
     let in_ci = is_ci_environment();
     let filtered: Vec<&TargetConfig> = targets
@@ -84,6 +92,7 @@ pub fn run_all_targets(
             }
         })
         .filter(|t| !skip.iter().any(|s| s == &t.name))
+        .filter(|t| target_matches_tag_filter(t, only_tags, skip_tags))
         .filter(|t| t.modes.contains_key(mode))
         .filter(|t| {
             // ci_skip: targets opted out when running under CI. Log the skip
@@ -107,6 +116,47 @@ pub fn run_all_targets(
     } else {
         run_sequential(&filtered, mode, project_dir, fail_fast)
     }
+}
+
+/// Compute the effective tag set for a target: the union of `target.tags` and
+/// every entry in `target.test_files[*].tags`.
+///
+/// Returned in a stable, deduplicated order to support diffable output in
+/// future tooling.
+#[must_use]
+pub fn target_tags(target: &TargetConfig) -> Vec<Tag> {
+    let mut set: std::collections::BTreeSet<Tag> = target.tags.iter().copied().collect();
+    for entry in &target.test_files {
+        set.extend(entry.tags.iter().copied());
+    }
+    set.into_iter().collect()
+}
+
+/// Determine whether a target passes the tag filter.
+///
+/// Composition rules:
+///
+/// * `only_tags = []` → no positive filter (accept).
+/// * `only_tags = [..]` → target must have at least one of these tags.
+/// * `skip_tags = []` → no negative filter.
+/// * `skip_tags = [..]` → target must NOT have ANY of these tags.
+/// * `only_tags` and `skip_tags` may be combined; skip wins over only when
+///   both match (e.g. `--only-tag critical --skip-tag critical` excludes
+///   critical targets).
+/// * Untagged targets (no tags anywhere) pass when `only_tags` is empty and
+///   survive negative filters. They are EXCLUDED when `only_tags` is non-empty.
+fn target_matches_tag_filter(target: &TargetConfig, only_tags: &[Tag], skip_tags: &[Tag]) -> bool {
+    let tags = target_tags(target);
+
+    if !skip_tags.is_empty() && tags.iter().any(|t| skip_tags.contains(t)) {
+        return false;
+    }
+
+    if only_tags.is_empty() {
+        return true;
+    }
+
+    tags.iter().any(|t| only_tags.contains(t))
 }
 
 fn run_sequential(
@@ -303,6 +353,9 @@ mod tests {
             coverage: None,
             ci_skip: None,
             ci_skip_reason: None,
+            structural: None,
+            tags: Vec::new(),
+            test_files: Vec::new(),
         }
     }
 
@@ -493,6 +546,8 @@ mod tests {
             false,
             &["a".to_string()],
             &[],
+            &[],
+            &[],
         );
         assert_eq!(results.len(), 1);
         assert!(results[0].as_ref().unwrap().stdout.contains('a'));
@@ -510,6 +565,8 @@ mod tests {
             false,
             &[],
             &["b".to_string()],
+            &[],
+            &[],
         );
         assert_eq!(results.len(), 1);
         assert!(results[0].as_ref().unwrap().stdout.contains('a'));
@@ -520,7 +577,17 @@ mod tests {
         let mut target = make_target("disabled", "echo should_not_run");
         target.enabled = false;
         let dir = tempfile::tempdir().unwrap();
-        let results = run_all_targets(&[target], "full", dir.path(), false, false, &[], &[]);
+        let results = run_all_targets(
+            &[target],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         assert!(results.is_empty());
     }
 
@@ -529,7 +596,17 @@ mod tests {
         let target = make_target("test", "echo hello");
         // Only has "full" mode, requesting "quick" should skip
         let dir = tempfile::tempdir().unwrap();
-        let results = run_all_targets(&[target], "quick", dir.path(), false, false, &[], &[]);
+        let results = run_all_targets(
+            &[target],
+            "quick",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         assert!(results.is_empty());
     }
 
@@ -548,7 +625,17 @@ mod tests {
         let fast = make_target("fast", "echo fast");
         let dir = tempfile::tempdir().unwrap();
 
-        let results = run_all_targets(&[slow, fast], "full", dir.path(), false, false, &[], &[]);
+        let results = run_all_targets(
+            &[slow, fast],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
 
         // SAFETY: cleanup before assertions so failure doesn't leak CI=true.
         unsafe { std::env::remove_var("CI") };
@@ -573,7 +660,17 @@ mod tests {
         slow.ci_skip_reason = Some("slow in CI only".to_string());
         let dir = tempfile::tempdir().unwrap();
 
-        let results = run_all_targets(&[slow], "full", dir.path(), false, false, &[], &[]);
+        let results = run_all_targets(
+            &[slow],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
 
         assert_eq!(results.len(), 1, "ci_skip must not affect local runs");
         assert_eq!(results[0].as_ref().unwrap().target_name, "slow");
@@ -613,5 +710,161 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert!(result.stdout.contains("mytest"));
+    }
+
+    // --- Tag filtering ---------------------------------------------------
+
+    fn tagged_target(name: &str, tags: &[Tag]) -> TargetConfig {
+        let mut t = make_target(name, "echo ok");
+        t.tags = tags.to_vec();
+        t
+    }
+
+    #[test]
+    fn target_tags_unions_target_and_file_tags() {
+        use crate::testing::config::TestFileEntry;
+        let mut t = tagged_target("shell", &[Tag::Critical]);
+        t.test_files = vec![
+            TestFileEntry {
+                path: "a.sh".to_string(),
+                tags: vec![Tag::High],
+            },
+            TestFileEntry {
+                path: "b.sh".to_string(),
+                tags: vec![Tag::Critical, Tag::Medium],
+            },
+        ];
+        let all = target_tags(&t);
+        assert!(all.contains(&Tag::Critical));
+        assert!(all.contains(&Tag::High));
+        assert!(all.contains(&Tag::Medium));
+        assert_eq!(all.len(), 3, "duplicates should be deduplicated");
+    }
+
+    #[test]
+    fn tag_filter_only_tag_matches_subset() {
+        let t = tagged_target("x", &[Tag::Critical]);
+        assert!(target_matches_tag_filter(&t, &[Tag::Critical], &[]));
+        assert!(!target_matches_tag_filter(&t, &[Tag::Low], &[]));
+    }
+
+    #[test]
+    fn tag_filter_empty_only_tag_accepts_all() {
+        let t = tagged_target("x", &[Tag::High]);
+        assert!(target_matches_tag_filter(&t, &[], &[]));
+        let untagged = make_target("u", "echo");
+        assert!(target_matches_tag_filter(&untagged, &[], &[]));
+    }
+
+    #[test]
+    fn tag_filter_skip_tag_rejects_matching() {
+        let t = tagged_target("x", &[Tag::Low]);
+        assert!(!target_matches_tag_filter(&t, &[], &[Tag::Low]));
+    }
+
+    #[test]
+    fn tag_filter_skip_wins_over_only() {
+        // Target is tagged Critical; --only-tag critical + --skip-tag critical
+        // should EXCLUDE (skip wins).
+        let t = tagged_target("x", &[Tag::Critical]);
+        assert!(!target_matches_tag_filter(
+            &t,
+            &[Tag::Critical],
+            &[Tag::Critical]
+        ));
+    }
+
+    #[test]
+    fn tag_filter_untagged_excluded_when_only_tag_nonempty() {
+        let t = make_target("u", "echo");
+        assert!(!target_matches_tag_filter(&t, &[Tag::Critical], &[]));
+    }
+
+    #[test]
+    fn tag_filter_multi_tag_target_matches_any_only() {
+        // Target has Critical + High; --only-tag high → match.
+        let t = tagged_target("x", &[Tag::Critical, Tag::High]);
+        assert!(target_matches_tag_filter(&t, &[Tag::High], &[]));
+    }
+
+    #[test]
+    fn run_all_targets_only_tag_selects_critical() {
+        let a = tagged_target("a", &[Tag::Critical]);
+        let b = tagged_target("b", &[Tag::Low]);
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_all_targets(
+            &[a, b],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[Tag::Critical],
+            &[],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().unwrap().target_name, "a");
+    }
+
+    #[test]
+    fn run_all_targets_skip_tag_excludes_critical() {
+        let a = tagged_target("a", &[Tag::Critical]);
+        let b = tagged_target("b", &[Tag::Low]);
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_all_targets(
+            &[a, b],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[Tag::Critical],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().unwrap().target_name, "b");
+    }
+
+    #[test]
+    fn run_all_targets_tag_filter_composes_with_name_filter() {
+        // Three targets: a(critical), b(critical), c(low). --only=b,c + --only-tag=critical → only b.
+        let a = tagged_target("a", &[Tag::Critical]);
+        let b = tagged_target("b", &[Tag::Critical]);
+        let c = tagged_target("c", &[Tag::Low]);
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_all_targets(
+            &[a, b, c],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &["b".to_string(), "c".to_string()],
+            &[],
+            &[Tag::Critical],
+            &[],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().unwrap().target_name, "b");
+    }
+
+    #[test]
+    fn run_all_targets_no_tag_filter_includes_untagged() {
+        let a = tagged_target("a", &[Tag::Critical]);
+        let b = make_target("untagged", "echo u");
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_all_targets(
+            &[a, b],
+            "full",
+            dir.path(),
+            false,
+            false,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(results.len(), 2);
     }
 }

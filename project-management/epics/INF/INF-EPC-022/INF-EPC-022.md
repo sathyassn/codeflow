@@ -8,7 +8,7 @@ area_type: "INF"
 work_type: "FEAT"
 domain: "GENL"
 is_ongoing: false
-file_scope: ["codeflow-rs/", ".claude/skills/cf-rust-standards/", ".claude/skills/cf-surrealdb-standards/", ".codeflow/testing/cli/test-rust-cli.sh", ".github/workflows/test-suite.yml"]
+file_scope: ["codeflow-rs/", ".claude/skills/cf-rust-standards/", ".claude/skills/cf-surrealdb-standards/", ".github/workflows/test-suite.yml"]
 priority: critical
 pr_number: null
 external_id: null
