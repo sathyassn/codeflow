@@ -2261,7 +2261,7 @@ fn render_table(
         Constraint::Min(16),    // BRANCH
         Constraint::Length(6),  // TYPE
         Constraint::Length(12), // STATUS
-        Constraint::Length(6),  // PHASE
+        Constraint::Length(10), // PHASE — widened from 6 to fit `Starting`, `pre-pf1`
         Constraint::Length(10), // DURATION
     ];
 

@@ -17,6 +17,13 @@ impl<'a> PhaseBadge<'a> {
     }
 
     /// Convert to a styled `Span`.
+    ///
+    /// Accepts phase labels in several shapes:
+    /// - Uppercase `PF1`..`PF7` (autorun legacy)
+    /// - Lowercase `pf-1`..`pf-7` (interactive sessions,
+    ///   `last_completed_phase` form)
+    /// - Contextual fallbacks: `Starting`, `N/A`, `pre-pf1` (INF-TSK-047-001)
+    /// - Anything else is rendered white.
     #[must_use]
     pub fn to_span(&self) -> Span<'static> {
         let Some(phase) = self.phase else {
@@ -24,10 +31,10 @@ impl<'a> PhaseBadge<'a> {
         };
 
         let style = match phase {
-            "PF1" | "PF2" | "PF3" => Style::new().fg(theme::BLUE_ACCENT),
-            "PF4" => Style::new().fg(theme::YELLOW_RUNNING),
-            "PF5" | "PF6" => Style::new().fg(theme::GREEN_SUCCESS),
-            "PF7" => Style::new().fg(theme::DIM_PENDING),
+            "PF1" | "PF2" | "PF3" | "pf-1" | "pf-2" | "pf-3" => Style::new().fg(theme::BLUE_ACCENT),
+            "PF4" | "pf-4" | "Starting" => Style::new().fg(theme::YELLOW_RUNNING),
+            "PF5" | "PF6" | "pf-5" | "pf-6" => Style::new().fg(theme::GREEN_SUCCESS),
+            "PF7" | "pf-7" | "N/A" | "pre-pf1" => Style::new().fg(theme::DIM_PENDING),
             _ => Style::new().fg(theme::WHITE_TEXT),
         };
 
@@ -104,5 +111,44 @@ mod tests {
         let badge = PhaseBadge::new(Some("PF3"));
         let span = badge.to_span();
         assert_eq!(span.style.fg, Some(theme::BLUE_ACCENT));
+    }
+
+    #[test]
+    fn test_lowercase_pf4_is_yellow() {
+        let badge = PhaseBadge::new(Some("pf-4"));
+        let span = badge.to_span();
+        assert_eq!(span.content.as_ref(), "pf-4");
+        assert_eq!(span.style.fg, Some(theme::YELLOW_RUNNING));
+    }
+
+    #[test]
+    fn test_starting_is_yellow() {
+        let badge = PhaseBadge::new(Some("Starting"));
+        let span = badge.to_span();
+        assert_eq!(span.content.as_ref(), "Starting");
+        assert_eq!(span.style.fg, Some(theme::YELLOW_RUNNING));
+    }
+
+    #[test]
+    fn test_pre_pf1_is_dim() {
+        let badge = PhaseBadge::new(Some("pre-pf1"));
+        let span = badge.to_span();
+        assert_eq!(span.content.as_ref(), "pre-pf1");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_na_is_dim() {
+        let badge = PhaseBadge::new(Some("N/A"));
+        let span = badge.to_span();
+        assert_eq!(span.content.as_ref(), "N/A");
+        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
+    }
+
+    #[test]
+    fn test_lowercase_pf6_is_green() {
+        let badge = PhaseBadge::new(Some("pf-6"));
+        let span = badge.to_span();
+        assert_eq!(span.style.fg, Some(theme::GREEN_SUCCESS));
     }
 }

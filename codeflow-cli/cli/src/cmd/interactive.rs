@@ -1277,7 +1277,7 @@ fn render_session_table(
             Constraint::Min(16),    // BRANCH
             Constraint::Length(6),  // TYPE
             Constraint::Length(12), // STATUS
-            Constraint::Length(6),  // PHASE
+            Constraint::Length(10), // PHASE — widened from 6 to fit `Starting`, `pre-pf1`
             Constraint::Length(10), // DURATION
         ],
     )
@@ -2579,6 +2579,7 @@ mod tests {
             work_type: None,
             task_id: None,
             task_format_id: None,
+            last_phase: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -2604,6 +2605,7 @@ mod tests {
             work_type: Some("FEAT".into()),
             task_id: None,
             task_format_id: None,
+            last_phase: None,
             team_name: Some("team-1".into()),
             pid: 42,
             worktree_path: None,
@@ -2632,6 +2634,7 @@ mod tests {
                 work_type: None,
                 task_id: None,
                 task_format_id: None,
+                last_phase: None,
                 team_name: None,
                 pid: 1,
                 worktree_path: None,
@@ -2648,6 +2651,7 @@ mod tests {
                 work_type: None,
                 task_id: None,
                 task_format_id: None,
+                last_phase: None,
                 team_name: None,
                 pid: 2,
                 worktree_path: None,

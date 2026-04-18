@@ -74,6 +74,10 @@ pub struct SessionView {
     /// `task_id` for display; callers use `format_task_id_for_display` to
     /// render the TUI's TASK column.
     pub task_format_id: Option<String>,
+    /// Last completed PathFlow phase recorded in the DB (e.g. `pf-4`).
+    /// Used as a fallback when the session is stale and its worktree
+    /// sentinels are no longer reachable.
+    pub last_phase: Option<String>,
     pub team_name: Option<String>,
     pub pid: i64,
     pub worktree_path: Option<String>,
@@ -363,23 +367,41 @@ pub async fn fetch_session_views_with_keep_last(
             _ => {}
         }
 
+        // Phase resolution — INF-TSK-047-001 AC #3.
+        //
+        // | Status   | Live phase | DB last_phase | Displayed |
+        // |----------|-----------|---------------|-----------|
+        // | active   | Some(x)   | any           | x         |
+        // | active   | None      | Some(p)       | p         |
+        // | active   | None      | None  (wt ok) | Starting  |
+        // | active   | None      | None  (no wt) | N/A       |
+        // | stale    | Some(x)   | any           | x         |
+        // | stale    | None      | Some(p)       | p         |
+        // | stale    | None      | None          | pre-pf1   |
+        // | complete | Some(x)   | any           | x         |
+        // | complete | None      | Some(p)       | p         |
+        // | complete | None      | None          | --        |
+        //
+        // Pre-migration sessions (created before the schema added
+        // `last_phase`) return None from the DB column; we deliberately do
+        // NOT reconstruct from the ledger here — it is too expensive for
+        // per-tick TUI rendering. Such rows simply render as `--` / `N/A`
+        // until their next post_tool_use writes the column.
         let raw_phase = derive_phase_from_session(project_dir, s);
-        // Provide contextual fallback when phase is unknown.
-        let phase = raw_phase.or_else(|| {
-            let is_active = effective_status == "active";
-            let is_stale = effective_status == "stale";
-            let has_worktree = s.worktree_path.as_ref().is_some_and(|p| !p.is_empty());
-            if is_stale {
-                // Dead sessions without filesystem data show "Unknown".
-                None
-            } else if is_active && has_worktree {
-                Some("Starting...".to_string())
-            } else if is_active {
-                Some("N/A".to_string())
-            } else {
-                None
-            }
-        });
+        let phase = raw_phase
+            .or_else(|| s.last_phase.clone().filter(|p| !p.is_empty()))
+            .or_else(|| match effective_status.as_str() {
+                "active" => {
+                    let has_worktree = s.worktree_path.as_ref().is_some_and(|p| !p.is_empty());
+                    if has_worktree {
+                        Some("Starting".to_string())
+                    } else {
+                        Some("N/A".to_string())
+                    }
+                }
+                "stale" => Some("pre-pf1".to_string()),
+                _ => None,
+            });
 
         // Duration freeze: use completed_at or updated_at for non-active sessions.
         // Use -1 as sentinel for "unknown duration" when a stale session has
@@ -433,6 +455,7 @@ pub async fn fetch_session_views_with_keep_last(
             work_type: s.work_type.clone(),
             task_id,
             task_format_id,
+            last_phase: s.last_phase.clone(),
             team_name: s.team_name.clone(),
             pid: s.pid,
             worktree_path: s.worktree_path.clone(),
@@ -916,6 +939,7 @@ mod tests {
             work_type: Some("FEAT".to_string()),
             task_id: Some("TSK-001".to_string()),
             task_format_id: None,
+            last_phase: None,
             team_name: Some("team-1".to_string()),
             pid: 12345,
             worktree_path: Some("/tmp/wt".to_string()),
@@ -1085,6 +1109,7 @@ mod tests {
             work_type: None,
             task_id: None,
             task_format_id: None,
+            last_phase: None,
             team_name: None,
             pid: 1,
             worktree_path: None,
@@ -1757,6 +1782,142 @@ mod tests {
     #[test]
     fn test_format_task_id_no_task_returns_dashes() {
         assert_eq!(format_task_id_for_display(None, None), "--");
+    }
+
+    // -----------------------------------------------------------------------
+    // Stale-row phase resolution — INF-TSK-047-001 AC #3
+    //
+    // These tests exercise fetch_session_views_with_keep_last end-to-end
+    // across the status × last_phase matrix.
+    // -----------------------------------------------------------------------
+
+    async fn insert_session(
+        store: &crate::store::SurrealStore,
+        session_id: &str,
+        pid: i64,
+        status: &str,
+        last_phase: Option<&str>,
+        worktree: Option<&str>,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = $sid, pid = $pid, status = $status, \
+                 worktree_path = $wt, last_phase = $lp, \
+                 source_cli = 'codeflow', managed = true, \
+                 created_at = $now RETURN NONE;",
+            )
+            .bind(("sid", session_id.to_string()))
+            .bind(("pid", pid))
+            .bind(("status", status.to_string()))
+            .bind(("wt", worktree.map(str::to_string)))
+            .bind(("lp", last_phase.map(str::to_string)))
+            .bind(("now", now))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_stale_session_uses_last_phase_from_db() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        // PID 2 on macOS/Linux is reserved and never alive → stale.
+        insert_session(
+            &store,
+            "ses-stale-with-phase",
+            2,
+            "stale",
+            Some("pf-4"),
+            None,
+        )
+        .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-stale-with-phase")
+            .unwrap();
+        assert_eq!(v.status, "stale");
+        assert_eq!(v.phase.as_deref(), Some("pf-4"));
+    }
+
+    #[tokio::test]
+    async fn test_stale_session_no_phase_falls_back_to_pre_pf1() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        insert_session(&store, "ses-stale-no-phase", 2, "stale", None, None).await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-stale-no-phase")
+            .unwrap();
+        assert_eq!(v.status, "stale");
+        assert_eq!(v.phase.as_deref(), Some("pre-pf1"));
+    }
+
+    #[tokio::test]
+    async fn test_active_session_no_live_or_db_phase_shows_starting_with_worktree() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let current_pid = i64::from(std::process::id());
+        // Use a non-existent worktree path so derive_phase_from_session can't
+        // find anything — isolates the fallback chain.
+        insert_session(
+            &store,
+            "ses-active-starting",
+            current_pid,
+            "active",
+            None,
+            Some("/tmp/no-such-wt-dir"),
+        )
+        .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-active-starting")
+            .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("Starting"));
+    }
+
+    #[tokio::test]
+    async fn test_active_session_no_worktree_shows_na() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let current_pid = i64::from(std::process::id());
+        insert_session(&store, "ses-active-na", current_pid, "active", None, None).await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-active-na")
+            .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("N/A"));
+    }
+
+    #[tokio::test]
+    async fn test_active_session_db_phase_used_when_no_live_sentinel() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let current_pid = i64::from(std::process::id());
+        insert_session(
+            &store,
+            "ses-active-db-phase",
+            current_pid,
+            "active",
+            Some("pf-3"),
+            None,
+        )
+        .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-active-db-phase")
+            .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("pf-3"));
     }
 
     #[test]
