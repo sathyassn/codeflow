@@ -1225,7 +1225,9 @@ fn render_session_table(
     )>,
     show_all: bool,
 ) {
-    use codeflow_core::tui::data::{abbreviate_session_id, format_task_id_for_display};
+    use codeflow_core::tui::data::{
+        abbreviate_session_id, format_task_id_for_display, truncate_branch_for_display,
+    };
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
     use ratatui::layout::Constraint;
@@ -1252,13 +1254,14 @@ fn render_session_table(
                     let status_badge = session_status_badge(&s.status);
                     let phase_badge = PhaseBadge::new(s.phase.as_deref());
                     let duration = DurationCell::new(Some(s.duration_secs));
-                    let branch = s.branch.as_deref().unwrap_or("--");
+                    let branch =
+                        truncate_branch_for_display(s.branch.as_deref().unwrap_or("--"), 50);
                     let work_type = s.work_type.as_deref().unwrap_or("--");
 
                     Row::new(vec![
                         Cell::from(task_display),
                         Cell::from(sid_display),
-                        Cell::from(branch.to_string()),
+                        Cell::from(branch),
                         Cell::from(work_type.to_string()),
                         Cell::from(status_badge),
                         Cell::from(phase_badge.to_span()),
@@ -1269,19 +1272,24 @@ fn render_session_table(
         })
         .unwrap_or_default();
 
+    // Column budget at 120-col terminal:
+    //   TASK(20) + SESSION(22) + BRANCH(up to 50) + TYPE(6) + STATUS(12)
+    //   + PHASE(10) + DURATION(10) + 6*spacing(2) = 142 max, 92 min.
+    // BRANCH uses Max so ratatui shrinks it when the terminal is narrower.
     let table = Table::new(
         rows,
         [
-            Constraint::Length(20), // TASK
-            Constraint::Min(16),    // SESSION
-            Constraint::Min(16),    // BRANCH
+            Constraint::Length(20), // TASK — fits `INF-TSK-046-008` or `task-01K…MHH`
+            Constraint::Length(22), // SESSION — fits abbreviated `ses-01kphb...yme2b`
+            Constraint::Max(50),    // BRANCH — truncated with ellipsis above 50
             Constraint::Length(6),  // TYPE
             Constraint::Length(12), // STATUS
-            Constraint::Length(10), // PHASE — widened from 6 to fit `Starting`, `pre-pf1`
+            Constraint::Length(10), // PHASE — fits `Starting`, `pre-pf1`
             Constraint::Length(10), // DURATION
         ],
     )
     .header(header)
+    .column_spacing(2)
     .block(
         Block::default()
             .borders(Borders::ALL)

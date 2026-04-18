@@ -2204,7 +2204,9 @@ fn render_table(
     state: &mut ratatui::widgets::TableState,
     view: Option<&codeflow_core::tui::data::BatchView>,
 ) {
-    use codeflow_core::tui::data::{abbreviate_session_id, format_task_id_for_display};
+    use codeflow_core::tui::data::{
+        abbreviate_session_id, format_task_id_for_display, truncate_branch_for_display,
+    };
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, PhaseBadge, StatusBadge};
     use ratatui::layout::Constraint;
@@ -2240,11 +2242,13 @@ fn render_table(
                     } else {
                         format_task_id_for_display(Some(&task.task_id), None)
                     };
+                    let branch =
+                        truncate_branch_for_display(task.branch.as_deref().unwrap_or("--"), 50);
 
                     Row::new(vec![
                         Cell::from(task_display),
                         Cell::from(session_display),
-                        Cell::from(task.branch.as_deref().unwrap_or("--").to_string()),
+                        Cell::from(branch),
                         Cell::from(work_type.to_string()),
                         Cell::from(status_badge.to_span()),
                         Cell::from(phase_badge.to_span()),
@@ -2255,13 +2259,14 @@ fn render_table(
         })
         .unwrap_or_default();
 
+    // Column budget matches the interactive TUI so rows align across panes.
     let widths = [
         Constraint::Length(20), // TASK
-        Constraint::Min(16),    // SESSION
-        Constraint::Min(16),    // BRANCH
+        Constraint::Length(22), // SESSION
+        Constraint::Max(50),    // BRANCH — truncated with ellipsis above 50
         Constraint::Length(6),  // TYPE
         Constraint::Length(12), // STATUS
-        Constraint::Length(10), // PHASE — widened from 6 to fit `Starting`, `pre-pf1`
+        Constraint::Length(10), // PHASE — fits `Starting`, `pre-pf1`
         Constraint::Length(10), // DURATION
     ];
 
@@ -2273,7 +2278,7 @@ fn render_table(
                 .border_type(theme::BORDER_TYPE)
                 .title(" Tasks "),
         )
-        .column_spacing(1)
+        .column_spacing(2)
         .row_highlight_style(
             Style::new()
                 .bg(theme::BLUE_ACCENT)

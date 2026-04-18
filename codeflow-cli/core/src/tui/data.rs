@@ -539,6 +539,24 @@ pub fn abbreviate_session_id(sid: &str) -> String {
     }
 }
 
+/// Truncate a branch name to `max_chars` with an ellipsis when longer.
+///
+/// The TUI's BRANCH column caps at 50 characters; anything longer is rendered
+/// as `{first max-1 chars}…` so the right-hand columns stay on screen. Branches
+/// that already fit are returned verbatim. `max_chars` must be at least 2
+/// (the width of the ellipsis plus one content char); smaller values are
+/// treated as "do not truncate" and the branch is returned as-is.
+#[must_use]
+pub fn truncate_branch_for_display(branch: &str, max_chars: usize) -> String {
+    let len = branch.chars().count();
+    if len <= max_chars || max_chars < 2 {
+        return branch.to_string();
+    }
+    let keep = max_chars - 1;
+    let head: String = branch.chars().take(keep).collect();
+    format!("{head}…")
+}
+
 /// Render the TUI TASK column for one session or task.
 ///
 /// Precedence (per INF-TSK-047-001 AC #1):
@@ -1918,6 +1936,37 @@ mod tests {
             .find(|v| v.session_id == "ses-active-db-phase")
             .unwrap();
         assert_eq!(v.phase.as_deref(), Some("pf-3"));
+    }
+
+    // -----------------------------------------------------------------------
+    // truncate_branch_for_display — INF-TSK-047-001 AC #5
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_truncate_branch_short_passthrough() {
+        assert_eq!(truncate_branch_for_display("fix/x", 50), "fix/x");
+    }
+
+    #[test]
+    fn test_truncate_branch_exact_length_passthrough() {
+        let branch = "a".repeat(50);
+        assert_eq!(truncate_branch_for_display(&branch, 50), branch);
+    }
+
+    #[test]
+    fn test_truncate_branch_long_gets_ellipsis() {
+        let branch = "fix/status-tui-layout-refresh-task-id-and-more-text";
+        let out = truncate_branch_for_display(branch, 50);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 50);
+    }
+
+    #[test]
+    fn test_truncate_branch_tiny_max_is_noop() {
+        // max_chars < 2 means we can't fit ellipsis + content, so we do not
+        // truncate — the branch is returned verbatim.
+        assert_eq!(truncate_branch_for_display("feat/x", 0), "feat/x");
+        assert_eq!(truncate_branch_for_display("feat/x", 1), "feat/x");
     }
 
     #[test]
