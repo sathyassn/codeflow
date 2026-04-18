@@ -358,8 +358,13 @@ Do NOT include:
 
 5c. Execute PR creation:
 
-   ```text
-   gh pr create --title "{title}" --body "$(printf '## Summary\n{summary}\n\n## Changes\n{bullets}\n\n## Testing\n{test_plan}\n\n## Test Results\n{test_results_from_qa_report}')" --base {base}
+   **ALWAYS use `--body-file` to avoid ARG_MAX truncation on large PR bodies (5-section test results can exceed shell argument limits). Inline `--body "$body"` is deprecated.**
+
+   ```bash
+   pr_body_file="/tmp/codeflow-pr-body-$$.md"
+   printf '%s' "$body" > "$pr_body_file"
+   gh pr create --title "{title}" --body-file "$pr_body_file" --base {base}
+   rm -f "$pr_body_file"
    ```
 
 5c. **Parallel session pre-check:** In parallel sessions, `check_merge_conflicts()` runs before PR creation. If `MergeConflictDetected` event is logged to `.state/ledger/coordination-events.jsonl`, stop and report conflict to team lead. `MergeRebaseAttempted` events are logged per attempt (max `max_rebase_attempts`: 3).
@@ -386,7 +391,7 @@ Do NOT include:
 2. If PR exists:
    a. Push the changes
    b. Re-run `codeflow test report show --format json` to get fresh results
-   c. Update the `## Test Results` section of the PR body via `gh api PATCH` with the fresh output
+   c. Update the PR body via `gh pr edit {number} --body-file {file}` (write full updated body to a temp file first; use `--body-file` not inline `--body` to avoid ARG_MAX truncation)
    d. Preserve `## Summary`, `## Testing`, `## Test plan` sections unchanged unless the scope of work changed
 3. If no PR exists: push only — PR body will be composed at PF6-TSK-05
 
@@ -397,6 +402,7 @@ Do NOT include:
 - Using `## Test Stats` — the canonical heading is `## Test Results`
 - Using thresholds that differ from the command output
 - Adding emoji or AI attribution text to PR body
+- Using inline `--body "$body"` for PR creation or edit — always use `--body-file` (inline body is truncated by ARG_MAX when body exceeds ~128KB)
 
 ### Step 6: Sync Remote
 
