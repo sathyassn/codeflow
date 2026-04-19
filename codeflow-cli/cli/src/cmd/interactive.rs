@@ -1132,8 +1132,14 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
 
         // Refresh data only once per `fetch_interval` so the render thread
         // is not blocked every 100 ms on a DB round-trip. The store is
-        // re-opened for cross-process visibility.
-        if last_fetch.elapsed() >= fetch_interval {
+        // re-opened for cross-process visibility. The gate predicate is
+        // extracted to `should_fetch_now` for regression testing (see
+        // `tui::data::tests::test_fetch_gate_prevents_stall`).
+        if codeflow_core::tui::data::should_fetch_now(
+            last_fetch,
+            std::time::Instant::now(),
+            fetch_interval,
+        ) {
             match open_store(project_dir).await {
                 Ok(refresh_store) => {
                     match fetch_session_views_with_keep_last(&refresh_store, project_dir, keep_last)

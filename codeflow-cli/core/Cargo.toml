@@ -41,6 +41,9 @@ tempfile = { workspace = true }
 filetime = { workspace = true }
 serial_test = { workspace = true }
 ctor = { workspace = true }
+# test-util enables `tokio::time::pause`/`advance` for deterministic
+# timer-driven regression tests (e.g. the refresh-loop stall guard).
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
