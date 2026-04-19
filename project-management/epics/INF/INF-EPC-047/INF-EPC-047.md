@@ -3,7 +3,7 @@ id: "epic-01KPHCP81KY13S9FRQBRZR20ST"
 format_id: "INF-EPC-047"
 title: "Status TUI Fixes — Layout, Refresh, Task Column, and Details Panel"
 summary: "Fix codeflow interactive status and autorun status TUI dashboards: TASK column correctness, stale-row phase semantics, details panel live updates, column layout tuning, and auto-refresh reliability."
-status: in_progress
+status: complete
 area_type: INF
 work_type: FIX
 domain: GENL
@@ -62,7 +62,7 @@ change, column widths are misaligned, and the auto-refresh loop can stall.
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-047-001 | Fix codeflow status TUI — TASK column, layout, stale semantics, details panel, auto-refresh | todo | normal |
+| INF-TSK-047-001 | Fix codeflow status TUI — TASK column, layout, stale semantics, details panel, auto-refresh | complete | normal |
 
 ## Dependencies
 
