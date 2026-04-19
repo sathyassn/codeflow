@@ -15,6 +15,7 @@ pub mod env;
 pub mod heartbeat;
 pub mod liveness;
 pub mod process;
+pub mod sentinel;
 mod state;
 
 use std::path::Path;

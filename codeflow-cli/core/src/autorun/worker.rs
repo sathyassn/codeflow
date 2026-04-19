@@ -1319,7 +1319,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 .project_dir
                 .join(crate::worktree::DEFAULT_BASE_DIR)
                 .join(&wt_name);
-            crate::tui::data::read_latest_phase(
+            crate::session::sentinel::read_latest_phase(
                 &self.project_dir,
                 Some(wt_dir.to_str().unwrap_or("")),
                 None,
