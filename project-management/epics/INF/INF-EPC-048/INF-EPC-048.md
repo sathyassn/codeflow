@@ -3,18 +3,18 @@ id: "epic-01KPNA05JCP5TT8GT0DJNTW1BH"
 format_id: "INF-EPC-048"
 title: "Autorun Reliability P0"
 summary: "Critical reliability fixes for autorun: gh-pr-guard base enforcement, rescue-to-patch-bundle refactor, batch report commit via ephemeral worktree, status TUI async refresh, CI-green wait, and pathflow-config session_complete gate"
-status: in_progress
+status: complete
 area_type: "INF"
 work_type: "FIX"
 domain: "GENL"
 is_ongoing: false
 file_scope: []
 priority: high
-pr_number: null
+pr_number: 300
 external_id: null
-external_url: null
+external_url: "https://github.com/sathyassn/codeflow/pull/300"
 created_at: "2026-04-20T00:00:00Z"
-updated_at: "2026-04-20T00:00:00Z"
+updated_at: "2026-04-20T20:55:00Z"
 ---
 
 # INF-EPC-048: Autorun Reliability P0
