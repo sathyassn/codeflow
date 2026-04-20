@@ -5,6 +5,7 @@
 //! rather than substring matching, enabling reliable detection of the canonical
 //! `## Test Results` section structure introduced by the generic testing subsystem.
 
+use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -34,6 +35,20 @@ pub(crate) fn gh_pr_create_re() -> &'static Regex {
         // and therefore need the same body-validation invariants.
         Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+(?:create|edit)(?:\s|$)").expect("valid regex")
     })
+}
+
+/// Matches only `gh pr create` (not `gh pr edit`). Used to distinguish the
+/// autorun `--base` contract, which applies to create and to edit-commands
+/// that mutate `--base`, but has slightly different fallbacks.
+pub(crate) fn gh_pr_create_only_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+create(?:\s|$)").expect("valid regex"))
+}
+
+/// Matches `gh pr edit` (any form).
+pub(crate) fn gh_pr_edit_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|\s|&&|\|)gh\s+pr\s+edit(?:\s|$)").expect("valid regex"))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +175,116 @@ fn tokenise_shell(command: &str) -> Vec<String> {
         tokens.push(current);
     }
     tokens
+}
+
+/// Extract `--base <value>` from a `gh pr …` command. Handles:
+/// - `--base=main`
+/// - `--base main`
+/// - `--base "quoted branch"`
+/// - `--base 'single-quoted'`
+///
+/// Returns `None` when the flag is absent.
+#[must_use]
+pub fn extract_base_flag(command: &str) -> Option<String> {
+    let tokens = tokenise_shell(command);
+    let mut iter = tokens.into_iter();
+    while let Some(tok) = iter.next() {
+        if let Some(val) = tok.strip_prefix("--base=") {
+            return Some(val.to_string());
+        }
+        if tok == "--base" {
+            return iter.next();
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Autorun `--base` enforcement
+// ---------------------------------------------------------------------------
+
+/// Resolution result for the autorun `--base` contract.
+#[derive(Debug, PartialEq, Eq)]
+enum ExpectedBase {
+    /// The autorun batch supplies a concrete expected base branch.
+    Resolved(String),
+    /// Autorun is active but neither `AUTORUN_INTEGRATION_BRANCH` nor
+    /// `target_branch` is populated — this is a batch misconfiguration.
+    MissingForAutorun,
+    /// Not an autorun session — caller should skip base enforcement.
+    NotAutorun,
+}
+
+/// Resolve the expected `--base` for the current session.
+///
+/// Precedence:
+/// 1. When `AUTORUN_SESSION_ID` is NOT set → `NotAutorun` (interactive
+///    passthrough). This short-circuits before any other env read so an
+///    interactive shell with stale `AUTORUN_INTEGRATION_BRANCH` inherited
+///    from a prior autorun invocation cannot trip `--base` enforcement.
+/// 2. `AUTORUN_INTEGRATION_BRANCH` env var (set by the CLI orchestrator).
+/// 3. `active-task.json:target_branch` at the project/worktree runtime dir.
+/// 4. Autorun active but neither (2) nor (3) resolves → `MissingForAutorun`
+///    (batch configuration error).
+///
+/// `project_dir` is the value from [`HookInput::project_dir`] (populated by
+/// Claude Code's `cwd` field). When absent, the caller should skip.
+fn resolve_expected_base(project_dir: Option<&Path>) -> ExpectedBase {
+    // Step 1 (REV-MINOR-3): gate every downstream env read on the autorun
+    // marker. Absent or blank marker = interactive, no enforcement.
+    let autorun = std::env::var("AUTORUN_SESSION_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    if !autorun {
+        return ExpectedBase::NotAutorun;
+    }
+
+    // Step 2: env var wins — it's the orchestrator's authoritative value.
+    if let Ok(val) = std::env::var("AUTORUN_INTEGRATION_BRANCH") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return ExpectedBase::Resolved(trimmed.to_string());
+        }
+    }
+
+    // Step 3: active-task.json fallback.
+    if let Some(pd) = project_dir {
+        if let Ok(Some(task)) = crate::session::active_task::get_active_task_worktree_aware(pd) {
+            if let Some(tb) = task.target_branch.as_deref() {
+                let trimmed = tb.trim();
+                if !trimmed.is_empty() {
+                    return ExpectedBase::Resolved(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    // Step 4: autorun active but no expected base resolvable → batch config
+    // error. The enforcement caller turns this into a hook Block with the
+    // `base_missing_config_reason` message.
+    ExpectedBase::MissingForAutorun
+}
+
+/// Build the block reason for a `--base` mismatch or absence.
+fn base_mismatch_reason(actual: Option<&str>, expected: &str, subcommand: &str) -> String {
+    let got = actual.map_or_else(|| "none".to_string(), |s| format!("'{s}'"));
+    format!(
+        "BLOCKED: Autorun PR must target '{expected}'; got {got}.\n\
+         Ensure --base is set in `gh pr {subcommand}`.\n\n\
+         Resolution order: (1) AUTORUN_INTEGRATION_BRANCH env, \
+         (2) active-task.json:target_branch, \
+         (3) neither set in autorun = batch misconfiguration.\n"
+    )
+}
+
+/// Build the block reason when autorun is active but no expected base can
+/// be resolved (batch-level misconfiguration).
+fn base_missing_config_reason() -> String {
+    "BLOCKED: Autorun session has no expected PR base branch.\n\
+     Either set AUTORUN_INTEGRATION_BRANCH in the worker environment, or\n\
+     populate 'target_branch' in active-task.json before creating the PR.\n"
+        .to_string()
 }
 
 /// Failure modes for [`load_body_content`].
@@ -519,6 +644,51 @@ impl<R: PRResolver> HookHandler for GhPrGuard<R> {
                                 category: Some(BlockCategory::GhPrGuard),
                             });
                         }
+                    }
+                }
+            }
+        }
+
+        // --- Autorun `--base` enforcement ---
+        //
+        // When in an autorun session, `gh pr create` MUST set `--base` to the
+        // orchestrator-assigned integration branch (or the task's
+        // `target_branch` as a fallback). `gh pr edit` also validates, but
+        // only when it actually mutates `--base` (to avoid blocking body-only
+        // edits).
+        let is_create = gh_pr_create_only_re().is_match(command);
+        let is_edit = gh_pr_edit_re().is_match(command);
+        if is_create || is_edit {
+            let project_dir_path = input.project_dir.as_deref().map(Path::new);
+            let actual_base = extract_base_flag(command);
+
+            // For `gh pr edit`, only enforce when the command is actually
+            // changing `--base`; body-only edits are allowed through.
+            let enforce = is_create || (is_edit && actual_base.is_some());
+            if enforce {
+                match resolve_expected_base(project_dir_path) {
+                    ExpectedBase::Resolved(expected) => {
+                        let matches = actual_base.as_deref() == Some(expected.as_str());
+                        if !matches {
+                            let subcmd = if is_create { "create" } else { "edit" };
+                            return Ok(HookOutput::Block {
+                                reason: base_mismatch_reason(
+                                    actual_base.as_deref(),
+                                    &expected,
+                                    subcmd,
+                                ),
+                                category: Some(BlockCategory::GhPrGuard),
+                            });
+                        }
+                    }
+                    ExpectedBase::MissingForAutorun => {
+                        return Ok(HookOutput::Block {
+                            reason: base_missing_config_reason(),
+                            category: Some(BlockCategory::GhPrGuard),
+                        });
+                    }
+                    ExpectedBase::NotAutorun => {
+                        // Interactive passthrough — no base enforcement.
                     }
                 }
             }
@@ -1017,5 +1187,285 @@ mod tests {
             matches!(result, HookOutput::Block { .. }),
             "inline --body path must still validate required sections"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Autorun `--base` enforcement tests (INF-TSK-048-001 AC #1)
+    //
+    // Env-var coupled — serialised to avoid inter-test interference.
+    // ---------------------------------------------------------------------
+
+    mod base_enforcement {
+        use super::*;
+        use serial_test::serial;
+
+        /// Reset every env var the resolver looks at.
+        fn clear_autorun_env() {
+            // SAFETY: tests are serialised via serial_test::serial.
+            unsafe {
+                std::env::remove_var("AUTORUN_INTEGRATION_BRANCH");
+                std::env::remove_var("AUTORUN_SESSION_ID");
+            }
+        }
+
+        fn with_canonical_body(cmd: &str) -> String {
+            format!("{} {}", cmd, canonical_pr_command_body())
+        }
+
+        /// Returns just the `--body "..."` suffix so a caller can attach it
+        /// to arbitrary `gh pr …` invocations.
+        fn canonical_pr_command_body() -> &'static str {
+            "--body \"\n\
+             ## Summary\n- x\n\
+             \n## Testing\n- y\n\
+             \n## Test Results\n\
+             ### 1. Overall Test Pass Status\n- Result: pass\n\
+             \n### 2. Overall Coverage\n- Workspace: 92%\n\
+             \n### 3. Modified File Coverage\n\
+             | File | Coverage | Threshold | Status |\n\
+             |------|----------|-----------|--------|\n\
+             | f.rs | 90% | 85% | PASS |\n\""
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn extract_base_space_form() {
+            assert_eq!(
+                extract_base_flag("gh pr create --base main --title x"),
+                Some("main".into())
+            );
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn extract_base_equals_form() {
+            assert_eq!(
+                extract_base_flag("gh pr create --base=feature/x"),
+                Some("feature/x".into())
+            );
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn extract_base_quoted() {
+            assert_eq!(
+                extract_base_flag("gh pr create --base \"my branch\""),
+                Some("my branch".into())
+            );
+            assert_eq!(
+                extract_base_flag("gh pr create --base 'feat/x'"),
+                Some("feat/x".into())
+            );
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn extract_base_absent() {
+            assert_eq!(extract_base_flag("gh pr create --title x --body y"), None);
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_correct_base_passes() {
+            clear_autorun_env();
+            // SAFETY: serialised.
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/batch-xyz");
+            }
+            let cmd =
+                with_canonical_body("gh pr create --base autorun/batch-xyz --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Allow),
+                "autorun with matching --base should pass; got: {result:?}"
+            );
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_wrong_base_blocks() {
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/batch-xyz");
+            }
+            let cmd = with_canonical_body("gh pr create --base main --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            if let HookOutput::Block { reason, .. } = result {
+                assert!(
+                    reason.contains("autorun/batch-xyz"),
+                    "block must name expected base; got: {reason}"
+                );
+                assert!(
+                    reason.contains("'main'"),
+                    "block must name actual base; got: {reason}"
+                );
+            } else {
+                panic!("autorun with wrong --base must block; got {result:?}");
+            }
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_missing_base_blocks() {
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/batch-xyz");
+            }
+            // No --base flag.
+            let cmd = with_canonical_body("gh pr create --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            if let HookOutput::Block { reason, .. } = result {
+                assert!(
+                    reason.contains("autorun/batch-xyz"),
+                    "block must name expected base; got: {reason}"
+                );
+                assert!(
+                    reason.contains("none"),
+                    "block must indicate missing base; got: {reason}"
+                );
+            } else {
+                panic!("autorun without --base must block; got {result:?}");
+            }
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_env_missing_blocks() {
+            // AUTORUN_SESSION_ID set but no expected-base source.
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+            }
+            let cmd = with_canonical_body("gh pr create --base main --title x");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            if let HookOutput::Block { reason, .. } = result {
+                assert!(
+                    reason.contains("no expected PR base"),
+                    "block must explain batch misconfig; got: {reason}"
+                );
+            } else {
+                panic!("autorun without expected base must block; got {result:?}");
+            }
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn interactive_passthrough_no_base() {
+            clear_autorun_env();
+            // Interactive session with canonical body, no --base.
+            let cmd = with_canonical_body("gh pr create --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Allow),
+                "interactive PR without --base must pass; got: {result:?}"
+            );
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn interactive_with_base_still_passes() {
+            clear_autorun_env();
+            let cmd = with_canonical_body("gh pr create --base main --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Allow),
+                "interactive PR with --base main must pass; got: {result:?}"
+            );
+        }
+
+        /// REV-MINOR-3: stale `AUTORUN_INTEGRATION_BRANCH` inherited from a
+        /// prior autorun MUST NOT trigger enforcement when
+        /// `AUTORUN_SESSION_ID` is absent (i.e., the current shell is
+        /// interactive).
+        #[test]
+        #[serial(env_vars)]
+        fn stale_integration_branch_without_autorun_session_passthrough() {
+            clear_autorun_env();
+            // Simulate stale env leaked from a parent autorun process.
+            unsafe {
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/stale");
+                // AUTORUN_SESSION_ID deliberately unset.
+            }
+            let cmd = with_canonical_body("gh pr create --base main --title \"feat: x\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Allow),
+                "stale AUTORUN_INTEGRATION_BRANCH without AUTORUN_SESSION_ID must NOT \
+                 trigger enforcement; got: {result:?}"
+            );
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_edit_base_mismatch_blocks() {
+            // `gh pr edit --base X` must validate in autorun.
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/batch-xyz");
+            }
+            let cmd = with_canonical_body("gh pr edit 42 --base main");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Block { .. }),
+                "autorun edit --base main must block; got: {result:?}"
+            );
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_edit_without_base_passes_body_validation() {
+            // `gh pr edit <N> --body <canonical>` (no --base) is a body-only
+            // edit — should pass base enforcement (nothing to check).
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/batch-xyz");
+            }
+            let cmd = with_canonical_body("gh pr edit 42");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Allow),
+                "autorun body-only edit must pass; got: {result:?}"
+            );
+            clear_autorun_env();
+        }
+
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_env_blank_is_treated_as_missing() {
+            // An empty AUTORUN_INTEGRATION_BRANCH is not a valid expected base.
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01test");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "  ");
+            }
+            let cmd = with_canonical_body("gh pr create --base main --title x");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            assert!(
+                matches!(result, HookOutput::Block { .. }),
+                "autorun with blank env should block as missing base"
+            );
+            clear_autorun_env();
+        }
     }
 }

@@ -399,6 +399,7 @@ pub async fn cleanup_stale_session<S: DataStore>(
                 status: Some(AutorunSessionStatus::Failed),
                 stale_reason: Some(Some(stale_reason.to_string())),
                 completed_at: Some(chrono::Utc::now().to_rfc3339()),
+                updated_at: Some(chrono::Utc::now().to_rfc3339()),
                 ..Default::default()
             },
         )
@@ -621,6 +622,9 @@ mod tests {
                 stale_reason: None,
                 target_branch: None,
                 final_pr_url: None,
+                current_task_id: None,
+                updated_at: None,
+                last_heartbeat_at: None,
                 created_at: String::new(),
                 completed_at: None,
             },
@@ -653,6 +657,9 @@ mod tests {
                 stale_reason: None,
                 target_branch: None,
                 final_pr_url: None,
+                current_task_id: None,
+                updated_at: None,
+                last_heartbeat_at: None,
                 created_at: String::new(),
                 completed_at: None,
             },
@@ -741,6 +748,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         }

@@ -119,6 +119,18 @@ pub enum LedgerEvent {
         #[serde(flatten)]
         data: serde_json::Value,
     },
+    /// Emitted by the rescue subsystem when a patch bundle is written to
+    /// `<project_root>/.state/rescue/{sid}-{ts}-{pid}/`. Records the session
+    /// whose work was preserved, the bundle location, and the reason the
+    /// rescue fired (e.g., `worktree_cleanup_force`).
+    RescueWritten {
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        timestamp: Option<String>,
+        #[serde(flatten)]
+        data: serde_json::Value,
+    },
 
     // -- memory-events.jsonl --
     MemoryStore {
@@ -266,6 +278,7 @@ impl LedgerEvent {
             Self::Void { .. } => "void",
             Self::WorkCancelled { .. } => "work_cancelled",
             Self::StaleWorkCleanup { .. } => "stale_work_cleanup",
+            Self::RescueWritten { .. } => "rescue_written",
             Self::MemoryStore { .. } => "memory_store",
             Self::Milestone { .. } => "milestone",
             Self::Progress { .. } => "progress",
@@ -447,6 +460,7 @@ mod tests {
             "void",
             "work_cancelled",
             "stale_work_cleanup",
+            "rescue_written",
             "memory_store",
             "milestone",
             "progress",

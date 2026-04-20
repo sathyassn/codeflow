@@ -606,6 +606,9 @@ impl DataStore for SurrealStore {
             "stale_reason" => update.stale_reason,
             "final_pr_url" => update.final_pr_url,
             "target_branch" => update.target_branch,
+            "current_task_id" => update.current_task_id,
+            "updated_at" => update.updated_at,
+            "last_heartbeat_at" => update.last_heartbeat_at,
         };
 
         let Some(data) = data else {
@@ -637,6 +640,9 @@ impl DataStore for SurrealStore {
             "stale_reason" => update.stale_reason,
             "final_pr_url" => update.final_pr_url,
             "target_branch" => update.target_branch,
+            "current_task_id" => update.current_task_id,
+            "updated_at" => update.updated_at,
+            "last_heartbeat_at" => update.last_heartbeat_at,
         };
 
         let Some(data) = data else {
@@ -798,6 +804,31 @@ impl DataStore for SurrealStore {
             .db
             .query("SELECT * FROM autorun_worker WHERE session_id = $sid ORDER BY worker_num")
             .bind(("sid", session_id.to_string()))
+            .await?;
+        let results: Vec<AutorunWorker> = response.take(0)?;
+        Ok(results)
+    }
+
+    async fn list_autorun_workers_bulk(
+        &self,
+        session_ids: &[String],
+    ) -> Result<Vec<AutorunWorker>, DbError> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Single round trip: WHERE session_id INSIDE $ids. Uses SurrealDB's
+        // `INSIDE` operator for array membership (matches the cleanup-path
+        // pattern at surreal.rs:940). Orders by session_id then worker_num
+        // so callers can safely group sequentially.
+        let ids: Vec<String> = session_ids.to_vec();
+        let mut response = self
+            .db
+            .query(
+                "SELECT * FROM autorun_worker \
+                 WHERE session_id INSIDE $ids \
+                 ORDER BY session_id, worker_num",
+            )
+            .bind(("ids", ids))
             .await?;
         let results: Vec<AutorunWorker> = response.take(0)?;
         Ok(results)
@@ -1564,6 +1595,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-03-08T00:00:00Z".into(),
             completed_at: None,
         };
@@ -2847,6 +2881,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             completed_at: completed_at.map(String::from),
         }

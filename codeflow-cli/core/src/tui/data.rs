@@ -110,8 +110,23 @@ pub struct BatchListEntry {
     pub completed_tasks: i32,
     pub failed_tasks: i32,
     pub running_count: usize,
+    /// Status-driven elapsed: live `now - created_at` for Running/Aborting,
+    /// frozen `completed_at|updated_at - created_at` for terminal statuses.
+    /// INF-TSK-048-001 AC #9.
     pub elapsed_secs: i64,
+    /// Task currently being executed by any worker on this session. Blank for
+    /// terminal sessions (cleared by the worker on task finish + by the
+    /// orchestrator on batch end).
+    pub current_task_id: Option<String>,
+    /// Seconds since the last worker heartbeat. `None` for terminal statuses
+    /// or sessions that never wrote a heartbeat. INF-TSK-048-001 AC #9.
+    pub idle_secs: Option<i64>,
 }
+
+/// Threshold (seconds) beyond which an IDLE value is rendered red. Worker
+/// writes heartbeats every 10 s (`WORKER_HEARTBEAT_INTERVAL_SECS`); 120 s
+/// allows for a handful of missed ticks before flagging the session.
+pub const HEARTBEAT_TTL_SECS: i64 = 120;
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -140,23 +155,144 @@ pub async fn fetch_batch_list<S: DataStore>(store: &S) -> Result<Vec<BatchListEn
             .iter()
             .filter(|w| w.status == crate::types::AutorunWorkerStatus::Running)
             .count();
-        entries.push(BatchListEntry {
-            session_id: s.id.clone(),
-            batch_name: s
-                .batch_name
-                .clone()
-                .unwrap_or_else(|| s.id[..s.id.len().min(20)].to_string()),
-            status: s.status,
-            total_tasks: s.total_tasks,
-            completed_tasks: s.completed_tasks,
-            failed_tasks: s.failed_tasks,
-            running_count,
-            elapsed_secs: compute_elapsed_secs(&s.created_at),
-        });
+        entries.push(build_list_entry(s, running_count));
     }
 
-    // Sort: running/aborting first, then by session_id (proxy for created_at DESC
-    // since list_autorun_sessions already returns sorted).
+    sort_batch_list(&mut entries);
+    Ok(entries)
+}
+
+/// Bulk-fetch variant that replaces the N+1 `list_autorun_workers` loop with
+/// a single `WHERE session_id INSIDE $ids` query (INF-TSK-048-001 AC #7).
+///
+/// The store handle is caller-owned so the TUI background task can open a
+/// fresh connection per fetch cycle for cross-process visibility.
+///
+/// # Errors
+///
+/// Returns an error if either underlying query fails.
+pub async fn fetch_batch_list_bulk<S: DataStore>(
+    store: &S,
+) -> Result<Vec<BatchListEntry>, DbError> {
+    let sessions = store
+        .list_autorun_sessions(crate::models::AutorunSessionFilter {
+            all: true,
+            ..Default::default()
+        })
+        .await?;
+
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let session_ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+    let workers = store.list_autorun_workers_bulk(&session_ids).await?;
+
+    // Group workers by session_id in a single linear pass (workers vec is
+    // ordered by session_id from the query).
+    let mut by_session: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::with_capacity(sessions.len());
+    for worker in &workers {
+        if worker.status == crate::types::AutorunWorkerStatus::Running {
+            *by_session.entry(worker.session_id.as_str()).or_insert(0) += 1;
+        }
+    }
+
+    let mut entries = Vec::with_capacity(sessions.len());
+    for s in &sessions {
+        let running_count = by_session.get(s.id.as_str()).copied().unwrap_or(0);
+        entries.push(build_list_entry(s, running_count));
+    }
+
+    sort_batch_list(&mut entries);
+    Ok(entries)
+}
+
+/// Shared constructor for `BatchListEntry` so the single-session and
+/// bulk-query code paths produce identical output.
+fn build_list_entry(s: &AutorunSession, running_count: usize) -> BatchListEntry {
+    BatchListEntry {
+        session_id: s.id.clone(),
+        batch_name: s
+            .batch_name
+            .clone()
+            .unwrap_or_else(|| s.id[..s.id.len().min(20)].to_string()),
+        status: s.status,
+        total_tasks: s.total_tasks,
+        completed_tasks: s.completed_tasks,
+        failed_tasks: s.failed_tasks,
+        running_count,
+        elapsed_secs: status_driven_elapsed_secs(s, chrono::Utc::now()),
+        current_task_id: s.current_task_id.clone(),
+        idle_secs: compute_idle_secs(s, chrono::Utc::now()),
+    }
+}
+
+/// Compute the ELAPSED value for the BatchList row.
+///
+/// INF-TSK-048-001 AC #9: the value MUST freeze for terminal sessions so the
+/// elapsed column does not tick up after a run has finished. The rules:
+///
+/// - Running / Aborting → `now - created_at` (live).
+/// - Completed / Failed / Cancelled / Timeout (terminal) → `completed_at -
+///   created_at` when `completed_at` is set, otherwise `updated_at -
+///   created_at`. Falls back to 0 on missing timestamps (not `now()`).
+/// - Pending → 0 (session is enqueued but not started).
+///
+/// Pure function — takes `now` explicitly so tests can pin the clock.
+#[must_use]
+pub fn status_driven_elapsed_secs(s: &AutorunSession, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    use AutorunSessionStatus::{Aborting, Pending, Running};
+    match s.status {
+        Running | Aborting => compute_elapsed_from(&s.created_at, now),
+        Pending => 0,
+        // Terminal: never use `now()`.
+        _ => {
+            if let Some(ref completed) = s.completed_at {
+                compute_elapsed_between(&s.created_at, completed)
+            } else if let Some(ref updated) = s.updated_at {
+                compute_elapsed_between(&s.created_at, updated)
+            } else {
+                0
+            }
+        }
+    }
+}
+
+/// Compute seconds since the worker's last heartbeat, relative to `now`.
+///
+/// Returns `None` for terminal statuses (IDLE column is blank for finished
+/// rows) and for sessions that never wrote a heartbeat.
+#[must_use]
+pub fn compute_idle_secs(s: &AutorunSession, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    use AutorunSessionStatus::{Aborting, Running};
+    if !matches!(s.status, Running | Aborting) {
+        return None;
+    }
+    let heartbeat = s.last_heartbeat_at.as_deref()?;
+    let parsed = chrono::DateTime::parse_from_rfc3339(heartbeat).ok()?;
+    Some(now.signed_duration_since(parsed).num_seconds().max(0))
+}
+
+/// True when an IDLE value should be rendered in red.
+///
+/// Pure predicate so the render layer can be tested without constructing a
+/// ratatui frame. INF-TSK-048-001 AC #9.
+#[must_use]
+pub fn is_idle_stale(idle_secs: Option<i64>) -> bool {
+    matches!(idle_secs, Some(secs) if secs > HEARTBEAT_TTL_SECS)
+}
+
+/// Parse `started_at` as RFC 3339 and return `max(0, now - started_at)`.
+fn compute_elapsed_from(started_at: &str, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(started_at)
+        .map(|start| now.signed_duration_since(start).num_seconds().max(0))
+        .unwrap_or(0)
+}
+
+/// Sort: running/aborting first, then by session_id (proxy for created_at
+/// DESC since `list_autorun_sessions` already returns sorted).
+fn sort_batch_list(entries: &mut [BatchListEntry]) {
     entries.sort_by(|a, b| {
         let a_active = matches!(
             a.status,
@@ -168,8 +304,54 @@ pub async fn fetch_batch_list<S: DataStore>(store: &S) -> Result<Vec<BatchListEn
         );
         b_active.cmp(&a_active)
     });
+}
 
-    Ok(entries)
+/// TUI batch-list snapshot shared between the background fetcher and the
+/// render thread (INF-TSK-048-001 AC #7).
+///
+/// The render thread reads the latest value via `tokio::sync::watch::Receiver`,
+/// so display never blocks on a slow DB fetch. When `stale=true`, the render
+/// thread shows the LAST successful snapshot and footers a `[STALE — Ns ago]`
+/// marker. When `error` is set, the render thread additionally footers a
+/// short error string.
+#[derive(Debug, Clone)]
+pub struct BatchListSnapshot {
+    pub entries: Vec<BatchListEntry>,
+    pub fetched_at: std::time::SystemTime,
+    pub stale: bool,
+    pub error: Option<String>,
+}
+
+impl Default for BatchListSnapshot {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            fetched_at: std::time::SystemTime::now(),
+            stale: false,
+            error: None,
+        }
+    }
+}
+
+impl BatchListSnapshot {
+    /// Age of the snapshot in seconds relative to `now`. Returns 0 when the
+    /// clock moves backwards (NTP correction).
+    #[must_use]
+    pub fn age_secs(&self, now: std::time::SystemTime) -> u64 {
+        now.duration_since(self.fetched_at)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+}
+
+/// Result of calling the background fetcher for one cycle. Used by the
+/// watch-channel publisher to decide whether to bump `stale` or preserve
+/// prior data.
+#[derive(Debug)]
+pub enum FetchCycleOutcome {
+    Fresh(Vec<BatchListEntry>),
+    Timeout,
+    Error(String),
 }
 
 /// Fetch a `BatchView` for the given session, or the most recent active session.
@@ -1026,6 +1208,8 @@ mod tests {
             failed_tasks: 1,
             running_count: 2,
             elapsed_secs: 300,
+            current_task_id: None,
+            idle_secs: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"session_id\":\"ses-batch-1\""));
@@ -1048,6 +1232,8 @@ mod tests {
             failed_tasks: 0,
             running_count: 0,
             elapsed_secs: 60,
+            current_task_id: None,
+            idle_secs: None,
         };
         assert_eq!(entry.batch_name.len(), 20);
     }
@@ -1081,6 +1267,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
         };
         let running = crate::models::AutorunSession {
             id: "ses-running".into(),
@@ -1099,6 +1288,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
         };
         store.create_autorun_session(&completed).await.unwrap();
         store.create_autorun_session(&running).await.unwrap();
@@ -1341,6 +1533,9 @@ mod tests {
             stale_reason: None,
             target_branch: Some("main".to_string()),
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         }
@@ -2202,5 +2397,106 @@ mod tests {
         assert_eq!(work_type("docs/readme"), "DOCS");
         assert_eq!(work_type("test/coverage"), "TEST");
         assert_eq!(work_type("main"), "FIX"); // default fallback
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-048-001 AC #7 tests: bulk query + snapshot behaviour
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_fetch_batch_list_bulk_empty_returns_empty() {
+        let store = crate::store::mock::MockStore::new();
+        let result = fetch_batch_list_bulk(&store).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_batch_list_bulk_matches_n_plus_one_output() {
+        // Same fixtures exercised through both the N+1 fetch_batch_list
+        // and the bulk fetch_batch_list_bulk must produce identical output
+        // — otherwise a TUI migration between the two would cause visible
+        // jitter in the batch list view.
+        let store = crate::store::mock::MockStore::new();
+        for (sid, status) in [
+            ("ar-bulk-1", AutorunSessionStatus::Running),
+            ("ar-bulk-2", AutorunSessionStatus::Completed),
+            ("ar-bulk-3", AutorunSessionStatus::Failed),
+        ] {
+            let session = make_mock_session(sid, status);
+            store
+                .autorun_sessions
+                .lock()
+                .unwrap()
+                .insert(sid.to_string(), session);
+        }
+        // Add mixed workers: only ar-bulk-1 has a Running worker.
+        let running = make_mock_worker(
+            "ar-bulk-1",
+            "task-r",
+            crate::types::AutorunWorkerStatus::Running,
+        );
+        store
+            .autorun_workers
+            .lock()
+            .unwrap()
+            .insert("aw-r".to_string(), running);
+        let completed = make_mock_worker(
+            "ar-bulk-2",
+            "task-c",
+            crate::types::AutorunWorkerStatus::Completed,
+        );
+        store
+            .autorun_workers
+            .lock()
+            .unwrap()
+            .insert("aw-c".to_string(), completed);
+
+        let n_plus_one = fetch_batch_list(&store).await.unwrap();
+        let bulk = fetch_batch_list_bulk(&store).await.unwrap();
+
+        assert_eq!(n_plus_one.len(), bulk.len());
+        for (a, b) in n_plus_one.iter().zip(bulk.iter()) {
+            assert_eq!(a.session_id, b.session_id);
+            assert_eq!(a.status, b.status);
+            assert_eq!(a.running_count, b.running_count);
+            assert_eq!(a.total_tasks, b.total_tasks);
+        }
+        // Sanity: ar-bulk-1 has a Running worker, others do not.
+        let ar1 = bulk.iter().find(|e| e.session_id == "ar-bulk-1").unwrap();
+        let ar2 = bulk.iter().find(|e| e.session_id == "ar-bulk-2").unwrap();
+        assert_eq!(ar1.running_count, 1);
+        assert_eq!(ar2.running_count, 0);
+    }
+
+    #[test]
+    fn test_batch_list_snapshot_default_and_age() {
+        let s = BatchListSnapshot::default();
+        assert!(s.entries.is_empty());
+        assert!(!s.stale);
+        assert!(s.error.is_none());
+        // Age is non-negative and small immediately after default().
+        let age = s.age_secs(std::time::SystemTime::now());
+        assert!(age <= 1, "unexpected age: {age}");
+    }
+
+    #[test]
+    fn test_batch_list_snapshot_age_is_monotonic() {
+        let mut s = BatchListSnapshot::default();
+        let t0 = s.fetched_at;
+        s.stale = true;
+        let later = t0 + std::time::Duration::from_secs(3);
+        assert_eq!(s.age_secs(later), 3);
+    }
+
+    #[test]
+    fn test_batch_list_snapshot_age_clock_skew_returns_zero() {
+        let s = BatchListSnapshot {
+            entries: Vec::new(),
+            fetched_at: std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+            stale: false,
+            error: None,
+        };
+        // now < fetched_at (clock skew) → age is clamped to 0.
+        assert_eq!(s.age_secs(std::time::SystemTime::now()), 0);
     }
 }

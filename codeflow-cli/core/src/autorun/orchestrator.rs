@@ -180,6 +180,9 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             stale_reason: None,
             target_branch: Some(batch.integration_branch.clone()),
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: Some(chrono::Utc::now().to_rfc3339()),
+            last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         };
@@ -198,6 +201,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     crate::types::AutorunSessionStatus::Running,
                     crate::models::AutorunSessionUpdate {
                         tmux_session: Some(Some(orch_tmux)),
+                        updated_at: Some(chrono::Utc::now().to_rfc3339()),
                         ..Default::default()
                     },
                 )
@@ -373,13 +377,17 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         // Update autorun_session at batch end.
         // CAS: expect Running — prevents overwriting a status set by another process
         // (e.g., stale detector already marked it Failed).
+        let now = chrono::Utc::now().to_rfc3339();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let session_update = crate::models::AutorunSessionUpdate {
             status: Some(final_status),
             completed_tasks: Some(completed_count.min(i32::MAX as usize) as i32),
             failed_tasks: Some((failed_count + timeout_count).min(i32::MAX as usize) as i32),
             skipped_tasks: Some(skipped_count.min(i32::MAX as usize) as i32),
-            completed_at: Some(chrono::Utc::now().to_rfc3339()),
+            completed_at: Some(now.clone()),
+            updated_at: Some(now),
+            // Clear in-flight task pointer on batch end (inner None = set to null).
+            current_task_id: Some(None),
             ..Default::default()
         };
         match self

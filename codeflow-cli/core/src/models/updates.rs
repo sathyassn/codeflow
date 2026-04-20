@@ -43,6 +43,13 @@ pub struct AutorunSessionUpdate {
     pub stale_reason: Option<Option<String>>,
     pub target_branch: Option<String>,
     pub final_pr_url: Option<String>,
+    /// Task currently being executed (set on dispatch, cleared on finish).
+    /// Outer `Option` = "should this field be touched", inner = new value.
+    pub current_task_id: Option<Option<String>>,
+    /// Timestamp of this update (RFC 3339). Written on every state-changing update.
+    pub updated_at: Option<String>,
+    /// Worker heartbeat timestamp (RFC 3339). Written every 10 s by the worker.
+    pub last_heartbeat_at: Option<String>,
 }
 
 #[derive(Debug, Default)]

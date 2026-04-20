@@ -28,6 +28,8 @@ filetime = "0.2"
 quick-xml = "0.37"
 jsonschema = "0.28"
 glob = "0.3"
+tar = "0.4"
+flate2 = "1"
 # Dev-only dependencies (4)
 proptest = "1"
 insta = { version = "1", features = ["json"] }

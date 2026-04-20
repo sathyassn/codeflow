@@ -103,6 +103,11 @@ enum Command {
     },
     /// Report generation
     Report,
+    /// Rescue patch bundles (list/show/apply/drop)
+    Rescue {
+        #[command(subcommand)]
+        command: Option<cmd::rescue::RescueCommand>,
+    },
     /// `WorkGraph` operations
     Workgraph,
     /// Git operations (conflict detection, branch analysis)
@@ -178,6 +183,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Worktree { command } => cmd::worktree::run(command),
         Command::Parallel { command } => cmd::parallel::run(command),
         Command::Report => cmd::report::run(),
+        Command::Rescue { command } => cmd::rescue::run(command),
         Command::Workgraph => cmd::workgraph::run().await,
         Command::Git { command } => cmd::git::run(command),
         Command::GitHooks { command } => cmd::git_hooks::run(command),

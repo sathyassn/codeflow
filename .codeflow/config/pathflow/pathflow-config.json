@@ -703,6 +703,10 @@
     "pr_pushed": {
       "on_phase_complete": "PF6-COMPLETE",
       "description": "Semantic marker for rescue_uncommitted_work skip"
+    },
+    "session_complete": {
+      "on_phase_complete": "PF7-END",
+      "description": "Semantic marker for rescue skip at session termination"
     }
   },
   "teammates": {

@@ -214,6 +214,13 @@ pub fn parse_batch_data_with_project_dir(
         bf.name.clone()
     };
 
+    // WS-REV REV-NOTE-4: `validate_batch_name` is permissive on empty input
+    // (the validator runs before the file_stem fallback), so a YAML with an
+    // empty name + an attacker-controlled file path could still surface an
+    // unsafe name here. Re-validate the resolved name for symmetry with the
+    // direct-name path. The literal `"unnamed"` fallback is always safe.
+    validate_batch_name(&name)?;
+
     // Resolve final_pr_target: default to "main" when empty.
     let final_pr_target = if bf.final_pr_target.is_empty() {
         "main".to_string()
@@ -246,7 +253,13 @@ pub fn parse_batch_data_with_project_dir(
 ///
 /// Reads `merge_protection.protected_branches` from the enforcement policy config.
 /// Returns default list if the file does not exist or cannot be parsed.
-fn load_protected_branches(project_dir: &Path) -> Vec<String> {
+///
+/// WS-REV REV-MAJOR-1: Exposed `pub` so the report-commit path in
+/// `cli/src/cmd/autorun.rs::commit_report_to_branch` (separate crate) can
+/// reuse the same protected-branch set that drives `integration_auto_merge`
+/// validation instead of hardcoding `main`/`master`.
+#[must_use]
+pub fn load_protected_branches(project_dir: &Path) -> Vec<String> {
     let path = project_dir.join(ENFORCEMENT_POLICY_PATH);
     let data = match std::fs::read_to_string(&path) {
         Ok(d) => d,
@@ -296,7 +309,13 @@ fn load_protected_branches(project_dir: &Path) -> Vec<String> {
 /// Check whether a branch name matches a protected branch pattern.
 ///
 /// Supports exact matches and `prefix/*` wildcard patterns (e.g. `release/*`).
-fn is_protected_branch(target: &str, protected: &[String]) -> bool {
+///
+/// WS-REV REV-MAJOR-1: Exposed `pub` for reuse by the report-commit guard
+/// in the `codeflow-cli` crate. Returns true for `main`, `master`,
+/// `release/*`, `production` by default (see `DEFAULT_PROTECTED_BRANCHES`)
+/// plus anything configured in `merge_protection.protected_branches`.
+#[must_use]
+pub fn is_protected_branch(target: &str, protected: &[String]) -> bool {
     for pattern in protected {
         if pattern.ends_with("/*") {
             let prefix = &pattern[..pattern.len() - 1]; // "release/" from "release/*"
@@ -347,11 +366,72 @@ pub fn resolve_task_path(project_dir: &Path, task_id: &str) -> Result<PathBuf, A
         .join(format!("{task_id}.md")))
 }
 
+/// Validate `batch.name` for path-safety — WS-SEC finding SEC-F3.
+///
+/// `batch.name` is substituted into filesystem paths (e.g., the batch report
+/// filename `{batch_name}-{sid}-{date}.md` joined to the report directory in
+/// `cli/src/cmd/autorun.rs::generate_batch_report`). A name containing `/`,
+/// `\`, `..`, or leading `.` can escape the intended directory or create
+/// hidden files.
+///
+/// Allowed characters: `A-Z`, `a-z`, `0-9`, `.` (non-leading), `_`, `-`.
+/// The first character must be alphanumeric so names cannot start with `.`
+/// (hidden file) or `-` (CLI option injection risk when pasted into ad-hoc
+/// shell commands during debugging).
+///
+/// Empty names are permitted here — the caller that actually uses
+/// `batch.name` for path construction can decide whether an empty name is a
+/// hard error or fall through to a fallback. This function only enforces
+/// that a NON-empty name is structurally safe.
+pub(crate) fn validate_batch_name(name: &str) -> Result<(), AutorunError> {
+    if name.is_empty() {
+        return Ok(());
+    }
+
+    // Fast-reject the three traversal signatures.
+    if name.contains('/') {
+        return Err(AutorunError::InvalidBatch(format!(
+            "batch.name contains forbidden character '/': {name:?}"
+        )));
+    }
+    if name.contains('\\') {
+        return Err(AutorunError::InvalidBatch(format!(
+            "batch.name contains forbidden character '\\\\': {name:?}"
+        )));
+    }
+    if name.contains("..") {
+        return Err(AutorunError::InvalidBatch(format!(
+            "batch.name contains forbidden substring '..': {name:?}"
+        )));
+    }
+
+    // Structural check: first character alphanumeric, rest in the allow-set.
+    let mut chars = name.chars();
+    let first = chars.next().unwrap(); // name.is_empty() already handled
+    if !first.is_ascii_alphanumeric() {
+        return Err(AutorunError::InvalidBatch(format!(
+            "batch.name must start with an ASCII letter or digit: {name:?}"
+        )));
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+            return Err(AutorunError::InvalidBatch(format!(
+                "batch.name contains forbidden character {c:?}: {name:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a batch file for structural and semantic errors.
 fn validate_batch(bf: &BatchFile, protected_branches: &[String]) -> Result<(), AutorunError> {
     if bf.tasks.is_empty() {
         return Err(AutorunError::InvalidBatch("no tasks defined".into()));
     }
+
+    // WS-SEC SEC-F3: reject batch names that would escape the report
+    // directory or create hidden files when composed into filesystem paths.
+    validate_batch_name(&bf.name)?;
 
     let mut task_ids = HashSet::with_capacity(bf.tasks.len());
     for t in &bf.tasks {
@@ -1256,6 +1336,38 @@ tasks:
         assert!(!is_protected_branch("releases/v1.0", &branches));
     }
 
+    #[test]
+    fn test_is_protected_branch_full_default_matrix() {
+        // WS-REV REV-MAJOR-1 acceptance grid: the report-commit guard in
+        // cli/src/cmd/autorun.rs must reject every branch the enforcement
+        // policy default set covers, not just main/master. Also verify a
+        // representative set of SAFE branches still passes through.
+        let defaults: Vec<String> = DEFAULT_PROTECTED_BRANCHES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        // Blocked inputs from the review brief:
+        for blocked in ["main", "master", "release/v1.0", "production"] {
+            assert!(
+                is_protected_branch(blocked, &defaults),
+                "{blocked} should be protected by default set"
+            );
+        }
+        // Safe inputs — autorun integration branches and feature branches
+        // must NOT be flagged.
+        for allowed in [
+            "autorun/foo",
+            "feature/bar",
+            "autorun-integration-20260420",
+            "integration/inf-epc-048",
+        ] {
+            assert!(
+                !is_protected_branch(allowed, &defaults),
+                "{allowed} should NOT be protected by default set"
+            );
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Tests: load_protected_branches
     // -----------------------------------------------------------------------
@@ -2021,5 +2133,147 @@ tasks:
             Some(3600),
             "timeout_secs should be parsed from YAML"
         );
+    }
+
+    // --- WS-SEC SEC-F3: batch.name path-traversal guard ---
+
+    fn batch_with_name(name: &str) -> BatchFile {
+        BatchFile {
+            name: name.to_string(),
+            max_workers: 1,
+            integration_auto_merge: None,
+            integration_branch: String::new(),
+            final_pr: None,
+            final_pr_target: String::new(),
+            tasks: vec![TaskSpec {
+                id: "task-a".to_string(),
+                depends_on: Vec::new(),
+                file_scope: Vec::new(),
+                scope_policy: None,
+                timeout_secs: None,
+            }],
+        }
+    }
+
+    fn assert_invalid_batch(err: &AutorunError, substr: &str) {
+        let msg = err.to_string();
+        assert!(
+            matches!(err, AutorunError::InvalidBatch(_)),
+            "expected InvalidBatch, got: {msg}"
+        );
+        assert!(
+            msg.contains(substr),
+            "expected message to contain {substr:?}, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_with_slash() {
+        let err = validate_batch_name("foo/bar").unwrap_err();
+        assert_invalid_batch(&err, "forbidden character '/'");
+        // End-to-end via validate_batch as well.
+        let bf = batch_with_name("foo/bar");
+        let err = validate_batch(&bf, &[]).unwrap_err();
+        assert_invalid_batch(&err, "forbidden character '/'");
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_with_backslash() {
+        let err = validate_batch_name("foo\\bar").unwrap_err();
+        assert_invalid_batch(&err, "forbidden character '\\\\'");
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_dotdot() {
+        // `../evil` — the `/` check fires first (defense in depth).
+        let err = validate_batch_name("../evil").unwrap_err();
+        assert_invalid_batch(&err, "forbidden character '/'");
+        // Bare `..` (no slash) — the substring check catches this.
+        let err = validate_batch_name("..").unwrap_err();
+        assert_invalid_batch(&err, "forbidden substring '..'");
+        // Embedded `..` with no slash: `foo..bar`.
+        let err = validate_batch_name("foo..bar").unwrap_err();
+        assert_invalid_batch(&err, "forbidden substring '..'");
+        // `foo/../bar` — slash is detected first, still rejected.
+        let err = validate_batch_name("foo/../bar").unwrap_err();
+        assert_invalid_batch(&err, "forbidden character '/'");
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_starting_with_dot() {
+        let err = validate_batch_name(".hidden").unwrap_err();
+        assert_invalid_batch(&err, "must start with an ASCII letter or digit");
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_starting_with_hyphen() {
+        // Leading `-` is also rejected to avoid CLI-option injection in
+        // debugging contexts where the name is pasted into a shell.
+        let err = validate_batch_name("-rf").unwrap_err();
+        assert_invalid_batch(&err, "must start with an ASCII letter or digit");
+    }
+
+    #[test]
+    fn test_validate_rejects_batch_name_null_byte() {
+        // Null bytes in file names terminate C-string APIs unexpectedly.
+        let err = validate_batch_name("foo\0bar").unwrap_err();
+        assert_invalid_batch(&err, "forbidden character");
+    }
+
+    #[test]
+    fn test_validate_accepts_normal_batch_names() {
+        for name in [
+            "inf-epc-024-phase1",
+            "my.batch_name",
+            "batch-1",
+            "BATCH_2026_04_20",
+            "a", // single-character boundary
+            "0001",
+            "release.candidate-1",
+        ] {
+            validate_batch_name(name)
+                .unwrap_or_else(|e| panic!("expected Ok for name={name:?}, got {e}"));
+        }
+    }
+
+    #[test]
+    fn test_validate_accepts_empty_batch_name() {
+        // Empty names fall through (caller decides) — empty is NOT a
+        // traversal signature by itself.
+        assert!(validate_batch_name("").is_ok());
+    }
+
+    #[test]
+    fn test_parse_rejects_empty_name_with_traversal_file_path() {
+        // WS-REV REV-NOTE-4: the file_stem fallback for an empty batch.name
+        // must ALSO be validated. A YAML with `name: ""` parsed against a
+        // file path like `/tmp/../../evil.yaml` would previously produce
+        // `name = "evil"` OR a safe-looking name, but a path like
+        // `/tmp/../evil.yaml` with a crafted stem could bypass the guard.
+        // Confirm the re-validation catches the hostile stem.
+        let yaml = "tasks:\n  - id: task-a\n"; // empty name → file_stem fallback
+        // Craft a file path whose file_stem contains a slash — impossible
+        // on real filesystems, but Path::file_stem on `foo/.hidden.yaml`
+        // returns `.hidden` which MUST be rejected by validate_batch_name.
+        let result = parse_batch_data(yaml, "/tmp/.hidden.yaml");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, AutorunError::InvalidBatch(_)),
+            "expected InvalidBatch for hidden-file stem, got: {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("must start with an ASCII letter or digit"),
+            "expected leading-dot rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_name_with_normal_file_path_uses_stem() {
+        // Positive case: empty YAML name + clean file path → stem is used
+        // AND passes validation. No regression on the existing code path.
+        let yaml = "tasks:\n  - id: task-a\n";
+        let batch = parse_batch_data(yaml, "my-batch.yaml").unwrap();
+        assert_eq!(batch.name, "my-batch");
     }
 }

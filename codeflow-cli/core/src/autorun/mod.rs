@@ -6,6 +6,7 @@
 //! - Orchestrator for dependency-aware concurrent execution ([`orchestrator`])
 
 pub mod batch;
+pub mod ci_wait;
 pub mod config;
 pub mod epic_update;
 pub mod orchestrator;

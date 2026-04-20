@@ -18,7 +18,7 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
     match event_type {
         // sessions.jsonl
         "session_start" | "session_end" | "session_progress" | "work_claimed" | "claim_created"
-        | "claim_released" | "claim_renewed" => Ok(files::SESSIONS),
+        | "claim_released" | "claim_renewed" | "rescue_written" => Ok(files::SESSIONS),
 
         // work-graph.jsonl (includes test results for cross-session queryability)
         "test_result_recorded"

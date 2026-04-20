@@ -324,10 +324,17 @@ Do NOT include:
 3. If unpushed commits exist: push with `--force-with-lease` (required after squash rewrite)
 4. Check for uncommitted changes: warn requester if present (commit-outstanding-changes step should have already handled this)
 5. Compose PR title and body following format above
-6. Determine PR base:
-   - Read target_branch from active-task.json (at `.state/runtime/active-task.json`)
-   - If target_branch is set and non-empty: use `--base {target_branch}`
-   - Otherwise: use `--base main`
+6. Determine PR base (`--base` is MANDATORY; the `gh-pr-guard` hook enforces it in autorun mode and will BLOCK `gh pr create` / `gh pr edit --base …` without a matching value):
+   - **Autorun**: `--base` MUST equal `$AUTORUN_INTEGRATION_BRANCH` (set by the CLI orchestrator).
+     Resolution order the hook applies:
+     1. `AUTORUN_INTEGRATION_BRANCH` env var (authoritative).
+     2. `active-task.json:target_branch` (fallback).
+     3. If neither is set while `AUTORUN_SESSION_ID` is populated → the hook treats it as a batch misconfiguration and blocks.
+   - **Interactive**:
+     - Read `target_branch` from `active-task.json` (at `.state/runtime/active-task.json`).
+     - If set and non-empty: use `--base {target_branch}`.
+     - Otherwise: use `--base main`.
+   - In all modes, pass `--base` explicitly — never rely on the CLI default. Missing `--base` in autorun is a hook block, not a warning.
 
 5a. **Pre-PR rebase (MANDATORY):** Before creating the PR, rebase onto the latest target branch to minimize merge conflicts:
 

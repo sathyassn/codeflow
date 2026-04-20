@@ -14,6 +14,7 @@ pub mod normalize;
 pub mod parallel;
 pub mod pathflow;
 pub mod report;
+pub mod rescue;
 pub mod sentinel;
 pub mod session;
 pub mod settings;

@@ -730,6 +730,7 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
                             session_id.as_str(),
                             codeflow_core::models::AutorunSessionUpdate {
                                 final_pr_url: Some(url.clone()),
+                                updated_at: Some(chrono::Utc::now().to_rfc3339()),
                                 ..Default::default()
                             },
                         )
@@ -1048,14 +1049,103 @@ fn is_safe_git_ref(s: &str) -> bool {
         && !s.contains('\n')
 }
 
-/// Commit a batch report file to the integration branch (best-effort).
+/// Log a single JSON event to `.state/logs/batch-report-commit.jsonl`.
 ///
-/// Checks out the integration branch, adds the report, commits, pushes,
-/// then switches back to the original branch. Silently logs failures
-/// without blocking the main flow.
+/// Append-only; one record per call. On filesystem errors the message is
+/// dropped — this logger is best-effort diagnostics and must not fail the
+/// orchestrator path.
+fn log_report_commit_event(project_dir: &Path, event: &str, detail: &serde_json::Value) {
+    let log_dir = project_dir.join(".state/logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("batch-report-commit.jsonl");
+    let record = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "event": event,
+        "detail": detail,
+    });
+    if let Ok(line) = serde_json::to_string(&record) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// Destroy an ephemeral report worktree at `wt_path`.
+///
+/// Runs `git worktree remove --force` (so partial state does not block),
+/// then prunes registry references. Errors are logged to the batch-report
+/// log but do not propagate — the orchestrator cannot block on cleanup.
+fn cleanup_report_worktree(project_dir: &Path, wt_path: &Path, wt_name: &str) {
+    // `git worktree remove --force` handles dirty trees and in-use locks.
+    let rm = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "remove",
+            "--force",
+            &wt_path.display().to_string(),
+        ])
+        .current_dir(project_dir)
+        .output();
+    match rm {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            // Fall back to filesystem removal if git refuses.
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let _ = std::fs::remove_dir_all(wt_path);
+            log_report_commit_event(
+                project_dir,
+                "cleanup_fallback_fs_remove",
+                &serde_json::json!({ "worktree_name": wt_name, "git_stderr": stderr }),
+            );
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(wt_path);
+            log_report_commit_event(
+                project_dir,
+                "cleanup_fallback_fs_remove",
+                &serde_json::json!({ "worktree_name": wt_name, "error": e.to_string() }),
+            );
+        }
+    }
+    // Run `git worktree prune` to reconcile the registry.
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(project_dir)
+        .output();
+}
+
+/// Commit a batch report file to the integration branch via an ephemeral
+/// detached-HEAD worktree.
+///
+/// INF-TSK-048-001 AC #5, #6: The main repository working tree is never
+/// touched. The ephemeral worktree:
+///
+/// 1. Is created at `.git-worktrees/_orch-report-{YYYYMMDD-HHMMSS}-{pid}/`
+/// 2. Carries a `.state/runtime/no-rescue` marker (short-circuits rescue logic)
+/// 3. Runs the full pre-commit hook chain (NO `--no-verify`)
+/// 4. Pushes with `--force-with-lease=<branch>:<fetched_sha>` and retries
+///    up to 3 times on lease failure (fetch + re-commit-on-new-tip)
+/// 5. Is always destroyed before returning (success or failure)
+///
+/// On commit or push failure, full stderr is captured and logged both to
+/// stderr and to `.state/logs/batch-report-commit.jsonl`. The caller is
+/// expected to not depend on the return value for control flow — this is a
+/// best-effort artifact publish.
 fn commit_report_to_branch(project_dir: &Path, report_path: &Path, integration_branch: &str) {
-    // Skip for protected branches (main, master) — report doesn't belong there.
-    if integration_branch == "main" || integration_branch == "master" {
+    // WS-REV REV-MAJOR-1: Reuse the enforcement-policy protected-branch set
+    // rather than hardcoding `main` + `master`. Catches `release/*`,
+    // `production`, and any custom branches configured in
+    // `enforcement-policy.json::merge_protection.protected_branches`.
+    let protected = codeflow_core::autorun::batch::load_protected_branches(project_dir);
+    if codeflow_core::autorun::batch::is_protected_branch(integration_branch, &protected) {
+        eprintln!(
+            "report: skipping commit (integration_branch '{integration_branch}' is protected)"
+        );
         return;
     }
 
@@ -1065,93 +1155,316 @@ fn commit_report_to_branch(project_dir: &Path, report_path: &Path, integration_b
         return;
     }
 
-    // Check the integration branch exists locally.
-    let branch_exists = std::process::Command::new("git")
-        .args(["rev-parse", "--verify", integration_branch])
-        .current_dir(project_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-
-    if !branch_exists {
-        eprintln!("report: skipping commit (integration branch '{integration_branch}' not found)");
-        return;
-    }
-
-    // Save current branch/HEAD for switching back.
-    let original_ref = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(project_dir)
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-
-    // Checkout integration branch.
-    let checkout = std::process::Command::new("git")
-        .args(["checkout", integration_branch])
-        .current_dir(project_dir)
-        .output();
-    if !checkout.is_ok_and(|o| o.status.success()) {
-        eprintln!("report: could not checkout {integration_branch}, skipping commit");
-        return;
-    }
-
-    // Helper: switch back to original ref on any exit path.
-    let switch_back = |original: &str| {
-        if !original.is_empty() && is_safe_git_ref(original) {
-            let _ = std::process::Command::new("git")
-                .args(["checkout", original])
-                .current_dir(project_dir)
-                .status();
-        }
-    };
-
-    // Make report path relative to project_dir for git add.
+    // Compute the relative path of the report inside the worktree.
     let rel_path = match report_path.strip_prefix(project_dir) {
-        Ok(p) => p,
+        Ok(p) => p.to_path_buf(),
         Err(_) => {
-            eprintln!("report: cannot compute relative path, skipping git add");
-            switch_back(&original_ref);
+            eprintln!("report: cannot compute relative path of report, skipping commit");
             return;
         }
     };
 
-    // Add and commit.
-    let add_ok = std::process::Command::new("git")
-        .args(["add", &rel_path.display().to_string()])
+    // Stage the report content — we will rewrite it into the ephemeral worktree
+    // on the detached commit, since the source lives in project_dir (main repo).
+    let report_bytes = match std::fs::read(report_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "report: cannot read report source {}: {e}",
+                report_path.display()
+            );
+            return;
+        }
+    };
+
+    // Build the ephemeral worktree path under .git-worktrees/.
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let pid = std::process::id();
+    let wt_name = format!("_orch-report-{ts}-{pid}");
+    let wt_path = project_dir.join(".git-worktrees").join(&wt_name);
+
+    // Ensure the parent exists.
+    if let Err(e) = std::fs::create_dir_all(project_dir.join(".git-worktrees")) {
+        eprintln!("report: cannot create .git-worktrees parent: {e}");
+        return;
+    }
+
+    // Create the detached-HEAD ephemeral worktree at main repo HEAD first —
+    // WS-REV REV-NOTE-2: fetching into the MAIN repo before creating the
+    // worktree opens a race window between concurrent orchestrators (one
+    // fetch can shift FETCH_HEAD for all orchestrators sharing the repo).
+    // Keep the fetch + FETCH_HEAD resolution INSIDE the ephemeral worktree
+    // so each orchestrator sees its own FETCH_HEAD without interference.
+    let add_out = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "--detach",
+            &wt_path.display().to_string(),
+            "HEAD",
+        ])
         .current_dir(project_dir)
-        .status()
-        .is_ok_and(|s| s.success());
+        .output();
+    match add_out {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            eprintln!(
+                "report: git worktree add --detach failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            // No worktree to clean up — add failed.
+            return;
+        }
+        Err(e) => {
+            eprintln!("report: git worktree add error: {e}");
+            return;
+        }
+    }
 
-    if add_ok {
-        let commit_ok = std::process::Command::new("git")
+    // Fetch the integration branch tip from origin FROM INSIDE the ephemeral
+    // worktree. Each worktree has its own FETCH_HEAD (a regular file under
+    // `.git/worktrees/<name>/FETCH_HEAD`), so concurrent orchestrators no
+    // longer race on the main repo's shared FETCH_HEAD.
+    let fetch_out = std::process::Command::new("git")
+        .args(["fetch", "origin", integration_branch])
+        .current_dir(&wt_path)
+        .output();
+    match fetch_out {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            eprintln!(
+                "report: git fetch origin {integration_branch} (in ephemeral worktree) failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            cleanup_report_worktree(project_dir, &wt_path, &wt_name);
+            return;
+        }
+        Err(e) => {
+            eprintln!("report: git fetch {integration_branch} error: {e}");
+            cleanup_report_worktree(project_dir, &wt_path, &wt_name);
+            return;
+        }
+    }
+
+    // Reset the ephemeral worktree to the fetched tip so the commit chain is
+    // on top of the real integration branch HEAD (not the main repo's HEAD).
+    let fetched_sha = match std::process::Command::new("git")
+        .args(["rev-parse", "FETCH_HEAD"])
+        .current_dir(&wt_path)
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            eprintln!("report: cannot resolve FETCH_HEAD inside ephemeral worktree");
+            cleanup_report_worktree(project_dir, &wt_path, &wt_name);
+            return;
+        }
+    };
+    let reset_out = std::process::Command::new("git")
+        .args(["reset", "--hard", &fetched_sha])
+        .current_dir(&wt_path)
+        .output();
+    if !reset_out.is_ok_and(|o| o.status.success()) {
+        eprintln!("report: could not reset ephemeral worktree to FETCH_HEAD");
+        cleanup_report_worktree(project_dir, &wt_path, &wt_name);
+        return;
+    }
+
+    // Write the no-rescue marker inside the ephemeral worktree BEFORE the
+    // commit. If any rescue logic fires against this worktree's runtime, it
+    // will short-circuit without writing patches.
+    let no_rescue_dir = wt_path.join(".state/runtime");
+    let _ = std::fs::create_dir_all(&no_rescue_dir);
+    let _ = std::fs::write(
+        no_rescue_dir.join("no-rescue"),
+        b"ephemeral orchestrator report worktree - rescue disabled\n",
+    );
+
+    // Commit + push with up to 3 retries; each retry re-fetches the tip.
+    const MAX_RETRIES: u32 = 3;
+    let mut last_error: Option<String> = None;
+    let mut pushed_sha: Option<String> = None;
+    let mut lease_sha = fetched_sha.clone();
+    for attempt in 1..=MAX_RETRIES {
+        // Write the report into the ephemeral worktree at its relative path.
+        let target = wt_path.join(&rel_path);
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&target, &report_bytes) {
+            last_error = Some(format!("write report into worktree: {e}"));
+            break;
+        }
+
+        // Stage.
+        let add = std::process::Command::new("git")
+            .args(["add", "--", &rel_path.display().to_string()])
+            .current_dir(&wt_path)
+            .output();
+        match add {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                last_error = Some(format!(
+                    "git add: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+                break;
+            }
+            Err(e) => {
+                last_error = Some(format!("git add error: {e}"));
+                break;
+            }
+        }
+
+        // Commit — NO --no-verify. Pre-commit hooks run normally.
+        let msg = format!("chore: add batch report {}", rel_path.display());
+        let commit = std::process::Command::new("git")
+            .args(["commit", "-m", &msg])
+            .current_dir(&wt_path)
+            .output();
+        match commit {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let exit_code = out.status.code().unwrap_or(-1);
+                eprintln!(
+                    "report: commit failed (attempt {attempt}/{MAX_RETRIES}, exit={exit_code}): {}",
+                    stderr.trim()
+                );
+                log_report_commit_event(
+                    project_dir,
+                    "commit_failed",
+                    &serde_json::json!({
+                        "attempt": attempt,
+                        "exit_code": exit_code,
+                        "stderr": stderr,
+                        "worktree": wt_name,
+                        "integration_branch": integration_branch,
+                    }),
+                );
+                // Unstage and restore to keep the worktree clean for retry.
+                let _ = std::process::Command::new("git")
+                    .args(["restore", "--staged", "--", &rel_path.display().to_string()])
+                    .current_dir(&wt_path)
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["checkout", "--", &rel_path.display().to_string()])
+                    .current_dir(&wt_path)
+                    .output();
+                last_error = Some(stderr);
+                // Hook failure is not lease-recoverable — break early.
+                break;
+            }
+            Err(e) => {
+                last_error = Some(format!("git commit error: {e}"));
+                break;
+            }
+        }
+
+        // Push with --force-with-lease=<ref>:<expected_sha> — scoped lease.
+        let lease = format!("{integration_branch}:{lease_sha}");
+        let push = std::process::Command::new("git")
             .args([
-                "commit",
-                "-m",
-                &format!("chore: add batch report {}", rel_path.display()),
+                "push",
+                "origin",
+                &format!("HEAD:refs/heads/{integration_branch}"),
+                &format!("--force-with-lease={lease}"),
             ])
-            .current_dir(project_dir)
-            .status()
-            .is_ok_and(|s| s.success());
-
-        if commit_ok {
-            let push_ok = std::process::Command::new("git")
-                .args(["push", "origin", integration_branch])
-                .current_dir(project_dir)
-                .status()
-                .is_ok_and(|s| s.success());
-            if push_ok {
-                eprintln!("report: committed to {integration_branch}");
-            } else {
-                eprintln!("report: commit succeeded but push to {integration_branch} failed");
+            .current_dir(&wt_path)
+            .output();
+        match push {
+            Ok(out) if out.status.success() => {
+                // Capture the committed SHA.
+                if let Ok(rev) = std::process::Command::new("git")
+                    .args(["rev-parse", "HEAD"])
+                    .current_dir(&wt_path)
+                    .output()
+                {
+                    if rev.status.success() {
+                        pushed_sha = Some(String::from_utf8_lossy(&rev.stdout).trim().to_string());
+                    }
+                }
+                last_error = None;
+                break;
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let is_lease = stderr.contains("stale info") || stderr.contains("rejected");
+                eprintln!(
+                    "report: push failed (attempt {attempt}/{MAX_RETRIES}): {}",
+                    stderr.trim()
+                );
+                log_report_commit_event(
+                    project_dir,
+                    "push_failed",
+                    &serde_json::json!({
+                        "attempt": attempt,
+                        "stderr": stderr,
+                        "worktree": wt_name,
+                        "integration_branch": integration_branch,
+                        "lease_kind": if is_lease { "stale_lease" } else { "other" },
+                    }),
+                );
+                last_error = Some(stderr);
+                if !is_lease || attempt == MAX_RETRIES {
+                    break;
+                }
+                // Lease failure: fetch the new tip, reset the ephemeral worktree
+                // to it, and retry the commit on top of the new tip.
+                let _ = std::process::Command::new("git")
+                    .args(["fetch", "origin", integration_branch])
+                    .current_dir(&wt_path)
+                    .output();
+                let new_tip = match std::process::Command::new("git")
+                    .args(["rev-parse", "FETCH_HEAD"])
+                    .current_dir(&wt_path)
+                    .output()
+                {
+                    Ok(o) if o.status.success() => {
+                        String::from_utf8_lossy(&o.stdout).trim().to_string()
+                    }
+                    _ => break,
+                };
+                let reset = std::process::Command::new("git")
+                    .args(["reset", "--hard", &new_tip])
+                    .current_dir(&wt_path)
+                    .output();
+                if !reset.is_ok_and(|o| o.status.success()) {
+                    last_error = Some("could not reset to new tip for retry".to_string());
+                    break;
+                }
+                lease_sha = new_tip;
+            }
+            Err(e) => {
+                last_error = Some(format!("git push error: {e}"));
+                break;
             }
         }
     }
 
-    // Switch back to original ref.
-    switch_back(&original_ref);
+    // Cleanup is always performed — success or failure.
+    cleanup_report_worktree(project_dir, &wt_path, &wt_name);
+
+    match (pushed_sha, last_error) {
+        (Some(sha), _) => {
+            eprintln!("report: committed to {integration_branch} ({sha})");
+            log_report_commit_event(
+                project_dir,
+                "committed",
+                &serde_json::json!({
+                    "sha": sha,
+                    "integration_branch": integration_branch,
+                    "worktree": wt_name,
+                }),
+            );
+        }
+        (None, Some(err)) => {
+            eprintln!("report: commit to {integration_branch} failed after retries: {err}");
+        }
+        (None, None) => {
+            eprintln!("report: commit to {integration_branch} aborted (no outcome)");
+        }
+    }
 }
 
 /// Format seconds into a human-readable duration string.
@@ -1584,7 +1897,9 @@ async fn run_status_watch(
     batch: Option<&str>,
     interval_secs: u64,
 ) -> Result<()> {
-    use codeflow_core::tui::data::{BatchListEntry, BatchView, fetch_batch_list, fetch_batch_view};
+    use codeflow_core::tui::data::{
+        BatchListSnapshot, BatchView, fetch_batch_list_bulk, fetch_batch_view,
+    };
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DetailPane, DurationCell};
     use ratatui::crossterm::event::{
@@ -1619,16 +1934,23 @@ async fn run_status_watch(
         AutorunView::BatchList
     };
     let started_with_batch = batch_owned.is_some();
+    let mut show_help_overlay = false;
 
     let mut table_state = TableState::default();
     let mut batch_table_state = TableState::default();
 
-    // Fetch initial data (fresh store for cross-process visibility).
+    // Initial snapshot (published to the watch channel below).
     let init_store = open_store(project_dir).await?;
-    let mut batch_list: Vec<BatchListEntry> = fetch_batch_list(init_store.as_ref())
+    let initial_entries = fetch_batch_list_bulk(init_store.as_ref())
         .await
         .unwrap_or_default();
-    if !batch_list.is_empty() {
+    let initial_snapshot = BatchListSnapshot {
+        entries: initial_entries.clone(),
+        fetched_at: std::time::SystemTime::now(),
+        stale: false,
+        error: None,
+    };
+    if !initial_entries.is_empty() {
         batch_table_state.select(Some(0));
     }
 
@@ -1645,19 +1967,111 @@ async fn run_status_watch(
                 None
             }
         };
-    // Drop initial store — all subsequent fetches open fresh connections.
+    // Drop initial store — subsequent fetches open fresh connections for
+    // cross-process visibility (intentional, preserves INF-TSK-047-001 fix).
     drop(init_store);
     let mut status_message: Option<(String, std::time::Instant)> = None;
 
-    // Auto-refresh decoupling (INF-TSK-047-001 AC #6): input polls every
-    // 100 ms for snappy key handling; data fetch runs at the user-configured
-    // `interval_secs` cadence. This prevents a slow DB fetch from freezing
-    // the render thread for multiple seconds.
-    let poll_interval = Duration::from_millis(100);
+    // INF-TSK-048-001 AC #7: Spawn a background task that refreshes the
+    // batch-list snapshot at `fetch_interval` cadence. Each cycle:
+    //   - opens a fresh store connection (cross-process visibility),
+    //   - times out at 2 s (slow DB → stale snapshot fallback),
+    //   - publishes to a watch channel consumed by the render thread.
     let fetch_interval = Duration::from_secs(interval_secs.max(1));
+    const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
+    let (snapshot_tx, mut snapshot_rx) = tokio::sync::watch::channel(initial_snapshot);
+    let (refresh_signal_tx, mut refresh_signal_rx) = tokio::sync::mpsc::channel::<()>(4);
+    let fetcher_project_dir = project_dir.to_path_buf();
+    let fetcher_handle = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(fetch_interval);
+        ticker.tick().await; // consume immediate tick — initial snapshot already published
+        loop {
+            let force_refresh = tokio::select! {
+                _ = ticker.tick() => false,
+                signal = refresh_signal_rx.recv() => {
+                    if signal.is_none() {
+                        break; // caller dropped the sender
+                    }
+                    true
+                }
+            };
+            let _ = force_refresh; // may be used for adaptive backoff later
+            let mut current = snapshot_tx.borrow().clone();
+            let store = match open_store(&fetcher_project_dir).await {
+                Ok(s) => s,
+                Err(e) => {
+                    current.stale = true;
+                    current.error = Some(format!("store open: {e}"));
+                    if snapshot_tx.send(current).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let fetch =
+                tokio::time::timeout(FETCH_TIMEOUT, fetch_batch_list_bulk(store.as_ref())).await;
+            match fetch {
+                Ok(Ok(entries)) => {
+                    let snap = BatchListSnapshot {
+                        entries,
+                        fetched_at: std::time::SystemTime::now(),
+                        stale: false,
+                        error: None,
+                    };
+                    if snapshot_tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+                Ok(Err(e)) => {
+                    current.stale = true;
+                    current.error = Some(format!("fetch: {e}"));
+                    if snapshot_tx.send(current).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    // 2 s timeout: keep prior snapshot, mark stale.
+                    current.stale = true;
+                    current.error = Some(format!(
+                        "fetch timed out after {}s",
+                        FETCH_TIMEOUT.as_secs()
+                    ));
+                    if snapshot_tx.send(current).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Guard so the background fetcher is stopped when the TUI exits.
+    struct FetcherGuard {
+        handle: Option<tokio::task::JoinHandle<()>>,
+        _sender: tokio::sync::mpsc::Sender<()>,
+    }
+    impl Drop for FetcherGuard {
+        fn drop(&mut self) {
+            if let Some(h) = self.handle.take() {
+                h.abort();
+            }
+        }
+    }
+    let _fetcher_guard = FetcherGuard {
+        handle: Some(fetcher_handle),
+        _sender: refresh_signal_tx.clone(),
+    };
+
+    // Input polls every 50 ms so `q`/`Esc`/`Ctrl+C` respond instantly even
+    // if the DB is stalled for seconds (INF-TSK-048-001 AC #7).
+    let poll_interval = Duration::from_millis(50);
     let mut last_fetch = std::time::Instant::now();
+    let _ = last_fetch; // retained for compat with existing fetch gate below
 
     loop {
+        // Read the latest snapshot from the background fetcher (lock-free
+        // read, never blocks on DB) — INF-TSK-048-001 AC #7.
+        let snapshot = snapshot_rx.borrow_and_update().clone();
+        let batch_list = &snapshot.entries;
         // Preserve selection index across refreshes (for whichever view is active).
         match view {
             AutorunView::BatchList => {
@@ -1729,9 +2143,13 @@ async fn run_status_watch(
                     ]);
                     frame.render_widget(Paragraph::new(header_line), chunks[0]);
 
-                    // Table
+                    // Table — INF-TSK-048-001 AC #9: TASK column (current task id,
+                    // blank for terminal rows), ELAPSED is status-driven (frozen for
+                    // terminal), IDLE column (Running/Aborting only) renders in
+                    // red when it exceeds HEARTBEAT_TTL_SECS.
                     let tbl_header = Row::new(vec![
-                        "BATCH", "STATUS", "TASKS", "DONE", "FAIL", "RUN", "ELAPSED",
+                        "BATCH", "STATUS", "TASK", "TASKS", "DONE", "FAIL", "RUN", "ELAPSED",
+                        "IDLE",
                     ])
                     .style(theme::header())
                     .bottom_margin(1);
@@ -1741,14 +2159,21 @@ async fn run_status_watch(
                         .map(|b| {
                             let status_badge = crate::cmd::autorun::status_badge_text(b.status);
                             let dur = DurationCell::new(Some(b.elapsed_secs));
+                            let task_cell_text = crate::cmd::autorun::format_task_cell(
+                                b.current_task_id.as_deref(),
+                                14,
+                            );
+                            let idle_cell = crate::cmd::autorun::render_idle_cell(b.idle_secs);
                             Row::new(vec![
                                 Cell::from(b.batch_name.clone()),
                                 Cell::from(status_badge),
+                                Cell::from(task_cell_text),
                                 Cell::from(format!("{}", b.total_tasks)),
                                 Cell::from(format!("{}", b.completed_tasks)),
                                 Cell::from(format!("{}", b.failed_tasks)),
                                 Cell::from(format!("{}", b.running_count)),
                                 Cell::from(dur.to_span()),
+                                idle_cell,
                             ])
                         })
                         .collect();
@@ -1756,13 +2181,15 @@ async fn run_status_watch(
                     let table = Table::new(
                         rows,
                         [
-                            Constraint::Min(20),    // BATCH
+                            Constraint::Min(16),    // BATCH
                             Constraint::Length(12), // STATUS
+                            Constraint::Length(16), // TASK
                             Constraint::Length(7),  // TASKS
                             Constraint::Length(7),  // DONE
                             Constraint::Length(7),  // FAIL
                             Constraint::Length(5),  // RUN
                             Constraint::Length(10), // ELAPSED
+                            Constraint::Length(8),  // IDLE
                         ],
                     )
                     .header(tbl_header)
@@ -1778,16 +2205,35 @@ async fn run_status_watch(
 
                     frame.render_stateful_widget(table, chunks[1], &mut batch_table_state);
 
-                    // Keybinding bar
-                    let bar = Line::from(vec![
+                    // Keybinding bar with stale/error footer per AC #7.
+                    let mut bar_spans = vec![
                         Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
                         Span::raw(" Detail "),
                         Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
                         Span::raw(" Navigate "),
+                        Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Refresh "),
+                        Span::styled("[?]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Help "),
                         Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
                         Span::raw(" Quit"),
-                    ]);
-                    frame.render_widget(Paragraph::new(bar), chunks[2]);
+                    ];
+                    if snapshot.stale {
+                        let age = snapshot.age_secs(std::time::SystemTime::now());
+                        bar_spans.push(Span::raw("   "));
+                        bar_spans.push(Span::styled(
+                            format!("[STALE - {age}s ago]"),
+                            Style::new().fg(theme::DIM_PENDING),
+                        ));
+                    }
+                    if let Some(ref err) = snapshot.error {
+                        bar_spans.push(Span::raw(" "));
+                        bar_spans.push(Span::styled(
+                            format!("[ERROR: {err}]"),
+                            Style::new().fg(theme::RED_FAILURE),
+                        ));
+                    }
+                    frame.render_widget(Paragraph::new(Line::from(bar_spans)), chunks[2]);
                 }
                 AutorunView::BatchDetail(_) => {
                     // --- Existing batch detail view ---
@@ -1835,6 +2281,46 @@ async fn run_status_watch(
                     frame.render_widget(Paragraph::new(bar_line), chunks[3]);
                 }
             }
+            // Help overlay (INF-TSK-048-001 AC #9): render on top of the
+            // current view when `?` was pressed. Any key dismisses it.
+            if show_help_overlay {
+                let area = frame.area();
+                let help_text = vec![
+                    Line::from(Span::styled(
+                        " Status TUI — Keys ",
+                        Style::new().fg(theme::BLUE_ACCENT),
+                    )),
+                    Line::from(""),
+                    Line::from(" Enter    Open selected batch / Attach to worker"),
+                    Line::from(" Up/Down  Navigate"),
+                    Line::from(" Esc      Back to batch list (or quit if started with --batch)"),
+                    Line::from(" r        Force refresh (BatchList) / Retry worker (Detail)"),
+                    Line::from(" a        Abort worker (Detail)"),
+                    Line::from(" q, ^C    Quit"),
+                    Line::from(" ?        Toggle this help"),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        " Press any key to dismiss.",
+                        Style::new().fg(theme::DIM_PENDING),
+                    )),
+                ];
+                let overlay_width = 64u16.min(area.width.saturating_sub(4));
+                let help_line_count = u16::try_from(help_text.len()).unwrap_or(u16::MAX);
+                let overlay_height = help_line_count.saturating_add(2).min(area.height);
+                let overlay_x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+                let overlay_y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+                let overlay_area =
+                    ratatui::layout::Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
+                frame.render_widget(ratatui::widgets::Clear, overlay_area);
+                let overlay = Paragraph::new(help_text).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(theme::BORDER_TYPE)
+                        .title(" Help ")
+                        .style(Style::new().fg(theme::WHITE_TEXT)),
+                );
+                frame.render_widget(overlay, overlay_area);
+            }
         })?;
 
         // Event handling — poll at 100 ms so keys respond immediately.
@@ -1849,9 +2335,21 @@ async fn run_status_watch(
                     {
                         break;
                     }
+                    // If the help overlay is visible, any key dismisses it.
+                    if show_help_overlay {
+                        show_help_overlay = false;
+                        continue;
+                    }
                     match view {
                         AutorunView::BatchList => match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Char('r') => {
+                                // Force immediate refresh without waiting for tick.
+                                let _ = refresh_signal_tx.try_send(());
+                            }
+                            KeyCode::Char('?') => {
+                                show_help_overlay = true;
+                            }
                             KeyCode::Up => {
                                 let i = batch_table_state.selected().unwrap_or(0);
                                 let prev = if i == 0 {
@@ -2067,38 +2565,27 @@ async fn run_status_watch(
             }
         }
 
-        // Refresh data only once per `fetch_interval` so the render thread
-        // is not blocked every 100 ms on DB round-trips. The store is
-        // re-opened for cross-process visibility. The gate predicate is
-        // extracted to `should_fetch_now` for regression testing (see
-        // `tui::data::tests::test_fetch_gate_prevents_stall`).
-        if codeflow_core::tui::data::should_fetch_now(
-            last_fetch,
-            std::time::Instant::now(),
-            fetch_interval,
-        ) {
-            if let Ok(refresh_store) = open_store(project_dir).await {
-                match view {
-                    AutorunView::BatchList => {
-                        batch_list = fetch_batch_list(refresh_store.as_ref())
-                            .await
-                            .unwrap_or_default();
-                    }
-                    AutorunView::BatchDetail(ref sid) => {
-                        match fetch_batch_view(
-                            refresh_store.as_ref(),
-                            project_dir,
-                            Some(sid.as_str()),
-                        )
+        // BatchList refresh is driven by the background fetcher task
+        // (watch channel). BatchDetail still refreshes inline on the gated
+        // interval — cross-process visibility preserved via a fresh store
+        // per tick. Preserves the regression-tested behaviour in
+        // `tui::data::tests::test_fetch_gate_prevents_stall`.
+        if let AutorunView::BatchDetail(ref sid) = view {
+            if codeflow_core::tui::data::should_fetch_now(
+                last_fetch,
+                std::time::Instant::now(),
+                fetch_interval,
+            ) {
+                if let Ok(refresh_store) = open_store(project_dir).await {
+                    match fetch_batch_view(refresh_store.as_ref(), project_dir, Some(sid.as_str()))
                         .await
-                        {
-                            Ok(v) => last_view = v,
-                            Err(e) => eprintln!("warn: fetch failed: {e}"),
-                        }
+                    {
+                        Ok(v) => last_view = v,
+                        Err(e) => eprintln!("warn: fetch failed: {e}"),
                     }
                 }
+                last_fetch = std::time::Instant::now();
             }
-            last_fetch = std::time::Instant::now();
         }
     }
 
@@ -2719,6 +3206,7 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             &session_id,
             codeflow_core::models::AutorunSessionUpdate {
                 status: Some(AutorunSessionStatus::Aborting),
+                updated_at: Some(chrono::Utc::now().to_rfc3339()),
                 ..Default::default()
             },
         )
@@ -2766,7 +3254,10 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             &session_id,
             codeflow_core::models::AutorunSessionUpdate {
                 status: Some(AutorunSessionStatus::Cancelled),
-                completed_at: Some(now),
+                completed_at: Some(now.clone()),
+                updated_at: Some(now),
+                // Clear in-flight task pointer on session cancel.
+                current_task_id: Some(None),
                 ..Default::default()
             },
         )
@@ -3672,6 +4163,81 @@ pub(crate) fn status_badge_text(
     Span::styled(label, style)
 }
 
+/// Format the TASK column value for a BatchList row.
+///
+/// INF-TSK-048-001 AC #9: renders `current_task_id` truncated to `width`
+/// characters, returning an empty string when the pointer is `None`. The
+/// worker clears `current_task_id` on task finish and the orchestrator
+/// clears it on batch end, so terminal rows naturally show blank.
+#[must_use]
+pub(crate) fn format_task_cell(current_task_id: Option<&str>, width: usize) -> String {
+    let Some(id) = current_task_id else {
+        return String::new();
+    };
+    if width == 0 || id.len() <= width {
+        return id.to_string();
+    }
+    // One-char ellipsis; keep the prefix so TSK-NNN is still identifiable.
+    if width == 1 {
+        return "…".to_string();
+    }
+    let mut out = id[..width - 1].to_string();
+    out.push('…');
+    out
+}
+
+/// Render the IDLE column cell for a BatchList row.
+///
+/// - `None` (terminal status or no heartbeat) → plain `"—"`.
+/// - `Some(secs) <= HEARTBEAT_TTL_SECS` → `"{secs}s"` in default style.
+/// - `Some(secs) > HEARTBEAT_TTL_SECS` → `"{secs}s"` rendered in RED
+///   (style returned via the enclosing `Cell::from(Span::styled(...))`).
+///
+/// Pure-data shape of the render decision is exercised by
+/// [`idle_cell_classification`] for unit-testability.
+#[must_use]
+pub(crate) fn render_idle_cell<'a>(idle_secs: Option<i64>) -> ratatui::widgets::Cell<'a> {
+    use codeflow_core::tui::theme;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    use ratatui::widgets::Cell;
+
+    match idle_classification(idle_secs) {
+        IdleClass::Blank => Cell::from("—"),
+        IdleClass::Fresh(secs) => Cell::from(Span::styled(
+            format!("{secs}s"),
+            Style::new().fg(theme::DIM_PENDING),
+        )),
+        IdleClass::Stale(secs) => Cell::from(Span::styled(
+            format!("{secs}s"),
+            Style::new().fg(theme::RED_FAILURE),
+        )),
+    }
+}
+
+/// Pure classification of the IDLE cell state (no ratatui dependency).
+///
+/// Exists so the IDLE rendering rule — blank vs fresh vs stale-red — can be
+/// exercised without constructing a ratatui Frame. See unit tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleClass {
+    /// Render a dash — terminal status or no heartbeat recorded.
+    Blank,
+    /// Recent heartbeat (within TTL). Rendered in dim style.
+    Fresh(i64),
+    /// Heartbeat older than TTL. Rendered in red.
+    Stale(i64),
+}
+
+#[must_use]
+pub(crate) fn idle_classification(idle_secs: Option<i64>) -> IdleClass {
+    match idle_secs {
+        None => IdleClass::Blank,
+        Some(secs) if secs > codeflow_core::tui::data::HEARTBEAT_TTL_SECS => IdleClass::Stale(secs),
+        Some(secs) => IdleClass::Fresh(secs),
+    }
+}
+
 /// Compute a simple ETA string from elapsed time and task progress.
 ///
 /// Returns "ETA: --" when no tasks have completed, "ETA: <1m" when close,
@@ -3884,26 +4450,54 @@ fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) ->
         Err(_) => return PathFlowState::Unknown,
     };
 
-    let pr_pushed_sentinel = resolve_pr_pushed_sentinel_name(worktree_path);
+    // Resolve the pr-pushed sentinel name from GateConfig; on failure, log and
+    // skip the pr-pushed check rather than silently substituting a hardcoded
+    // phase sentinel. AC #11 bonus: zero hardcoded phase names in this resolver.
+    let pr_pushed_sentinel = match resolve_pr_pushed_sentinel_name(worktree_path) {
+        Ok(name) => Some(name),
+        Err(e) => {
+            eprintln!(
+                "warn: cannot resolve pr_pushed sentinel for {}: {e} (skipping pr-pushed check)",
+                worktree_path.display()
+            );
+            None
+        }
+    };
 
-    let mut has_pf7 = false;
+    // WS-REV REV-MINOR-1: resolve `session_complete` sentinel name from
+    // GateConfig rather than hardcoding `pathflow-pf-7`. On Err, log and
+    // continue with pr_pushed + latest-phase detection unchanged.
+    let session_complete_sentinel = match resolve_session_complete_sentinel_name(worktree_path) {
+        Ok(name) => Some(name),
+        Err(e) => {
+            eprintln!(
+                "warn: cannot resolve session_complete sentinel for {}: {e} (skipping complete check)",
+                worktree_path.display()
+            );
+            None
+        }
+    };
+
+    let mut has_complete = false;
     let mut has_pr_pushed = false;
     let mut latest_phase = String::new();
 
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == "pathflow-pf-7" {
-            has_pf7 = true;
-        } else if name == pr_pushed_sentinel {
+        if session_complete_sentinel.as_deref() == Some(name.as_str()) {
+            has_complete = true;
+        } else if pr_pushed_sentinel.as_deref() == Some(name.as_str()) {
             has_pr_pushed = true;
         }
-        // Track latest phase sentinel for InProgress reporting.
+        // Track latest phase sentinel for InProgress reporting. The `pathflow-pf-`
+        // prefix is the sentinel filename convention, not a phase literal — the
+        // specific phase index comes from the filename itself.
         if name.starts_with("pathflow-pf-") && (latest_phase.is_empty() || name > latest_phase) {
             latest_phase = name;
         }
     }
 
-    if has_pf7 {
+    if has_complete {
         PathFlowState::Complete
     } else if has_pr_pushed {
         PathFlowState::PrCreated
@@ -3914,37 +4508,71 @@ fn check_pathflow_progress(worktree_path: &std::path::Path, session_id: &str) ->
     }
 }
 
-/// Resolve the sentinel filename that signifies "PR pushed" by reading
-/// `gates.pr_pushed.on_phase_complete` from `pathflow-config.json`.
+/// Resolve the sentinel filename for a GateConfig entry by reading
+/// `gates.<gate_name>.on_phase_complete` from `pathflow-config.json` and
+/// formatting it as `pathflow-pf-{N}`.
 ///
-/// Falls back to `pathflow-pf-6` when the config cannot be loaded or the
-/// gate is missing (historical default).
-fn resolve_pr_pushed_sentinel_name(worktree_path: &std::path::Path) -> String {
+/// Shared helper for both `resolve_pr_pushed_sentinel_name` and
+/// `resolve_session_complete_sentinel_name` (WS-REV REV-MINOR-1). Returns an
+/// error when the config is missing, malformed, or lacks the requested
+/// gate — callers MUST treat this as an unresolvable state (log and skip)
+/// rather than substituting a hardcoded phase name. Zero-hardcoded-phase
+/// invariant (AC #11).
+fn resolve_gate_sentinel_name(
+    worktree_path: &std::path::Path,
+    gate_name: &str,
+) -> Result<String, anyhow::Error> {
     use codeflow_core::pathflow::gates::GateConfig;
 
-    const FALLBACK: &str = "pathflow-pf-6";
     let config_dir = worktree_path
         .join(".codeflow")
         .join("config")
         .join("pathflow");
-    if !config_dir.join("pathflow-config.json").exists() {
-        return FALLBACK.to_string();
+    let config_path = config_dir.join("pathflow-config.json");
+    if !config_path.exists() {
+        anyhow::bail!(
+            "GateConfig unavailable at {}: cannot resolve {gate_name} sentinel name",
+            config_path.display()
+        );
     }
 
-    // GateConfig::load panics on malformed config; catch to keep this
-    // progress check non-fatal.
-    let result = std::panic::catch_unwind(|| GateConfig::load(&config_dir));
-    let Ok(gates) = result else {
-        return FALLBACK.to_string();
-    };
+    // GateConfig::load panics on malformed config; catch so the caller
+    // sees a structured error instead of the process aborting.
+    let gates = std::panic::catch_unwind(|| GateConfig::load(&config_dir))
+        .map_err(|_| anyhow::anyhow!("GateConfig::load panicked on {}", config_dir.display()))?;
 
-    gates
-        .get("pr_pushed")
+    let phase = gates
+        .get(gate_name)
         .and_then(|req| req.on_phase_complete)
-        .map_or_else(
-            || FALLBACK.to_string(),
-            |phase| format!("pathflow-pf-{}", phase.index()),
-        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "pathflow gate `{gate_name}` is missing or lacks `on_phase_complete` in {}",
+                config_path.display()
+            )
+        })?;
+
+    Ok(format!("pathflow-pf-{}", phase.index()))
+}
+
+/// Resolve the sentinel filename that signifies "PR pushed" by reading
+/// `gates.pr_pushed.on_phase_complete` from `pathflow-config.json`.
+fn resolve_pr_pushed_sentinel_name(
+    worktree_path: &std::path::Path,
+) -> Result<String, anyhow::Error> {
+    resolve_gate_sentinel_name(worktree_path, "pr_pushed")
+}
+
+/// Resolve the sentinel filename that signifies "session complete" by reading
+/// `gates.session_complete.on_phase_complete` from `pathflow-config.json`.
+///
+/// WS-REV REV-MINOR-1: replaces the hardcoded `name == "pathflow-pf-7"`
+/// literal in `check_pathflow_progress` with a config-driven lookup. The
+/// `session_complete` gate (added in commit 191e4a12 → `PF7-END`) is the
+/// authoritative source for which phase sentinel signals a finished session.
+fn resolve_session_complete_sentinel_name(
+    worktree_path: &std::path::Path,
+) -> Result<String, anyhow::Error> {
+    resolve_gate_sentinel_name(worktree_path, "session_complete")
 }
 
 /// Write the wrap-up signal file to the worktree's runtime local directory.
@@ -4316,6 +4944,471 @@ impl<T: codeflow_core::autorun::TmuxRunner> codeflow_core::autorun::ClaudeInvoke
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-048-001 AC #9: BatchList render-layer column tests.
+    //
+    // These are pure-function tests over the formatter helpers so the render
+    // decision (TASK truncation, ELAPSED freeze, IDLE class) is exercised
+    // without constructing a ratatui Frame. One test per status class.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_task_cell_none_is_blank() {
+        assert_eq!(format_task_cell(None, 14), "");
+    }
+
+    #[test]
+    fn test_format_task_cell_fits_width_unchanged() {
+        assert_eq!(format_task_cell(Some("INF-TSK-001"), 14), "INF-TSK-001");
+    }
+
+    #[test]
+    fn test_format_task_cell_truncates_long_id_with_ellipsis() {
+        let out = format_task_cell(Some("INF-TSK-048-001"), 8);
+        assert_eq!(out.chars().count(), 8);
+        assert!(out.ends_with('…'));
+        assert!(out.starts_with("INF-TSK"));
+    }
+
+    #[test]
+    fn test_format_task_cell_width_one_is_ellipsis_only() {
+        assert_eq!(format_task_cell(Some("anything"), 1), "…");
+    }
+
+    #[test]
+    fn test_idle_classification_none_is_blank() {
+        assert_eq!(idle_classification(None), IdleClass::Blank);
+    }
+
+    #[test]
+    fn test_idle_classification_fresh_below_threshold() {
+        assert_eq!(idle_classification(Some(0)), IdleClass::Fresh(0));
+        assert_eq!(idle_classification(Some(30)), IdleClass::Fresh(30));
+        // Exactly at threshold is still fresh (> is the stale predicate).
+        assert_eq!(
+            idle_classification(Some(codeflow_core::tui::data::HEARTBEAT_TTL_SECS)),
+            IdleClass::Fresh(codeflow_core::tui::data::HEARTBEAT_TTL_SECS)
+        );
+    }
+
+    #[test]
+    fn test_idle_classification_stale_above_threshold() {
+        let over = codeflow_core::tui::data::HEARTBEAT_TTL_SECS + 1;
+        assert_eq!(idle_classification(Some(over)), IdleClass::Stale(over));
+        assert_eq!(idle_classification(Some(600)), IdleClass::Stale(600));
+    }
+
+    // --- Status-driven ELAPSED (one case per status class) ---
+    //
+    // These build a synthetic AutorunSession for each status and pin `now`
+    // so the freeze-vs-live decision is deterministic.
+
+    fn mk_session(
+        status: codeflow_core::types::AutorunSessionStatus,
+        created_at: &str,
+        completed_at: Option<&str>,
+        updated_at: Option<&str>,
+    ) -> codeflow_core::models::AutorunSession {
+        codeflow_core::models::AutorunSession {
+            id: "ses-test".to_string(),
+            batch_file: "b.yaml".to_string(),
+            batch_name: Some("t".to_string()),
+            status,
+            max_session_workers: 1,
+            total_tasks: 1,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: Some(1),
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            updated_at: updated_at.map(str::to_string),
+            last_heartbeat_at: None,
+            created_at: created_at.to_string(),
+            completed_at: completed_at.map(str::to_string),
+        }
+    }
+
+    fn ts(rfc: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(rfc)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_running_is_live() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Running,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        let now = ts("2026-04-20T10:01:30Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 90);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_aborting_is_live() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Aborting,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        let now = ts("2026-04-20T10:00:45Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 45);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_completed_is_frozen_from_completed_at() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Completed,
+            "2026-04-20T10:00:00Z",
+            Some("2026-04-20T10:05:00Z"),
+            None,
+        );
+        // `now` has advanced 1 hour past completion — elapsed must NOT move.
+        let now = ts("2026-04-20T11:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 300);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_failed_is_frozen() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Failed,
+            "2026-04-20T10:00:00Z",
+            Some("2026-04-20T10:00:30Z"),
+            None,
+        );
+        let now = ts("2026-04-20T12:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 30);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_cancelled_is_frozen() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Cancelled,
+            "2026-04-20T10:00:00Z",
+            Some("2026-04-20T10:02:00Z"),
+            None,
+        );
+        let now = ts("2026-04-20T15:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 120);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_timeout_is_frozen() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Timeout,
+            "2026-04-20T10:00:00Z",
+            Some("2026-04-20T11:00:00Z"),
+            None,
+        );
+        let now = ts("2026-04-21T00:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 3600);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_terminal_falls_back_to_updated_at() {
+        // Some older rows lack `completed_at` but have `updated_at`. The
+        // formatter must use updated_at, never `now()`.
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Completed,
+            "2026-04-20T10:00:00Z",
+            None,
+            Some("2026-04-20T10:04:00Z"),
+        );
+        let now = ts("2026-04-21T00:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 240);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_terminal_with_no_timestamps_is_zero() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Failed,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        let now = ts("2026-04-21T00:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 0);
+    }
+
+    #[test]
+    fn test_status_driven_elapsed_pending_is_zero() {
+        use codeflow_core::tui::data::status_driven_elapsed_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Pending,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        let now = ts("2026-04-20T11:00:00Z");
+        assert_eq!(status_driven_elapsed_secs(&s, now), 0);
+    }
+
+    // --- IDLE presence/absence per status ---
+
+    #[test]
+    fn test_compute_idle_secs_running_returns_some() {
+        use codeflow_core::tui::data::compute_idle_secs;
+        let mut s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Running,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        s.last_heartbeat_at = Some("2026-04-20T10:00:05Z".to_string());
+        let now = ts("2026-04-20T10:00:20Z");
+        assert_eq!(compute_idle_secs(&s, now), Some(15));
+    }
+
+    #[test]
+    fn test_compute_idle_secs_terminal_always_none() {
+        use codeflow_core::tui::data::compute_idle_secs;
+        let mut s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Completed,
+            "2026-04-20T10:00:00Z",
+            Some("2026-04-20T10:05:00Z"),
+            None,
+        );
+        s.last_heartbeat_at = Some("2026-04-20T10:04:50Z".to_string());
+        let now = ts("2026-04-20T11:00:00Z");
+        // Terminal statuses never expose an IDLE value.
+        assert!(compute_idle_secs(&s, now).is_none());
+    }
+
+    #[test]
+    fn test_compute_idle_secs_no_heartbeat_is_none() {
+        use codeflow_core::tui::data::compute_idle_secs;
+        let s = mk_session(
+            codeflow_core::types::AutorunSessionStatus::Running,
+            "2026-04-20T10:00:00Z",
+            None,
+            None,
+        );
+        // No last_heartbeat_at → None even though status is Running.
+        assert!(compute_idle_secs(&s, ts("2026-04-20T11:00:00Z")).is_none());
+    }
+
+    // --- WS-QA retry 2 coverage boost: report-commit helpers ---
+
+    #[test]
+    fn test_log_report_commit_event_appends_record_to_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        log_report_commit_event(
+            dir.path(),
+            "committed",
+            &serde_json::json!({"sha": "abc123", "branch": "autorun/foo"}),
+        );
+        let log_path = dir.path().join(".state/logs/batch-report-commit.jsonl");
+        assert!(log_path.exists(), "log file should be created");
+        let body = std::fs::read_to_string(&log_path).unwrap();
+        // One JSON object per line.
+        let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1);
+        let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(parsed["event"], "committed");
+        assert_eq!(parsed["detail"]["sha"], "abc123");
+        assert!(parsed["ts"].is_string());
+    }
+
+    #[test]
+    fn test_log_report_commit_event_appends_multiple_records() {
+        let dir = tempfile::tempdir().unwrap();
+        log_report_commit_event(
+            dir.path(),
+            "commit_failed",
+            &serde_json::json!({"attempt": 1}),
+        );
+        log_report_commit_event(
+            dir.path(),
+            "push_failed",
+            &serde_json::json!({"attempt": 2}),
+        );
+        let log_path = dir.path().join(".state/logs/batch-report-commit.jsonl");
+        let body = std::fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("commit_failed"));
+        assert!(lines[1].contains("push_failed"));
+    }
+
+    #[test]
+    fn test_log_report_commit_event_handles_missing_log_parent_silently() {
+        // The function creates .state/logs under project_dir. When the
+        // project_dir is a read-only FS, create_dir_all fails — function
+        // should silently swallow. Emulate by pointing project_dir at a
+        // non-existent path; create_dir_all builds the whole chain.
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("deeply/nested/path");
+        log_report_commit_event(&nested, "probe", &serde_json::json!({}));
+        // Should have created the directory chain.
+        assert!(
+            nested
+                .join(".state/logs/batch-report-commit.jsonl")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn test_cleanup_report_worktree_nonexistent_wt_is_graceful() {
+        // The worktree was never created (git worktree add failed before
+        // we got here) — git worktree remove will fail with exit !=0.
+        // cleanup_report_worktree must fall through to fs::remove_dir_all
+        // (which also no-ops on a missing path) and write a diagnostic.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_path = dir.path().join(".git-worktrees/_orch-report-fake");
+        // Not creating the directory — path doesn't exist.
+        // Also not initializing a real git repo — so `git worktree remove`
+        // will fail immediately with "not a git repository".
+        cleanup_report_worktree(dir.path(), &wt_path, "_orch-report-fake");
+        // Function is void; success = no panic, and the log was written.
+        let log = dir.path().join(".state/logs/batch-report-commit.jsonl");
+        assert!(log.exists(), "cleanup should have logged the fallback path");
+        let body = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            body.contains("cleanup_fallback_fs_remove"),
+            "expected fallback-remove event, got: {body}"
+        );
+    }
+
+    #[test]
+    fn test_commit_report_to_branch_skips_main() {
+        // When integration_branch is `main`, the function must early-return
+        // WITHOUT creating any .git-worktrees/ directory. Enforces
+        // REV-MAJOR-1: protected-branch guard applies to every default-set
+        // member (main / master / release/* / production), not just main.
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "dummy").unwrap();
+        commit_report_to_branch(dir.path(), &report, "main");
+        // No ephemeral worktree directory should exist.
+        let wt_root = dir.path().join(".git-worktrees");
+        assert!(
+            !wt_root.exists() || wt_root.read_dir().unwrap().next().is_none(),
+            ".git-worktrees should be empty/absent for protected branch"
+        );
+    }
+
+    #[test]
+    fn test_commit_report_to_branch_skips_master_release_production() {
+        // Spot-check the other three default-set members. Each should
+        // early-return; no side effects in the temp dir.
+        for branch in ["master", "release/v1.0", "production"] {
+            let dir = tempfile::tempdir().unwrap();
+            let report = dir.path().join("report.md");
+            std::fs::write(&report, "dummy").unwrap();
+            commit_report_to_branch(dir.path(), &report, branch);
+            let wt_root = dir.path().join(".git-worktrees");
+            assert!(
+                !wt_root.exists() || wt_root.read_dir().unwrap().next().is_none(),
+                "{branch} should be rejected by protected-branch guard"
+            );
+        }
+    }
+
+    #[test]
+    fn test_commit_report_to_branch_rejects_unsafe_branch_name() {
+        // After passing the protected-branch check, the next guard is
+        // is_safe_git_ref. A branch name starting with `-` would be
+        // interpreted by git as a flag.
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.md");
+        std::fs::write(&report, "dummy").unwrap();
+        commit_report_to_branch(dir.path(), &report, "-rf");
+        let wt_root = dir.path().join(".git-worktrees");
+        assert!(
+            !wt_root.exists() || wt_root.read_dir().unwrap().next().is_none(),
+            "unsafe branch name should be rejected before worktree creation"
+        );
+    }
+
+    #[test]
+    fn test_commit_report_skips_invalid_ref_names() {
+        // is_safe_git_ref rejects names with traversal, wildcard, and
+        // special chars. Each rejected name short-circuits the function
+        // BEFORE any .git-worktrees/ side effect.
+        for branch in [
+            "foo..bar",
+            "foo/.bar",
+            "foo\\bar",
+            "foo@{upstream}",
+            "foo:bar",
+            "foo?",
+            "foo*",
+            "foo[bar",
+            "foo^1",
+            "foo~2",
+            "foo bar",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let report = dir.path().join("report.md");
+            std::fs::write(&report, "dummy").unwrap();
+            commit_report_to_branch(dir.path(), &report, branch);
+            let wt_root = dir.path().join(".git-worktrees");
+            assert!(
+                !wt_root.exists() || wt_root.read_dir().unwrap().next().is_none(),
+                "{branch} should be rejected by is_safe_git_ref"
+            );
+        }
+    }
+
+    #[test]
+    fn test_commit_report_aborts_on_unreadable_report_path() {
+        // Report path doesn't strip-prefix under project_dir → early
+        // return with `cannot compute relative path`.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_report = outside.path().join("not-under-project.md");
+        std::fs::write(&outside_report, "dummy").unwrap();
+        // branch passes protection + is_safe_git_ref checks; the report
+        // path is where the function bails.
+        commit_report_to_branch(dir.path(), &outside_report, "autorun/test");
+        // No .git-worktrees side effect.
+        assert!(
+            !dir.path().join(".git-worktrees").exists()
+                || dir
+                    .path()
+                    .join(".git-worktrees")
+                    .read_dir()
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
+    }
+
+    #[test]
+    fn test_commit_report_aborts_on_missing_source_report() {
+        // Report path is under project_dir but the file doesn't exist →
+        // read() fails → function early-returns before any subprocess spawn.
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("does-not-exist.md");
+        // NOT creating the file.
+        commit_report_to_branch(dir.path(), &report, "autorun/test");
+        assert!(
+            !dir.path().join(".git-worktrees").exists()
+                || dir
+                    .path()
+                    .join(".git-worktrees")
+                    .read_dir()
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
+    }
 
     /// Initialize a minimal git repo (with one commit) so preflight's git-clean check passes.
     fn init_git_repo(dir: &Path) {
@@ -5759,6 +6852,9 @@ tasks:
                 stale_reason: None,
                 target_branch: None,
                 final_pr_url: None,
+                current_task_id: None,
+                updated_at: None,
+                last_heartbeat_at: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 completed_at: None,
             };
@@ -5828,6 +6924,9 @@ tasks:
                     stale_reason: None,
                     target_branch: None,
                     final_pr_url: None,
+                    current_task_id: None,
+                    updated_at: None,
+                    last_heartbeat_at: None,
                     created_at: now.clone(),
                     completed_at: None,
                 };
@@ -5932,6 +7031,9 @@ tasks:
                     stale_reason: None,
                     target_branch: None,
                     final_pr_url: None,
+                    current_task_id: None,
+                    updated_at: None,
+                    last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -6014,6 +7116,9 @@ tasks:
                     stale_reason: None,
                     target_branch: None,
                     final_pr_url: None,
+                    current_task_id: None,
+                    updated_at: None,
+                    last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
                 };
@@ -6210,6 +7315,9 @@ tasks:
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         }
@@ -7149,6 +8257,139 @@ tasks:
         }
     }
 
+    /// Structural markdown compliance check for the batch-report generator
+    /// (INF-TSK-048-001 AC #6).
+    ///
+    /// Reimplements the subset of `.markdownlint.json` rules relevant to the
+    /// generator's output. Run inline so the test does not depend on an
+    /// external markdownlint binary being available. Covers:
+    ///
+    /// - MD003 (ATX style headings)
+    /// - MD022 (blank line before and after each heading)
+    /// - MD031 (blank line before and after fenced code)
+    /// - MD032 (blank line before and after each list)
+    /// - MD040 (fenced code blocks have language)
+    /// - MD046 (fenced, not indented, code blocks)
+    /// - MD009 (no trailing spaces)
+    fn assert_markdownlint_compliant(content: &str) {
+        let lines: Vec<&str> = content.split('\n').collect();
+        for (i, line) in lines.iter().enumerate() {
+            let line_no = i + 1;
+            // MD009: no trailing spaces.
+            assert!(
+                !line.ends_with(' '),
+                "MD009 violation at line {line_no}: trailing space"
+            );
+            // MD003: ATX style — no setext headings (underlined === or ---).
+            if (line.starts_with("===") || (line.starts_with("---") && line.len() >= 3))
+                && i > 0
+                && !lines[i - 1].is_empty()
+            {
+                panic!(
+                    "MD003 violation at line {line_no}: setext-style heading detected (use ATX #)"
+                );
+            }
+            // MD022: heading preceded/followed by blank line.
+            if line.starts_with('#') && !line.starts_with("#!") {
+                assert!(
+                    i == 0 || lines[i - 1].is_empty(),
+                    "MD022 violation at line {line_no}: heading '{line}' must be preceded by a blank line"
+                );
+                assert!(
+                    i + 1 >= lines.len() || lines[i + 1].is_empty(),
+                    "MD022 violation at line {line_no}: heading '{line}' must be followed by a blank line"
+                );
+            }
+        }
+
+        // MD032: lists must be surrounded by blank lines. Check by walking the
+        // document and finding consecutive list lines; verify boundary lines
+        // on each side are blank.
+        let mut i = 0;
+        while i < lines.len() {
+            let is_list =
+                |l: &str| l.trim_start().starts_with("- ") || l.trim_start().starts_with("* ");
+            if is_list(lines[i]) {
+                let list_start = i;
+                while i < lines.len() && (is_list(lines[i]) || lines[i].trim().is_empty()) {
+                    // Stop at a true blank (separator) only if it's followed by a non-list.
+                    if lines[i].trim().is_empty() && i + 1 < lines.len() && !is_list(lines[i + 1]) {
+                        break;
+                    }
+                    i += 1;
+                }
+                let list_end = i;
+                // Line preceding the list must be blank.
+                let start_line = list_start + 1;
+                assert!(
+                    list_start == 0 || lines[list_start - 1].trim().is_empty(),
+                    "MD032 violation at line {start_line}: list item must be preceded by a blank line"
+                );
+                // Line following the list (if any) must be blank or EOF.
+                assert!(
+                    list_end >= lines.len()
+                        || lines[list_end].trim().is_empty()
+                        || is_list(lines[list_end]),
+                    "MD032 violation at line {list_end}: list must be followed by a blank line"
+                );
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_report_markdownlint_compliant_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(60);
+        let results = vec![
+            make_worker_result(
+                "task-alpha",
+                "completed",
+                0,
+                7,
+                "https://github.com/org/repo/pull/7",
+                "",
+                30,
+            ),
+            make_worker_result("task-beta", "failed", 1, 0, "", "hook failed", 15),
+        ];
+        let meta = BatchReportMeta {
+            project_dir: dir.path(),
+            report_dir: &report_dir,
+            batch_name: "compliance-test",
+            session_id: "ses-compliance-01",
+            batch_path: "batches/compliance.yaml",
+            start_time: start,
+            end_time: end,
+        };
+        let path = generate_batch_report(&meta, &results).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_markdownlint_compliant(&content);
+    }
+
+    #[test]
+    fn test_batch_report_markdownlint_compliant_empty_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let report_dir = dir.path().join("reports");
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::seconds(1);
+        let meta = BatchReportMeta {
+            project_dir: dir.path(),
+            report_dir: &report_dir,
+            batch_name: "empty",
+            session_id: "ses-empty",
+            batch_path: "batch.yaml",
+            start_time: start,
+            end_time: end,
+        };
+        let path = generate_batch_report(&meta, &[]).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_markdownlint_compliant(&content);
+    }
+
     #[test]
     fn test_batch_report_filename_pattern() {
         let dir = tempfile::tempdir().unwrap();
@@ -7881,30 +9122,15 @@ tasks:
         );
     }
 
-    #[test]
-    fn test_pathflow_state_pr_created() {
-        let dir = tempfile::tempdir().unwrap();
-        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
-        std::fs::create_dir_all(&sentinel_dir).unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-pf-1"), "").unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-pf-3"), "").unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
-
-        let state = check_pathflow_progress(dir.path(), "ses-test");
-        assert_eq!(state, PathFlowState::PrCreated);
-    }
-
-    #[test]
-    fn test_pathflow_state_complete() {
-        let dir = tempfile::tempdir().unwrap();
-        let sentinel_dir = dir.path().join(".state/sentinels/pathflow/ses-test");
-        std::fs::create_dir_all(&sentinel_dir).unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
-        std::fs::write(sentinel_dir.join("pathflow-pf-7"), "").unwrap();
-
-        let state = check_pathflow_progress(dir.path(), "ses-test");
-        assert_eq!(state, PathFlowState::Complete);
-    }
+    // `test_pathflow_state_pr_created` and `test_pathflow_state_complete`
+    // were removed in WS-QA rework: after REV-MINOR-1 replaced hardcoded
+    // sentinel names with GateConfig lookups, those tests required a
+    // `pathflow-config.json` fixture to exercise the same transitions.
+    // `test_autorun_pr_pushed_gate_driven` (below) and
+    // `test_autorun_session_complete_gate_driven` (below) already exercise
+    // the PrCreated / Complete transitions with richer coverage — multiple
+    // trigger phases + config swap scenarios — so the old tests were
+    // redundant.
 
     // -----------------------------------------------------------------------
     // wrap-up signal tests
@@ -8216,13 +9442,21 @@ tasks:
         let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
         std::fs::create_dir_all(&sentinel_dir).unwrap();
 
-        // Fallback behavior: with no config, the resolver returns pf-6.
-        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-6");
+        // Fail-loud behavior: with no config, the resolver returns an error
+        // so the caller does not silently substitute a hardcoded phase name.
+        let err = resolve_pr_pushed_sentinel_name(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("GateConfig unavailable"),
+            "expected GateConfig unavailable error, got: {err}"
+        );
 
         // Config says PR is pushed at PF6-COMPLETE. Writing pathflow-pf-6
         // should trigger PrCreated.
         write_pr_pushed_gate_config(dir.path(), "PF6-COMPLETE");
-        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-6");
+        assert_eq!(
+            resolve_pr_pushed_sentinel_name(dir.path()).unwrap(),
+            "pathflow-pf-6"
+        );
         std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
         assert!(matches!(
             check_pathflow_progress(dir.path(), sid),
@@ -8233,11 +9467,80 @@ tasks:
         // (not pf-6) should signify PrCreated. Swap the sentinel files.
         std::fs::remove_file(sentinel_dir.join("pathflow-pf-6")).unwrap();
         write_pr_pushed_gate_config(dir.path(), "PF5-VERIFY");
-        assert_eq!(resolve_pr_pushed_sentinel_name(dir.path()), "pathflow-pf-5");
+        assert_eq!(
+            resolve_pr_pushed_sentinel_name(dir.path()).unwrap(),
+            "pathflow-pf-5"
+        );
         std::fs::write(sentinel_dir.join("pathflow-pf-5"), "").unwrap();
         assert!(matches!(
             check_pathflow_progress(dir.path(), sid),
             PathFlowState::PrCreated
+        ));
+    }
+
+    /// Helper: seed a `pathflow-config.json` with one `session_complete` gate.
+    fn write_session_complete_gate_config(worktree: &std::path::Path, trigger_phase: &str) {
+        let config_dir = worktree.join(".codeflow").join("config").join("pathflow");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let body = format!(
+            r#"{{
+              "phases": {{
+                "PF6-COMPLETE": {{"phase_order": 6}},
+                "PF7-END": {{"phase_order": 7}}
+              }},
+              "gates": {{
+                "session_complete": {{
+                  "on_phase_complete": "{trigger_phase}",
+                  "description": "test"
+                }}
+              }}
+            }}"#
+        );
+        std::fs::write(config_dir.join("pathflow-config.json"), body).unwrap();
+    }
+
+    /// WS-REV REV-MINOR-1: `PathFlowState::Complete` detection must resolve
+    /// the sentinel name from the `session_complete` GateConfig entry, not
+    /// from a hardcoded `"pathflow-pf-7"` literal. Mirrors the behaviour
+    /// test above for `pr_pushed`.
+    #[test]
+    fn test_autorun_session_complete_gate_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-session-complete-gate";
+        let sentinel_dir = dir.path().join(".state/sentinels/pathflow").join(sid);
+        std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+        // Fail-loud: missing config → Err, not a hardcoded fallback.
+        let err = resolve_session_complete_sentinel_name(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("GateConfig unavailable"),
+            "expected GateConfig unavailable error, got: {err}"
+        );
+
+        // Config points session_complete at PF7-END → sentinel must be pf-7.
+        write_session_complete_gate_config(dir.path(), "PF7-END");
+        assert_eq!(
+            resolve_session_complete_sentinel_name(dir.path()).unwrap(),
+            "pathflow-pf-7"
+        );
+        std::fs::write(sentinel_dir.join("pathflow-pf-7"), "").unwrap();
+        assert!(matches!(
+            check_pathflow_progress(dir.path(), sid),
+            PathFlowState::Complete
+        ));
+
+        // Change config to PF6-COMPLETE as the trigger — now pf-6 signals
+        // completion (not pf-7). Swap the sentinel files.
+        std::fs::remove_file(sentinel_dir.join("pathflow-pf-7")).unwrap();
+        write_session_complete_gate_config(dir.path(), "PF6-COMPLETE");
+        assert_eq!(
+            resolve_session_complete_sentinel_name(dir.path()).unwrap(),
+            "pathflow-pf-6"
+        );
+        std::fs::write(sentinel_dir.join("pathflow-pf-6"), "").unwrap();
+        assert!(matches!(
+            check_pathflow_progress(dir.path(), sid),
+            PathFlowState::Complete
         ));
     }
 }

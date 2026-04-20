@@ -162,6 +162,22 @@ pub trait DataStore: Send + Sync {
         session_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<AutorunWorker>, DbError>> + Send;
 
+    /// Bulk-fetch workers for MANY sessions in a single round trip.
+    ///
+    /// INF-TSK-048-001 AC #7: The status TUI previously issued N+1 queries
+    /// (one `list_autorun_workers` per batch session). For TUIs that display
+    /// dozens of batches, this blocks the render thread for seconds on a
+    /// cold DB. This method replaces the loop with one `WHERE session_id IN
+    /// $ids` query and lets callers group results client-side.
+    ///
+    /// Returns an empty vec when `session_ids` is empty. Order within a
+    /// session is stable (by `worker_num`) but sessions are not partitioned
+    /// in the result — callers must group by `session_id`.
+    fn list_autorun_workers_bulk(
+        &self,
+        session_ids: &[String],
+    ) -> impl std::future::Future<Output = Result<Vec<AutorunWorker>, DbError>> + Send;
+
     fn list_autorun_task_runs(
         &self,
         session_id: &str,
@@ -326,6 +342,9 @@ impl DataStore for NoopStore {
         Ok(vec![])
     }
     async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> {
+        Ok(vec![])
+    }
+    async fn list_autorun_workers_bulk(&self, _: &[String]) -> Result<Vec<AutorunWorker>, DbError> {
         Ok(vec![])
     }
     async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> {
@@ -742,6 +761,31 @@ pub mod mock {
                 .collect())
         }
 
+        async fn list_autorun_workers_bulk(
+            &self,
+            session_ids: &[String],
+        ) -> Result<Vec<AutorunWorker>, DbError> {
+            if session_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let wanted: std::collections::HashSet<&str> =
+                session_ids.iter().map(String::as_str).collect();
+            let lock = self.autorun_workers.lock().unwrap();
+            let mut results: Vec<AutorunWorker> = lock
+                .values()
+                .filter(|w| wanted.contains(w.session_id.as_str()))
+                .cloned()
+                .collect();
+            // Stable order: session_id asc, worker_num asc — matches Surreal
+            // ordering so tests can assert on exact vectors.
+            results.sort_by(|a, b| {
+                a.session_id
+                    .cmp(&b.session_id)
+                    .then(a.worker_num.cmp(&b.worker_num))
+            });
+            Ok(results)
+        }
+
         async fn list_autorun_task_runs(
             &self,
             session_id: &str,
@@ -893,6 +937,7 @@ pub mod mock {
         async fn update_autorun_task_run(&self, _: &str, _: AutorunTaskRunUpdate) -> Result<(), DbError> { Ok(()) }
         async fn list_autorun_sessions(&self, _: AutorunSessionFilter) -> Result<Vec<AutorunSession>, DbError> { Ok(vec![]) }
         async fn list_autorun_workers(&self, _: &str) -> Result<Vec<AutorunWorker>, DbError> { Ok(vec![]) }
+        async fn list_autorun_workers_bulk(&self, _: &[String]) -> Result<Vec<AutorunWorker>, DbError> { Ok(vec![]) }
         async fn list_autorun_task_runs(&self, _: &str) -> Result<Vec<AutorunTaskRun>, DbError> { Ok(vec![]) }
         async fn get_autorun_worker_by_task_id(&self, _: &str, _: &str) -> Result<Option<AutorunWorker>, DbError> { Ok(None) }
         async fn prune_interactive_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Ok(PruneResult::default()) }
@@ -1309,6 +1354,9 @@ pub mod mock {
                 stale_reason: None,
                 target_branch: None,
                 final_pr_url: None,
+                current_task_id: None,
+                updated_at: None,
+                last_heartbeat_at: None,
                 created_at: "2026-03-08T00:00:00Z".into(),
                 completed_at: None,
             })
@@ -1425,6 +1473,9 @@ pub mod mock {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: created_at.into(),
             completed_at: None,
         }
@@ -1711,6 +1762,61 @@ pub mod mock {
     }
 
     #[tokio::test]
+    async fn test_mock_list_autorun_workers_bulk_three_sessions_four_workers() {
+        // INF-TSK-048-001 AC #7 acceptance test: seed 3 sessions × 4 workers
+        // each, bulk-fetch all 12 workers in one call, assert count + correct
+        // session_id grouping. Mirrors the real SurrealDB bulk query path
+        // (`WHERE session_id INSIDE $ids`) via MockStore's equivalent filter.
+        let store = MockStore::new();
+        let sessions = ["ses-bulk-a", "ses-bulk-b", "ses-bulk-c"];
+        for sid in &sessions {
+            for n in 1..=4 {
+                let worker_id = format!("w-{sid}-{n}");
+                let task_id = format!("task-{sid}-{n}");
+                store
+                    .create_autorun_worker(&make_autorun_worker(&worker_id, sid, &task_id, n))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let ids: Vec<String> = sessions.iter().map(|s| (*s).to_string()).collect();
+        let bulk = store.list_autorun_workers_bulk(&ids).await.unwrap();
+
+        // All 12 workers in one call.
+        assert_eq!(bulk.len(), 12, "expected 12 workers, got {}", bulk.len());
+
+        // Every returned row carries one of the requested session_ids — no
+        // cross-session bleed.
+        for w in &bulk {
+            assert!(
+                sessions.contains(&w.session_id.as_str()),
+                "unexpected session_id {} in bulk result",
+                w.session_id
+            );
+        }
+
+        // Group-by parity: 4 workers per requested session_id.
+        for sid in &sessions {
+            let count = bulk.iter().filter(|w| w.session_id == *sid).count();
+            assert_eq!(
+                count, 4,
+                "expected 4 workers for session {sid}, got {count}"
+            );
+        }
+
+        // Empty session_ids → empty result (no round trip).
+        let empty = store.list_autorun_workers_bulk(&[]).await.unwrap();
+        assert!(empty.is_empty());
+
+        // Subset fetch: pass only 2 of 3 → 8 rows, none from the excluded session.
+        let subset: Vec<String> = vec!["ses-bulk-a".into(), "ses-bulk-c".into()];
+        let partial = store.list_autorun_workers_bulk(&subset).await.unwrap();
+        assert_eq!(partial.len(), 8);
+        assert!(partial.iter().all(|w| w.session_id != "ses-bulk-b"));
+    }
+
+    #[tokio::test]
     async fn test_mock_list_autorun_task_runs_sorted() {
         let store = MockStore::new();
         store
@@ -1825,6 +1931,9 @@ pub mod mock {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             completed_at: completed_at.map(String::from),
         }

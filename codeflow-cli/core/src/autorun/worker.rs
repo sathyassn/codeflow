@@ -30,6 +30,13 @@ fn worker_log(log_path: &std::path::Path, message: &str) {
 /// Default timeout for a single worker (120 minutes).
 pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(120 * 60);
 
+/// Cadence for writing `last_heartbeat_at` on the parent `autorun_session`.
+///
+/// The status TUI uses this value along with the heartbeat-TTL threshold to
+/// render the IDLE column and flag stalled workers. 10 s balances DB write
+/// pressure against liveness resolution in the TUI.
+pub const WORKER_HEARTBEAT_INTERVAL_SECS: u64 = 10;
+
 /// Executes commands via tmux. Enables testing without actual tmux sessions.
 pub trait TmuxRunner: Send + Sync {
     /// Create a new tmux session with the given name.
@@ -232,6 +239,12 @@ pub(crate) enum MergeOutcome {
     MergeConflict { error: String },
     /// Timed out waiting for queue position 0.
     QueueTimeout,
+    /// CI reported a required-check failure — PR left open, task blocked.
+    /// INF-TSK-048-001 AC #10.
+    CiFailed { failing_checks: Vec<String> },
+    /// CI polling hit the configured timeout without conclusive state.
+    /// PR left open, merge-queue slot released.
+    CiTimeout,
 }
 
 /// Execute a serialized merge: enqueue, wait for position 0, rebase, push, merge PR.
@@ -437,6 +450,54 @@ pub(crate) async fn serialized_merge(
             if attempt < 5 {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
+        }
+    }
+
+    // Step 6b: INF-TSK-048-001 AC #10 — wait for required CI checks to pass
+    // before invoking `gh pr merge`. Without this check, `gh pr merge` either
+    // rejects (branch protection) or merges with pending checks (no protection
+    // but an autorun PR still needs CI green). The resulting release path:
+    //   - AllGreen          → proceed to gh pr merge
+    //   - RequiredFailed(n) → leave PR open, release queue slot, block task
+    //   - Timeout           → leave PR open, release queue slot, block task
+    //   - NoRequiredChecks  → proceed (legacy repo or config opt-out)
+    let ci_cfg = crate::autorun::ci_wait::CiWaitConfig::load(wt_path).unwrap_or_default();
+    #[allow(clippy::cast_sign_loss)]
+    let pr_u64 = pr_number.max(0) as u64;
+    match crate::autorun::ci_wait::wait_for_ci_green(pr_u64, &ci_cfg).await {
+        Ok(
+            crate::autorun::ci_wait::CiOutcome::AllGreen
+            | crate::autorun::ci_wait::CiOutcome::NoRequiredChecks,
+        ) => {}
+        Ok(crate::autorun::ci_wait::CiOutcome::RequiredFailed(names)) => {
+            eprintln!(
+                "ci-wait: PR #{pr_number} has failing required checks: {}",
+                names.join(", ")
+            );
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::CiFailed {
+                failing_checks: names,
+            };
+        }
+        Ok(crate::autorun::ci_wait::CiOutcome::Timeout) => {
+            eprintln!(
+                "ci-wait: PR #{pr_number} timed out waiting for CI green \
+                 ({} min); leaving PR open",
+                ci_cfg.timeout_minutes
+            );
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::CiTimeout;
+        }
+        Err(e) => {
+            eprintln!(
+                "ci-wait: CI status polling failed for PR #{pr_number}: {e} \
+                 — leaving PR open"
+            );
+            let _ =
+                crate::coordination::merge_queue::locked_remove_by_session(state_path, worker_sid);
+            return MergeOutcome::CiTimeout;
         }
     }
 
@@ -893,6 +954,71 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             eprintln!("warning: failed to create autorun_task_run record: {e}");
         }
 
+        // INF-TSK-048-001 AC #8: On task dispatch, record `current_task_id` on the
+        // parent autorun_session so the TUI TASK column can surface the active task.
+        // Also bump `updated_at` as part of the dispatch state change.
+        let dispatch_now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = self
+            .store
+            .update_autorun_session(
+                &cfg.session_id,
+                crate::models::AutorunSessionUpdate {
+                    current_task_id: Some(Some(cfg.task_id.clone())),
+                    updated_at: Some(dispatch_now.clone()),
+                    last_heartbeat_at: Some(dispatch_now.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            eprintln!("warning: failed to record current_task_id at dispatch: {e}");
+        }
+
+        // INF-TSK-048-001 AC #8: Spawn a 10 s cadence heartbeat updater on the parent
+        // session. Uses a separate connection obtained via the existing store clone
+        // mechanism. We shut it down via an mpsc::channel so the task exits cleanly
+        // on all worker-exit branches.
+        let (heartbeat_stop_tx, heartbeat_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let heartbeat_handle = {
+            let session_id_for_hb = cfg.session_id.clone();
+            let project_dir_for_hb = self.project_dir.clone();
+            tokio::spawn(async move {
+                let interval = std::time::Duration::from_secs(WORKER_HEARTBEAT_INTERVAL_SECS);
+                let mut ticker = tokio::time::interval(interval);
+                // First tick is immediate; we already wrote one at dispatch above,
+                // so consume it to avoid double-writing within a single millisecond.
+                ticker.tick().await;
+                tokio::pin!(heartbeat_stop_rx);
+                let db_dir = project_dir_for_hb.join(".state/db");
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            // Open a fresh store handle per tick for cross-process
+                            // visibility — a long-lived handle would miss writes
+                            // from other workers on the same session record.
+                            use crate::store::DataStore as _;
+                            let Ok(store) = crate::store::SurrealStore::open(&db_dir).await else {
+                                continue;
+                            };
+                            let now = chrono::Utc::now().to_rfc3339();
+                            let _ = store
+                                .update_autorun_session(
+                                    &session_id_for_hb,
+                                    crate::models::AutorunSessionUpdate {
+                                        last_heartbeat_at: Some(now),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await;
+                        }
+                        _ = &mut heartbeat_stop_rx => {
+                            break;
+                        }
+                    }
+                }
+            })
+        };
+
         // Emit worker_started event.
         Self::emit_autorun_event(
             &self.project_dir,
@@ -1085,10 +1211,44 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                                     invoke_result.pr_number
                                 );
                             }
+                            MergeOutcome::CiFailed { ref failing_checks } => {
+                                eprintln!(
+                                    "serialized merge: PR #{} blocked — failing required CI checks: {} (PR left open, task blocked)",
+                                    invoke_result.pr_number,
+                                    failing_checks.join(", ")
+                                );
+                            }
+                            MergeOutcome::CiTimeout => {
+                                eprintln!(
+                                    "serialized merge: PR #{} blocked — CI did not reach green within configured timeout (PR left open, task blocked)",
+                                    invoke_result.pr_number
+                                );
+                            }
                         }
                     } // end queue_enforcing
                 }
             }
+        }
+
+        // INF-TSK-048-001 AC #8: Stop the heartbeat writer and clear current_task_id.
+        // Order matters: stop the ticker first so it does not race the clear write.
+        let _ = heartbeat_stop_tx.send(());
+        let _ = heartbeat_handle.await;
+        let finish_now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = self
+            .store
+            .update_autorun_session(
+                &cfg.session_id,
+                crate::models::AutorunSessionUpdate {
+                    // Inner None = write SurrealDB null (clear pointer).
+                    current_task_id: Some(None),
+                    updated_at: Some(finish_now),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            eprintln!("warning: failed to clear current_task_id at finish: {e}");
         }
 
         // Always cleanup: remove heartbeat, release claims, kill tmux, remove worktree.
@@ -3591,5 +3751,144 @@ Read and implement.
         let atr = runs.get("atr-ses-err-test-task-err").unwrap();
         assert_eq!(atr.status, crate::types::AutorunTaskRunStatus::Failed);
         assert!(atr.completed_at.is_some());
+    }
+
+    // --- WS-QA retry 2 coverage boost: MergeOutcome + constants ---
+
+    #[test]
+    fn test_merge_outcome_variants_equality() {
+        // Exhaustive equality + Debug formatting for all 5 MergeOutcome
+        // variants. The two new variants introduced by INF-TSK-048-001
+        // AC #10 (CiFailed + CiTimeout) must be equatable, distinct from
+        // each other, and distinct from the pre-existing variants.
+        assert_eq!(MergeOutcome::Merged, MergeOutcome::Merged);
+        assert_eq!(MergeOutcome::QueueTimeout, MergeOutcome::QueueTimeout);
+        assert_eq!(MergeOutcome::CiTimeout, MergeOutcome::CiTimeout);
+
+        let a = MergeOutcome::MergeConflict {
+            error: "rebase rejected".into(),
+        };
+        let b = MergeOutcome::MergeConflict {
+            error: "rebase rejected".into(),
+        };
+        assert_eq!(a, b);
+        let c = MergeOutcome::MergeConflict {
+            error: "different".into(),
+        };
+        assert_ne!(a, c);
+
+        let fail_a = MergeOutcome::CiFailed {
+            failing_checks: vec!["ci".to_string(), "lint".to_string()],
+        };
+        let fail_b = MergeOutcome::CiFailed {
+            failing_checks: vec!["ci".to_string(), "lint".to_string()],
+        };
+        assert_eq!(fail_a, fail_b);
+        let fail_c = MergeOutcome::CiFailed {
+            failing_checks: vec!["ci".to_string()],
+        };
+        assert_ne!(fail_a, fail_c);
+
+        // Cross-variant inequality.
+        assert_ne!(MergeOutcome::Merged, MergeOutcome::CiTimeout);
+        assert_ne!(MergeOutcome::CiTimeout, MergeOutcome::QueueTimeout);
+        assert_ne!(
+            MergeOutcome::CiFailed {
+                failing_checks: vec![]
+            },
+            MergeOutcome::CiTimeout
+        );
+    }
+
+    #[test]
+    fn test_merge_outcome_debug_formatting() {
+        // Each variant produces a distinct Debug string — log output must
+        // unambiguously identify which outcome occurred.
+        let merged = format!("{:?}", MergeOutcome::Merged);
+        let qt = format!("{:?}", MergeOutcome::QueueTimeout);
+        let ct = format!("{:?}", MergeOutcome::CiTimeout);
+        let mc = format!("{:?}", MergeOutcome::MergeConflict { error: "x".into() });
+        let cf = format!(
+            "{:?}",
+            MergeOutcome::CiFailed {
+                failing_checks: vec!["ci".into()]
+            }
+        );
+        let all = [&merged, &qt, &ct, &mc, &cf];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "Debug output collision between variants");
+                }
+            }
+        }
+        assert!(merged.contains("Merged"));
+        assert!(qt.contains("QueueTimeout"));
+        assert!(ct.contains("CiTimeout"));
+        assert!(mc.contains("MergeConflict"));
+        assert!(cf.contains("CiFailed"));
+    }
+
+    #[test]
+    fn test_worker_heartbeat_interval_constant() {
+        // INF-TSK-048-001 AC #8 — heartbeat cadence must be 10 s to balance
+        // DB write pressure against the TUI's ability to flag stalled
+        // workers. If this test fails, the change was accidental — update
+        // the TUI's HEARTBEAT_TTL_SECS (120 s in tui/data.rs) to match.
+        assert_eq!(WORKER_HEARTBEAT_INTERVAL_SECS, 10);
+    }
+
+    #[test]
+    fn test_default_worker_timeout_is_two_hours() {
+        // Documented default is 120 minutes. A regression would silently
+        // truncate long-running autorun tasks in production.
+        assert_eq!(
+            DEFAULT_WORKER_TIMEOUT,
+            std::time::Duration::from_secs(120 * 60)
+        );
+    }
+
+    #[test]
+    fn test_merge_outcome_exhaustive_match_all_arms() {
+        // Exercise every match arm for MergeOutcome — covers the enum
+        // discriminant + string-field / vec-field handling that the real
+        // serialized_merge produces but which async tests stop short of.
+        let outcomes = [
+            MergeOutcome::Merged,
+            MergeOutcome::QueueTimeout,
+            MergeOutcome::CiTimeout,
+            MergeOutcome::MergeConflict {
+                error: "boom".into(),
+            },
+            MergeOutcome::CiFailed {
+                failing_checks: vec!["ci".into(), "lint".into()],
+            },
+        ];
+        for outcome in &outcomes {
+            let label = match outcome {
+                MergeOutcome::Merged => "merged",
+                MergeOutcome::QueueTimeout => "queue_timeout",
+                MergeOutcome::CiTimeout => "ci_timeout",
+                MergeOutcome::MergeConflict { error } => {
+                    assert_eq!(error, "boom");
+                    "merge_conflict"
+                }
+                MergeOutcome::CiFailed { failing_checks } => {
+                    assert_eq!(failing_checks.len(), 2);
+                    assert_eq!(failing_checks[0], "ci");
+                    "ci_failed"
+                }
+            };
+            assert!(
+                [
+                    "merged",
+                    "queue_timeout",
+                    "ci_timeout",
+                    "merge_conflict",
+                    "ci_failed"
+                ]
+                .contains(&label)
+            );
+        }
     }
 }

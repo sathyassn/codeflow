@@ -171,6 +171,18 @@ DEFINE FIELD OVERWRITE completed_tasks     ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE failed_tasks        ON TABLE autorun_session TYPE int;
 DEFINE FIELD OVERWRITE pid                 ON TABLE autorun_session TYPE option<int>;
 DEFINE FIELD OVERWRITE skipped_tasks       ON TABLE autorun_session TYPE int;
+-- WS-REV REV-NOTE-1: `tmux_session` and `stale_reason` were always present
+-- on the Rust `AutorunSession` struct but missing from the SCHEMAFULL
+-- declaration, so writes through `merge_fields!` on a SCHEMAFULL table were
+-- silently dropped. Declared here for parity with the model.
+DEFINE FIELD OVERWRITE tmux_session        ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE stale_reason        ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE target_branch      ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE final_pr_url       ON TABLE autorun_session TYPE option<string>;
+-- INF-TSK-048-001 AC #8: TUI status fields (current task, last update, worker heartbeat).
+DEFINE FIELD OVERWRITE current_task_id    ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE updated_at         ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE last_heartbeat_at  ON TABLE autorun_session TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_session TYPE string;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_session TYPE option<string>;
 

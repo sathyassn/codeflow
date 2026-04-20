@@ -32,6 +32,24 @@ pub struct AutorunSession {
     /// URL of the final PR (integration branch -> main) if created.
     #[serde(default)]
     pub final_pr_url: Option<String>,
+    /// Task ID currently being executed by a worker in this session.
+    ///
+    /// Written on task dispatch, cleared (None) on task finish. Used by the
+    /// status TUI to populate the TASK column.
+    #[serde(default)]
+    pub current_task_id: Option<String>,
+    /// Last time any field on this record was updated (RFC 3339).
+    ///
+    /// Updated on task state changes and orchestrator heartbeat. Used by the
+    /// TUI to compute ELAPSED for terminal rows when `completed_at` is absent.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// Last worker heartbeat timestamp (RFC 3339).
+    ///
+    /// Written every `worker_heartbeat_interval_secs` by the worker main loop.
+    /// Used by the TUI to render the IDLE column and flag stale workers.
+    #[serde(default)]
+    pub last_heartbeat_at: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
 }
@@ -124,6 +142,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -148,6 +169,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
@@ -172,12 +196,90 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: Some("2026-03-21T01:00:00Z".into()),
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"pid\":999"));
         assert!(json.contains("\"skipped_tasks\":1"));
+    }
+
+    #[test]
+    fn test_autorun_session_tui_fields_serialization() {
+        // Verify that current_task_id, updated_at, and last_heartbeat_at
+        // serialize correctly. Note: `id` uses `serialize_record_id` so full
+        // round-trip needs the SurrealDB deserializer; we only assert on the
+        // serialized form here (the DB side handles deserialization).
+        let session = AutorunSession {
+            id: "ar-tui".into(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("tui-test".into()),
+            status: AutorunSessionStatus::Running,
+            max_session_workers: 1,
+            total_tasks: 3,
+            completed_tasks: 1,
+            failed_tasks: 0,
+            pid: Some(42),
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: Some("INF-TSK-001-001".into()),
+            updated_at: Some("2026-04-20T10:00:00Z".into()),
+            last_heartbeat_at: Some("2026-04-20T10:00:05Z".into()),
+            created_at: "2026-04-20T09:00:00Z".into(),
+            completed_at: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(
+            json.contains("\"current_task_id\":\"INF-TSK-001-001\""),
+            "expected current_task_id in JSON, got: {json}"
+        );
+        assert!(
+            json.contains("\"updated_at\":\"2026-04-20T10:00:00Z\""),
+            "expected updated_at in JSON, got: {json}"
+        );
+        assert!(
+            json.contains("\"last_heartbeat_at\":\"2026-04-20T10:00:05Z\""),
+            "expected last_heartbeat_at in JSON, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_autorun_session_tui_fields_none_serialization() {
+        // When the new fields are None, they serialize as JSON null (not
+        // absent) — #[serde(default)] controls deserialization, not the
+        // serialized representation. This confirms the DB write path emits
+        // explicit nulls so legacy records get populated on update.
+        let session = AutorunSession {
+            id: "ar-none".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Pending,
+            max_session_workers: 1,
+            total_tasks: 0,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            completed_at: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"current_task_id\":null"));
+        assert!(json.contains("\"updated_at\":null"));
+        assert!(json.contains("\"last_heartbeat_at\":null"));
     }
 
     #[test]
@@ -198,6 +300,9 @@ mod tests {
             stale_reason: None,
             target_branch: None,
             final_pr_url: None,
+            current_task_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
         };
