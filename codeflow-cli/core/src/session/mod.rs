@@ -419,6 +419,41 @@ mod tests {
         assert!(result.is_err(), "should not read env var, only env file");
     }
 
+    /// INF-TSK-024-028 invariant: the env file is the SINGLE source of truth.
+    /// The production resolver does NOT consult `CODEFLOW_SESSION_ID` at all
+    /// when an env file exists — the env var is not a fallback, not a tiebreaker,
+    /// not consulted, period. Even if the env var is set to a different value,
+    /// the env file's SID is returned. This nails down the "no two session IDs"
+    /// mandate from the user directive.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_current_session_id_ignores_env_var_when_file_present() {
+        // SAFETY: serialized via #[serial(env_vars)].
+        unsafe {
+            std::env::set_var("CODEFLOW_SESSION_ID", "ses-01jq7envvarwouldbewrong0");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let file_sid = SessionId::new_unchecked("ses-01jq7envfilewinscorrectk");
+        write_env_file(&runtime_dir, &file_sid, "codeflow").unwrap();
+
+        // Capture the result, then clean up env state BEFORE asserting so a
+        // panic does not leak the env var to subsequent serialized tests.
+        // (Project convention: see testing/runner/mod.rs:641.)
+        let result = current_session_id_inner(dir.path(), None);
+        // SAFETY: serialized via #[serial(env_vars)].
+        unsafe {
+            std::env::remove_var("CODEFLOW_SESSION_ID");
+        }
+
+        let sid = result.expect("current_session_id_inner must return Ok");
+        assert_eq!(
+            sid, file_sid,
+            "env file is the single source; CODEFLOW_SESSION_ID env var must be ignored when the env file exists"
+        );
+    }
+
     #[test]
     fn test_is_valid_session_id_with_crockford_excluded_chars() {
         // Crockford Base32 excludes i, l, o, u — these should fail validation

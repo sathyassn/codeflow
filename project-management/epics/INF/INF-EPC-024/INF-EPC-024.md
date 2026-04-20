@@ -110,7 +110,7 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 25 | INF-TSK-024-025 | INF-EPC-024 Template Improvements and Epic Refinement (planning task) | complete | M | normal |
 | 26 | INF-TSK-024-026 | Switch autorun orchestrator to read task metadata from DB | todo | M | normal |
 | 27 | INF-TSK-024-027 | Resolve batch dependencies from DB tasks table | todo | S | normal |
-| 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | todo | M | high |
+| 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | complete | M | high |
 | 29 | INF-TSK-024-029 | Update Claude artifacts for DB-authoritative autorun data flow | todo | S | normal |
 | 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | complete | M | normal |
 | 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | complete | M | normal |
