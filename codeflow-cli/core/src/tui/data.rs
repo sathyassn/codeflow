@@ -27,7 +27,14 @@ pub struct BatchView {
     pub failed_tasks: i32,
     pub skipped_tasks: i32,
     pub running_count: usize,
+    /// Status-driven elapsed — live for Running/Aborting, frozen for terminal
+    /// (`completed_at - created_at`, fallback to `updated_at`) per
+    /// INF-TSK-049-001 AC #2.
     pub elapsed_secs: i64,
+    /// True when `elapsed_secs` has frozen — the header ETA and "% complete"
+    /// projections are meaningless post-termination and MUST be suppressed.
+    /// INF-TSK-049-001 AC #2.
+    pub elapsed_frozen: bool,
     pub target_branch: Option<String>,
     pub tasks: Vec<TaskView>,
 }
@@ -114,10 +121,14 @@ pub struct BatchListEntry {
     /// frozen `completed_at|updated_at - created_at` for terminal statuses.
     /// INF-TSK-048-001 AC #9.
     pub elapsed_secs: i64,
-    /// Task currently being executed by any worker on this session. Blank for
-    /// terminal sessions (cleared by the worker on task finish + by the
-    /// orchestrator on batch end).
+    /// Task currently being executed by any worker on this session.
+    /// INF-TSK-049-001 AC #15: PRESERVED on task finish (previously cleared)
+    /// so terminal rows retain the last-dispatched task for visibility.
     pub current_task_id: Option<String>,
+    /// Human-readable task format id (e.g. `INF-TSK-049-001`) paired with
+    /// `current_task_id`. Preferred for display. Same lifecycle — written
+    /// on dispatch, preserved on finish. INF-TSK-049-001 AC #15.
+    pub current_task_format_id: Option<String>,
     /// Seconds since the last worker heartbeat. `None` for terminal statuses
     /// or sessions that never wrote a heartbeat. INF-TSK-048-001 AC #9.
     pub idle_secs: Option<i64>,
@@ -224,39 +235,22 @@ fn build_list_entry(s: &AutorunSession, running_count: usize) -> BatchListEntry 
         running_count,
         elapsed_secs: status_driven_elapsed_secs(s, chrono::Utc::now()),
         current_task_id: s.current_task_id.clone(),
+        current_task_format_id: s.current_task_format_id.clone(),
         idle_secs: compute_idle_secs(s, chrono::Utc::now()),
     }
 }
 
 /// Compute the ELAPSED value for the BatchList row.
 ///
-/// INF-TSK-048-001 AC #9: the value MUST freeze for terminal sessions so the
-/// elapsed column does not tick up after a run has finished. The rules:
-///
-/// - Running / Aborting → `now - created_at` (live).
-/// - Completed / Failed / Cancelled / Timeout (terminal) → `completed_at -
-///   created_at` when `completed_at` is set, otherwise `updated_at -
-///   created_at`. Falls back to 0 on missing timestamps (not `now()`).
-/// - Pending → 0 (session is enqueued but not started).
+/// INF-TSK-048-001 AC #9 / INF-TSK-049-001 AC #1-2: the value MUST freeze for
+/// terminal sessions so the elapsed column does not tick up after a run has
+/// finished. Thin wrapper around [`crate::tui::duration::freeze_on_terminal_secs`];
+/// the live-vs-terminal rule lives in one place now (INF-TSK-049-001 AC #7).
 ///
 /// Pure function — takes `now` explicitly so tests can pin the clock.
 #[must_use]
 pub fn status_driven_elapsed_secs(s: &AutorunSession, now: chrono::DateTime<chrono::Utc>) -> i64 {
-    use AutorunSessionStatus::{Aborting, Pending, Running};
-    match s.status {
-        Running | Aborting => compute_elapsed_from(&s.created_at, now),
-        Pending => 0,
-        // Terminal: never use `now()`.
-        _ => {
-            if let Some(ref completed) = s.completed_at {
-                compute_elapsed_between(&s.created_at, completed)
-            } else if let Some(ref updated) = s.updated_at {
-                compute_elapsed_between(&s.created_at, updated)
-            } else {
-                0
-            }
-        }
-    }
+    crate::tui::duration::freeze_on_terminal_secs(s, now, false)
 }
 
 /// Compute seconds since the worker's last heartbeat, relative to `now`.
@@ -281,13 +275,6 @@ pub fn compute_idle_secs(s: &AutorunSession, now: chrono::DateTime<chrono::Utc>)
 #[must_use]
 pub fn is_idle_stale(idle_secs: Option<i64>) -> bool {
     matches!(idle_secs, Some(secs) if secs > HEARTBEAT_TTL_SECS)
-}
-
-/// Parse `started_at` as RFC 3339 and return `max(0, now - started_at)`.
-fn compute_elapsed_from(started_at: &str, now: chrono::DateTime<chrono::Utc>) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(started_at)
-        .map(|start| now.signed_duration_since(start).num_seconds().max(0))
-        .unwrap_or(0)
 }
 
 /// Sort: running/aborting first, then by session_id (proxy for created_at
@@ -411,7 +398,12 @@ async fn build_batch_view<S: DataStore>(
         .filter(|w| w.status == crate::types::AutorunWorkerStatus::Running)
         .count();
 
-    let elapsed_secs = compute_elapsed_secs(&session.created_at);
+    // INF-TSK-049-001 AC #2: freeze the detail-header ELAPSED for terminal
+    // batches so the value matches the list row. Previously used
+    // `compute_elapsed_secs(&session.created_at)` which ticks forever.
+    let elapsed_secs = status_driven_elapsed_secs(session, chrono::Utc::now());
+    let elapsed_frozen =
+        session.status.is_terminal() || matches!(session.status, AutorunSessionStatus::Pending);
 
     let mut tasks = Vec::with_capacity(task_runs.len());
     for run in &task_runs {
@@ -475,6 +467,7 @@ async fn build_batch_view<S: DataStore>(
         skipped_tasks: session.skipped_tasks,
         running_count,
         elapsed_secs,
+        elapsed_frozen,
         target_branch: session.target_branch.clone(),
         tasks,
     })
@@ -508,9 +501,17 @@ pub async fn fetch_session_views_with_keep_last(
     project_dir: &Path,
     keep_last: usize,
 ) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
+    // INF-TSK-049-001 AC #9: filter out autorun worker sessions. Workers
+    // register as `interactive_session` rows with `source_cli='codeflow'`,
+    // so without this filter the interactive dashboard surfaces them as
+    // noise (and counts them as stale when they terminate).
     let sessions: Vec<crate::models::InteractiveSession> = store
         .db()
-        .query("SELECT * FROM interactive_session ORDER BY created_at DESC")
+        .query(
+            "SELECT * FROM interactive_session \
+             WHERE session_kind = 'interactive' OR session_kind = NONE \
+             ORDER BY created_at DESC",
+        )
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
         .take(0)
@@ -518,11 +519,13 @@ pub async fn fetch_session_views_with_keep_last(
 
     let mut views = Vec::with_capacity(sessions.len());
     let mut summary = SessionSummary::default();
-    // Collect sessions whose DB status says `active` but whose PID is dead,
-    // so the promotion UPDATE can fire after the view is computed rather
-    // than blocking the render path. Per INF-TSK-047-001 AC #6 the inline
-    // UPDATE was a known stall source under DB contention.
+    // Collect sessions whose DB status says `active` but whose PID is dead;
+    // INF-TSK-049-001 AC #12 requires us to UPDATE them synchronously
+    // before returning so the very first render uses the frozen duration
+    // instead of producing the "00:01 blip" from the async write landing
+    // later.
     let mut stale_promotions: Vec<String> = Vec::new();
+    let now_rfc = chrono::Utc::now().to_rfc3339();
 
     for s in &sessions {
         // PID liveness override: detect dead sessions still marked "active".
@@ -581,19 +584,26 @@ pub async fn fetch_session_views_with_keep_last(
                 _ => None,
             });
 
-        // Duration freeze: use completed_at or updated_at for non-active sessions.
-        // Use -1 as sentinel for "unknown duration" when a stale session has
-        // no completed_at (renders as "--" in both TUI and text mode).
-        let elapsed = if effective_status == "active" {
-            compute_elapsed_secs(&s.created_at)
-        } else if let Some(ref completed) = s.completed_at {
-            compute_elapsed_between(&s.created_at, completed)
-        } else if let Some(ref updated) = s.updated_at {
-            compute_elapsed_between(&s.created_at, updated)
-        } else {
-            // Stale/complete session with no timestamp endpoint -- unknown duration.
-            -1
-        };
+        // Duration freeze: live for active, `completed_at - created_at` (or
+        // `updated_at - created_at` fallback) for terminal. INF-TSK-049-001
+        // AC #4 / AC #7: identical rule to the autorun path — shared helper
+        // in `tui::duration`. For sessions we just promoted from active to
+        // stale this cycle, synthesize `completed_at` from `now_rfc` so the
+        // returned view uses the same frozen value the synchronous DB write
+        // is about to persist (AC #12: no "00:01 blip").
+        let mut effective_session = s.clone();
+        if effective_status == "stale" && s.status == crate::types::InteractiveSessionStatus::Active
+        {
+            effective_session.status = crate::types::InteractiveSessionStatus::Stale;
+            if effective_session.completed_at.is_none() {
+                effective_session.completed_at = Some(now_rfc.clone());
+            }
+        }
+        let elapsed = crate::tui::duration::freeze_on_terminal_secs(
+            &effective_session,
+            chrono::Utc::now(),
+            true,
+        );
 
         // Resolve task_id + task_format_id: prefer DB values, fall back to
         // active-task.json on disk. Both reads are idempotent and safe to miss.
@@ -658,31 +668,32 @@ pub async fn fetch_session_views_with_keep_last(
     }
     summary.hidden_count = terminal_seen.saturating_sub(keep_last);
 
-    // Promote dead-PID-active sessions to stale AFTER the view is computed.
-    // Use tokio::spawn so the write happens off the render thread — under
-    // DB contention this previously stalled the TUI for multiple seconds
-    // (INF-TSK-047-001 AC #6). If no tokio runtime is available (sync
-    // caller, e.g. text-mode CLI), fall back to the inline await.
+    // INF-TSK-049-001 AC #12: promote dead-PID-active sessions to stale
+    // SYNCHRONOUSLY so the first render after the promotion renders the
+    // frozen duration. The earlier async spawn produced a "00:01 blip" —
+    // the first render would see `effective_status='stale'` but
+    // `completed_at=None`, falling back to `updated_at` or the sentinel,
+    // and then the async write would land on a later cycle causing a
+    // visible duration jump. The synthetic `completed_at` assignment in
+    // the view loop above uses the same `now_rfc` we persist here so the
+    // two values match.
+    //
+    // Cost: ~5 ms per promoted session on the first detection; after
+    // promotion the row is no longer in `stale_promotions` so the cost
+    // disappears. Acceptable — these rows are rare (session crash only).
     if !stale_promotions.is_empty() {
-        let store_clone = store.clone();
-        let ids = stale_promotions;
-        let promote = async move {
-            for sid in ids {
-                let _ = store_clone
-                    .db()
-                    .query(
-                        "UPDATE interactive_session SET status = 'stale', \
-                         completed_at = time::now(), updated_at = time::now() \
-                         WHERE session_id = $sid AND status = 'active'",
-                    )
-                    .bind(("sid", sid))
-                    .await;
-            }
-        };
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(promote);
-        } else {
-            promote.await;
+        let persist_now = now_rfc.clone();
+        for sid in stale_promotions {
+            let _ = store
+                .db()
+                .query(
+                    "UPDATE interactive_session SET status = 'stale', \
+                     completed_at = $now, updated_at = $now \
+                     WHERE session_id = $sid AND status = 'active'",
+                )
+                .bind(("now", persist_now.clone()))
+                .bind(("sid", sid))
+                .await;
         }
     }
 
@@ -844,18 +855,6 @@ fn compute_elapsed_secs(started_at: &str) -> i64 {
                 .max(0)
         })
         .unwrap_or(0)
-}
-
-/// Compute duration between two RFC 3339 timestamps.
-///
-/// Returns 0 if either timestamp fails to parse.
-fn compute_elapsed_between(start: &str, end: &str) -> i64 {
-    let start_dt = chrono::DateTime::parse_from_rfc3339(start);
-    let end_dt = chrono::DateTime::parse_from_rfc3339(end);
-    match (start_dt, end_dt) {
-        (Ok(s), Ok(e)) => e.signed_duration_since(s).num_seconds().max(0),
-        _ => 0,
-    }
 }
 
 fn compute_display_status(
@@ -1097,6 +1096,7 @@ mod tests {
             skipped_tasks: 0,
             running_count: 2,
             elapsed_secs: 120,
+            elapsed_frozen: false,
             target_branch: Some("main".to_string()),
             tasks: vec![TaskView {
                 task_id: "task-a".to_string(),
@@ -1209,6 +1209,7 @@ mod tests {
             running_count: 2,
             elapsed_secs: 300,
             current_task_id: None,
+            current_task_format_id: None,
             idle_secs: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -1233,6 +1234,7 @@ mod tests {
             running_count: 0,
             elapsed_secs: 60,
             current_task_id: None,
+            current_task_format_id: None,
             idle_secs: None,
         };
         assert_eq!(entry.batch_name.len(), 20);
@@ -1268,6 +1270,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
         };
@@ -1289,6 +1292,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
         };
@@ -1421,6 +1425,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
+            session_kind: "interactive".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: None,
             completed_at: None,
@@ -1454,6 +1459,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
+            session_kind: "interactive".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: None,
             completed_at: None,
@@ -1481,6 +1487,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: true,
+            session_kind: "interactive".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: None,
             completed_at: None,
@@ -1534,6 +1541,7 @@ mod tests {
             target_branch: Some("main".to_string()),
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -2348,6 +2356,7 @@ mod tests {
             team_name: Some("team-1".to_string()),
             source_cli: "codeflow".to_string(),
             managed: true,
+            session_kind: "interactive".to_string(),
             created_at: "2026-04-13T00:00:00Z".to_string(),
             updated_at: None,
             completed_at: None,
@@ -2374,6 +2383,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".to_string(),
             managed: false,
+            session_kind: "interactive".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: None,
             completed_at: None,
@@ -2498,5 +2508,291 @@ mod tests {
         };
         // now < fetched_at (clock skew) → age is clamped to 0.
         assert_eq!(s.age_secs(std::time::SystemTime::now()), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #2 — build_batch_view freeze + elapsed_frozen flag.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_build_batch_view_freezes_on_completed_batch() {
+        let store = crate::store::mock::MockStore::new();
+        let mut session = make_mock_session("ar-frozen", AutorunSessionStatus::Completed);
+        let now = chrono::Utc::now();
+        session.created_at = (now - chrono::Duration::seconds(1000)).to_rfc3339();
+        session.completed_at = Some((now - chrono::Duration::seconds(500)).to_rfc3339());
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ar-frozen".into(), session);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ar-frozen"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // elapsed = 1000 - 500 = 500 (frozen), NOT ~1000 (live now()).
+        assert!(
+            view.elapsed_secs >= 490 && view.elapsed_secs <= 510,
+            "frozen elapsed should be ~500 but was {}",
+            view.elapsed_secs
+        );
+        assert!(
+            view.elapsed_frozen,
+            "completed batch must set elapsed_frozen=true"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_batch_view_running_ticks_live() {
+        let store = crate::store::mock::MockStore::new();
+        let mut session = make_mock_session("ar-live", AutorunSessionStatus::Running);
+        session.created_at = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ar-live".into(), session);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ar-live"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Live elapsed should be ~30s (not frozen).
+        assert!(
+            view.elapsed_secs >= 28 && view.elapsed_secs <= 40,
+            "live elapsed should be ~30 but was {}",
+            view.elapsed_secs
+        );
+        assert!(
+            !view.elapsed_frozen,
+            "running batch must set elapsed_frozen=false"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #9 — session_kind filter in fetch_session_views.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_fetch_session_views_excludes_autorun_session_kind() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let pid = i64::from(std::process::id());
+        // Real interactive row.
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-real', pid = $pid, status = 'active', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $now RETURN NONE",
+            )
+            .bind(("pid", pid))
+            .bind(("now", now.clone()))
+            .await;
+        // Autorun worker row masquerading as interactive.
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-autorun-worker', pid = $pid, status = 'active', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'autorun', \
+                 created_at = $now RETURN NONE",
+            )
+            .bind(("pid", pid))
+            .bind(("now", now))
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        // Only the 'interactive' row should surface. The 'autorun' row is
+        // filtered out at the query level.
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].session_id, "ses-real");
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #12 — synchronous stale promotion sets completed_at.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_stale_promotion_writes_completed_at_synchronously() {
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        // PID 2 is reserved and never alive on macOS/Linux → promotes to stale.
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-dead-pid', pid = 2, status = 'active', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $now RETURN NONE",
+            )
+            .bind(("now", now))
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = fetch_session_views(&store, tmp.path()).await.unwrap();
+
+        // After the fetch returns, the row MUST already be marked stale with
+        // completed_at populated. Previously the UPDATE was spawned async, so
+        // this select could observe the pre-promotion state.
+        let mut res = store
+            .db()
+            .query(
+                "SELECT status, completed_at FROM interactive_session \
+                 WHERE session_id = 'ses-dead-pid'",
+            )
+            .await
+            .unwrap();
+        #[derive(serde::Deserialize)]
+        struct Row {
+            status: String,
+            completed_at: Option<String>,
+        }
+        let rows: Vec<Row> = res.take(0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "stale");
+        assert!(
+            rows[0].completed_at.is_some(),
+            "completed_at must be populated synchronously"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_promoted_view_reports_frozen_duration() {
+        // Regression for the "00:01 blip": the returned view for a freshly
+        // promoted session must use the synthetic completed_at, not the
+        // -1 sentinel, so the first render shows the correct duration.
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let created = (chrono::Utc::now() - chrono::Duration::seconds(600)).to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-blip', pid = 2, status = 'active', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $created RETURN NONE",
+            )
+            .bind(("created", created))
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let v = views
+            .iter()
+            .find(|v| v.session_id == "ses-blip")
+            .expect("row should surface");
+        assert_eq!(v.status, "stale");
+        // duration_secs should be ~600, definitely not the -1 sentinel.
+        assert!(
+            v.duration_secs >= 590 && v.duration_secs <= 610,
+            "first-render duration should be ~600s not {}",
+            v.duration_secs
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #8 — migration back-fills session_kind='autorun'
+    // for rows whose session_id matches an autorun_session record. The
+    // migration runs automatically inside apply_schema; assert idempotency
+    // by running the schema twice.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_migration_backfills_autorun_session_kind_idempotent() {
+        use crate::store::DataStore;
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+
+        // Seed: interactive_session row without session_kind set (pre-migration),
+        // and a matching autorun_session row with the same session_id.
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-migrate', pid = 99, status = 'complete', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $now RETURN NONE",
+            )
+            .bind(("now", now.clone()))
+            .await;
+        let ar = AutorunSession {
+            id: "ses-migrate".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Completed,
+            max_session_workers: 1,
+            total_tasks: 0,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: now,
+            completed_at: None,
+        };
+        store.create_autorun_session(&ar).await.unwrap();
+
+        // First apply (in-memory store already applied once at open; re-apply).
+        store.apply_schema().await.unwrap();
+        // Second apply = idempotent no-op.
+        store.apply_schema().await.unwrap();
+
+        let mut res = store
+            .db()
+            .query(
+                "SELECT VALUE session_kind FROM interactive_session \
+                 WHERE session_id = 'ses-migrate'",
+            )
+            .await
+            .unwrap();
+        let vals: Vec<String> = res.take(0).unwrap();
+        assert_eq!(vals, vec!["autorun".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #15 — BatchListEntry preserves task pointers on
+    // terminal rows (no longer cleared by the worker finish path).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_batch_list_entry_surfaces_current_task_format_id() {
+        use crate::store::DataStore;
+        let store = crate::store::mock::MockStore::new();
+        let mut s = make_mock_session("ar-task", AutorunSessionStatus::Completed);
+        s.current_task_id = Some("task-01KXYZ".into());
+        s.current_task_format_id = Some("INF-TSK-049-001".into());
+        store.create_autorun_session(&s).await.unwrap();
+
+        let entries = fetch_batch_list(&store).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].current_task_id.as_deref(),
+            Some("task-01KXYZ"),
+            "current_task_id propagates to BatchListEntry"
+        );
+        assert_eq!(
+            entries[0].current_task_format_id.as_deref(),
+            Some("INF-TSK-049-001"),
+            "current_task_format_id propagates to BatchListEntry"
+        );
     }
 }

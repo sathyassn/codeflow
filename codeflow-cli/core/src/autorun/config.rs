@@ -22,7 +22,7 @@ const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.j
 /// Relative path to the local config override file (gitignored).
 const LOCAL_CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.local.json";
 
-/// Top-level parallel work configuration with 6 sections.
+/// Top-level parallel work configuration with 7 sections.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ParallelWorkConfig {
@@ -38,6 +38,43 @@ pub struct ParallelWorkConfig {
     pub autorun: AutorunConfig,
     /// Session retention and cleanup settings.
     pub retention: RetentionConfig,
+    /// Rescue bundle retention, gating, and surfacing settings.
+    pub rescue: RescueConfig,
+}
+
+/// Rescue bundle retention, gating, and surfacing settings.
+///
+/// Controls behavior of the worktree cleanup rescue path
+/// (`crate::autorun::rescue`) and the `codeflow rescue` CLI.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RescueConfig {
+    /// Days to retain unpinned rescue bundles before auto-prune (default: 30).
+    /// A `.pinned` marker file inside a bundle directory exempts it from
+    /// age-based deletion.
+    pub retention_days: u32,
+    /// When true, rescue may consult `gh pr list --head <branch>` as a
+    /// fallback gate when HEAD-on-origin is inconclusive (no upstream
+    /// configured). Failures of `gh` (not installed, not authed, network)
+    /// are non-blocking — the rescue path falls through to the dirty-tree
+    /// check. Default: true.
+    pub gh_pr_check: bool,
+    /// When true, emit a "rescue: N bundles" banner on stderr at the start
+    /// of `codeflow autorun status`, `codeflow interactive status`, and
+    /// bare `codeflow` invocations when bundles exist. Throttled to once
+    /// per 24h via `{xdg_rescue_root}/.last-scan` mtime. Suppressible via
+    /// `CODEFLOW_NO_RESCUE_BANNER=true`. Default: true.
+    pub banner_enabled: bool,
+}
+
+impl Default for RescueConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 30,
+            gh_pr_check: true,
+            banner_enabled: true,
+        }
+    }
 }
 
 /// Session retention and cleanup settings.
@@ -391,6 +428,11 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
             config.autorun.stale_threshold_secs, config.autorun.heartbeat_interval_secs
         )));
     }
+    if config.rescue.retention_days < 1 {
+        return Err(AutorunError::InvalidBatch(
+            "rescue.retention_days must be >= 1".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -434,6 +476,10 @@ mod tests {
         assert_eq!(cfg.retention.days, 30);
         assert_eq!(cfg.retention.keep_last, 10);
         assert!(cfg.retention.purge_on_cleanup);
+        // Rescue defaults.
+        assert_eq!(cfg.rescue.retention_days, 30);
+        assert!(cfg.rescue.gh_pr_check);
+        assert!(cfg.rescue.banner_enabled);
     }
 
     #[test]
@@ -453,6 +499,42 @@ mod tests {
         assert_eq!(cfg.retention.days, 14);
         assert_eq!(cfg.retention.keep_last, 5);
         assert!(!cfg.retention.purge_on_cleanup);
+    }
+
+    // -- Rescue config tests --
+
+    #[test]
+    fn rescue_config_defaults_when_section_missing() {
+        let json = r#"{"worktree": {"mode": "autorun"}}"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.rescue.retention_days, 30);
+        assert!(cfg.rescue.gh_pr_check);
+        assert!(cfg.rescue.banner_enabled);
+    }
+
+    #[test]
+    fn rescue_config_values_from_json() {
+        let json =
+            r#"{"rescue": {"retention_days": 7, "gh_pr_check": false, "banner_enabled": false}}"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.rescue.retention_days, 7);
+        assert!(!cfg.rescue.gh_pr_check);
+        assert!(!cfg.rescue.banner_enabled);
+    }
+
+    #[test]
+    fn validate_rescue_retention_zero_rejected() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.rescue.retention_days = 0;
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("retention_days"));
+    }
+
+    #[test]
+    fn validate_rescue_retention_one_accepted() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.rescue.retention_days = 1;
+        assert!(validate_config(&cfg).is_ok());
     }
 
     // -- M5: Sync interval alignment test --

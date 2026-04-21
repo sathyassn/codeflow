@@ -6,5 +6,6 @@
 //! - `widgets` — reusable ratatui widgets (status badge, phase badge, etc.)
 
 pub mod data;
+pub mod duration;
 pub mod theme;
 pub mod widgets;

@@ -43,9 +43,14 @@ pub struct AutorunSessionUpdate {
     pub stale_reason: Option<Option<String>>,
     pub target_branch: Option<String>,
     pub final_pr_url: Option<String>,
-    /// Task currently being executed (set on dispatch, cleared on finish).
+    /// Task currently being executed (set on dispatch, PRESERVED on finish
+    /// per INF-TSK-049-001 AC #15 so terminal rows retain the last task for
+    /// TUI display).
     /// Outer `Option` = "should this field be touched", inner = new value.
     pub current_task_id: Option<Option<String>>,
+    /// Human-readable format id paired with `current_task_id`. Same
+    /// touch/no-touch semantics. INF-TSK-049-001 AC #15.
+    pub current_task_format_id: Option<Option<String>>,
     /// Timestamp of this update (RFC 3339). Written on every state-changing update.
     pub updated_at: Option<String>,
     /// Worker heartbeat timestamp (RFC 3339). Written every 10 s by the worker.

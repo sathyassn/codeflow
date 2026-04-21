@@ -12,6 +12,108 @@ use crate::error::AutorunError;
 use super::orchestrator::{WorkerConfig, WorkerResult};
 
 /// Append a timestamped log entry to a worker log file.
+/// Resolve the open PR number for `branch` via `gh pr list`.
+///
+/// INF-TSK-049-001 batch 2 (AC #35 / W2): callers use this when the
+/// in-process invoke result reports `pr_number == 0` even though the
+/// branch has been pushed to origin and a PR likely exists.
+///
+/// Returns:
+/// - `Some(n)` when `gh pr list --head <branch> --state open --limit 1`
+///   reports a JSON array containing a `{"number": n, ...}` object.
+/// - `None` when gh is missing, errored, returned no PRs, or the JSON
+///   could not be parsed (fail-safe — never fabricate a PR number).
+pub(crate) fn gh_pr_number_for_branch(wt_path: &std::path::Path, branch: &str) -> Option<i64> {
+    if branch.is_empty() {
+        return None;
+    }
+    // Branch sanity — same allowlist as in rescue::gh_pr_exists_for_branch.
+    if !branch
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-' || b == b'/')
+    {
+        return None;
+    }
+    let output = std::process::Command::new("gh")
+        .args([
+            "pr", "list", "--head", branch, "--state", "open", "--limit", "1", "--json", "number",
+        ])
+        .current_dir(wt_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let arr: serde_json::Value = serde_json::from_str(s.trim()).ok()?;
+    let first = arr.as_array()?.first()?;
+    first.get("number")?.as_i64()
+}
+
+/// INF-TSK-049-001 batch 2 (AC #34 / W1): shared warning message used by
+/// both `classify_invoke_outcome` (inner claude exit 124) and the
+/// wrapper-level timeout handler. Kept as a constant so the two call
+/// sites can never drift. Rework iter 1 Finding 3.
+pub(crate) const W1_TIMEOUT_ON_ORIGIN_WARNING: &str = "worker timed out but work is on origin (W1)";
+
+/// Shared W1 policy: when a task hits exit 124 (or the wrapper-level
+/// timeout), check whether its branch is already on origin. If yes,
+/// that's success-with-warning; otherwise fail/timeout per the caller's
+/// chosen failure status.
+///
+/// Returns `Some((warning_text, ()))` for the on-origin case so callers
+/// can inject the shared warning, or `None` to signal "apply your own
+/// failure classification".
+///
+/// Introduced for rework iter 1 Finding 3 so the policy is defined once.
+pub(crate) fn w1_timeout_outcome(wt_path: &std::path::Path) -> Option<String> {
+    if matches!(
+        crate::autorun::rescue::branch_on_origin(wt_path),
+        crate::autorun::rescue::BranchOriginStatus::OnOrigin
+    ) {
+        Some(W1_TIMEOUT_ON_ORIGIN_WARNING.to_string())
+    } else {
+        None
+    }
+}
+
+/// Classify a finished worker invocation into `(status, error_msg, warning)`.
+///
+/// INF-TSK-049-001 batch 2 (AC #34, AC #36):
+/// - `exit_code == 0`: `completed` (or `pr_creation_failed` when
+///   `integration_auto_merge` is set but no PR was created).
+/// - `exit_code == 124` AND branch is on origin: `completed` with warning
+///   (W1 — work pushed before timeout).
+/// - `exit_code == 124` AND branch NOT on origin (or inconclusive): `failed`.
+/// - Any other non-zero exit: `failed`.
+///
+/// `wt_path` is the worker's worktree (used for the `branch_on_origin`
+/// check). `pr_number` is consulted only for the `integration_auto_merge`
+/// guard. Pure function — no side effects.
+pub(crate) fn classify_invoke_outcome(
+    wt_path: &std::path::Path,
+    exit_code: i32,
+    pr_number: i64,
+    integration_auto_merge: bool,
+) -> (&'static str, String, Option<String>) {
+    if exit_code == 0 {
+        if integration_auto_merge && pr_number == 0 {
+            return (
+                "pr_creation_failed",
+                "PR expected but not created".to_string(),
+                None,
+            );
+        }
+        return ("completed", String::new(), None);
+    }
+    if exit_code == 124 {
+        if let Some(warning) = w1_timeout_outcome(wt_path) {
+            return ("completed", String::new(), Some(warning));
+        }
+    }
+    ("failed", String::new(), None)
+}
+
 fn worker_log(log_path: &std::path::Path, message: &str) {
     use std::io::Write;
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -115,6 +217,12 @@ pub struct InvokeConfig {
     pub prompt: String,
     pub session_id: String,
     pub task_id: String,
+    /// Human-readable task format id (e.g. `INF-TSK-049-001`) paired with
+    /// `task_id`. Surfaced in the TUI TASK column via the parent
+    /// `autorun_session.current_task_format_id` field on dispatch.
+    /// INF-TSK-049-001 AC #15.
+    #[serde(default)]
+    pub task_format_id: Option<String>,
     pub integration_auto_merge: bool,
     pub integration_branch: String,
     pub tmux_session: String,
@@ -764,6 +872,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     branch_name: String::new(),
                     error: e.to_string(),
                     duration_sec: 0,
+                    warning: None,
                 });
             }
             Err(e) => return Err(e),
@@ -874,6 +983,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             branch_name: String::new(),
                             error: format!("claim conflict on files: {claim_conflicts:?}"),
                             duration_sec: 0,
+                            warning: None,
                         });
                     }
                 }
@@ -954,9 +1064,19 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             eprintln!("warning: failed to create autorun_task_run record: {e}");
         }
 
-        // INF-TSK-048-001 AC #8: On task dispatch, record `current_task_id` on the
-        // parent autorun_session so the TUI TASK column can surface the active task.
-        // Also bump `updated_at` as part of the dispatch state change.
+        // INF-TSK-048-001 AC #8 + INF-TSK-049-001 AC #15: on task dispatch,
+        // record both `current_task_id` (ULID) and `current_task_format_id`
+        // (human-readable) on the parent autorun_session so the TUI TASK
+        // column can prefer the format id for display. Also bump
+        // `updated_at` as part of the dispatch state change.
+        //
+        // When the caller did not supply `task_format_id`, fall back to
+        // reading it from the task markdown's YAML frontmatter so every
+        // tracked task populates the field even if callers were written
+        // before the plumbing existed.
+        let task_format_id = cfg.task_format_id.clone().or_else(|| {
+            crate::autorun::batch::read_task_format_id(&cfg.task_id, &self.project_dir)
+        });
         let dispatch_now = chrono::Utc::now().to_rfc3339();
         if let Err(e) = self
             .store
@@ -964,6 +1084,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 &cfg.session_id,
                 crate::models::AutorunSessionUpdate {
                     current_task_id: Some(Some(cfg.task_id.clone())),
+                    current_task_format_id: Some(task_format_id),
                     updated_at: Some(dispatch_now.clone()),
                     last_heartbeat_at: Some(dispatch_now.clone()),
                     ..Default::default()
@@ -1056,6 +1177,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     prompt,
                     session_id: cfg.session_id.clone(),
                     task_id: cfg.task_id.clone(),
+                    task_format_id: cfg.task_format_id.clone(),
                     integration_auto_merge: cfg.integration_auto_merge,
                     integration_branch: cfg.integration_branch.clone(),
                     tmux_session: tmux_name.clone(),
@@ -1164,74 +1286,115 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         branch_name: String::new(),
                         error,
                         duration_sec: elapsed,
+                        warning: None,
                     });
                 }
             }
         }
 
-        // Serialized merge: when integration_auto_merge is enabled and a PR was
-        // created, use the merge queue to serialize PR merges to the integration
-        // branch. The pr_number check is independent of exit_code so that PRs
-        // created before a timeout (exit_code 124) still get merged.
+        // Serialized merge: when integration_auto_merge is enabled, use the
+        // merge queue to serialize PR merges to the integration branch.
+        //
+        // INF-TSK-049-001 batch 2 (AC #35 / W2): when invoke_result reports
+        // pr_number == 0 BUT the branch is on origin, fall back to
+        // `gh pr list --head <branch>` (gated on rescue.gh_pr_check). This
+        // covers the failure mode where Claude pushed the branch and opened
+        // a PR but its parser missed the PR number from the trailing output.
         if cfg.integration_auto_merge {
             if let Ok(Ok(ref invoke_result)) = result {
-                if invoke_result.pr_number > 0 {
-                    let merge_config = crate::autorun::config::load_config(&self.project_dir)
-                        .unwrap_or_default()
-                        .merge;
-                    if merge_config.queue_enforcing {
-                        let merge_result = serialized_merge(
-                            &wt_info.path,
-                            &cfg.integration_branch,
-                            &worker_sid,
-                            invoke_result.pr_number,
-                            &cfg.task_id,
-                            &invoke_result.branch_name,
-                            &state_path,
-                            &merge_config,
-                            cfg.queue_timeout_secs,
-                        )
-                        .await;
-                        match merge_result {
-                            MergeOutcome::Merged => {
-                                eprintln!(
-                                    "serialized merge: PR #{} merged to {}",
-                                    invoke_result.pr_number, cfg.integration_branch
-                                );
-                            }
-                            MergeOutcome::MergeConflict { ref error } => {
-                                eprintln!(
-                                    "serialized merge: PR #{} failed: {error}",
-                                    invoke_result.pr_number
-                                );
-                            }
-                            MergeOutcome::QueueTimeout => {
-                                eprintln!(
-                                    "serialized merge: PR #{} timed out in queue",
-                                    invoke_result.pr_number
-                                );
-                            }
-                            MergeOutcome::CiFailed { ref failing_checks } => {
-                                eprintln!(
-                                    "serialized merge: PR #{} blocked — failing required CI checks: {} (PR left open, task blocked)",
-                                    invoke_result.pr_number,
-                                    failing_checks.join(", ")
-                                );
-                            }
-                            MergeOutcome::CiTimeout => {
-                                eprintln!(
-                                    "serialized merge: PR #{} blocked — CI did not reach green within configured timeout (PR left open, task blocked)",
-                                    invoke_result.pr_number
-                                );
+                let cfg_loaded =
+                    crate::autorun::config::load_config(&self.project_dir).unwrap_or_default();
+                let merge_config = cfg_loaded.merge.clone();
+
+                // Resolve the effective PR number, preferring the worker's
+                // direct value but falling back to a gh query when needed.
+                let mut effective_pr_number = invoke_result.pr_number;
+                let mut effective_branch = invoke_result.branch_name.clone();
+                if effective_pr_number == 0 && cfg_loaded.rescue.gh_pr_check {
+                    if effective_branch.is_empty() {
+                        // Best-effort: read the worker's current branch name.
+                        if let Ok(o) = std::process::Command::new("git")
+                            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                            .current_dir(&wt_info.path)
+                            .output()
+                        {
+                            if o.status.success() {
+                                effective_branch =
+                                    String::from_utf8_lossy(&o.stdout).trim().to_string();
                             }
                         }
-                    } // end queue_enforcing
+                    }
+                    let on_origin = matches!(
+                        crate::autorun::rescue::branch_on_origin(&wt_info.path),
+                        crate::autorun::rescue::BranchOriginStatus::OnOrigin
+                    );
+                    if on_origin && !effective_branch.is_empty() && effective_branch != "HEAD" {
+                        if let Some(found) =
+                            gh_pr_number_for_branch(&wt_info.path, &effective_branch)
+                        {
+                            eprintln!(
+                                "serialized merge: pr_number=0 from worker; gh pr list reports PR #{found} for branch '{effective_branch}'"
+                            );
+                            effective_pr_number = found;
+                        }
+                    }
+                }
+
+                if effective_pr_number > 0 && merge_config.queue_enforcing {
+                    let merge_result = serialized_merge(
+                        &wt_info.path,
+                        &cfg.integration_branch,
+                        &worker_sid,
+                        effective_pr_number,
+                        &cfg.task_id,
+                        &effective_branch,
+                        &state_path,
+                        &merge_config,
+                        cfg.queue_timeout_secs,
+                    )
+                    .await;
+                    match merge_result {
+                        MergeOutcome::Merged => {
+                            eprintln!(
+                                "serialized merge: PR #{} merged to {}",
+                                effective_pr_number, cfg.integration_branch
+                            );
+                        }
+                        MergeOutcome::MergeConflict { ref error } => {
+                            eprintln!(
+                                "serialized merge: PR #{effective_pr_number} failed: {error}"
+                            );
+                        }
+                        MergeOutcome::QueueTimeout => {
+                            eprintln!(
+                                "serialized merge: PR #{effective_pr_number} timed out in queue"
+                            );
+                        }
+                        MergeOutcome::CiFailed { ref failing_checks } => {
+                            eprintln!(
+                                "serialized merge: PR #{effective_pr_number} blocked — failing required CI checks: {} (PR left open, task blocked)",
+                                failing_checks.join(", ")
+                            );
+                        }
+                        MergeOutcome::CiTimeout => {
+                            eprintln!(
+                                "serialized merge: PR #{effective_pr_number} blocked — CI did not reach green within configured timeout (PR left open, task blocked)"
+                            );
+                        }
+                    }
                 }
             }
         }
 
-        // INF-TSK-048-001 AC #8: Stop the heartbeat writer and clear current_task_id.
-        // Order matters: stop the ticker first so it does not race the clear write.
+        // INF-TSK-048-001 AC #8 / INF-TSK-049-001 AC #15: stop the heartbeat
+        // writer but PRESERVE `current_task_id` and `current_task_format_id`
+        // on the session row. Previously both were cleared to None on
+        // finish; that made the batches-list TASK column go blank on
+        // terminal rows, losing the "which task was running when this batch
+        // ended" at-a-glance. Keep them; only bump `updated_at`.
+        //
+        // Order matters: stop the ticker first so it does not race the
+        // subsequent updated_at write.
         let _ = heartbeat_stop_tx.send(());
         let _ = heartbeat_handle.await;
         let finish_now = chrono::Utc::now().to_rfc3339();
@@ -1240,15 +1403,13 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             .update_autorun_session(
                 &cfg.session_id,
                 crate::models::AutorunSessionUpdate {
-                    // Inner None = write SurrealDB null (clear pointer).
-                    current_task_id: Some(None),
                     updated_at: Some(finish_now),
                     ..Default::default()
                 },
             )
             .await
         {
-            eprintln!("warning: failed to clear current_task_id at finish: {e}");
+            eprintln!("warning: failed to bump updated_at at finish: {e}");
         }
 
         // Always cleanup: remove heartbeat, release claims, kill tmux, remove worktree.
@@ -1420,13 +1581,19 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         }
 
         let elapsed = (chrono::Utc::now() - start_time).num_seconds().max(0);
+        // INF-TSK-049-001 batch 2 (AC #34): exit 124 + branch already on
+        // origin → success-with-warning. Otherwise (or if HEAD is not on
+        // origin), keep the historical "failed" classification. Same rule
+        // applies to the wrapper-level timeout (Err(_) branch below).
         let worker_result = match result {
             Ok(Ok(invoke_result)) => {
-                // Determine status: check for PR creation failure when auto_merge expects a PR.
-                let (status, error_msg) = if invoke_result.exit_code != 0 {
-                    ("failed", String::new())
-                } else if cfg.integration_auto_merge && invoke_result.pr_number == 0 {
-                    // PR was expected (auto_merge=true) but not created.
+                let (status, error_msg, warning) = classify_invoke_outcome(
+                    &wt_info.path,
+                    invoke_result.exit_code,
+                    invoke_result.pr_number,
+                    cfg.integration_auto_merge,
+                );
+                if status == "pr_creation_failed" {
                     Self::emit_autorun_event(
                         &self.project_dir,
                         &crate::coordination::types::events::AutorunEvent::WorkerFailed {
@@ -1437,13 +1604,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         },
                     );
-                    (
-                        "pr_creation_failed",
-                        "PR expected but not created".to_string(),
-                    )
-                } else {
-                    ("completed", String::new())
-                };
+                }
                 Ok(WorkerResult {
                     worker_id: cfg.worker_id.clone(),
                     task_id: cfg.task_id.clone(),
@@ -1454,23 +1615,41 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     branch_name: invoke_result.branch_name,
                     error: error_msg,
                     duration_sec: elapsed,
+                    warning,
                 })
             }
             Ok(Err(e)) => Err(AutorunError::WorkerFailed(format!(
                 "task {}: {e}",
                 cfg.task_id
             ))),
-            Err(_) => Ok(WorkerResult {
-                worker_id: cfg.worker_id.clone(),
-                task_id: cfg.task_id.clone(),
-                status: "timeout".into(),
-                exit_code: 124, // standard timeout exit code
-                pr_number: 0,
-                pr_url: String::new(),
-                branch_name: String::new(),
-                error: "worker exceeded timeout".into(),
-                duration_sec: elapsed,
-            }),
+            Err(_) => {
+                // Wrapper-level timeout. Route through the shared W1
+                // policy helper so the on-origin classification is
+                // defined in ONE place (Rework iter 1 Finding 3 — avoid
+                // drift between this arm and classify_invoke_outcome).
+                // When NOT on origin the wrapper surfaces the richer
+                // "timeout" status (distinct from the inner-claude
+                // exit-124 "failed" classification) with its explanatory
+                // error message.
+                let warning = w1_timeout_outcome(&wt_info.path);
+                let (status, error_msg) = if warning.is_some() {
+                    ("completed", String::new())
+                } else {
+                    ("timeout", "worker exceeded timeout".to_string())
+                };
+                Ok(WorkerResult {
+                    worker_id: cfg.worker_id.clone(),
+                    task_id: cfg.task_id.clone(),
+                    status: status.into(),
+                    exit_code: 124, // standard timeout exit code
+                    pr_number: 0,
+                    pr_url: String::new(),
+                    branch_name: String::new(),
+                    error: error_msg,
+                    duration_sec: elapsed,
+                    warning,
+                })
+            }
         };
 
         // Read last phase from sentinel files before worktree cleanup destroys them.
@@ -2115,6 +2294,7 @@ mod tests {
             worker_id: "arw-test".into(),
             worker_num: 1,
             task_id: "task-a".into(),
+            task_format_id: None,
             batch_name: "test-batch".into(),
             integration_auto_merge: false,
             integration_branch: "main".into(),
@@ -2213,6 +2393,7 @@ mod tests {
             worker_session_id: "ses-worker-1".into(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         assert_eq!(cfg.task_id, "t-1");
         assert!(cfg.integration_auto_merge);
@@ -2234,6 +2415,7 @@ mod tests {
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 3600,
+            task_format_id: None,
         };
         assert_eq!(cfg.worker_timeout_secs, 3600);
     }
@@ -2700,6 +2882,7 @@ Read and implement.
             worker_session_id: "ses-worker-1".into(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: InvokeConfig = serde_json::from_str(&json).unwrap();
@@ -3044,6 +3227,7 @@ Read and implement.
             worker_id: "arw-test".into(),
             worker_num: 3,
             task_id: "task-a".into(),
+            task_format_id: None,
             batch_name: "test-batch".into(),
             integration_auto_merge: false,
             integration_branch: "main".into(),
@@ -3066,6 +3250,7 @@ Read and implement.
             worker_id: format!("arw-{session_id}-{task_id}"),
             worker_num: 1,
             task_id: task_id.into(),
+            task_format_id: None,
             batch_name: "test-batch".into(),
             integration_auto_merge: false,
             integration_branch: String::new(),
@@ -3890,5 +4075,177 @@ Read and implement.
                 .contains(&label)
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // INF-TSK-049-001 batch 2 — W1 / W2 / W3 / shared helper tests.
+    // -----------------------------------------------------------------
+
+    /// Build a real on-disk git repo at `dir` with one initial commit.
+    fn init_real_git_repo(dir: &std::path::Path) {
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "t@t.c"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init", "--no-verify"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+    }
+
+    /// Build a real bare-origin + working repo with upstream tracking.
+    /// Returns the working repo path. Useful for branch_on_origin paths.
+    fn make_repo_with_origin(name: &str) -> tempfile::TempDir {
+        let _ = name;
+        let origin = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .current_dir(origin.path())
+            .status()
+            .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        init_real_git_repo(work.path());
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", origin.path().to_str().unwrap()])
+            .current_dir(work.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["push", "-u", "origin", "HEAD:refs/heads/main"])
+            .current_dir(work.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["branch", "--set-upstream-to=origin/main"])
+            .current_dir(work.path())
+            .status()
+            .unwrap();
+        // Keep `origin` alive through the test by leaking it into the
+        // returned tempdir's caller-side scope via a thread-local — but
+        // easier: just keep both alive in the test body. For this helper
+        // we return only `work` and rely on caller to retain `origin`
+        // separately when needed. Simplest: drop `origin` to disk via
+        // `into_path` to leak it.
+        let _ = origin.keep();
+        work
+    }
+
+    // ---- W1: classify_invoke_outcome ----
+
+    #[test]
+    fn w1_exit_zero_completed() {
+        let td = tempfile::tempdir().unwrap();
+        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 42, false);
+        assert_eq!(status, "completed");
+        assert!(msg.is_empty());
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn w1_exit_zero_pr_creation_failed_when_auto_merge_no_pr() {
+        let td = tempfile::tempdir().unwrap();
+        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 0, true);
+        assert_eq!(status, "pr_creation_failed");
+        assert!(msg.contains("PR expected"));
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn w1_exit_124_failed_when_branch_not_on_origin() {
+        // No git repo here at all → branch_on_origin returns Inconclusive.
+        let td = tempfile::tempdir().unwrap();
+        let (status, _msg, warning) = classify_invoke_outcome(td.path(), 124, 0, false);
+        assert_eq!(status, "failed", "exit 124 + no git → failed");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn w1_exit_124_completed_when_branch_on_origin() {
+        let work = make_repo_with_origin("w1-on-origin");
+        let (status, msg, warning) = classify_invoke_outcome(work.path(), 124, 0, false);
+        assert_eq!(
+            status, "completed",
+            "AC #34: exit 124 + branch on origin → completed (success-with-warning)"
+        );
+        assert!(msg.is_empty());
+        assert!(
+            warning.as_deref().unwrap_or_default().contains("on origin"),
+            "warning must mention 'on origin'; got {warning:?}"
+        );
+    }
+
+    #[test]
+    fn w1_other_nonzero_exit_failed() {
+        let td = tempfile::tempdir().unwrap();
+        for code in [1, 2, 137] {
+            let (status, _, warning) = classify_invoke_outcome(td.path(), code, 0, false);
+            assert_eq!(status, "failed", "exit {code} → failed");
+            assert!(warning.is_none());
+        }
+    }
+
+    // ---- Rework iter 1 Finding 3: shared w1_timeout_outcome helper ----
+
+    /// `w1_timeout_outcome` returns `Some(warning)` when the branch is on
+    /// origin — the SAME warning string that `classify_invoke_outcome`
+    /// emits on its exit-124-on-origin path. This guarantees the two
+    /// call sites (inner claude exit 124 vs wrapper-level timeout) agree.
+    #[test]
+    fn w1_timeout_outcome_on_origin_returns_shared_warning() {
+        let work = make_repo_with_origin("w1-shared-on-origin");
+        let outcome = w1_timeout_outcome(work.path());
+        assert_eq!(outcome.as_deref(), Some(W1_TIMEOUT_ON_ORIGIN_WARNING));
+
+        // And the classify path emits the same warning.
+        let (status, _, warning) = classify_invoke_outcome(work.path(), 124, 0, false);
+        assert_eq!(status, "completed");
+        assert_eq!(warning.as_deref(), Some(W1_TIMEOUT_ON_ORIGIN_WARNING));
+    }
+
+    #[test]
+    fn w1_timeout_outcome_not_on_origin_returns_none() {
+        let td = tempfile::tempdir().unwrap();
+        // Non-git → Inconclusive → not OnOrigin → None.
+        assert!(w1_timeout_outcome(td.path()).is_none());
+    }
+
+    // ---- W2: gh_pr_number_for_branch input sanitisation ----
+
+    #[test]
+    fn w2_gh_pr_number_rejects_empty_branch() {
+        let td = tempfile::tempdir().unwrap();
+        assert_eq!(gh_pr_number_for_branch(td.path(), ""), None);
+    }
+
+    #[test]
+    fn w2_gh_pr_number_rejects_shell_metachars() {
+        let td = tempfile::tempdir().unwrap();
+        assert_eq!(gh_pr_number_for_branch(td.path(), "feat;rm -rf /"), None);
+        assert_eq!(gh_pr_number_for_branch(td.path(), "$(whoami)"), None);
+        assert_eq!(gh_pr_number_for_branch(td.path(), "br with space"), None);
+    }
+
+    #[test]
+    fn w2_gh_pr_number_returns_none_when_gh_missing_or_no_pr() {
+        // Sanitised branch but gh either is missing or returns []. Either way
+        // result is None; never a fabricated PR number.
+        let td = tempfile::tempdir().unwrap();
+        let result = gh_pr_number_for_branch(td.path(), "feat/never-exists-anywhere");
+        assert_eq!(
+            result, None,
+            "expected None (gh missing/empty); got {result:?}"
+        );
     }
 }

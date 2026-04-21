@@ -278,22 +278,35 @@ pub fn cleanup_orphan(
 
 /// Rescue uncommitted and unpushed work from a worktree before deletion.
 ///
-/// **Refactor (INF-TSK-048-001 AC #2):** this function no longer performs
-/// ANY git write operations. Instead it writes a patch bundle to
-/// `<project_root>/.state/rescue/{sid}-{YYYYMMDD-HHMMSS}-{pid}/`
-/// containing:
+/// **Refactor (INF-TSK-048-001 AC #2):** this function performs no git
+/// write operations.
+///
+/// **Refactor (INF-TSK-049-001 batch 2 — AC #24-#28):** rescue bundles now
+/// land under the XDG cache root (`crate::autorun::rescue::xdg_rescue_root`)
+/// — never inside a git working tree. Two new gates run before the
+/// dirty-tree check:
+/// - **Gate 8 (HEAD-on-origin):** if `git rev-list --count @{u}..HEAD == 0`,
+///   skip (work is already on origin).
+/// - **Gate 9 (gh pr list fallback):** if Gate 8 is inconclusive AND
+///   `rescue.gh_pr_check` is true, run `gh pr list --head <branch>`. If
+///   any PR exists, skip.
+///
+/// Bundle contents:
 /// - `working.patch` — output of `git diff HEAD`
 /// - `staged.patch` — output of `git diff --cached`
 /// - `untracked.tar.gz` — tar of untracked files (100 MB cap per file; total 100 MB cap)
 /// - `metadata.json` — session id, branch, head sha, timestamp, reason
 ///
-/// Gating (skip when any is true, in order):
-/// 1. Non-git directory → no-op.
+/// Gating order (skip on first match):
+/// 1. Non-git directory.
 /// 2. `no-rescue` marker at `{wt_path}/.state/runtime/no-rescue` exists.
 /// 3. `GateConfig(session_complete)` → pf-7 sentinel exists.
 /// 4. `GateConfig(pr_pushed)` → pf-6 sentinel exists.
-/// 5. Ledger contains any `pr_created` event for this session.
-/// 6. Nothing to rescue (clean working tree AND no untracked files).
+/// 5. Legacy `pr_pushed` flag in `pathflow-session-status.json`.
+/// 6. Ledger contains any `pr_created` event for this session.
+/// 7. **Gate 8** — HEAD on origin (zero commits ahead of `@{u}`).
+/// 8. **Gate 9** — `gh pr list --head <branch>` reports an existing PR.
+/// 9. Nothing to rescue (clean working tree AND no untracked files).
 ///
 /// The inspect/apply CLI (`codeflow rescue`) surfaces the bundle to the user.
 pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(), WorktreeError> {
@@ -360,33 +373,88 @@ pub fn rescue_uncommitted_work_with_reason(
         return Ok(());
     }
 
+    // Step 0g (Gate 8): HEAD-on-origin. If the branch has zero commits
+    // ahead of @{u}, every change is already pushed — nothing to rescue.
+    let on_origin = crate::autorun::rescue::branch_on_origin(wt_path);
+    if matches!(
+        on_origin,
+        crate::autorun::rescue::BranchOriginStatus::OnOrigin
+    ) {
+        crate::diagnostics::warn(
+            "worktree",
+            &format!("{session_hint}: skipping rescue — HEAD on origin"),
+        );
+        return Ok(());
+    }
+
+    // Step 0h (Gate 9): gh pr list fallback. ONLY runs when Gate 8 was
+    // inconclusive (no upstream configured) AND the config flag is on. A
+    // gh failure (not installed / not authed / network) returns
+    // Inconclusive — never skip rescue based on a transient outage.
+    if matches!(
+        on_origin,
+        crate::autorun::rescue::BranchOriginStatus::Inconclusive
+    ) {
+        let project_root_for_cfg = derive_main_repo_root(wt_path);
+        let cfg = crate::autorun::config::load_config(&project_root_for_cfg).unwrap_or_default();
+        if cfg.rescue.gh_pr_check {
+            let branch = get_branch_name(wt_path);
+            if !branch.is_empty()
+                && branch != "HEAD"
+                && matches!(
+                    crate::autorun::rescue::gh_pr_exists_for_branch(wt_path, &branch),
+                    crate::autorun::rescue::GhPrCheck::Exists
+                )
+            {
+                crate::diagnostics::warn(
+                    "worktree",
+                    &format!(
+                        "{session_hint}: skipping rescue — gh pr list reports PR exists for '{branch}'"
+                    ),
+                );
+                return Ok(());
+            }
+        }
+    }
+
     // Step 1: is there anything to rescue?
     let has_changes = has_dirty_files(wt_path);
     if !has_changes {
         return Ok(());
     }
 
-    // Step 2: write the bundle.
+    // Step 2: write the bundle to the XDG rescue root (NEVER a git working tree).
     let session_id = session_hint
         .strip_prefix("worktree-")
         .unwrap_or(session_hint)
         .to_string();
-    let project_root = derive_project_root(wt_path);
-    match write_rescue_bundle(wt_path, &project_root, &session_id, reason) {
+    let bundle_root = match crate::autorun::rescue::xdg_rescue_root() {
+        Ok(p) => p,
+        Err(e) => {
+            crate::diagnostics::warn(
+                "worktree",
+                &format!(
+                    "{session_hint}: cannot resolve xdg rescue root ({e}); proceeding with cleanup"
+                ),
+            );
+            return Ok(());
+        }
+    };
+    match write_rescue_bundle(wt_path, &bundle_root, &session_id, reason) {
         Ok(bundle_path) => {
+            let id = bundle_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("<unknown>");
             let msg = format!(
                 "Rescue bundle: {path}. \
                  Inspect: codeflow rescue show {id}. \
                  Apply: codeflow rescue apply {id}",
                 path = bundle_path.display(),
-                id = bundle_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("<unknown>"),
             );
             eprintln!("{msg}");
             crate::diagnostics::warn("worktree", &msg);
-            append_rescue_written_event(&project_root, &session_id, &bundle_path, reason);
+            append_rescue_written_event(&session_id, &bundle_path, reason);
             Ok(())
         }
         Err(e) => {
@@ -404,12 +472,16 @@ pub fn rescue_uncommitted_work_with_reason(
     }
 }
 
-/// Derive the main project root from a worktree path.
+/// Derive the main repository root from a worktree path.
 ///
 /// Worktrees live at `{project_root}/.git-worktrees/worktree-{SID}`. If the
-/// path does not match that shape, fall back to the worktree itself (rescue
-/// bundle lands inside the worktree — still better than failing).
-fn derive_project_root(wt_path: &Path) -> PathBuf {
+/// path does not match that shape, fall back to the worktree itself.
+///
+/// **Read-only use:** this function is intentionally limited to looking up
+/// gate config and ledger files in the MAIN repo. It MUST NOT be used to
+/// place new files (rescue bundle writes go to xdg root —
+/// `crate::autorun::rescue::xdg_rescue_root` — never to a git working tree).
+fn derive_main_repo_root(wt_path: &Path) -> PathBuf {
     if let Some(parent) = wt_path.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some(".git-worktrees") {
             if let Some(root) = parent.parent() {
@@ -436,7 +508,7 @@ fn gate_sentinel_present(wt_path: &Path, session_hint: &str, gate_name: &str) ->
     let sentinel_dir = wt_path.join(".state/sentinels/pathflow").join(session_id);
 
     // Config lives at the MAIN project root, not the worktree.
-    let project_root = derive_project_root(wt_path);
+    let project_root = derive_main_repo_root(wt_path);
     let config_path = project_root.join(".codeflow/config/pathflow/pathflow-config.json");
 
     let Ok(gates) = std::panic::catch_unwind(|| {
@@ -473,7 +545,7 @@ fn session_has_pr_created_event(wt_path: &Path, session_hint: &str) -> bool {
     if !is_safe_session_id(session_id) {
         return false;
     }
-    let project_root = derive_project_root(wt_path);
+    let project_root = derive_main_repo_root(wt_path);
     let ledger_dir = project_root.join(".state/ledger");
     if !ledger_dir.is_dir() {
         return false;
@@ -529,19 +601,22 @@ const RESCUE_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const RESCUE_MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Write the rescue bundle. On success returns the bundle directory.
+///
+/// `bundle_root` is expected to be the XDG rescue root from
+/// `crate::autorun::rescue::xdg_rescue_root`. Per AC #24, this MUST NEVER
+/// be a git working tree path.
 fn write_rescue_bundle(
     wt_path: &Path,
-    project_root: &Path,
+    bundle_root: &Path,
     session_id: &str,
     reason: &str,
 ) -> Result<PathBuf, WorktreeError> {
     let (ts_human, ts_rfc3339) = rescue_timestamps();
-    let pid = std::process::id();
-    let bundle_name = format!("{session_id}-{ts_human}-{pid}");
-    let bundle_dir = project_root
-        .join(".state")
-        .join("rescue")
-        .join(&bundle_name);
+    // The XDG root is host-wide so the session_id alone disambiguates
+    // bundles produced concurrently by different worktrees on this machine.
+    // No PID component needed.
+    let bundle_name = crate::autorun::rescue::bundle_name(session_id, &ts_human);
+    let bundle_dir = bundle_root.join(&bundle_name);
     fs::create_dir_all(&bundle_dir)
         .map_err(|e| WorktreeError::Cleanup(format!("create bundle dir: {e}")))?;
 
@@ -665,28 +740,17 @@ fn rescue_timestamps() -> (String, String) {
     (human, rfc)
 }
 
-/// Append a `rescue_written` event to the project-level ledger. Best-effort
-/// — swallows every failure so the rescue path never blocks cleanup.
-fn append_rescue_written_event(
-    project_root: &Path,
-    session_id: &str,
-    bundle_path: &Path,
-    reason: &str,
-) {
-    let ledger_dir = project_root.join(".state").join("ledger");
-    let sessions_dir = ledger_dir.join("sessions");
-    if fs::create_dir_all(&sessions_dir).is_err() {
+/// Append a `rescue_written` event to the single XDG-scoped sessions log.
+///
+/// AC #25: rescue events live in ONE append-only file
+/// `{xdg_rescue_root}/sessions.jsonl`, not per-session fragments under any
+/// project's `.state/ledger/sessions/`.
+///
+/// Best-effort — swallows every failure so the rescue path never blocks cleanup.
+fn append_rescue_written_event(session_id: &str, bundle_path: &Path, reason: &str) {
+    let Ok(log_path) = crate::autorun::rescue::sessions_log_path() else {
         return;
-    }
-    // Write to a session fragment file if session id is well-formed;
-    // otherwise the base file.
-    let file_name = if is_safe_session_id(session_id) {
-        format!("sessions-{session_id}.jsonl")
-    } else {
-        "sessions.jsonl".to_string()
     };
-    let path = sessions_dir.join(file_name);
-
     let (_, ts_rfc3339) = rescue_timestamps();
     let event = serde_json::json!({
         "event": "rescue_written",
@@ -702,7 +766,7 @@ fn append_rescue_written_event(
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(&log_path)
     {
         use std::io::Write as _;
         let _ = writeln!(f, "{line}");
@@ -910,6 +974,32 @@ fn prune_worktrees(mgr: &WorktreeManager, dry_run: bool) -> Result<(), WorktreeE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate `HOME` / `XDG_CACHE_HOME` to redirect the
+    /// xdg rescue root into a tempdir. Mirrors the lock in
+    /// `crate::autorun::rescue::tests`.
+    static XDG_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire `XDG_LOCK` tolerating poison: a previous test panicking
+    /// inside the critical section poisons the mutex, but the env mutation
+    /// is idempotent — we just want to serialise, not propagate state.
+    fn xdg_lock() -> std::sync::MutexGuard<'static, ()> {
+        XDG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Redirect `dirs::cache_dir()` (used by `xdg_rescue_root`) into a
+    /// tempdir for the duration of a test. Caller must hold `XDG_LOCK`.
+    fn redirect_xdg_cache(td: &tempfile::TempDir) {
+        // SAFETY: tests serialise via XDG_LOCK; no other thread reads these
+        // env vars during the test body.
+        unsafe {
+            std::env::set_var("HOME", td.path());
+            std::env::set_var("XDG_CACHE_HOME", td.path().join(".cache"));
+        }
+    }
 
     #[test]
     fn test_cleanup_opts_default() {
@@ -1170,9 +1260,11 @@ mod tests {
 
     #[test]
     fn test_rescue_uncommitted_work_dirty_detached_head_writes_bundle() {
-        // Post-refactor (INF-TSK-048-001 AC #2): a dirty worktree is NEVER an
-        // error. Rescue writes a patch bundle and returns Ok(()). The bundle
-        // lands under the worktree-parent chain's .state/rescue/.
+        // Post-refactor (INF-TSK-049-001 batch 2 AC #24): a dirty worktree
+        // produces a bundle under the XDG rescue root, NEVER inside a git tree.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
         let sig = git2::Signature::now("Test", "test@test.com").unwrap();
@@ -1633,7 +1725,10 @@ mod tests {
 
     #[test]
     fn test_rescue_writes_bundle_on_dirty_worktree() {
-        let (project, wt) = make_worktree("ses-bundle1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-bundle1");
         commit_file(&wt, "seed.txt", "seed");
         // Modify a tracked file → shows up in `git diff HEAD`.
         fs::write(wt.join("seed.txt"), "modified").unwrap();
@@ -1643,13 +1738,14 @@ mod tests {
         let result = rescue_uncommitted_work(&wt, "worktree-ses-bundle1");
         assert!(result.is_ok(), "rescue failed: {result:?}");
 
-        // Bundle lives under project_root/.state/rescue/{sid}-{ts}-{pid}/.
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(rescue_dir.is_dir(), "rescue dir missing");
+        // Bundle lives under xdg_rescue_root() (NOT inside any git tree).
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        assert!(rescue_dir.is_dir(), "xdg rescue dir missing");
         let mut bundles: Vec<_> = fs::read_dir(&rescue_dir)
             .unwrap()
             .filter_map(Result::ok)
             .map(|e| e.path())
+            .filter(|p| p.is_dir())
             .collect();
         assert_eq!(bundles.len(), 1, "expected 1 bundle; got {bundles:?}");
         let bundle = bundles.pop().unwrap();
@@ -1662,11 +1758,21 @@ mod tests {
         assert_eq!(metadata["session_id"], "ses-bundle1");
         assert_eq!(metadata["reason"], "worktree_cleanup");
         assert!(metadata["timestamp_rfc3339"].is_string());
+        // AC #24: the bundle path MUST NOT contain any `.git-worktrees`
+        // segment — i.e. the bundle never lands inside a git working tree.
+        let bundle_str = bundle.to_string_lossy();
+        assert!(
+            !bundle_str.contains(".git-worktrees"),
+            "AC #24: bundle path must not be inside a git working tree; got {bundle_str}"
+        );
     }
 
     #[test]
     fn test_rescue_skips_on_no_rescue_marker() {
-        let (project, wt) = make_worktree("ses-noresc1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-noresc1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
         fs::create_dir_all(wt.join(".state/runtime")).unwrap();
@@ -1674,15 +1780,25 @@ mod tests {
 
         rescue_uncommitted_work(&wt, "worktree-ses-noresc1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(
-            !rescue_dir.exists() || fs::read_dir(&rescue_dir).unwrap().next().is_none(),
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 0,
             "no bundle should be written when no-rescue marker is set"
         );
     }
 
     #[test]
     fn test_rescue_skips_when_pr_pushed_gate_satisfied() {
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
         let (project, wt) = make_worktree("ses-prgate1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
@@ -1713,15 +1829,22 @@ mod tests {
 
         rescue_uncommitted_work(&wt, "worktree-ses-prgate1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(
-            !rescue_dir.exists() || fs::read_dir(&rescue_dir).unwrap().next().is_none(),
-            "pr_pushed gate must suppress rescue"
-        );
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(dir_count, 0, "pr_pushed gate must suppress rescue");
     }
 
     #[test]
     fn test_rescue_skips_when_session_complete_gate_satisfied() {
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
         let (project, wt) = make_worktree("ses-scgate1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
@@ -1750,15 +1873,22 @@ mod tests {
 
         rescue_uncommitted_work(&wt, "worktree-ses-scgate1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(
-            !rescue_dir.exists() || fs::read_dir(&rescue_dir).unwrap().next().is_none(),
-            "session_complete gate must suppress rescue"
-        );
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(dir_count, 0, "session_complete gate must suppress rescue");
     }
 
     #[test]
     fn test_rescue_skips_when_ledger_has_pr_created() {
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
         let (project, wt) = make_worktree("ses-ledger1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
@@ -1774,55 +1904,62 @@ mod tests {
 
         rescue_uncommitted_work(&wt, "worktree-ses-ledger1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(
-            !rescue_dir.exists() || fs::read_dir(&rescue_dir).unwrap().next().is_none(),
-            "pr_created ledger event must suppress rescue"
-        );
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(dir_count, 0, "pr_created ledger event must suppress rescue");
     }
 
     #[test]
     fn test_rescue_skips_when_clean() {
-        let (project, wt) = make_worktree("ses-clean1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-clean1");
         commit_file(&wt, "seed.txt", "s");
         // No modifications, no untracked files → nothing to rescue.
 
         rescue_uncommitted_work(&wt, "worktree-ses-clean1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
-        assert!(
-            !rescue_dir.exists() || fs::read_dir(&rescue_dir).unwrap().next().is_none(),
-            "clean worktree must not write bundle"
-        );
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(dir_count, 0, "clean worktree must not write bundle");
     }
 
     #[test]
     fn test_rescue_records_ledger_event_on_success() {
-        let (project, wt) = make_worktree("ses-lgrec1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-lgrec1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
 
         rescue_uncommitted_work(&wt, "worktree-ses-lgrec1").unwrap();
 
-        // Look for the rescue_written event in sessions.jsonl (fragment form).
-        let sessions_dir = project.path().join(".state/ledger/sessions");
-        let mut found = false;
-        if let Ok(entries) = fs::read_dir(&sessions_dir) {
-            for entry in entries.flatten() {
-                let Ok(content) = fs::read_to_string(entry.path()) else {
-                    continue;
-                };
-                if content.contains("\"event\":\"rescue_written\"")
-                    && content.contains("ses-lgrec1")
-                {
-                    found = true;
-                    break;
-                }
-            }
-        }
+        // AC #25: rescue events live in ONE append-only file under the xdg
+        // root, not in per-session fragments under any project's
+        // `.state/ledger/sessions/`.
+        let sessions_log = crate::autorun::rescue::sessions_log_path().unwrap();
         assert!(
-            found,
-            "rescue_written event must be appended to sessions ledger"
+            sessions_log.exists(),
+            "xdg sessions.jsonl must exist after first rescue"
+        );
+        let content = fs::read_to_string(&sessions_log).unwrap();
+        assert!(
+            content.contains("\"event\":\"rescue_written\"") && content.contains("ses-lgrec1"),
+            "rescue_written event must be appended to xdg sessions log"
         );
     }
 
@@ -1830,6 +1967,9 @@ mod tests {
     fn test_rescue_bad_config_does_not_panic() {
         // GateConfig::load panics on malformed config. The rescue path must
         // swallow the panic and proceed (writing the bundle).
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
         let (project, wt) = make_worktree("ses-badcfg1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
@@ -1845,17 +1985,21 @@ mod tests {
         // Should NOT panic, should still write the bundle.
         rescue_uncommitted_work(&wt, "worktree-ses-badcfg1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
         let bundles: Vec<_> = fs::read_dir(&rescue_dir)
             .unwrap()
             .filter_map(Result::ok)
+            .filter(|e| e.path().is_dir())
             .collect();
         assert_eq!(bundles.len(), 1, "expected bundle despite bad config");
     }
 
     #[test]
     fn test_rescue_skips_large_untracked_files() {
-        let (project, wt) = make_worktree("ses-big1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-big1");
         commit_file(&wt, "seed.txt", "s");
         // Small untracked file — included.
         fs::write(wt.join("small.txt"), "ok").unwrap();
@@ -1864,11 +2008,11 @@ mod tests {
         // `skipped_large_files` is present (as an array, possibly empty).
         rescue_uncommitted_work(&wt, "worktree-ses-big1").unwrap();
 
-        let rescue_dir = project.path().join(".state/rescue");
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
         let bundle = fs::read_dir(&rescue_dir)
             .unwrap()
-            .next()
-            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.path().is_dir())
             .unwrap()
             .path();
         let metadata: serde_json::Value =
@@ -1885,7 +2029,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_rescue_captures_newline_in_filename() {
-        let (project, wt) = make_worktree("ses-newline1");
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-newline1");
         commit_file(&wt, "seed.txt", "s");
 
         // Create an untracked file whose name contains `\n`.
@@ -1896,11 +2043,11 @@ mod tests {
 
         // Verify the bundle's untracked.tar.gz contains the file with
         // the exact (newline-bearing) name.
-        let rescue_dir = project.path().join(".state/rescue");
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
         let bundle = fs::read_dir(&rescue_dir)
             .unwrap()
-            .next()
-            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.path().is_dir())
             .unwrap()
             .path();
         let tar_path = bundle.join("untracked.tar.gz");

@@ -5,15 +5,35 @@ use crate::error::DbError;
 /// Raw `SurrealQL` schema loaded at compile time.
 pub const SCHEMA_SQL: &str = include_str!("schema.surql");
 
+/// One-shot migration: back-fill `session_kind='autorun'` for existing
+/// `interactive_session` rows whose `session_id` matches an `autorun_session`
+/// id. INF-TSK-049-001 AC #8.
+///
+/// Idempotent: a second run matches zero rows because every targeted row is
+/// already `'autorun'` after the first. Safe to call on every startup.
+///
+/// Uses `record::id(id)` to unwrap the `RecordId` to its string key part so
+/// the set comparison against `interactive_session.session_id` (a plain
+/// string) works.
+const MIGRATION_BACKFILL_AUTORUN_KIND: &str = "\
+UPDATE interactive_session SET session_kind = 'autorun' \
+WHERE session_kind = 'interactive' \
+  AND session_id IN (SELECT VALUE record::id(id) FROM autorun_session);";
+
 /// Apply the idempotent schema to a `SurrealDB` instance.
 ///
 /// All statements use `OVERWRITE`, making this safe to run on every startup.
+/// After the schema, runs one-shot migrations that back-fill newly-added
+/// columns on pre-existing rows (see [`MIGRATION_BACKFILL_AUTORUN_KIND`]).
 ///
 /// # Errors
 ///
 /// Returns `DbError::Surreal` if any schema statement fails.
 pub async fn apply_schema<C: Connection>(db: &Surreal<C>) -> Result<(), DbError> {
     db.query(SCHEMA_SQL).await?.check()?;
+    // Back-fill session_kind for rows created before the column existed.
+    // Idempotent: rows already set to 'autorun' are not matched.
+    let _ = db.query(MIGRATION_BACKFILL_AUTORUN_KIND).await?.check();
     Ok(())
 }
 

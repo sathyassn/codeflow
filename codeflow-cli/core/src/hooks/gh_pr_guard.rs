@@ -1337,6 +1337,42 @@ mod tests {
             clear_autorun_env();
         }
 
+        /// INF-TSK-049-001 batch 2 (AC #38 / W5): defensive regression. In
+        /// an autorun context with `AUTORUN_INTEGRATION_BRANCH` set, a
+        /// `gh pr create` invocation that omits `--base` MUST be blocked
+        /// with a non-zero hook exit. This locks in the contract added by
+        /// PR #300 — if a future refactor lets `gh pr create` slip through
+        /// without `--base`, this test catches it.
+        #[test]
+        #[serial(env_vars)]
+        fn autorun_missing_base_is_hard_block_w5_regression() {
+            clear_autorun_env();
+            unsafe {
+                std::env::set_var("AUTORUN_SESSION_ID", "ses-01w5regress");
+                std::env::set_var("AUTORUN_INTEGRATION_BRANCH", "autorun/inf-epc-049-batch2");
+            }
+            let cmd = with_canonical_body("gh pr create --title \"feat: w5 regression\"");
+            let guard = make_guard_with_resolver(NullResolver);
+            let result = guard.handle(make_input(&cmd)).unwrap();
+            match result {
+                HookOutput::Block { reason, .. } => {
+                    assert!(
+                        reason.contains("autorun/inf-epc-049-batch2"),
+                        "block must name expected base; got: {reason}"
+                    );
+                    assert!(
+                        reason.contains("none"),
+                        "block must indicate missing base; got: {reason}"
+                    );
+                }
+                other => panic!(
+                    "AC #38 / W5 regression: `gh pr create` without --base under autorun \
+                     MUST be blocked; got: {other:?}"
+                ),
+            }
+            clear_autorun_env();
+        }
+
         #[test]
         #[serial(env_vars)]
         fn autorun_env_missing_blocks() {

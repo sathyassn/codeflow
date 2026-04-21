@@ -38,6 +38,11 @@ pub struct WorkerConfig {
     pub worker_id: String,
     pub worker_num: usize,
     pub task_id: String,
+    /// Human-readable format id for `task_id` (e.g. `INF-TSK-049-001`).
+    /// Read from the task markdown's `format_id` frontmatter field.
+    /// `None` when the task markdown cannot be located or the field is
+    /// absent. INF-TSK-049-001 AC #15.
+    pub task_format_id: Option<String>,
     pub batch_name: String,
     pub integration_auto_merge: bool,
     pub integration_branch: String,
@@ -61,7 +66,7 @@ pub struct WorkerConfig {
 }
 
 /// Result of a worker execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WorkerResult {
     pub worker_id: String,
     pub task_id: String,
@@ -72,6 +77,13 @@ pub struct WorkerResult {
     pub error: String,
     pub branch_name: String,
     pub duration_sec: i64,
+    /// Optional human-readable warning attached to a successful (or
+    /// success-with-caveats) outcome. INF-TSK-049-001 AC #34 — exit 124
+    /// with branch already on origin is reported as `status="completed"`
+    /// and a non-empty `warning` rather than as `failed`. Cascade
+    /// dispatch (orchestrator) treats any "completed" task — with or
+    /// without a warning — as success and proceeds to dependents (AC #36).
+    pub warning: Option<String>,
 }
 
 /// Manages task sequencing and worker lifecycle using semaphore-based
@@ -181,6 +193,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             target_branch: Some(batch.integration_branch.clone()),
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -461,6 +474,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     error: "batch_aborted".into(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 });
             }
         }
@@ -616,6 +630,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     error: "dependency failed".into(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 });
                 launched_any = true;
                 continue;
@@ -659,6 +674,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                             error: "user_cancelled".into(),
                             branch_name: String::new(),
                             duration_sec: 0,
+                            warning: None,
                         });
                         drop(permit);
                         launched_any = true;
@@ -696,6 +712,10 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                     worker_id: format!("arw-{session_id}-{task_id}"),
                     worker_num: idx + 1,
                     task_id: task_id.clone(),
+                    task_format_id: crate::autorun::batch::read_task_format_id(
+                        task_id,
+                        project_dir,
+                    ),
                     batch_name: batch.name.clone(),
                     integration_auto_merge: batch.integration_auto_merge,
                     integration_branch: batch.integration_branch.clone(),
@@ -776,6 +796,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                         error: reason.into(),
                         branch_name: String::new(),
                         duration_sec: duration,
+                        warning: None,
                     });
                     drop(permit);
                     return;
@@ -795,7 +816,15 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                 }
                 Ok(mut r) => {
                     r.duration_sec = duration;
-                    if r.status == "completed" {
+                    // INF-TSK-049-001 batch 2 (AC #36 / W3): a worker that
+                    // reports `status == "completed"` (with or without a
+                    // warning) is success — its dependents proceed. A
+                    // non-empty `warning` on any other status is also
+                    // honoured as success-with-warning so out-of-band
+                    // classifications cannot reintroduce the cascade-kill
+                    // bug.
+                    let is_success = r.status == "completed" || r.warning.is_some();
+                    if is_success {
                         completed.lock().await.insert(task_id);
                     } else {
                         failed.lock().await.insert(task_id);
@@ -814,6 +843,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                         error: e.to_string(),
                         branch_name: String::new(),
                         duration_sec: duration,
+                        warning: None,
                     });
                 }
             }
@@ -946,6 +976,7 @@ mod tests {
                 error: String::new(),
                 branch_name: String::new(),
                 duration_sec: 0,
+                warning: None,
             })
         }
     }
@@ -964,6 +995,7 @@ mod tests {
                 error: "test failure".into(),
                 branch_name: String::new(),
                 duration_sec: 0,
+                warning: None,
             })
         }
     }
@@ -1048,6 +1080,109 @@ mod tests {
         assert_eq!(b_result.status, "skipped");
     }
 
+    /// Mock runner that reports `status="completed"` with a non-empty
+    /// warning. Models the W1 outcome (exit-124-on-origin).
+    struct CompletedWithWarningRunner;
+
+    impl WorkerRunner for CompletedWithWarningRunner {
+        async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+            Ok(WorkerResult {
+                worker_id: cfg.worker_id,
+                task_id: cfg.task_id,
+                status: "completed".into(),
+                exit_code: 124,
+                pr_number: 0,
+                pr_url: String::new(),
+                error: String::new(),
+                branch_name: String::new(),
+                duration_sec: 0,
+                warning: Some("worker timed out but work is on origin (W1)".to_string()),
+            })
+        }
+    }
+
+    /// INF-TSK-049-001 batch 2 (AC #36 / W3): a task that finishes with
+    /// `status="completed"` and a non-empty warning MUST NOT cause its
+    /// dependents to be skipped.
+    #[tokio::test]
+    async fn w3_completed_with_warning_does_not_skip_dependents() {
+        let orch = Orchestrator::new(CompletedWithWarningRunner, mock_store());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch =
+            make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n");
+
+        let results = orch
+            .execute(
+                "ses-w3",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        let a = results.iter().find(|r| r.task_id == "a").unwrap();
+        assert_eq!(a.status, "completed");
+        assert!(a.warning.is_some(), "a must carry the W1 warning");
+
+        let b = results.iter().find(|r| r.task_id == "b").unwrap();
+        assert_eq!(
+            b.status, "completed",
+            "AC #36: dependent of completed-with-warning task must NOT be skipped; got {:?}",
+            b.status
+        );
+    }
+
+    /// W3 hardening: even when a task somehow reports a non-completed
+    /// status alongside a non-empty warning, the orchestrator routes it to
+    /// `completed` so dependents proceed. Locks in the defence-in-depth
+    /// added in `spawn_worker`.
+    struct WarningOnNonCompletedRunner;
+
+    impl WorkerRunner for WarningOnNonCompletedRunner {
+        async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+            Ok(WorkerResult {
+                worker_id: cfg.worker_id,
+                task_id: cfg.task_id,
+                status: "timeout".into(), // out-of-band classification
+                exit_code: 124,
+                pr_number: 0,
+                pr_url: String::new(),
+                error: String::new(),
+                branch_name: String::new(),
+                duration_sec: 0,
+                warning: Some("worker timed out but work is on origin (W1)".to_string()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn w3_warning_on_non_completed_status_treated_as_success() {
+        let orch = Orchestrator::new(WarningOnNonCompletedRunner, mock_store());
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let batch =
+            make_batch("max_workers: 3\ntasks:\n  - id: a\n  - id: b\n    depends_on: [a]\n");
+
+        let results = orch
+            .execute(
+                "ses-w3-defence",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let b = results.iter().find(|r| r.task_id == "b").unwrap();
+        assert_ne!(
+            b.status, "skipped",
+            "warning-bearing result must not cascade-kill dependents"
+        );
+    }
+
     #[tokio::test]
     async fn test_orchestrator_single_task() {
         let runner = OrderTracker::new();
@@ -1111,6 +1246,7 @@ mod tests {
             worker_id: "arw-1".into(),
             worker_num: 1,
             task_id: "task-a".into(),
+            task_format_id: None,
             batch_name: "batch".into(),
             integration_auto_merge: false,
             integration_branch: "main".into(),
@@ -1140,6 +1276,7 @@ mod tests {
             error: String::new(),
             branch_name: "feat/x".into(),
             duration_sec: 120,
+            warning: None,
         };
         assert_eq!(result.status, "completed");
         assert_eq!(result.duration_sec, 120);
@@ -1206,6 +1343,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }
@@ -1434,6 +1572,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }
@@ -1501,6 +1640,7 @@ mod tests {
                         error: "batch_aborted".into(),
                         branch_name: String::new(),
                         duration_sec: 0,
+                        warning: None,
                     });
                 }
             }
@@ -1721,6 +1861,7 @@ mod tests {
             error: String::new(),
             branch_name: String::new(),
             duration_sec: 1,
+            warning: None,
         });
 
         // Add a fast handle for the "running" task (simulates worker finishing after tmux kill).
@@ -1830,6 +1971,7 @@ mod tests {
                 worker_id: "arw-err".into(),
                 worker_num: 1,
                 task_id: "task-err".into(),
+                task_format_id: None,
                 batch_name: "batch".into(),
                 integration_auto_merge: false,
                 integration_branch: "main".into(),
@@ -2174,6 +2316,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }
@@ -2261,6 +2404,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }
@@ -2301,6 +2445,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }
@@ -2391,6 +2536,7 @@ mod tests {
                     error: String::new(),
                     branch_name: String::new(),
                     duration_sec: 0,
+                    warning: None,
                 })
             }
         }

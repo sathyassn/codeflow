@@ -1465,7 +1465,16 @@ codeflow interactive                   # Launch Claude with worktree isolation (
 codeflow interactive status            # Show active interactive sessions with liveness
 codeflow interactive list              # Show all interactive sessions (active + complete)
 codeflow interactive cleanup           # Remove stale sessions (dead PID detection)
+codeflow rescue list                   # List saved rescue bundles (XDG cache root)
+codeflow rescue show <id>              # Show metadata + diff preview for a bundle
+codeflow rescue apply <id> [--repo X]  # Stage a bundle's patches into a target repo
+codeflow rescue clean <id|--all|--older-than <dur>>  # Delete bundle(s)
+codeflow rescue drop <id>              # Alias for clean
+codeflow rescue pin <id>               # Exclude bundle from auto-prune
+codeflow rescue unpin <id>             # Re-enable auto-prune
 ```
+
+Rescue bundles are written to an XDG cache directory (macOS `~/Library/Caches/codeflow/rescue/`, Linux `$XDG_CACHE_HOME/codeflow/rescue/`, Windows `%LOCALAPPDATA%\\codeflow\\rescue\\`) — never to any git working tree. Auto-prune runs at CLI startup using `rescue.retention_days` (default 30) from `.codeflow/config/parallel-work/parallel-work-config.json`; bundles with `.pinned` markers are preserved indefinitely. A stderr banner surfaces the backlog once per 24h; suppress via `CODEFLOW_NO_RESCUE_BANNER=true` env var or `rescue.banner_enabled: false` in config.
 
 The unified `codeflow test --mode full` command is the ONLY authorized test execution path for all PathFlow pipeline stages (WS-DEV, WS-QA). It routes to all configured test targets defined in `.codeflow/config/testing/test-config.json` and enforces first-match-wins per-target coverage rules.
 
@@ -1655,6 +1664,7 @@ All memory operations are routed through the **cf-knowledge-layer** teammate. Th
 | Orphaned worktree | If `.git-worktrees/worktree-{SID}/` exists but no registry entry, run `codeflow worktree prune` to reconcile. |
 | Max worktrees reached | `WorktreeRegistry` enforces max 5 concurrent. Clean up completed sessions' worktrees first, then retry. |
 | Claims stuck after crash | Claims have TTL. Run `claims::release_all()` for the crashed session's worktree_id, or wait for TTL expiry. |
+| Rescue bundle exists for prior interrupted session | Run `codeflow rescue list` to see bundles. `codeflow rescue show <id>` for contents. If the branch is already on origin, bundle is typically redundant — use `codeflow rescue clean <id>`. To preserve a bundle indefinitely, run `codeflow rescue pin <id>`. |
 
 ### Teammate Recovery
 

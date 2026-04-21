@@ -10,6 +10,7 @@ pub mod ci_wait;
 pub mod config;
 pub mod epic_update;
 pub mod orchestrator;
+pub mod rescue;
 pub mod stale;
 pub mod worker;
 

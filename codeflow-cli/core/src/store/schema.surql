@@ -180,9 +180,11 @@ DEFINE FIELD OVERWRITE stale_reason        ON TABLE autorun_session TYPE option<
 DEFINE FIELD OVERWRITE target_branch      ON TABLE autorun_session TYPE option<string>;
 DEFINE FIELD OVERWRITE final_pr_url       ON TABLE autorun_session TYPE option<string>;
 -- INF-TSK-048-001 AC #8: TUI status fields (current task, last update, worker heartbeat).
-DEFINE FIELD OVERWRITE current_task_id    ON TABLE autorun_session TYPE option<string>;
-DEFINE FIELD OVERWRITE updated_at         ON TABLE autorun_session TYPE option<string>;
-DEFINE FIELD OVERWRITE last_heartbeat_at  ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE current_task_id        ON TABLE autorun_session TYPE option<string>;
+-- INF-TSK-049-001 AC #15: human-readable format id paired with current_task_id.
+DEFINE FIELD OVERWRITE current_task_format_id ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE updated_at             ON TABLE autorun_session TYPE option<string>;
+DEFINE FIELD OVERWRITE last_heartbeat_at      ON TABLE autorun_session TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_session TYPE string;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_session TYPE option<string>;
 
@@ -240,12 +242,19 @@ DEFINE FIELD OVERWRITE work_type     ON TABLE interactive_session TYPE option<st
 DEFINE FIELD OVERWRITE team_name     ON TABLE interactive_session TYPE option<string>;
 DEFINE FIELD OVERWRITE source_cli    ON TABLE interactive_session TYPE string;
 DEFINE FIELD OVERWRITE managed       ON TABLE interactive_session TYPE bool;
+-- INF-TSK-049-001 AC #8: Distinguishes real interactive sessions from
+-- autorun worker sessions (workers register as interactive_session with
+-- managed=true, otherwise indistinguishable from real interactive rows).
+-- Valid values: 'interactive' (default) | 'autorun'. Written at row
+-- creation based on the presence of AUTORUN_SESSION_ID env var.
+DEFINE FIELD OVERWRITE session_kind  ON TABLE interactive_session TYPE string DEFAULT 'interactive';
 DEFINE FIELD OVERWRITE created_at    ON TABLE interactive_session TYPE string;
 DEFINE FIELD OVERWRITE updated_at    ON TABLE interactive_session TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at  ON TABLE interactive_session TYPE option<string>;
 
 DEFINE INDEX OVERWRITE idx_interactive_session_sid    ON interactive_session FIELDS session_id UNIQUE;
 DEFINE INDEX OVERWRITE idx_interactive_session_status ON interactive_session FIELDS status;
+DEFINE INDEX OVERWRITE idx_interactive_session_kind   ON interactive_session FIELDS session_kind;
 
 -- =============================================================================
 -- COORDINATION TABLES

@@ -135,6 +135,24 @@ pub fn read_task_scope(
     Ok((file_scope, scope_policy))
 }
 
+/// Read a task's `format_id` from its markdown frontmatter.
+///
+/// INF-TSK-049-001 AC #15: surfaces the human-readable id (e.g.
+/// `INF-TSK-049-001`) so the autorun orchestrator can populate
+/// `autorun_session.current_task_format_id` at dispatch for TUI display.
+///
+/// Returns `None` if the markdown cannot be read or lacks the field —
+/// the TUI falls back to the opaque ULID in that case. Deliberately
+/// non-fatal: a missing `format_id` should NOT block a dispatch.
+#[must_use]
+pub fn read_task_format_id(task_id: &str, project_dir: &Path) -> Option<String> {
+    let task_path = resolve_task_path(project_dir, task_id).ok()?;
+    let content = std::fs::read(&task_path).ok()?;
+    let (data, _body) = crate::validate::parse_frontmatter(&content).ok()?;
+    let fmt = crate::validate::get_string_field(&data, "format_id");
+    if fmt.is_empty() { None } else { Some(fmt) }
+}
+
 /// Parse and validate a YAML batch file from disk.
 ///
 /// # Errors
@@ -1314,6 +1332,94 @@ tasks:
         let result = resolve_task_path(dir.path(), "INF-TSK-../../../etc-001");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("path traversal"));
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #15 — read_task_format_id reads markdown frontmatter.
+    // -----------------------------------------------------------------------
+
+    fn write_task_md(dir: &std::path::Path, task_id: &str, format_id: &str) {
+        use std::io::Write;
+        // resolve_task_path expects {project}/project-management/epics/{AREA}/
+        // {AREA}-EPC-{NNN}/tasks/{task_id}.md. Parse the pieces from task_id
+        // like INF-TSK-049-001: area=INF, epic=049.
+        let parts: Vec<&str> = task_id.split('-').collect();
+        let area = parts[0];
+        let epic_num = parts[2];
+        let parent = dir
+            .join("project-management/epics")
+            .join(area)
+            .join(format!("{area}-EPC-{epic_num}"))
+            .join("tasks");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join(format!("{task_id}.md"));
+        let body = format!("---\nformat_id: \"{format_id}\"\ntitle: \"Test\"\n---\n\n# Test\n");
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn test_read_task_format_id_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_md(dir.path(), "INF-TSK-049-001", "INF-TSK-049-001");
+        let out = read_task_format_id("INF-TSK-049-001", dir.path());
+        assert_eq!(out.as_deref(), Some("INF-TSK-049-001"));
+    }
+
+    #[test]
+    fn test_read_task_format_id_missing_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = read_task_format_id("INF-TSK-999-999", dir.path());
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn test_read_task_format_id_missing_field_returns_none() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-049/tasks");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("INF-TSK-049-002.md");
+        let body = "---\ntitle: \"No format id\"\n---\n\n# No format id\n";
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        let out = read_task_format_id("INF-TSK-049-002", dir.path());
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn test_read_task_format_id_empty_field_returns_none() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-049/tasks");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("INF-TSK-049-003.md");
+        let body = "---\nformat_id: \"\"\ntitle: \"Empty\"\n---\n\n# Empty\n";
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        let out = read_task_format_id("INF-TSK-049-003", dir.path());
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn test_read_task_format_id_invalid_frontmatter_returns_none() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir
+            .path()
+            .join("project-management/epics/INF/INF-EPC-049/tasks");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("INF-TSK-049-004.md");
+        // Missing trailing --- fence.
+        let body = "---\nformat_id: \"INF-TSK-049-004\"\n\n# No fence\n";
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        let out = read_task_format_id("INF-TSK-049-004", dir.path());
+        assert!(out.is_none());
     }
 
     // -----------------------------------------------------------------------

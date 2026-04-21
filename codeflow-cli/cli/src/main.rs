@@ -147,7 +147,53 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // INF-TSK-049-001 batch 2 (AC #33): one-shot migration from legacy
+    // {project}/.state/rescue/* to xdg_rescue_root. Idempotent — second
+    // call no-ops via marker file. Best-effort: failures are logged but
+    // do NOT block CLI startup.
+    rescue_startup_hooks();
     dispatch(cli.command).await
+}
+
+/// Run rescue startup side-effects (migration + banner + auto-prune).
+///
+/// Called once per CLI invocation, before subcommand dispatch.
+/// All operations are best-effort — never propagate errors.
+fn rescue_startup_hooks() {
+    // 1. One-shot migration — idempotent, marker-guarded.
+    if let Ok(project) = helpers::detect_project_dir() {
+        let _ = codeflow_core::autorun::rescue::migrate_legacy(&project);
+        // 2. Auto-prune per configured retention.
+        let cfg = codeflow_core::autorun::config::load_config(&project).unwrap_or_default();
+        let _ = codeflow_core::autorun::rescue::auto_prune(cfg.rescue.retention_days);
+    } else {
+        // Outside a project — no migration target, but auto-prune by
+        // default retention so xdg root doesn't accumulate forever. Read
+        // the default from RescueConfig to keep the retention-days value
+        // in one place (AC30 — rework iter 1 Finding 2).
+        let default_retention =
+            codeflow_core::autorun::config::RescueConfig::default().retention_days;
+        let _ = codeflow_core::autorun::rescue::auto_prune(default_retention);
+    }
+}
+
+/// Emit the rescue banner to stderr if conditions are met.
+///
+/// Called by subcommands that surface session-level state
+/// (`autorun status`, `interactive status`, bare `codeflow`). Honours
+/// `rescue.banner_enabled` from the parallel-work config (default true)
+/// — rework iter 1 Finding 1 fix.
+pub(crate) fn maybe_emit_rescue_banner() {
+    let banner_enabled = helpers::detect_project_dir()
+        .ok()
+        .and_then(|p| codeflow_core::autorun::config::load_config(&p).ok())
+        .map_or_else(
+            || codeflow_core::autorun::config::RescueConfig::default().banner_enabled,
+            |cfg| cfg.rescue.banner_enabled,
+        );
+    if let Some(line) = codeflow_core::autorun::rescue::maybe_banner(banner_enabled) {
+        eprintln!("{line}");
+    }
 }
 
 async fn dispatch(command: Command) -> Result<()> {

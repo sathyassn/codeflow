@@ -1727,6 +1727,16 @@ impl SessionStartInit {
         let wt = worktree_path.map(String::from);
         let pid = i64::from(std::process::id());
         let now = chrono::Utc::now().to_rfc3339();
+        // INF-TSK-049-001 AC #8: classify as autorun when this unmanaged
+        // session was spawned by an autorun worker (AUTORUN_SESSION_ID
+        // inherited from the orchestrator process). Practically rare (this
+        // path runs for plain `claude` invocations, not `codeflow -i` ones)
+        // but the check is defensive and costs nothing when unset.
+        let session_kind = if std::env::var("AUTORUN_SESSION_ID").is_ok() {
+            "autorun".to_string()
+        } else {
+            "interactive".to_string()
+        };
 
         let update = async move {
             let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
@@ -1744,6 +1754,7 @@ impl SessionStartInit {
                      team_name = NONE, \
                      source_cli = 'claude', \
                      managed = false, \
+                     session_kind = $session_kind, \
                      created_at = $created_at, \
                      updated_at = NONE, \
                      completed_at = NONE;",
@@ -1751,6 +1762,7 @@ impl SessionStartInit {
                 .bind(("session_id", sid))
                 .bind(("pid", pid))
                 .bind(("worktree_path", wt))
+                .bind(("session_kind", session_kind))
                 .bind(("created_at", now))
                 .await
                 .ok()?

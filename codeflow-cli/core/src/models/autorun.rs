@@ -34,10 +34,18 @@ pub struct AutorunSession {
     pub final_pr_url: Option<String>,
     /// Task ID currently being executed by a worker in this session.
     ///
-    /// Written on task dispatch, cleared (None) on task finish. Used by the
+    /// INF-TSK-049-001 AC #15: written on task dispatch and PRESERVED on
+    /// task finish (retained as the last-dispatched task on terminal rows
+    /// so the TUI TASK column does not go blank mid-run). Used by the
     /// status TUI to populate the TASK column.
     #[serde(default)]
     pub current_task_id: Option<String>,
+    /// Human-readable task format ID (e.g. `INF-TSK-048-001`) paired with
+    /// `current_task_id`. Same lifecycle: written on dispatch, preserved
+    /// on finish. Preferred over `current_task_id` for display so the
+    /// TUI shows identifiers operators recognize.
+    #[serde(default)]
+    pub current_task_format_id: Option<String>,
     /// Last time any field on this record was updated (RFC 3339).
     ///
     /// Updated on task state changes and orchestrator heartbeat. Used by the
@@ -143,6 +151,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
@@ -170,6 +179,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
@@ -197,6 +207,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
@@ -229,6 +240,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: Some("INF-TSK-001-001".into()),
+            current_task_format_id: Some("INF-TSK-001-001".into()),
             updated_at: Some("2026-04-20T10:00:00Z".into()),
             last_heartbeat_at: Some("2026-04-20T10:00:05Z".into()),
             created_at: "2026-04-20T09:00:00Z".into(),
@@ -271,6 +283,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-04-01T00:00:00Z".into(),
@@ -301,6 +314,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),

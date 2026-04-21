@@ -48,11 +48,26 @@ pub struct InteractiveSession {
     /// Whether this session is managed by the `codeflow` CLI.
     /// Managed sessions have `CODEFLOW_MANAGED=true` in the environment.
     pub managed: bool,
+    /// Classifies the row as a real interactive session vs an autorun worker
+    /// session (workers register as `interactive_session` rows with
+    /// `source_cli='codeflow', managed=true` and are otherwise
+    /// indistinguishable). INF-TSK-049-001 AC #8. Valid values:
+    /// `"interactive"` (default) or `"autorun"`. Written at session
+    /// creation based on the presence of `AUTORUN_SESSION_ID` env var.
+    #[serde(default = "default_session_kind")]
+    pub session_kind: String,
     pub created_at: String,
     #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
+}
+
+/// Default `session_kind` for rows that pre-date the column. The migration
+/// in `apply_schema` updates the seed value for known autorun workers; any
+/// row still carrying the default is treated as a real interactive session.
+fn default_session_kind() -> String {
+    "interactive".to_string()
 }
 
 #[cfg(test)]

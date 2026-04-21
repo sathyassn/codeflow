@@ -607,6 +607,7 @@ impl DataStore for SurrealStore {
             "final_pr_url" => update.final_pr_url,
             "target_branch" => update.target_branch,
             "current_task_id" => update.current_task_id,
+            "current_task_format_id" => update.current_task_format_id,
             "updated_at" => update.updated_at,
             "last_heartbeat_at" => update.last_heartbeat_at,
         };
@@ -641,6 +642,7 @@ impl DataStore for SurrealStore {
             "final_pr_url" => update.final_pr_url,
             "target_branch" => update.target_branch,
             "current_task_id" => update.current_task_id,
+            "current_task_format_id" => update.current_task_format_id,
             "updated_at" => update.updated_at,
             "last_heartbeat_at" => update.last_heartbeat_at,
         };
@@ -1596,6 +1598,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-03-08T00:00:00Z".into(),
@@ -2882,6 +2885,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: "2026-01-01T00:00:00Z".into(),

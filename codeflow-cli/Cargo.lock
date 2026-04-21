@@ -844,6 +844,7 @@ dependencies = [
  "ctor",
  "filetime",
  "flate2",
+ "fs2",
  "git2",
  "insta",
  "libc",

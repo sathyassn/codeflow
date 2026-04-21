@@ -55,6 +55,10 @@ pub async fn run(command: Option<InteractiveCommand>) -> Result<()> {
             all,
             status,
         }) => {
+            // INF-TSK-049-001 batch 2 (AC #32): surface unprocessed rescue
+            // bundles before status output. Throttled once-per-24h via
+            // .last-scan; suppressed by CODEFLOW_NO_RESCUE_BANNER=true.
+            crate::maybe_emit_rescue_banner();
             // Default to TUI when stdout is a TTY; --once forces text output.
             if once || !std::io::stdout().is_terminal() {
                 run_status(all, status.as_deref()).await
@@ -217,6 +221,14 @@ async fn register_interactive_session(
     let pid = i64::from(std::process::id());
     let wt = worktree_path.map(String::from);
     let tmux = tmux_session.map(String::from);
+    // INF-TSK-049-001 AC #8: classify this row as autorun when launched
+    // inside an autorun worker (AUTORUN_SESSION_ID inherited from the
+    // orchestrator). Real interactive launches leave the env var unset.
+    let session_kind = if std::env::var("AUTORUN_SESSION_ID").is_ok() {
+        "autorun"
+    } else {
+        "interactive"
+    };
     let _ = store
         .db()
         .query(
@@ -232,6 +244,7 @@ async fn register_interactive_session(
              team_name = NONE, \
              source_cli = $source_cli, \
              managed = $managed, \
+             session_kind = $session_kind, \
              created_at = $created_at, \
              updated_at = NONE, \
              completed_at = NONE;",
@@ -242,6 +255,7 @@ async fn register_interactive_session(
         .bind(("tmux_session", tmux))
         .bind(("source_cli", source_cli.to_string()))
         .bind(("managed", managed))
+        .bind(("session_kind", session_kind.to_string()))
         .bind(("created_at", now))
         .await;
 }
@@ -340,10 +354,16 @@ async fn run_cleanup(no_purge: bool) -> Result<()> {
         for s in &sessions {
             if is_session_stale(s.pid) {
                 let now = chrono::Utc::now().to_rfc3339();
+                // INF-TSK-049-001 AC #13: set `completed_at` alongside
+                // `updated_at` so the frozen DURATION in the status TUI has
+                // an anchor. Previously only `updated_at` was set, which made
+                // the duration collapse to the -1 sentinel and render as
+                // "--" until the next post_tool_use touch.
                 let _ = store
                     .db()
                     .query(
-                        "UPDATE interactive_session SET status = 'stale', updated_at = $now \
+                        "UPDATE interactive_session SET status = 'stale', \
+                         updated_at = $now, completed_at = $now \
                          WHERE session_id = $sid AND status = 'active'",
                     )
                     .bind(("now", now))
@@ -905,6 +925,13 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     let mut table_state = TableState::default();
     let mut status_message: Option<(String, std::time::Instant)> = None;
     let mut show_all = false;
+    // INF-TSK-049-001 AC #11: session-scoped default list. Capture the TUI
+    // invocation timestamp; by default the list only shows rows that are
+    // either still active OR terminated at/after this moment. `show_stale_backlog`
+    // (toggled by `[s]`) reveals the historical rows that were already stale
+    // when the TUI started. Footer advertises the hidden count.
+    let invocation_start: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+    let mut show_stale_backlog = false;
 
     // Fetch initial data (open store fresh each time for cross-process visibility).
     let mut last_data = match open_store(project_dir).await {
@@ -932,8 +959,70 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     let mut last_fetch = std::time::Instant::now();
 
     loop {
+        // INF-TSK-049-001 AC #11: session-scoped visibility. A stale or
+        // complete row is considered "historical stale" (hidden from the
+        // default list) when its termination time (computed from
+        // `created_at + duration_secs`) is strictly before
+        // `invocation_start`. Active rows are always visible; rows with
+        // unknown duration surface by default. `[s]` toggles
+        // `show_stale_backlog` to reveal the hidden historical set.
+        //
+        // This is a PURE predicate on the view (no mutation) so a single
+        // data fetch can serve multiple render ticks with different `[s]`
+        // toggle states without corrupting the underlying data.
+        let is_pre_invocation_stale = |v: &codeflow_core::tui::data::SessionView| -> bool {
+            if v.status == "active" {
+                return false;
+            }
+            if v.duration_secs < 0 {
+                return false;
+            }
+            let Ok(created) = chrono::DateTime::parse_from_rfc3339(&v.created_at) else {
+                return false;
+            };
+            let terminated_at =
+                created.with_timezone(&chrono::Utc) + chrono::Duration::seconds(v.duration_secs);
+            terminated_at < invocation_start
+        };
+        // `[s] show stale (N hidden)` count — number of rows hidden ONLY
+        // because of session scoping (not already marked hidden by
+        // keep_last). Zero when `show_stale_backlog` is true (everything
+        // is visible in that mode).
+        let hidden_backlog_count = if show_all || show_stale_backlog {
+            0
+        } else {
+            last_data.as_ref().map_or(0, |(views, _)| {
+                views
+                    .iter()
+                    .filter(|v| !v.hidden && is_pre_invocation_stale(v))
+                    .count()
+            })
+        };
+
+        // INF-TSK-049-001 AC #11: build an effective view-list that mutates
+        // `hidden` for pre-invocation stale rows when the default scoped
+        // view is active. This keeps the downstream selector/renderer
+        // honest without threading a separate predicate argument through
+        // every helper.
+        let effective_data: Option<(
+            Vec<codeflow_core::tui::data::SessionView>,
+            codeflow_core::tui::data::SessionSummary,
+        )> = last_data.as_ref().map(|(views, summary)| {
+            let mut cloned = views.clone();
+            if !show_all && !show_stale_backlog {
+                for v in &mut cloned {
+                    if is_pre_invocation_stale(v) {
+                        v.hidden = true;
+                    }
+                }
+            }
+            let mut sum = summary.clone();
+            sum.hidden_count = sum.hidden_count.max(hidden_backlog_count);
+            (cloned, sum)
+        });
+
         // Compute filtered view count for navigation bounds.
-        let visible_count = last_data.as_ref().map_or(0, |(views, _)| {
+        let visible_count = effective_data.as_ref().map_or(0, |(views, _)| {
             if show_all {
                 views.len()
             } else {
@@ -966,7 +1055,7 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
             render_session_header(
                 frame,
                 chunks[0],
-                last_data.as_ref().map(|(_, s)| s),
+                effective_data.as_ref().map(|(_, s)| s),
                 show_all,
             );
 
@@ -975,12 +1064,12 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                 frame,
                 chunks[1],
                 &mut table_state,
-                last_data.as_ref(),
+                effective_data.as_ref(),
                 show_all,
             );
 
             // --- Detail pane ---
-            let selected_session = last_data.as_ref().and_then(|(views, _)| {
+            let selected_session = effective_data.as_ref().and_then(|(views, _)| {
                 table_state
                     .selected()
                     .and_then(|i| views.iter().filter(|v| show_all || !v.hidden).nth(i))
@@ -996,10 +1085,18 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                     ))
                 } else {
                     status_message = None;
-                    session_keybinding_line()
+                    session_keybinding_line(
+                        show_stale_backlog,
+                        hidden_backlog_count,
+                        last_fetch.elapsed().as_secs(),
+                    )
                 }
             } else {
-                session_keybinding_line()
+                session_keybinding_line(
+                    show_stale_backlog,
+                    hidden_backlog_count,
+                    last_fetch.elapsed().as_secs(),
+                )
             };
             frame.render_widget(Paragraph::new(bar_line), chunks[3]);
         })?;
@@ -1041,7 +1138,7 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                     KeyCode::Enter => {
                         // Attach to session's tmux (if in a worktree session).
                         if let Some(session) =
-                            get_selected_session(last_data.as_ref(), &table_state, show_all)
+                            get_selected_session(effective_data.as_ref(), &table_state, show_all)
                         {
                             // Validate DB-sourced session_id before using as tmux argument.
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
@@ -1078,7 +1175,7 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                     KeyCode::Char('c') => {
                         // Cleanup selected stale session.
                         if let Some(session) =
-                            get_selected_session(last_data.as_ref(), &table_state, show_all)
+                            get_selected_session(effective_data.as_ref(), &table_state, show_all)
                         {
                             // Validate DB-sourced session_id before filesystem operations.
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
@@ -1090,7 +1187,11 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                                         let _ = cleanup_store
                                             .db()
                                             .query(
-                                                "UPDATE interactive_session SET status = 'stale', updated_at = $now \
+                                                // INF-TSK-049-001 AC #13:
+                                                // always set completed_at so
+                                                // the duration freezes.
+                                                "UPDATE interactive_session SET status = 'stale', \
+                                                 updated_at = $now, completed_at = $now \
                                                  WHERE session_id = $sid AND status = 'active'",
                                             )
                                             .bind(("now", now))
@@ -1124,6 +1225,28 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                             format!("Showing {label} sessions"),
                             std::time::Instant::now(),
                         ));
+                    }
+                    // INF-TSK-049-001 AC #11: toggle historical stale backlog.
+                    KeyCode::Char('s') => {
+                        show_stale_backlog = !show_stale_backlog;
+                        table_state.select(Some(0));
+                        let label = if show_stale_backlog {
+                            "showing stale"
+                        } else {
+                            "scoped to this session"
+                        };
+                        status_message =
+                            Some((format!("Session list {label}"), std::time::Instant::now()));
+                    }
+                    // INF-TSK-049-001 AC #10/17: force refresh. Reset last_fetch
+                    // to the epoch so the gate in `should_fetch_now` fires on
+                    // the very next iteration.
+                    KeyCode::Char('r') => {
+                        last_fetch = std::time::Instant::now()
+                            .checked_sub(Duration::from_secs(3600))
+                            .unwrap_or_else(std::time::Instant::now);
+                        status_message =
+                            Some(("Refreshing...".to_string(), std::time::Instant::now()));
                     }
                     _ => {}
                 }
@@ -1160,23 +1283,51 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
     Ok(())
 }
 
-fn session_keybinding_line() -> ratatui::text::Line<'static> {
+/// INF-TSK-049-001 AC #11/17: footer keybinding bar for interactive status
+/// TUI. Renders `[s] show stale (N hidden)` when the default view is
+/// hiding historical rows and `[s] showing stale` when toggled on; always
+/// renders `[r] Refresh` and a `[last updated Ns ago]` age indicator.
+fn session_keybinding_line(
+    show_stale_backlog: bool,
+    hidden_backlog_count: usize,
+    last_fetch_age_secs: u64,
+) -> ratatui::text::Line<'static> {
     use codeflow_core::tui::theme;
     use ratatui::style::Style;
     use ratatui::text::Span;
 
-    ratatui::text::Line::from(vec![
+    let mut spans = vec![
         Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Attach "),
         Span::styled("[c]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Cleanup "),
         Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Toggle All "),
+        Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
+        Span::raw(" Refresh "),
+    ];
+    // [s] label depends on state.
+    spans.push(Span::styled("[s]", Style::new().fg(theme::BLUE_ACCENT)));
+    let s_label = if show_stale_backlog {
+        " Showing stale ".to_string()
+    } else if hidden_backlog_count > 0 {
+        format!(" Show stale ({hidden_backlog_count} hidden) ")
+    } else {
+        " Show stale ".to_string()
+    };
+    spans.push(Span::raw(s_label));
+    spans.extend([
         Span::styled("[Up/Down]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Navigate "),
         Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
         Span::raw(" Quit"),
-    ])
+        Span::raw("  "),
+        Span::styled(
+            format!("[last updated {last_fetch_age_secs}s ago]"),
+            Style::new().fg(theme::DIM_PENDING),
+        ),
+    ]);
+    ratatui::text::Line::from(spans)
 }
 
 fn render_session_header(
@@ -2414,6 +2565,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2448,6 +2600,7 @@ mod tests {
             team_name: Some("team-1".into()),
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2472,6 +2625,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2496,6 +2650,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2530,6 +2685,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2564,6 +2720,7 @@ mod tests {
             team_name: None,
             source_cli: "codeflow".into(),
             managed: true,
+            session_kind: "interactive".into(),
             created_at: "2026-04-08T00:00:00Z".into(),
             updated_at: None,
             completed_at: None,
@@ -2621,7 +2778,7 @@ mod tests {
 
     #[test]
     fn test_session_keybinding_line_contents() {
-        let line = session_keybinding_line();
+        let line = session_keybinding_line(false, 0, 3);
         let text = line.to_string();
         assert!(text.contains("[Enter]"), "should contain Enter: {text}");
         assert!(text.contains("Attach"), "should contain Attach: {text}");
@@ -2630,6 +2787,48 @@ mod tests {
         assert!(text.contains("[Up/Down]"), "should contain Up/Down: {text}");
         assert!(text.contains("[q]"), "should contain q: {text}");
         assert!(text.contains("Quit"), "should contain Quit: {text}");
+        // INF-TSK-049-001 AC #11/17: [s] stale toggle and [r] refresh
+        // keybindings are always present; last-updated age indicator too.
+        assert!(text.contains("[s]"), "should contain [s]: {text}");
+        assert!(text.contains("[r]"), "should contain [r]: {text}");
+        assert!(
+            text.contains("last updated 3s ago"),
+            "should contain age indicator: {text}"
+        );
+    }
+
+    #[test]
+    fn test_session_keybinding_line_hidden_backlog_count_rendered() {
+        let line = session_keybinding_line(false, 7, 0);
+        let text = line.to_string();
+        assert!(
+            text.contains("Show stale (7 hidden)"),
+            "should render hidden count: {text}"
+        );
+    }
+
+    #[test]
+    fn test_session_keybinding_line_showing_stale_label() {
+        let line = session_keybinding_line(true, 7, 0);
+        let text = line.to_string();
+        assert!(
+            text.contains("Showing stale"),
+            "should advertise 'Showing stale' when toggled: {text}"
+        );
+        assert!(
+            !text.contains("(7 hidden)"),
+            "hidden count should not render when already showing stale: {text}"
+        );
+    }
+
+    #[test]
+    fn test_session_keybinding_line_no_hidden_no_count() {
+        let line = session_keybinding_line(false, 0, 1);
+        let text = line.to_string();
+        assert!(
+            !text.contains("hidden"),
+            "hidden count should be absent when 0: {text}"
+        );
     }
 
     #[test]
@@ -2749,7 +2948,7 @@ mod tests {
     #[test]
     fn test_keybinding_and_badge_do_not_panic() {
         // Verify rendering helper paths don't panic.
-        let _line = session_keybinding_line();
+        let _line = session_keybinding_line(false, 0, 0);
         let _active = session_status_badge("active");
         let _stale = session_status_badge("stale");
         let _complete = session_status_badge("complete");
@@ -2819,5 +3018,116 @@ mod tests {
         } else {
             panic!("expected Status variant");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-049-001 AC #13 — `interactive cleanup` UPDATE sets completed_at.
+    //
+    // We exercise the SurrealDB UPDATE directly (same query shape as the
+    // production path in `run_cleanup`) against an in-memory store so we
+    // assert observable behaviour without depending on PID liveness.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_cleanup_update_sets_completed_at_alongside_updated_at() {
+        let store = codeflow_core::store::SurrealStore::in_memory()
+            .await
+            .unwrap();
+        let created = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-cleanup', pid = 2, status = 'active', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $created RETURN NONE",
+            )
+            .bind(("created", created))
+            .await;
+
+        // Production UPDATE shape from `run_cleanup` (and the TUI `c` path).
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "UPDATE interactive_session SET status = 'stale', \
+                 updated_at = $now, completed_at = $now \
+                 WHERE session_id = $sid AND status = 'active'",
+            )
+            .bind(("now", now.clone()))
+            .bind(("sid", "ses-cleanup".to_string()))
+            .await;
+
+        let mut res = store
+            .db()
+            .query(
+                "SELECT status, completed_at, updated_at FROM interactive_session \
+                 WHERE session_id = 'ses-cleanup'",
+            )
+            .await
+            .unwrap();
+        #[derive(serde::Deserialize)]
+        struct Row {
+            status: String,
+            completed_at: Option<String>,
+            updated_at: Option<String>,
+        }
+        let rows: Vec<Row> = res.take(0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "stale");
+        assert!(
+            rows[0].completed_at.is_some(),
+            "AC #13: cleanup must set completed_at"
+        );
+        assert!(rows[0].updated_at.is_some(), "updated_at must remain set");
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_update_is_noop_when_session_already_stale() {
+        // The UPDATE filters on status='active'; pre-promoted rows are not
+        // re-touched so `updated_at`/`completed_at` preserve their earlier
+        // values.
+        let store = codeflow_core::store::SurrealStore::in_memory()
+            .await
+            .unwrap();
+        let created = "2026-04-01T00:00:00Z".to_string();
+        let prior_completed = "2026-04-05T00:00:00Z".to_string();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-already-stale', pid = 2, status = 'stale', \
+                 source_cli = 'codeflow', managed = true, \
+                 session_kind = 'interactive', \
+                 created_at = $created, completed_at = $completed, \
+                 updated_at = $completed RETURN NONE",
+            )
+            .bind(("created", created))
+            .bind(("completed", prior_completed.clone()))
+            .await;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "UPDATE interactive_session SET status = 'stale', \
+                 updated_at = $now, completed_at = $now \
+                 WHERE session_id = $sid AND status = 'active'",
+            )
+            .bind(("now", now))
+            .bind(("sid", "ses-already-stale".to_string()))
+            .await;
+
+        let mut res = store
+            .db()
+            .query(
+                "SELECT VALUE completed_at FROM interactive_session \
+                 WHERE session_id = 'ses-already-stale'",
+            )
+            .await
+            .unwrap();
+        let vals: Vec<String> = res.take(0).unwrap();
+        assert_eq!(vals, vec![prior_completed]);
     }
 }

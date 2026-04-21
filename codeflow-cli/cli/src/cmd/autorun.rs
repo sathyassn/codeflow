@@ -452,14 +452,78 @@ fn resolve_or_create_integration_branch(
     Ok(())
 }
 
-/// C6: Check batch guard -- reject if too many concurrent batches or same batch already running.
-async fn check_batch_guard(project_dir: &Path, batch_path: &Path) -> Result<()> {
+/// Acquired flock guard returned by [`check_batch_guard`].
+///
+/// Holds the per-project `batch-launch.lock` exclusive flock so concurrent
+/// `codeflow autorun run` invocations cannot race past the
+/// max_concurrent_batches check (W4 — INF-TSK-049-001 batch 2 AC #37).
+///
+/// The lock is released on `Drop`. Callers should hold this until at least
+/// the new `autorun_session` row has been written to the DB (otherwise the
+/// race window reopens).
+pub(crate) struct BatchLaunchGuard {
+    /// File handle whose `Drop` releases the flock.
+    _file: std::fs::File,
+}
+
+impl Drop for BatchLaunchGuard {
+    fn drop(&mut self) {
+        // fs2 unlocks automatically on file close; no explicit call needed.
+    }
+}
+
+/// C6: Check batch guard -- reject if too many concurrent batches or same
+/// batch already running.
+///
+/// **W4 (AC #37):** acquires an exclusive flock on
+/// `{project}/.state/autorun/batch-launch.lock` BEFORE the DB read. Two
+/// simultaneous `codeflow autorun run` invocations cannot both observe
+/// "N-1 active" and both proceed to register the (N+1)th session. The
+/// returned `BatchLaunchGuard` MUST be held until the new session row is
+/// written to the DB.
+async fn check_batch_guard(project_dir: &Path, batch_path: &Path) -> Result<BatchLaunchGuard> {
     use codeflow_core::store::DataStore;
+    use fs2::FileExt;
+
+    // Acquire the per-project launch lock first. `fs2` exposes only
+    // blocking flock primitives; running them on `spawn_blocking` keeps
+    // the tokio runtime responsive while one invocation waits on another.
+    let lock_dir = project_dir.join(".state/autorun");
+    std::fs::create_dir_all(&lock_dir).with_context(|| format!("create {}", lock_dir.display()))?;
+    let lock_path = lock_dir.join("batch-launch.lock");
+
+    let lock_path_clone = lock_path.clone();
+    let lock_file: std::fs::File = tokio::task::spawn_blocking(move || -> Result<std::fs::File> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path_clone)
+            .with_context(|| format!("open {}", lock_path_clone.display()))?;
+        // Try a non-blocking acquire first so concurrent launches see a
+        // friendly message rather than appearing to hang.
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(file),
+            Err(_) => {
+                eprintln!(
+                    "another `codeflow autorun run` is launching; waiting for it to finish..."
+                );
+                FileExt::lock_exclusive(&file).with_context(|| {
+                    format!("acquire exclusive flock on {}", lock_path_clone.display())
+                })?;
+                Ok(file)
+            }
+        }
+    })
+    .await
+    .context("batch-launch lock acquisition join")??;
+    let guard = BatchLaunchGuard { _file: lock_file };
 
     let db_dir = project_dir.join(".state/db");
     let Ok(store) = codeflow_core::store::SurrealStore::open(&db_dir).await else {
-        // DB not available yet -- skip guard (first run).
-        return Ok(());
+        // DB not available yet -- skip guard (first run). Lock still held
+        // for the rest of the launch.
+        return Ok(guard);
     };
 
     let config = codeflow_core::autorun::load_config(project_dir).unwrap_or_default();
@@ -500,7 +564,7 @@ async fn check_batch_guard(project_dir: &Path, batch_path: &Path) -> Result<()> 
         }
     }
 
-    Ok(())
+    Ok(guard)
 }
 
 async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -> Result<()> {
@@ -534,7 +598,12 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
     }
 
     // C6: Batch guard -- check active batch count and duplicate batch file.
-    check_batch_guard(project_dir, batch_path).await?;
+    // W4 (AC #37): the returned guard holds an exclusive flock so a
+    // concurrent invocation cannot race past the count check. Bind it to
+    // a name so it stays alive through the rest of `run_with_dir`. Drop
+    // happens on function return; orchestrator.execute() writes the new
+    // session row well before that.
+    let _batch_launch_guard = check_batch_guard(project_dir, batch_path).await?;
 
     // Detach to tmux if not foreground and stdout is a TTY.
     if !foreground && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -1678,6 +1747,9 @@ async fn resolve_task_session(
 async fn run_status(project_dir: &Path, batch: Option<&str>, show_all: bool) -> Result<()> {
     use codeflow_core::store::DataStore;
 
+    // INF-TSK-049-001 batch 2 (AC #32): surface unprocessed rescue bundles.
+    crate::maybe_emit_rescue_banner();
+
     let store = open_store(project_dir).await?;
     let stale_threshold = codeflow_core::autorun::load_config(project_dir)
         .map(|c| c.autorun.stale_threshold_secs)
@@ -1781,7 +1853,14 @@ async fn run_status(project_dir: &Path, batch: Option<&str>, show_all: bool) -> 
                 codeflow_core::autorun::is_session_stale(pid_alive, tmux_alive, heartbeat);
         }
 
-        let elapsed = format_elapsed(&session.created_at);
+        // INF-TSK-049-001 AC #6: text-mode elapsed must freeze on terminal
+        // batches just like the TUI. `format_elapsed` calls `Utc::now()`
+        // unconditionally, which made the text output tick up forever on
+        // a completed row. Route through the shared helper so all surfaces
+        // agree.
+        let elapsed_secs =
+            codeflow_core::tui::data::status_driven_elapsed_secs(session, chrono::Utc::now());
+        let elapsed = format_duration_secs(elapsed_secs);
         let batch_name = session
             .batch_name
             .as_deref()
@@ -2159,9 +2238,15 @@ async fn run_status_watch(
                         .map(|b| {
                             let status_badge = crate::cmd::autorun::status_badge_text(b.status);
                             let dur = DurationCell::new(Some(b.elapsed_secs));
+                            // INF-TSK-049-001 AC #14/15: TASK column width
+                            // bumped to 18 (matches Constraint::Length(18));
+                            // prefer task_format_id over the raw ULID when
+                            // available so rows show "INF-TSK-048-001" style
+                            // labels instead of the opaque "task-01K…MHH".
                             let task_cell_text = crate::cmd::autorun::format_task_cell(
+                                b.current_task_format_id.as_deref(),
                                 b.current_task_id.as_deref(),
-                                14,
+                                18,
                             );
                             let idle_cell = crate::cmd::autorun::render_idle_cell(b.idle_secs);
                             Row::new(vec![
@@ -2178,12 +2263,19 @@ async fn run_status_watch(
                         })
                         .collect();
 
+                    // INF-TSK-049-001 AC #14: BATCH column was `Min(16)`
+                    // which claimed all leftover width (~50% on a 120-col
+                    // terminal), starving the TASK column to its minimum
+                    // `Length(16)`. Cap BATCH at 36 so long batch names
+                    // truncate with an ellipsis instead of squeezing every
+                    // other column; widen TASK to 18 so format_id variants
+                    // like "INF-TSK-048-001" fit without clipping.
                     let table = Table::new(
                         rows,
                         [
-                            Constraint::Min(16),    // BATCH
+                            Constraint::Max(36),    // BATCH (capped, ellipsis beyond)
                             Constraint::Length(12), // STATUS
-                            Constraint::Length(16), // TASK
+                            Constraint::Length(18), // TASK
                             Constraint::Length(7),  // TASKS
                             Constraint::Length(7),  // DONE
                             Constraint::Length(7),  // FAIL
@@ -2192,6 +2284,7 @@ async fn run_status_watch(
                             Constraint::Length(8),  // IDLE
                         ],
                     )
+                    .column_spacing(1)
                     .header(tbl_header)
                     .block(
                         Block::default()
@@ -2255,7 +2348,7 @@ async fn run_status_watch(
                     let detail = DetailPane::new(sel_task);
                     frame.render_widget(detail, chunks[2]);
 
-                    let bar_line = if let Some((ref msg, at)) = status_message {
+                    let mut bar_line = if let Some((ref msg, at)) = status_message {
                         if at.elapsed() < Duration::from_secs(3) {
                             Line::from(Span::styled(
                                 format!(" {msg}"),
@@ -2278,6 +2371,18 @@ async fn run_status_watch(
                         }
                         line
                     };
+                    // INF-TSK-049-001 AC #16: freshness indicator in the
+                    // BatchDetail footer. The BatchDetail path refreshes
+                    // inline on `fetch_interval` with `last_fetch` as the
+                    // anchor, so show seconds since that timestamp. Keeps
+                    // the operator aware of whether they are looking at
+                    // live data or a stale snapshot.
+                    let age_secs = last_fetch.elapsed().as_secs();
+                    bar_line.spans.push(Span::raw("  "));
+                    bar_line.spans.push(Span::styled(
+                        format!("[last updated {age_secs}s ago]"),
+                        Style::new().fg(theme::DIM_PENDING),
+                    ));
                     frame.render_widget(Paragraph::new(bar_line), chunks[3]);
                 }
             }
@@ -2484,6 +2589,13 @@ async fn run_status_watch(
                                 }
                             }
                             KeyCode::Char('r') => {
+                                // INF-TSK-049-001 AC #16: `[r]` in BatchDetail
+                                // dual-purpose — retry selected task when it's
+                                // failed/timeout, else force-refresh the
+                                // detail view. Either way, reset last_fetch
+                                // so the next poll tick re-fetches immediately
+                                // so the user sees fresh state.
+                                let mut retried = false;
                                 if let Some(task) = selected_task(last_view.as_ref(), &table_state)
                                 {
                                     let is_retryable = matches!(
@@ -2507,6 +2619,7 @@ async fn run_status_watch(
                                                         format!("Retrying {}...", task.task_id),
                                                         std::time::Instant::now(),
                                                     ));
+                                                    retried = true;
                                                 }
                                                 Err(e) => {
                                                     status_message = Some((
@@ -2517,6 +2630,19 @@ async fn run_status_watch(
                                             }
                                         }
                                     }
+                                }
+                                // Force refresh — works for both the retry
+                                // path (so the new state lands in the next
+                                // render) and the non-retryable fallback
+                                // (where [r] is purely a refresh hotkey).
+                                last_fetch = std::time::Instant::now()
+                                    .checked_sub(Duration::from_secs(3600))
+                                    .unwrap_or_else(std::time::Instant::now);
+                                if !retried && status_message.is_none() {
+                                    status_message = Some((
+                                        "Refreshing...".to_string(),
+                                        std::time::Instant::now(),
+                                    ));
                                 }
                             }
                             _ => {}
@@ -2692,7 +2818,15 @@ fn render_header(
             ),
             Span::raw("  "),
             Span::styled(
-                compute_eta(v.elapsed_secs, v.completed_tasks, v.total_tasks),
+                // INF-TSK-049-001 AC #2: ETA projection is meaningless once
+                // the batch has terminated (elapsed is frozen, remaining
+                // tasks will not complete). Suppress the "ETA: ~Xm" hint
+                // so the header reflects the post-run reality.
+                if v.elapsed_frozen {
+                    String::new()
+                } else {
+                    compute_eta(v.elapsed_secs, v.completed_tasks, v.total_tasks)
+                },
                 Style::new().fg(theme::DIM_PENDING),
             ),
         ])
@@ -3672,8 +3806,9 @@ async fn run_resume(
 
     // C6: Batch guard applies to resume as well (AC 33).
     // Use a placeholder path for the duplicate-file check since resume
-    // intentionally reuses the original batch file.
-    check_batch_guard(project_dir, Path::new("__resume__")).await?;
+    // intentionally reuses the original batch file. W4 (AC #37): the
+    // guard holds the batch-launch flock until this function returns.
+    let _batch_launch_guard = check_batch_guard(project_dir, Path::new("__resume__")).await?;
 
     // C7: Detach to tmux if not foreground and stdout is a TTY.
     if !foreground && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -4165,25 +4300,44 @@ pub(crate) fn status_badge_text(
 
 /// Format the TASK column value for a BatchList row.
 ///
-/// INF-TSK-048-001 AC #9: renders `current_task_id` truncated to `width`
-/// characters, returning an empty string when the pointer is `None`. The
-/// worker clears `current_task_id` on task finish and the orchestrator
-/// clears it on batch end, so terminal rows naturally show blank.
+/// INF-TSK-049-001 AC #15: prefer `current_task_format_id` (e.g.
+/// `INF-TSK-049-001`) over the opaque ULID in `current_task_id`; fall back
+/// to the ULID (truncated to `width` characters with an ellipsis) when no
+/// format id is available; return the empty string only when both are
+/// `None`. Terminal rows retain their last-dispatched task id (the worker
+/// no longer clears the field on finish) so the TASK column remains useful
+/// for post-mortem inspection.
+///
+/// `width` caps the rendered length so the column cannot overflow the
+/// allocated ratatui constraint. `width == 0` returns the raw value; other
+/// truncations pad to `width` with a trailing `…`.
 #[must_use]
-pub(crate) fn format_task_cell(current_task_id: Option<&str>, width: usize) -> String {
-    let Some(id) = current_task_id else {
-        return String::new();
-    };
-    if width == 0 || id.len() <= width {
-        return id.to_string();
+pub(crate) fn format_task_cell(
+    current_task_format_id: Option<&str>,
+    current_task_id: Option<&str>,
+    width: usize,
+) -> String {
+    // First choice: human-readable format id.
+    if let Some(fmt) = current_task_format_id.filter(|s| !s.is_empty()) {
+        return truncate_cell(fmt, width);
     }
-    // One-char ellipsis; keep the prefix so TSK-NNN is still identifiable.
+    // Fallback: raw ULID.
+    if let Some(id) = current_task_id.filter(|s| !s.is_empty()) {
+        return truncate_cell(id, width);
+    }
+    String::new()
+}
+
+/// Truncate `s` to `width` characters with a trailing `…` when oversized.
+fn truncate_cell(s: &str, width: usize) -> String {
+    if width == 0 || s.chars().count() <= width {
+        return s.to_string();
+    }
     if width == 1 {
         return "…".to_string();
     }
-    let mut out = id[..width - 1].to_string();
-    out.push('…');
-    out
+    let kept: String = s.chars().take(width - 1).collect();
+    format!("{kept}…")
 }
 
 /// Render the IDLE column cell for a BatchList row.
@@ -4954,18 +5108,45 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_format_task_cell_none_is_blank() {
-        assert_eq!(format_task_cell(None, 14), "");
+    fn test_format_task_cell_both_none_is_blank() {
+        assert_eq!(format_task_cell(None, None, 14), "");
+    }
+
+    #[test]
+    fn test_format_task_cell_prefers_format_id_over_ulid() {
+        // INF-TSK-049-001 AC #15: when both are present, format id wins.
+        let out = format_task_cell(
+            Some("INF-TSK-049-001"),
+            Some("task-01KPHCP81KGS3PKG06TZRAKMHH"),
+            18,
+        );
+        assert_eq!(out, "INF-TSK-049-001");
+    }
+
+    #[test]
+    fn test_format_task_cell_falls_back_to_ulid_when_no_format_id() {
+        let out = format_task_cell(None, Some("task-01KABCDE"), 18);
+        assert_eq!(out, "task-01KABCDE");
+    }
+
+    #[test]
+    fn test_format_task_cell_falls_back_when_format_id_empty() {
+        // Empty-string format id is treated as absent.
+        let out = format_task_cell(Some(""), Some("task-raw"), 18);
+        assert_eq!(out, "task-raw");
     }
 
     #[test]
     fn test_format_task_cell_fits_width_unchanged() {
-        assert_eq!(format_task_cell(Some("INF-TSK-001"), 14), "INF-TSK-001");
+        assert_eq!(
+            format_task_cell(Some("INF-TSK-001"), None, 14),
+            "INF-TSK-001"
+        );
     }
 
     #[test]
     fn test_format_task_cell_truncates_long_id_with_ellipsis() {
-        let out = format_task_cell(Some("INF-TSK-048-001"), 8);
+        let out = format_task_cell(Some("INF-TSK-048-001-extra"), None, 8);
         assert_eq!(out.chars().count(), 8);
         assert!(out.ends_with('…'));
         assert!(out.starts_with("INF-TSK"));
@@ -4973,7 +5154,15 @@ mod tests {
 
     #[test]
     fn test_format_task_cell_width_one_is_ellipsis_only() {
-        assert_eq!(format_task_cell(Some("anything"), 1), "…");
+        assert_eq!(format_task_cell(Some("anything"), None, 1), "…");
+    }
+
+    #[test]
+    fn test_format_task_cell_width_zero_is_raw_passthrough() {
+        assert_eq!(
+            format_task_cell(Some("INF-TSK-999-001"), None, 0),
+            "INF-TSK-999-001"
+        );
     }
 
     #[test]
@@ -5026,6 +5215,7 @@ mod tests {
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: updated_at.map(str::to_string),
             last_heartbeat_at: None,
             created_at: created_at.to_string(),
@@ -5809,6 +5999,7 @@ tasks:
             worker_id: "w-1".into(),
             worker_num: 1,
             task_id: "task-test".into(),
+            task_format_id: None,
             batch_name: "test-batch".into(),
             integration_auto_merge: false,
             integration_branch: "main".into(),
@@ -5837,6 +6028,7 @@ tasks:
             error: String::new(),
             branch_name: "feat/test".into(),
             duration_sec: 120,
+            warning: None,
         };
         assert_eq!(result.status, "completed");
         assert_eq!(result.pr_number, 42);
@@ -5857,6 +6049,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         assert_eq!(cfg.task_id, "task-invoke");
         assert_eq!(cfg.acceptance_criteria, vec!["tests pass"]);
@@ -5886,6 +6079,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: codeflow_core::autorun::InvokeConfig =
@@ -5920,6 +6114,7 @@ tasks:
             error: String::new(),
             branch_name: String::new(),
             duration_sec: 0,
+            warning: None,
         }
     }
 
@@ -5939,6 +6134,7 @@ tasks:
             error: error.into(),
             branch_name: String::new(),
             duration_sec: 0,
+            warning: None,
         }
     }
 
@@ -6099,6 +6295,7 @@ tasks:
             worker_session_id: "ses-env-worker".into(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6184,6 +6381,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6218,6 +6416,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6263,6 +6462,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6337,6 +6537,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -6853,6 +7054,7 @@ tasks:
                 target_branch: None,
                 final_pr_url: None,
                 current_task_id: None,
+                current_task_format_id: None,
                 updated_at: None,
                 last_heartbeat_at: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
@@ -6925,6 +7127,7 @@ tasks:
                     target_branch: None,
                     final_pr_url: None,
                     current_task_id: None,
+                    current_task_format_id: None,
                     updated_at: None,
                     last_heartbeat_at: None,
                     created_at: now.clone(),
@@ -7032,6 +7235,7 @@ tasks:
                     target_branch: None,
                     final_pr_url: None,
                     current_task_id: None,
+                    current_task_format_id: None,
                     updated_at: None,
                     last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
@@ -7117,6 +7321,7 @@ tasks:
                     target_branch: None,
                     final_pr_url: None,
                     current_task_id: None,
+                    current_task_format_id: None,
                     updated_at: None,
                     last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
@@ -7316,6 +7521,7 @@ tasks:
             target_branch: None,
             final_pr_url: None,
             current_task_id: None,
+            current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -8184,6 +8390,7 @@ tasks:
             error: error.to_string(),
             branch_name: format!("feat/{task_id}"),
             duration_sec,
+            warning: None,
         }
     }
 
@@ -9035,6 +9242,7 @@ tasks:
             worker_session_id: "ses-worker-123".into(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         // worker_session_id should be non-empty and different from session_id.
         assert_ne!(cfg.worker_session_id, cfg.session_id);
@@ -9062,6 +9270,7 @@ tasks:
             worker_session_id: String::new(),
             epic_update: String::new(),
             worker_timeout_secs: 0,
+            task_format_id: None,
         };
         let autorun_sid = if cfg.worker_session_id.is_empty() {
             &cfg.session_id
@@ -9542,5 +9751,82 @@ tasks:
             check_pathflow_progress(dir.path(), sid),
             PathFlowState::Complete
         ));
+    }
+
+    // -----------------------------------------------------------------
+    // INF-TSK-049-001 batch 2 — W4: batch-launch flock concurrency.
+    // -----------------------------------------------------------------
+
+    /// AC #37 / W4: a second concurrent `check_batch_guard` invocation
+    /// must observe the lock and serialize behind the first. The test
+    /// spawns two concurrent tokio tasks both calling check_batch_guard;
+    /// one acquires the lock and (briefly) sleeps before releasing, the
+    /// other must block until the first completes.
+    #[tokio::test]
+    async fn w4_batch_launch_lock_serialises_concurrent_invocations() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        use std::time::Instant;
+        use tokio::time::Duration;
+
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch_path = project_dir.path().join("noexist.yaml");
+
+        let counter = std::sync::Arc::new(AtomicI64::new(0));
+        let c1 = counter.clone();
+        let c2 = counter.clone();
+        let p1 = project_dir.path().to_path_buf();
+        let p2 = project_dir.path().to_path_buf();
+        let b1 = batch_path.clone();
+        let b2 = batch_path.clone();
+
+        let started = Instant::now();
+        let h1 = tokio::spawn(async move {
+            let _g = check_batch_guard(&p1, &b1).await.unwrap();
+            // Hold the lock briefly so the other task has to wait.
+            c1.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        });
+        // Give task 1 a moment to grab the lock first.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let h2 = tokio::spawn(async move {
+            let acquired_at = Instant::now();
+            let _g = check_batch_guard(&p2, &b2).await.unwrap();
+            c2.fetch_add(1, Ordering::SeqCst);
+            // Verify task 2 had to wait for task 1's lock to release.
+            // Without serialization, h2 would acquire ~immediately
+            // (within ~30ms total since started). With serialization,
+            // h2 waits at least until t≈180ms.
+            let waited_ms = acquired_at.elapsed().as_millis();
+            (waited_ms, started.elapsed().as_millis())
+        });
+
+        h1.await.unwrap();
+        let (_w2_after_acquire, total_elapsed) = h2.await.unwrap();
+        // Both tasks completed.
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        // Combined runtime must exceed the lock-hold duration of task 1
+        // (~150ms) — otherwise the lock did not serialize.
+        assert!(
+            total_elapsed >= 150,
+            "AC #37: two concurrent check_batch_guard invocations must serialize \
+             via flock; total elapsed was {total_elapsed}ms, expected >= 150ms"
+        );
+    }
+
+    /// AC #37 / W4: the lock file lives under
+    /// `{project}/.state/autorun/batch-launch.lock` and is auto-created.
+    #[tokio::test]
+    async fn w4_batch_launch_lock_path_is_under_state_autorun() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch_path = project_dir.path().join("noexist.yaml");
+        let _g = check_batch_guard(project_dir.path(), &batch_path)
+            .await
+            .unwrap();
+        let lock_path = project_dir.path().join(".state/autorun/batch-launch.lock");
+        assert!(
+            lock_path.exists(),
+            "lock file must be created at {}",
+            lock_path.display()
+        );
     }
 }
