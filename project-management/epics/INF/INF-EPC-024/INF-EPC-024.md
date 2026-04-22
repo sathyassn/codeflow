@@ -117,7 +117,7 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 32 | INF-TSK-024-032 | INF-EPC-024 gap remediation: add 4 new tasks, expand 3 existing, update phase structure | complete | M | normal |
 | 33 | INF-TSK-024-033 | Ledger audit: coordination-events.jsonl schema documentation | todo | M | normal |
 | 34 | INF-TSK-024-034 | Ledger audit: autorun-events.jsonl schema documentation | todo | S | normal |
-| 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | todo | S | normal |
+| 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | complete | S | normal |
 | 36 | INF-TSK-024-036 | Execute SurrealDB schema updates from standardized JSONL | todo | L | normal |
 | 37 | INF-TSK-024-037 | Implement codeflow interactive command, worktree session isolation, and autorun field rename | complete | XL | high |
 

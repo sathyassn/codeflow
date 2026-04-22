@@ -1286,6 +1286,11 @@ impl SessionStartInit {
             }
             _ => {}
         }
+
+        // Auto-migrate pathflow-events.jsonl from legacy .state/logs/ location
+        // to .state/ledger/pathflow-events/ subdirectory. One-time, idempotent.
+        let state_dir = project_dir.join(".state");
+        migrate_pathflow_events_from_logs(&state_dir);
     }
 
     /// Sweep ALL stale sessions using `pathflow-session-status.json`.
@@ -2047,6 +2052,118 @@ impl SessionStartInit {
                 _ => {}
             }
         }
+
+        // Auto-migrate pathflow-events.jsonl from legacy .state/logs/ location
+        // to .state/ledger/pathflow-events/ subdirectory (worktree-local).
+        // One-time, idempotent. In worktree mode, .state/logs/ is shared via
+        // symlink and .state/ledger/ is LOCAL per-worktree, so the first
+        // worktree or non-worktree session to run wins and removes the source.
+        migrate_pathflow_events_from_logs(&wp.state_dir());
+    }
+}
+
+/// Migrate `pathflow-events.jsonl` from the legacy `.state/logs/` location
+/// to its canonical `.state/ledger/pathflow-events/` subdirectory.
+///
+/// One-time, idempotent: returns silently if the source file does not exist.
+/// If the destination already contains a base file (re-run scenario where a
+/// previous incomplete migration left both sides populated), the source is
+/// removed without overwriting the destination to avoid data loss. The lock
+/// file at `.state/logs/pathflow-events.jsonl.lock` is also removed when
+/// present.
+///
+/// All filesystem errors are logged to stderr and swallowed -- migration
+/// failure must never block session start (consistent with the existing
+/// `migrate_flat_to_subdirs` invocation pattern).
+fn migrate_pathflow_events_from_logs(state_dir: &Path) {
+    let src = state_dir.join("logs").join("pathflow-events.jsonl");
+    let src_lock = state_dir.join("logs").join("pathflow-events.jsonl.lock");
+
+    // Idempotent skip: source absent means nothing to migrate. Still best-
+    // effort remove a stray lock file so old deployments stop accumulating
+    // lock files in .state/logs/ after migration.
+    if !src.exists() {
+        if src_lock.exists() {
+            let _ = fs::remove_file(&src_lock);
+        }
+        return;
+    }
+
+    let dst_dir = state_dir.join("ledger").join("pathflow-events");
+    let dst = dst_dir.join("pathflow-events.jsonl");
+
+    if let Err(e) = fs::create_dir_all(&dst_dir) {
+        eprintln!(
+            "warn: pathflow-events migration: failed to create {}: {e}",
+            dst_dir.display()
+        );
+        return;
+    }
+
+    // Re-run edge case: destination already exists. Do NOT overwrite it.
+    // Remove the stale source file so subsequent sessions are fast-path
+    // idempotent skips. This preserves the destination (authoritative for
+    // new writes) while cleaning up the legacy path.
+    if dst.exists() {
+        if let Err(e) = fs::remove_file(&src) {
+            eprintln!(
+                "warn: pathflow-events migration: destination {} exists; failed to remove stale source {}: {e}",
+                dst.display(),
+                src.display()
+            );
+        } else {
+            eprintln!(
+                "info: pathflow-events migration: destination already present; removed stale source {}",
+                src.display()
+            );
+        }
+        if src_lock.exists() {
+            let _ = fs::remove_file(&src_lock);
+        }
+        return;
+    }
+
+    // Happy path: move source to destination. Try rename first (atomic on
+    // same filesystem); fall back to copy+remove if rename fails (e.g.,
+    // cross-device when .state/ledger/ is a mount point in some deployments).
+    match fs::rename(&src, &dst) {
+        Ok(()) => {
+            eprintln!(
+                "info: pathflow-events migration: moved {} to {}",
+                src.display(),
+                dst.display()
+            );
+        }
+        Err(_) => match fs::copy(&src, &dst) {
+            Ok(_) => {
+                if let Err(e) = fs::remove_file(&src) {
+                    eprintln!(
+                        "warn: pathflow-events migration: copied to {} but failed to remove source {}: {e}",
+                        dst.display(),
+                        src.display()
+                    );
+                } else {
+                    eprintln!(
+                        "info: pathflow-events migration: copied {} to {} (cross-device fallback)",
+                        src.display(),
+                        dst.display()
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "warn: pathflow-events migration: failed to move {} to {}: {e}",
+                    src.display(),
+                    dst.display()
+                );
+                return;
+            }
+        },
+    }
+
+    // Clean up the stale lock file regardless of how the move happened.
+    if src_lock.exists() {
+        let _ = fs::remove_file(&src_lock);
     }
 }
 
@@ -6352,5 +6469,129 @@ mod tests {
             "interactive heartbeat should be removed by stale sweep"
         );
         assert!(!session_dir.exists(), "session directory should be removed");
+    }
+
+    // --- migrate_pathflow_events_from_logs tests ---
+
+    #[test]
+    fn test_migrate_pathflow_events_moves_file_and_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        let logs_dir = state_dir.join("logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        let src = logs_dir.join("pathflow-events.jsonl");
+        let src_lock = logs_dir.join("pathflow-events.jsonl.lock");
+        let body = "{\"event\":\"phase_transition\",\"timestamp\":\"2026-04-21T00:00:00Z\"}\n\
+                    {\"event\":\"stage_transition\",\"timestamp\":\"2026-04-21T00:00:01Z\"}\n";
+        fs::write(&src, body).unwrap();
+        fs::write(&src_lock, "").unwrap();
+
+        migrate_pathflow_events_from_logs(&state_dir);
+
+        let dst = state_dir
+            .join("ledger")
+            .join("pathflow-events")
+            .join("pathflow-events.jsonl");
+        assert!(dst.exists(), "destination base file should exist");
+        assert_eq!(
+            fs::read_to_string(&dst).unwrap(),
+            body,
+            "content should be preserved byte-for-byte"
+        );
+        assert!(!src.exists(), "source file should be removed");
+        assert!(!src_lock.exists(), "source lock file should be removed");
+    }
+
+    #[test]
+    fn test_migrate_pathflow_events_idempotent_when_source_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        fs::create_dir_all(state_dir.join("logs")).unwrap();
+
+        // No source file, no lock file. Must not error.
+        migrate_pathflow_events_from_logs(&state_dir);
+
+        let dst = state_dir
+            .join("ledger")
+            .join("pathflow-events")
+            .join("pathflow-events.jsonl");
+        assert!(
+            !dst.exists(),
+            "destination must not be created when source is absent"
+        );
+    }
+
+    #[test]
+    fn test_migrate_pathflow_events_preserves_destination_on_rerun() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        let logs_dir = state_dir.join("logs");
+        let dst_dir = state_dir.join("ledger").join("pathflow-events");
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Destination already has authoritative content; source is a stale
+        // leftover (simulates a re-run or partial earlier migration).
+        let dst = dst_dir.join("pathflow-events.jsonl");
+        let dst_body = "{\"event\":\"phase_transition\",\"timestamp\":\"2026-04-21T00:00:00Z\",\"authoritative\":true}\n";
+        fs::write(&dst, dst_body).unwrap();
+
+        let src = logs_dir.join("pathflow-events.jsonl");
+        let src_body = "{\"event\":\"phase_transition\",\"timestamp\":\"2026-04-21T00:00:00Z\",\"stale\":true}\n";
+        fs::write(&src, src_body).unwrap();
+
+        migrate_pathflow_events_from_logs(&state_dir);
+
+        assert_eq!(
+            fs::read_to_string(&dst).unwrap(),
+            dst_body,
+            "destination must NOT be overwritten (no data loss)"
+        );
+        assert!(!src.exists(), "stale source must be removed on re-run");
+    }
+
+    #[test]
+    fn test_migrate_pathflow_events_removes_orphan_lock_without_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        let logs_dir = state_dir.join("logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        // Lock file exists but no data file (e.g., prior migration removed
+        // the data but crashed before removing the lock).
+        let src_lock = logs_dir.join("pathflow-events.jsonl.lock");
+        fs::write(&src_lock, "").unwrap();
+
+        migrate_pathflow_events_from_logs(&state_dir);
+
+        assert!(
+            !src_lock.exists(),
+            "orphan lock file should be cleaned up even when source data is absent"
+        );
+    }
+
+    #[test]
+    fn test_migrate_pathflow_events_double_run_is_noop_after_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".state");
+        let logs_dir = state_dir.join("logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        let src = logs_dir.join("pathflow-events.jsonl");
+        let body = "{\"event\":\"phase_transition\",\"timestamp\":\"2026-04-21T00:00:00Z\"}\n";
+        fs::write(&src, body).unwrap();
+
+        // First call migrates.
+        migrate_pathflow_events_from_logs(&state_dir);
+        // Second call must be a clean no-op and must not touch the dest.
+        migrate_pathflow_events_from_logs(&state_dir);
+
+        let dst = state_dir
+            .join("ledger")
+            .join("pathflow-events")
+            .join("pathflow-events.jsonl");
+        assert_eq!(fs::read_to_string(&dst).unwrap(), body);
+        assert!(!src.exists());
     }
 }
