@@ -49,24 +49,28 @@ INF-TSK-024-035 fixed the producer side of the pathflow-events file location (wr
 
 ## 4. Task State Rollup (authoritative as of 2026-04-22)
 
-Filesystem enumeration: 39 task files (INF-TSK-024-001 through INF-TSK-024-039) existed before this audit's renumber; 6 new files (040–045) drafted in this session bring the total to 45.
+Filesystem enumeration at audit time: 39 task files (INF-TSK-024-001 through INF-TSK-024-039) existed before this audit's renumber; 6 new files (040–045) drafted in this session bring the total to 45.
 
-**Status breakdown (pre-renumber, excluding the 6 new drafts):**
+**Status breakdown (pre-draft, from on-disk frontmatter `status:` fields — verified by grep at audit time):**
 
 | Status | Count | Task IDs |
 |--------|-------|----------|
-| complete | 16 | 001, 002, 003, 004, 005, 006, 007, 016, 017, 028, 030, 031, 032, 035, 037, 039 |
-| todo | 22 | 008, 009, 010, 011, 012, 014, 015, 018, 019, 020, 021, 022, 023, 024, 026, 027, 029, 033, 034, 036, 038, 039-if-039-later-reverts |
-| cancelled | 1 | 013 (cancelled — duplicate of 007) |
+| complete | 17 | 001, 002, 003, 004, 005, 006, 007, 016, 017, 028, 030, 032, 033, 034, 035, 037, 039 |
+| in_progress | 2 | 025, 031 |
+| cancelled | 1 | 013 (duplicate of 007) |
+| todo | 19 | 008, 009, 010, 011, 012, 014, 015, 018, 019, 020, 021, 022, 023, 024, 026, 027, 029, 036, 038 |
 
-Note: The "complete" count of 16 updates the earlier 14/37 figure in the memory file. Two additional completions — 039 (disk-complete; DB disagrees, to be reconciled by task 045) and the now-merged 035 — bring the true complete count up. Task 003 is listed as complete per filesystem frontmatter; the epic table at `INF-EPC-024.md` line 88 still shows it as todo. INF-TSK-024-039's own DOCS Report (line 257-262) calls out this discrepancy explicitly as deferred.
+Pre-draft total: 17 + 2 + 1 + 19 = 39. ✓
 
-**Post-draft state (after task 045 reconciliation):**
+**Corrections to the earlier "14/37 complete" figure:** the memory file's snapshot was stale. Two completions (033, 034 — ledger audits for coordination-events and autorun-events) landed after that snapshot. Task 035 (pathflow-events migration) landed during the trigger PR #303. Task 039 (DOCS template alignment) is `complete` on disk but `in_progress` in the DB — task 045 reconciles the DB to match. Task 031 is `in_progress` on disk despite the epic table showing `complete` — this discrepancy is flagged as a separate bookkeeping note for task 045.
+
+**Post-draft state (after drafting 040–045, before they execute):**
 
 - 45 total
-- 16 complete (unchanged by drafting)
-- 28 todo (22 previous + 6 new drafts)
-- 1 cancelled (013)
+- 17 complete (unchanged by drafting)
+- 2 in_progress (unchanged)
+- 1 cancelled (unchanged)
+- 25 todo (19 previous + 6 new drafts)
 
 ## 5. Verification Closure
 
@@ -98,7 +102,7 @@ Severity is stated post-verification. The "Still a gap?" column records the disp
 | G8 | Bookkeeping: delivery evidence missing on 14 completed tasks (pr_number, branch, completed_at null) | LOW | Yes | Frontmatter spot-check on 001, 003, 035 | New Task 045 |
 | G9 | File-scope overlap between TODO tasks would cause autorun claim conflicts if executed in parallel | MEDIUM | Yes | Tasks 008, 010, 011, 012, 014, 015 all touch `ledger/jsonl.rs`, `ledger/mod.rs`, `types/events.rs`, `types/ids.rs` | Epic amendment — add serial Implementation Order section |
 | G10 | Unread TODO task scope | — | Closed (verified) | All 22 TODO tasks read and verified well-specified (except 019, 022 mildly vague) | No action |
-| G11 | Missing audits for coordination-events (033) and autorun-events (034) before schema-definition chain | MEDIUM | Yes | Tasks 033 and 034 exist (todo) but are scheduled after 007; should run BEFORE 007-amendment | Implementation Order places 033/034 first |
+| G11 | Audit deliverables for 033/034 already complete; schema-enforcement chain can consume them | LOW | Closed | Disk status: 033=complete, 034=complete (verified via frontmatter grep). The "audits-first" concern raised at audit time is already satisfied; remaining task is to ensure the Schema-enforcement chain actually consumes 033/034 outputs when drafting 007-amendment | Implementation Order documents the consumption order (033/034 outputs feed 007-amendment); no new task |
 | G12 | Orphan tasks in filesystem not in epic task table (038 todo-on-disk, 039 DB/disk status drift) | LOW | Yes | `project-management/epics/INF/INF-EPC-024/tasks/INF-TSK-024-038.md` (task_id `task-pending-038`) and 039 (DB=in_progress, disk=complete) | Task 045 AC 8-11 |
 
 ## 7. Gap-to-Task Mapping
@@ -121,9 +125,11 @@ The six new tasks and the one rescope map 1:1 to the gaps:
 The `## Implementation Order` amendment to the epic specifies three chains. Rationale per chain:
 
 **Schema-enforcement chain (serial execution required — G9 resolution).**
-`033 → 034 → 007-amendment → 014 → 008 → 010 → 011 → 009 → 012 → 015 → 023`
+`007-amendment (if needed, informed by already-complete 033+034) → 014 → 008 → 010 → 011 → 009 → 012 → 015 → 023`
 
-Tasks 008, 010, 011, 012, 014, 015, 023 all modify `ledger/jsonl.rs`, `ledger/mod.rs`, `types/events.rs`, and `types/ids.rs`. Parallel execution would produce autorun claim conflicts under any `scope_policy` setting; `soft` would block dynamically, `hard` would block immediately. Serial is the only viable order. 033 and 034 precede because their audits may surface new event shapes that require amending 007 (canonical schema) before the enforcement tasks can be written.
+Tasks 008, 010, 011, 012, 014, 015, 023 all modify `ledger/jsonl.rs`, `ledger/mod.rs`, `types/events.rs`, and `types/ids.rs`. Parallel execution would produce autorun claim conflicts under any `scope_policy` setting; `soft` would block dynamically, `hard` would block immediately. Serial is the only viable order.
+
+Note: Tasks 033 (coordination-events audit) and 034 (autorun-events audit) are already `complete` on disk as of 2026-04-22, so they are NOT scheduled in this chain — their audit outputs feed into `007-amendment` only if the amendment is deemed necessary after reviewing their findings.
 
 **Consumer + data-layer (independent, parallelizable).**
 `035 → 040 → 041 → 043 → 044` with `045` (bookkeeping, any time) and `042` (session-id regression-prevention, any time after 028).
@@ -135,7 +141,7 @@ Each of these tasks has a non-overlapping `file_scope` and works on different co
 
 Each later task depends on the deliverable of the previous (the rebuild-mapping document feeds the validator feeds the three-tier validator feeds the SurrealDB target schemas…), and several share scope under `codeflow-cli/core/src/store/`. Serial enforcement prevents rework loops.
 
-**Audits-first (G11 resolution).** 033 and 034 precede the schema-enforcement chain so 007 can be amended if the coordination-events or autorun-events shapes surprise the canonical definition.
+**Audit consumption (G11 resolution).** 033 (coordination-events audit) and 034 (autorun-events audit) are already `complete` on disk. Their outputs should be reviewed ONCE before the schema-enforcement chain begins: if either audit surfaces an event shape not covered by the current canonical schema (007), apply an amendment to 007 first; otherwise the chain proceeds without a 007-amendment step.
 
 ## Out-of-Scope Observations
 

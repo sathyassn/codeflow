@@ -86,7 +86,7 @@ Derived from the 2026-04-22 chain audit (see [audits/2026-04-22-chain-audit.md](
 Schema-enforcement chain (serial execution required — file-scope overlap on `ledger/jsonl.rs`, `ledger/mod.rs`, `types/events.rs`, `types/ids.rs`):
 
 ```text
-033 → 034 → 007-amendment → 014 → 008 → 010 → 011 → 009 → 012 → 015 → 023
+007-amendment (optional — only if informed by already-complete 033+034 findings) → 014 → 008 → 010 → 011 → 009 → 012 → 015 → 023
 ```
 
 Consumer + data layer (independent, can parallelize):
@@ -103,11 +103,11 @@ DB + autorun (sequential):
 019 → 020 (with cursor AC) → 021 → 022 → 026 → 027 → 029 → 036
 ```
 
-Phase audits (schedule 033/034 BEFORE the schema-enforcement chain so 007 can be amended if new event shapes emerge):
+Audit deliverables already complete (no scheduling needed — consume their outputs when drafting 007-amendment):
 
-- 033 (coordination-events)
-- 034 (autorun-events)
-- 007-amendment (applied only if 033/034 surface new event shapes)
+- 033 (coordination-events) — **complete**
+- 034 (autorun-events) — **complete**
+- 007-amendment — applied ONLY if reviewing 033/034 findings reveals an event shape not covered by the current canonical schema (007); otherwise the schema-enforcement chain begins with task 014.
 
 ## Tasks
 
@@ -115,7 +115,7 @@ Phase audits (schedule 033/034 BEFORE the schema-enforcement chain so 007 can be
 |---|-----|-------|--------|-----|----------|
 | 1 | INF-TSK-024-001 | Ledger audit: sessions.jsonl schema documentation and gap analysis | complete | S | normal |
 | 2 | INF-TSK-024-002 | Ledger audit: work-graph.jsonl schema documentation and gap analysis | complete | M | normal |
-| 3 | INF-TSK-024-003 | Ledger audit: memory-events.jsonl schema documentation and gap analysis | todo | M | normal |
+| 3 | INF-TSK-024-003 | Ledger audit: memory-events.jsonl schema documentation and gap analysis | complete | M | normal |
 | 4 | INF-TSK-024-004 | Ledger audit: config.jsonl schema documentation and gap analysis | complete | XS | normal |
 | 5 | INF-TSK-024-005 | Log audit: pathflow-events.jsonl and pr-events schema documentation | complete | M | normal |
 | 6 | INF-TSK-024-006 | Log audit: security, network, conversation log schema documentation | complete | M | normal |
@@ -143,10 +143,10 @@ Phase audits (schedule 033/034 BEFORE the schema-enforcement chain so 007 can be
 | 28 | INF-TSK-024-028 | Session ID consolidation: audit and fix UUID session ID usage | complete | M | high |
 | 29 | INF-TSK-024-029 | Update Claude artifacts for DB-authoritative autorun data flow | todo | S | normal |
 | 30 | INF-TSK-024-030 | Fix worktree ledger isolation -- make ledger LOCAL per-worktree | complete | M | normal |
-| 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | complete | M | normal |
+| 31 | INF-TSK-024-031 | INF-EPC-024 post-ledger refinement + gitignore fix | in_progress | M | normal |
 | 32 | INF-TSK-024-032 | INF-EPC-024 gap remediation: add 4 new tasks, expand 3 existing, update phase structure | complete | M | normal |
-| 33 | INF-TSK-024-033 | Ledger audit: coordination-events.jsonl schema documentation | todo | M | normal |
-| 34 | INF-TSK-024-034 | Ledger audit: autorun-events.jsonl schema documentation | todo | S | normal |
+| 33 | INF-TSK-024-033 | Ledger audit: coordination-events.jsonl schema documentation | complete | M | normal |
+| 34 | INF-TSK-024-034 | Ledger audit: autorun-events.jsonl schema documentation | complete | S | normal |
 | 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | complete | S | normal |
 | 36 | INF-TSK-024-036 | Execute SurrealDB schema updates from standardized JSONL | todo | L | normal |
 | 37 | INF-TSK-024-037 | Implement codeflow interactive command, worktree session isolation, and autorun field rename | complete | XL | high |
