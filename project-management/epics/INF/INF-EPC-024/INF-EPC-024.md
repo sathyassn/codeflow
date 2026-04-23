@@ -79,6 +79,36 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 - [ ] Direct PII check -- no hardcoded PII in source/tests/comments
 - [ ] Code logic review -- PII fields in JSONL are metadata only; no encryption required at rest for local ledger files
 
+## Implementation Order
+
+Derived from the 2026-04-22 chain audit (see [audits/2026-04-22-chain-audit.md](audits/2026-04-22-chain-audit.md) Section 8).
+
+Schema-enforcement chain (serial execution required — file-scope overlap on `ledger/jsonl.rs`, `ledger/mod.rs`, `types/events.rs`, `types/ids.rs`):
+
+```text
+033 → 034 → 007-amendment → 014 → 008 → 010 → 011 → 009 → 012 → 015 → 023
+```
+
+Consumer + data layer (independent, can parallelize):
+
+```text
+035 → 040 → 041 → 043 → 044
+045 (bookkeeping + orphan reconciliation, any time)
+042 (session-id regression-prevention, any time after 028)
+```
+
+DB + autorun (sequential):
+
+```text
+019 → 020 (with cursor AC) → 021 → 022 → 026 → 027 → 029 → 036
+```
+
+Phase audits (schedule 033/034 BEFORE the schema-enforcement chain so 007 can be amended if new event shapes emerge):
+
+- 033 (coordination-events)
+- 034 (autorun-events)
+- 007-amendment (applied only if 033/034 surface new event shapes)
+
 ## Tasks
 
 | # | ID | Title | Status | Est | Priority |
@@ -120,12 +150,22 @@ Epic B runs after Epic 0 (INF-EPC-022: Rust CLI -- COMPLETE) and Epic A (INF-EPC
 | 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | complete | S | normal |
 | 36 | INF-TSK-024-036 | Execute SurrealDB schema updates from standardized JSONL | todo | L | normal |
 | 37 | INF-TSK-024-037 | Implement codeflow interactive command, worktree session isolation, and autorun field rename | complete | XL | high |
+| 38 | INF-TSK-024-038 | Fix template-to-DB alignment gaps in epic/task validation (orphan — to reconcile via 045) | todo | M | normal |
+| 39 | INF-TSK-024-039 | Update INF-EPC-024 todo task docs to latest template (DB/disk status drift — to reconcile via 045) | complete | L | normal |
+| 40 | INF-TSK-024-040 | Update pathflow-events/ledger consumers; introduce resolve_path helper | todo | S | high |
+| 41 | INF-TSK-024-041 | One-time repair of mis-routed events in pathflow-events.jsonl | todo | S | normal |
+| 42 | INF-TSK-024-042 | Regression-prevention enforcement of canonical session ID resolution | todo | S | normal |
+| 43 | INF-TSK-024-043 | Cross-worktree ledger aggregator | todo | M | normal |
+| 44 | INF-TSK-024-044 | Automated compaction lifecycle triggers | todo | M | normal |
+| 45 | INF-TSK-024-045 | Backfill delivery evidence + orphan task reconciliation | todo | S | normal |
 
 **Task 013 cancelled:** Superseded by Epic 0 restructuring. The work-graph.jsonl details migration is now handled differently -- the workgraph module at `codeflow-cli/core/src/workgraph/` already defines typed events with structured fields, making the flat-to-details migration unnecessary for work-graph events.
 
 **Tasks 001-012, 014-024, 026-029 reviewed (PR #221 refinement):** Stale file path references (flat `.state/ledger/{type}.jsonl` -> subdirectory `.state/ledger/{type}/{type}.jsonl`) and worktree assumptions (ledger was SHARED/symlinked, now LOCAL per-worktree) corrected in tasks 001-004, 008-010, 012. Remaining tasks confirmed no changes needed. See INF-TSK-024-031 PLAN Report for full details.
 
 **Gap remediation (INF-TSK-024-032):** 4 new tasks added (033-036), 3 existing tasks expanded (006, 017, 022). Task 033 (coordination-events audit) and 034 (autorun-events audit) fill Phase 1 gaps. Task 035 (pathflow-events migration) adds a Phase 3 fix. Task 036 (SurrealDB schema execution) adds Phase 6 implementation step. Task 006 expanded with 4 criteria for operational logs (git, db, cleanup, .meta files). Task 017 expanded with 3 criteria for session .meta files, stale locks, and prompt counters. Task 022 expanded with 3 criteria for CANONICAL/ALL rationale and non-canonical DB table relationships.
+
+**Chain audit (2026-04-22):** Post-INF-TSK-024-035, a chain audit identified 12 gaps in the data layer. Six new tasks were drafted (040 consumer fix, 041 event repair, 042 session-ID regression prevention, 043 cross-worktree aggregator, 044 auto-compaction, 045 bookkeeping + orphan reconciliation), one task was rescoped (020 gains SurrealDB rebuild cursor metadata and incremental sync), and this epic gained an `## Implementation Order` section to prevent file-scope conflicts during parallel autorun execution. During the audit's format_id renumber, two orphan tasks were discovered on disk that were never registered in the epic table: 038 (todo, template-to-DB alignment) and 039 (disk-complete but DB status drift); both are now tracked above and will be reconciled by task 045. See [audits/2026-04-22-chain-audit.md](audits/2026-04-22-chain-audit.md) for the full verification closure, gap map, and rationale.
 
 ## Dependencies
 
