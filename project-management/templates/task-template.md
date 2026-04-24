@@ -2,7 +2,10 @@
 id: "{task-ULID}"                     # ULID PK: task-{ulid} (auto-generated)
 format_id: "{AREA}-TSK-{NNN}-{NNN}"   # Human-readable unique ID
 epic_id: "{epic-ULID}"                # FK to epics(id)
-epic_format_id: "{AREA}-EPC-{NNN}"    # Cross-reference to epic format_id (convenience; not yet in DB tasks table)
+epic_format_id: "{AREA}-EPC-{NNN}"    # Markdown-only convenience cross-reference.
+                                       # Derivable from epic_id via DB lookup (epic.format_id).
+                                       # Not persisted on the task table — keep in sync with
+                                       # the parent epic's format_id for readability only.
 title: "{Title}"
 description: "{One-line description}"
 status: todo                           # todo|blocked|in_progress|complete|cancelled
@@ -28,7 +31,11 @@ branch: null
 pr_number: null
 external_id: null
 external_url: null
-dependencies: []
+dependencies: []                       # Markdown-only human-readable reference.
+                                       # Structured dependency tracking uses the `depends_on`
+                                       # graph relation in the DB (set via cf-knowledge-layer).
+                                       # Keep in sync manually for readability, but the DB
+                                       # relation is authoritative.
 created_at: "{ISO-8601}"
 updated_at: "{ISO-8601}"
 started_at: null

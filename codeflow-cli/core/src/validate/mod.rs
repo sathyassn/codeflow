@@ -270,6 +270,25 @@ fn validate_boolean_fields(
     errs
 }
 
+fn validate_array_fields(
+    data: &HashMap<String, serde_yaml::Value>,
+    fields: &[&str],
+) -> Vec<ValidationError> {
+    let mut errs = Vec::new();
+    for &field in fields {
+        match data.get(field) {
+            None | Some(serde_yaml::Value::Null | serde_yaml::Value::Sequence(_)) => {}
+            Some(v) => {
+                errs.push(ValidationError {
+                    field: field.into(),
+                    message: format!("must be an array, got {v:?}"),
+                });
+            }
+        }
+    }
+    errs
+}
+
 fn check_template_sentinels(
     data: &HashMap<String, serde_yaml::Value>,
     fields: &[&str],
@@ -415,7 +434,13 @@ const ESTIMATE_VALUES: &[&str] = &["XS", "S", "M", "L", "XL"];
 const STAGE_VALUES: &[&str] = &["dev", "plan", "docs", "test", "review", "qa", "done"];
 const STAGE_STATUS_VALUES: &[&str] = &["pending", "in_progress", "complete", "failed"];
 
-const TASK_BOOLEAN_FIELDS: &[&str] = &["autorun_eligible", "raise_pr", "auto_merge"];
+const TASK_BOOLEAN_FIELDS: &[&str] = &["autorun_eligible", "raise_pr", "auto_merge", "auto_commit"];
+
+/// Markdown-only array fields: present in the template for human
+/// readability but not persisted to the `task` table. Structured
+/// dependency tracking uses the `depends_on` graph relation in the
+/// DB (set via cf-knowledge-layer). Validated as arrays when present.
+const TASK_MARKDOWN_ARRAY_FIELDS: &[&str] = &["dependencies"];
 
 const TASK_FORMAT_ID_PATTERN: &str = r"^[A-Z]{2,4}-TSK-[0-9]{3}-[0-9]{3}$";
 
@@ -502,6 +527,10 @@ pub fn validate_task(
 
     // Boolean fields.
     errs.extend(validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS));
+
+    // Markdown-only array fields (e.g. dependencies) — validated as
+    // arrays when present but not persisted to the `task` table.
+    errs.extend(validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS));
 
     // Cross-field: format_id prefix must match area_type.
     errs.extend(validate_format_id_prefix(&data, "format_id", "-TSK-"));
@@ -1276,5 +1305,195 @@ Related
         let data = HashMap::new();
         let errs = validate_optional_enum(&data, "stage", STAGE_VALUES);
         assert!(errs.is_empty());
+    }
+
+    // -- auto_commit boolean validation (INF-TSK-024-038 AC #1) --
+
+    #[test]
+    fn test_auto_commit_true_passes_validation() {
+        let mut data = HashMap::new();
+        data.insert("auto_commit".into(), serde_yaml::Value::Bool(true));
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
+    }
+
+    #[test]
+    fn test_auto_commit_false_passes_validation() {
+        let mut data = HashMap::new();
+        data.insert("auto_commit".into(), serde_yaml::Value::Bool(false));
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
+    }
+
+    #[test]
+    fn test_auto_commit_string_yes_produces_error() {
+        let mut data = HashMap::new();
+        data.insert(
+            "auto_commit".into(),
+            serde_yaml::Value::String("yes".into()),
+        );
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert_eq!(errs.len(), 1, "Expected exactly one error, got: {errs:?}");
+        assert_eq!(errs[0].field, "auto_commit");
+        assert!(errs[0].message.contains("must be true or false"));
+    }
+
+    #[test]
+    fn test_auto_commit_number_produces_error() {
+        let mut data = HashMap::new();
+        data.insert("auto_commit".into(), serde_yaml::Value::Number(1.into()));
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert_eq!(errs.len(), 1, "Expected exactly one error, got: {errs:?}");
+        assert_eq!(errs[0].field, "auto_commit");
+    }
+
+    #[test]
+    fn test_auto_commit_missing_is_ok() {
+        // Omitted auto_commit is tolerated by validate_boolean_fields; the
+        // task struct default of false applies downstream.
+        let data = HashMap::new();
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_auto_commit_string_true_accepted() {
+        // Quoted "true" mirrors the existing raise_pr/auto_merge tolerance
+        // for YAML values authored as strings.
+        let mut data = HashMap::new();
+        data.insert(
+            "auto_commit".into(),
+            serde_yaml::Value::String("true".into()),
+        );
+        let errs = validate_boolean_fields(&data, TASK_BOOLEAN_FIELDS);
+        assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
+    }
+
+    #[test]
+    fn test_validate_task_auto_commit_string_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("INF-TSK-022-014.md");
+        let content = valid_task_frontmatter().replace(
+            "work_type: \"FEAT\"",
+            "work_type: \"FEAT\"\nauto_commit: \"yes\"",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        let auto_commit_err = errs.iter().find(|e| e.field == "auto_commit");
+        assert!(
+            auto_commit_err.is_some(),
+            "Expected auto_commit error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_task_auto_commit_true_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("INF-TSK-022-014.md");
+        let content = valid_task_frontmatter().replace(
+            "work_type: \"FEAT\"",
+            "work_type: \"FEAT\"\nauto_commit: true",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        let auto_commit_err = errs.iter().find(|e| e.field == "auto_commit");
+        assert!(
+            auto_commit_err.is_none(),
+            "Expected no auto_commit error, got: {errs:?}"
+        );
+    }
+
+    // -- dependencies markdown-only array validation (INF-TSK-024-038 AC #2) --
+
+    #[test]
+    fn test_dependencies_empty_array_passes() {
+        let mut data = HashMap::new();
+        data.insert("dependencies".into(), serde_yaml::Value::Sequence(vec![]));
+        let errs = validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS);
+        assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
+    }
+
+    #[test]
+    fn test_dependencies_non_empty_array_passes() {
+        let mut data = HashMap::new();
+        data.insert(
+            "dependencies".into(),
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("INF-TSK-024-001".into()),
+                serde_yaml::Value::String("INF-TSK-024-002".into()),
+            ]),
+        );
+        let errs = validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS);
+        assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
+    }
+
+    #[test]
+    fn test_dependencies_string_produces_error() {
+        let mut data = HashMap::new();
+        data.insert(
+            "dependencies".into(),
+            serde_yaml::Value::String("INF-TSK-024-001".into()),
+        );
+        let errs = validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS);
+        assert_eq!(errs.len(), 1, "Expected exactly one error, got: {errs:?}");
+        assert_eq!(errs[0].field, "dependencies");
+        assert!(errs[0].message.contains("must be an array"));
+    }
+
+    #[test]
+    fn test_dependencies_missing_is_ok() {
+        let data = HashMap::new();
+        let errs = validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_dependencies_null_is_ok() {
+        let mut data = HashMap::new();
+        data.insert("dependencies".into(), serde_yaml::Value::Null);
+        let errs = validate_array_fields(&data, TASK_MARKDOWN_ARRAY_FIELDS);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn test_validate_task_dependencies_array_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("INF-TSK-022-014.md");
+        let content = valid_task_frontmatter().replace(
+            "work_type: \"FEAT\"",
+            "work_type: \"FEAT\"\ndependencies: [\"INF-TSK-024-001\"]",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        let deps_err = errs.iter().find(|e| e.field == "dependencies");
+        assert!(
+            deps_err.is_none(),
+            "Expected no dependencies error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_task_dependencies_string_produces_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("INF-TSK-022-014.md");
+        let content = valid_task_frontmatter().replace(
+            "work_type: \"FEAT\"",
+            "work_type: \"FEAT\"\ndependencies: \"INF-TSK-024-001\"",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        let deps_err = errs.iter().find(|e| e.field == "dependencies");
+        assert!(
+            deps_err.is_some(),
+            "Expected dependencies error, got: {errs:?}"
+        );
     }
 }
