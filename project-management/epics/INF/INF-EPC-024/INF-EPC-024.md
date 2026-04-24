@@ -150,8 +150,8 @@ Audit deliverables already complete (no scheduling needed — consume their outp
 | 35 | INF-TSK-024-035 | Migrate pathflow-events.jsonl from .state/logs/ to .state/ledger/ | complete | S | normal |
 | 36 | INF-TSK-024-036 | Execute SurrealDB schema updates from standardized JSONL | todo | L | normal |
 | 37 | INF-TSK-024-037 | Implement codeflow interactive command, worktree session isolation, and autorun field rename | complete | XL | high |
-| 38 | INF-TSK-024-038 | Fix template-to-DB alignment gaps in epic/task validation (orphan — to reconcile via 045) | todo | M | normal |
-| 39 | INF-TSK-024-039 | Update INF-EPC-024 todo task docs to latest template (DB/disk status drift — to reconcile via 045) | complete | L | normal |
+| 38 | INF-TSK-024-038 | Fix template-to-DB alignment gaps in epic/task validation | todo | M | normal |
+| 39 | INF-TSK-024-039 | Update INF-EPC-024 todo task docs to latest template | complete | L | normal |
 | 40 | INF-TSK-024-040 | Update pathflow-events/ledger consumers; introduce resolve_path helper | todo | S | high |
 | 41 | INF-TSK-024-041 | One-time repair of mis-routed events in pathflow-events.jsonl | todo | S | normal |
 | 42 | INF-TSK-024-042 | Regression-prevention enforcement of canonical session ID resolution | todo | S | normal |
@@ -196,6 +196,33 @@ Audit deliverables already complete (no scheduling needed — consume their outp
 - Worktree module: `codeflow-cli/core/src/worktree/` -- `setup.rs`, `cleanup.rs`, `paths.rs`, `registry.rs`, `mod.rs`.
 - Session module: `codeflow-cli/core/src/session/` -- `mod.rs`, `env.rs`, `active_task.rs`, `builder.rs`, `state.rs`.
 - Hooks: `codeflow-cli/core/src/hooks/` -- `session_start.rs`, `session_end.rs`, `pre_tool_use.rs`, `post_tool_use.rs`, `task_completed.rs`, `prompt_validate.rs`, `pipeline.rs`, `logging/`, `security/`.
+
+### Delivery Evidence Backfill (2026-04-24)
+
+INF-TSK-024-045 backfilled delivery evidence (pr_number, branch, completed_at, target_branch, updated_at) on 14 completed INF-EPC-024 tasks and reconciled two orphan tasks. Scope-compliant per `scope_policy: hard`; only the five allowed frontmatter fields plus a single Delivery Evidence Notes row were modified per task file; no `acceptance` or `file_scope` text was changed. Evidence sourced from `git log main --merges --grep <branch-keyword>` cross-referenced with PR merge commits on main.
+
+| Task | PR | Branch | Merge Commit | Merged (UTC) |
+|------|---:|--------|--------------|--------------|
+| 001 | #223 | `docs/inf-tsk-024-001-sessions-jsonl-audit` | e9a32ef8 | 2026-03-25T19:18:41Z |
+| 002 | #224 | `docs/inf-tsk-024-002-work-graph-jsonl-audit` | bff90293 | 2026-03-25T22:31:46Z |
+| 003 | #236 | `docs/memory-events-audit` | 734525b4 | 2026-03-31T01:53:46Z |
+| 004 | #235 | `docs/config-jsonl-audit` | cee7d90e | 2026-03-31T01:02:34Z |
+| 005 | #248 | `docs/pathflow-pr-events-schema-audit` | 40169d07 | 2026-04-04T23:38:37Z |
+| 006 | #249 | `docs/log-audit-schemas` | b2c33ead | 2026-04-05T14:00:50Z |
+| 007 | #260 | `docs/canonical-event-schema` | 19e5b605 | 2026-04-07T20:25:13Z |
+| 016 | #268 | `docs/ledger-retention-policy` | ff53cb52 | 2026-04-08T02:55:21Z |
+| 017 | #269 | `docs/log-retention-policy` | fa36b26e | 2026-04-08T02:56:14Z |
+| 028 | #301 | `refactor/inf-tsk-024-028-session-id-consolidation` | bd8a7cf9 | 2026-04-21T15:29:35Z |
+| 030 | #221 | `fix/worktree-ledger-isolation` | 7677ce35 | 2026-03-25T04:18:04Z |
+| 031 | #222 | `plan/inf-epc-024-post-ledger-refinement` | e0b652a5 | 2026-03-25T14:02:02Z |
+| 032 | #225 | `plan/inf-epc-024-gap-remediation` | 6147efcf | 2026-03-25T23:37:06Z |
+| 037 | #258 | `feat/interactive-command` | 0066ea29 | 2026-04-07T13:40:41Z |
+
+**PR span:** #221 – #301 (14 merged PRs). No "no PR found" rows.
+
+**Orphan 038 reconciliation (Option A):** Placeholder `id: "task-pending-038"` replaced with ULID `task-01KPZMGHVH1S34ZZGAS3SF0D9X`. DB row registered via cf-knowledge-layer with `status: todo`; INSERT confirmed at 2026-04-24T11:39:15Z (1 row affected); `task_created` event appended to `.state/ledger/work-graph/work-graph.jsonl`. During the INSERT, cf-knowledge-layer also detected and deleted a pre-existing stale duplicate row (`task-01KPZM2Y01J8CDJYT7AB5CJ400`, status=in_progress from an earlier session today) to preserve the one-row-per-format_id invariant. The duplicate was traced to a sibling autorun worker `arw-ses-01kpzktds8ba8pe6cgp95k5xj2-INF-TSK-024-038` that had inserted the row at 2026-04-24T11:25:56Z during its own begin_work processing (CLI-generated ULID, placeholder `created_at: 2026-04-24T00:00:00Z`, no `task_created` JSONL event — hence orphaned without audit trail). No ULID collision, no data loss. Task now fully tracked in WorkGraph with a single canonical row. Latent bug noted for follow-up: autorun worker's begin_work should either reuse the on-disk markdown's `id` field or always emit `task_created` to JSONL so orphans are detectable via the rebuild authority.
+
+**Orphan 039 DB sync:** Task `task-01KPKR7C4CJMJXP6YMTW7YZ6VY` (INF-TSK-024-039) updated in SurrealDB from `status: in_progress` to `status: complete` with `completed_at: "2026-04-19T23:00:00Z"` via cf-knowledge-layer; UPDATE confirmed at 2026-04-24T11:39:19Z (1 row affected). `task_status_changed { from: "in_progress", to: "complete" }` event appended to `.state/ledger/work-graph/work-graph.jsonl`.
 
 ### Autorun Batching
 
