@@ -49,7 +49,7 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         // config.jsonl
         "config_set" | "config_updated" => Ok(files::CONFIG),
 
-        // pathflow-events.jsonl
+        // pathflow-events.jsonl // EXEMPT: section divider naming the target ledger file; no path construction
         "phase_transition"
         | "stage_transition"
         | "session_register"

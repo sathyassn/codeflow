@@ -184,7 +184,7 @@ pub enum LedgerEvent {
         data: serde_json::Value,
     },
 
-    // -- pathflow-events.jsonl --
+    // -- pathflow-events.jsonl -- // EXEMPT: section divider grouping variants by target ledger file
     PhaseTransition {
         #[serde(default)]
         session_id: Option<String>,

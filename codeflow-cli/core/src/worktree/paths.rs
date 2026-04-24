@@ -24,6 +24,19 @@ impl WorktreePaths {
         Self { root: root.into() }
     }
 
+    /// Construct a `WorktreePaths` from the `CODEFLOW_WORKTREE_PATH` env var.
+    ///
+    /// Returns `Some` when the env var is set to a non-empty value, otherwise
+    /// returns `None`. Callers that need worktree-aware path resolution with
+    /// a main-repo fallback should combine this with an explicit fallback.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        match std::env::var("CODEFLOW_WORKTREE_PATH") {
+            Ok(v) if !v.is_empty() => Some(Self::new(v)),
+            _ => None,
+        }
+    }
+
     /// Return the worktree root directory.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -366,5 +379,39 @@ mod tests {
         let wp = make_paths();
         let wp2 = wp.clone();
         assert_eq!(wp.root(), wp2.root());
+    }
+
+    // SAFETY: `std::env::set_var` / `remove_var` are `unsafe` in Rust 2024 due to
+    // data races with other threads reading env. These tests run under
+    // `#[serial]` to guarantee exclusive access to the environment.
+    #[test]
+    #[serial_test::serial]
+    fn test_from_env_set() {
+        // SAFETY: serial test exclusivity, no concurrent env readers.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "/tmp/wt-from-env-test") };
+        let wp = WorktreePaths::from_env();
+        // SAFETY: serial test exclusivity.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        assert!(wp.is_some());
+        assert_eq!(wp.unwrap().root(), Path::new("/tmp/wt-from-env-test"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_from_env_unset() {
+        // SAFETY: serial test exclusivity.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        assert!(WorktreePaths::from_env().is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_from_env_empty() {
+        // SAFETY: serial test exclusivity.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "") };
+        let wp = WorktreePaths::from_env();
+        // SAFETY: serial test exclusivity.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        assert!(wp.is_none());
     }
 }

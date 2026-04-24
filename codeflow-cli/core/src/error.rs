@@ -55,6 +55,9 @@ pub enum LedgerError {
     #[error("unknown event type: {0}")]
     UnknownEventType(String),
 
+    #[error("unknown ledger type: {0}")]
+    UnknownType(String),
+
     #[error("misrouted event: {event_type} belongs to {expected}, not {actual}")]
     MisroutedEvent {
         event_type: String,
@@ -586,6 +589,12 @@ mod tests {
     fn test_ledger_error_unknown_event_type() {
         let err = LedgerError::UnknownEventType("bad_event".into());
         assert_eq!(err.to_string(), "unknown event type: bad_event");
+    }
+
+    #[test]
+    fn test_ledger_error_unknown_type() {
+        let err = LedgerError::UnknownType("bogus".into());
+        assert_eq!(err.to_string(), "unknown ledger type: bogus");
     }
 
     #[test]

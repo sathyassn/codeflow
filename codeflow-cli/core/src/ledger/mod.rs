@@ -14,6 +14,75 @@ use crate::error::LedgerError;
 pub use jsonl::JsonlWriter;
 pub use routing::route_event_type;
 
+use crate::worktree::WorktreePaths;
+
+/// Resolve the canonical base file path for a ledger type.
+///
+/// Returns `<state_dir>/ledger/<type_name>/<type_name>.jsonl`, where
+/// `<state_dir>` is resolved as follows:
+///
+/// - `worktree_aware = true` and `CODEFLOW_WORKTREE_PATH` is set to a
+///   non-empty value: `<worktree_root>/.state`.
+/// - `worktree_aware = true` and the env var is unset or empty: the main-repo
+///   `./.state` directory (relative to the current working directory).
+/// - `worktree_aware = false`: the main-repo `./.state` directory.
+///
+/// This is the single authoritative path resolver for ledger consumers.
+/// Callers that need to read a ledger file must use this helper (or the
+/// explicit-state-dir companion [`resolve_path_in`]) instead of constructing
+/// paths from string literals, so the regression test in this module keeps
+/// the source tree free of legacy `.state/logs/pathflow-events` references.
+///
+/// # Errors
+///
+/// Returns [`LedgerError::UnknownType`] when `type_name` is not listed in
+/// [`files::ALL`].
+pub fn resolve_path(type_name: &str, worktree_aware: bool) -> Result<PathBuf, LedgerError> {
+    validate_type(type_name)?;
+    let state_dir = if worktree_aware {
+        WorktreePaths::from_env()
+            .map_or_else(|| PathBuf::from(".").join(".state"), |wp| wp.state_dir())
+    } else {
+        PathBuf::from(".").join(".state")
+    };
+    Ok(ledger_file_path(&state_dir, type_name))
+}
+
+/// Resolve the canonical base file path for a ledger type under an explicit
+/// state directory.
+///
+/// Returns `<state_dir>/ledger/<type_name>/<type_name>.jsonl`. Callers that
+/// already know the state directory (for example, `codeflow doctor` which is
+/// parameterised by `--state-dir`) use this variant to avoid re-reading
+/// `CODEFLOW_WORKTREE_PATH`.
+///
+/// # Errors
+///
+/// Returns [`LedgerError::UnknownType`] when `type_name` is not listed in
+/// [`files::ALL`].
+pub fn resolve_path_in(
+    state_dir: &std::path::Path,
+    type_name: &str,
+) -> Result<PathBuf, LedgerError> {
+    validate_type(type_name)?;
+    Ok(ledger_file_path(state_dir, type_name))
+}
+
+fn validate_type(type_name: &str) -> Result<(), LedgerError> {
+    if files::ALL.contains(&type_name) {
+        Ok(())
+    } else {
+        Err(LedgerError::UnknownType(type_name.to_string()))
+    }
+}
+
+fn ledger_file_path(state_dir: &std::path::Path, type_name: &str) -> PathBuf {
+    state_dir
+        .join("ledger")
+        .join(type_name)
+        .join(format!("{type_name}.jsonl"))
+}
+
 /// Canonical JSONL ledger type names (directory names in subdirectory layout).
 ///
 /// Each type maps to a subdirectory under `.state/ledger/`. Within each
@@ -244,6 +313,116 @@ mod tests {
         insta::assert_json_snapshot!(event);
     }
 
+    // -- resolve_path / resolve_path_in --
+
+    #[test]
+    fn test_resolve_path_in_known_pathflow_events() {
+        let state_dir = PathBuf::from("/tmp/test-state");
+        let p = resolve_path_in(&state_dir, files::PATHFLOW_EVENTS).unwrap();
+        assert_eq!(
+            p,
+            PathBuf::from("/tmp/test-state/ledger/pathflow-events/pathflow-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn test_resolve_path_in_known_work_graph() {
+        let state_dir = PathBuf::from("/tmp/test-state");
+        let p = resolve_path_in(&state_dir, files::WORK_GRAPH).unwrap();
+        assert_eq!(
+            p,
+            PathBuf::from("/tmp/test-state/ledger/work-graph/work-graph.jsonl")
+        );
+    }
+
+    #[test]
+    fn test_resolve_path_in_all_canonical_types() {
+        // Every entry in files::ALL must be accepted.
+        let state_dir = PathBuf::from("/s");
+        for ty in files::ALL {
+            let p = resolve_path_in(&state_dir, ty).expect("every files::ALL entry must resolve");
+            assert_eq!(p, PathBuf::from(format!("/s/ledger/{ty}/{ty}.jsonl")));
+        }
+    }
+
+    #[test]
+    fn test_resolve_path_in_unknown_type_returns_err() {
+        let state_dir = PathBuf::from("/tmp/test-state");
+        let err = resolve_path_in(&state_dir, "unknown-type").unwrap_err();
+        match err {
+            LedgerError::UnknownType(name) => assert_eq!(name, "unknown-type"),
+            other => panic!("expected UnknownType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_path_unknown_type_returns_err() {
+        let err = resolve_path("bogus", false).unwrap_err();
+        assert!(matches!(err, LedgerError::UnknownType(s) if s == "bogus"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_worktree_aware_uses_env() {
+        let td = tempfile::tempdir().unwrap();
+        let wt_root = td.path();
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", wt_root) };
+        let p = resolve_path(files::PATHFLOW_EVENTS, true).unwrap();
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        assert_eq!(
+            p,
+            wt_root
+                .join(".state")
+                .join("ledger")
+                .join("pathflow-events")
+                .join("pathflow-events.jsonl"),
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_worktree_aware_unset_falls_back_to_main_state() {
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        let p = resolve_path(files::PATHFLOW_EVENTS, true).unwrap();
+        assert_eq!(
+            p,
+            PathBuf::from("./.state/ledger/pathflow-events/pathflow-events.jsonl"),
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_worktree_aware_empty_env_falls_back() {
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", "") };
+        let p = resolve_path(files::PATHFLOW_EVENTS, true).unwrap();
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        assert_eq!(
+            p,
+            PathBuf::from("./.state/ledger/pathflow-events/pathflow-events.jsonl"),
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_non_worktree_ignores_env() {
+        let td = tempfile::tempdir().unwrap();
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::set_var("CODEFLOW_WORKTREE_PATH", td.path()) };
+        let p = resolve_path(files::PATHFLOW_EVENTS, false).unwrap();
+        // SAFETY: serial test exclusivity over env.
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+        // worktree_aware=false MUST ignore the env var and use the main-repo path.
+        assert_eq!(
+            p,
+            PathBuf::from("./.state/ledger/pathflow-events/pathflow-events.jsonl"),
+        );
+    }
+
     #[test]
     fn test_event_serialization_with_worktree() {
         let mut data = HashMap::new();
@@ -284,6 +463,233 @@ mod tests {
             parsed.get("worktree").is_none(),
             "worktree should be absent when None, but got: {json}",
         );
+    }
+
+    // -- Regression lint: no hardcoded pathflow-events path literals outside
+    //    (a) ledger/mod.rs resolve_path (this helper), and
+    //    (b) session_start.rs migrate_pathflow_events_from_logs migration function,
+    //    (c) lines carrying `// EXEMPT:` comments,
+    //    (d) test code (#[cfg(test)] modules and files under /tests/).
+    //
+    // This prevents future consumers from silently reading the legacy
+    // `.state/logs/pathflow-events.jsonl` path after the INF-TSK-024-035
+    // migration and closes gap G1 from the 2026-04-22 chain audit.
+    mod regression_lint {
+        use std::path::{Path, PathBuf};
+
+        fn workspace_src_roots() -> Vec<PathBuf> {
+            // CARGO_MANIFEST_DIR for this crate = codeflow-cli/core
+            let core_manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let workspace_root = core_manifest
+                .parent()
+                .expect("core crate must have a parent")
+                .to_path_buf();
+            vec![
+                workspace_root.join("core").join("src"),
+                workspace_root.join("cli").join("src"),
+            ]
+        }
+
+        fn collect_rs_files(root: &Path) -> Vec<PathBuf> {
+            let pattern = root.join("**").join("*.rs");
+            glob::glob(&pattern.to_string_lossy())
+                .expect("glob pattern compiles")
+                .filter_map(Result::ok)
+                .collect()
+        }
+
+        /// Return the indices of lines that live inside a `#[cfg(test)]` module
+        /// (or nested module within one). Uses brace-counting to track scope.
+        fn test_line_mask(lines: &[&str]) -> Vec<bool> {
+            let mut mask = vec![false; lines.len()];
+            let mut i = 0;
+            while i < lines.len() {
+                let trimmed = lines[i].trim_start();
+                if trimmed.starts_with("#[cfg(test)]") {
+                    // Find the opening `{` of the following module.
+                    let mut j = i + 1;
+                    while j < lines.len() && !lines[j].contains('{') {
+                        j += 1;
+                    }
+                    if j >= lines.len() {
+                        break;
+                    }
+                    // Count braces starting from line j until depth returns to 0.
+                    let mut depth: i32 = 0;
+                    let mut started = false;
+                    let mut k = j;
+                    while k < lines.len() {
+                        for ch in lines[k].chars() {
+                            if ch == '{' {
+                                depth += 1;
+                                started = true;
+                            } else if ch == '}' {
+                                depth -= 1;
+                            }
+                        }
+                        mask[k] = true;
+                        if started && depth <= 0 {
+                            k += 1;
+                            break;
+                        }
+                        k += 1;
+                    }
+                    i = k;
+                    continue;
+                }
+                i += 1;
+            }
+            mask
+        }
+
+        /// Path is exempt from the regression lint because the file legitimately
+        /// references the legacy location (helper definitions or migration code).
+        fn is_exempt_file(path: &Path) -> bool {
+            let s = path.to_string_lossy();
+            // This file (ledger/mod.rs) contains the resolve_path helper and
+            // this very lint's documentation strings.
+            if s.ends_with("ledger/mod.rs") || s.ends_with("ledger\\mod.rs") {
+                return true;
+            }
+            // session_start.rs contains the one-shot migration from
+            // .state/logs/pathflow-events.jsonl -> ledger subdir.
+            if s.ends_with("hooks/session_start.rs") || s.ends_with("hooks\\session_start.rs") {
+                return true;
+            }
+            false
+        }
+
+        fn line_is_exempt(line: &str) -> bool {
+            line.contains("// EXEMPT:")
+        }
+
+        #[test]
+        fn no_hardcoded_legacy_pathflow_events_literals() {
+            let mut offenders: Vec<String> = Vec::new();
+            for root in workspace_src_roots() {
+                if !root.exists() {
+                    continue;
+                }
+                for file in collect_rs_files(&root) {
+                    if is_exempt_file(&file) {
+                        continue;
+                    }
+                    let Ok(content) = std::fs::read_to_string(&file) else {
+                        continue;
+                    };
+                    let lines: Vec<&str> = content.lines().collect();
+                    let test_mask = test_line_mask(&lines);
+                    for (idx, line) in lines.iter().enumerate() {
+                        if test_mask[idx] {
+                            continue;
+                        }
+                        if line_is_exempt(line) {
+                            continue;
+                        }
+                        if line.contains(".state/logs/pathflow-events")
+                            || line.contains("pathflow-events.jsonl")
+                        {
+                            offenders.push(format!(
+                                "{}:{}: {}",
+                                file.display(),
+                                idx + 1,
+                                line.trim(),
+                            ));
+                        }
+                    }
+                }
+            }
+            assert!(
+                offenders.is_empty(),
+                "hardcoded legacy pathflow-events path literals found in non-test code \
+                 (use ledger::resolve_path / resolve_path_in or add // EXEMPT: <reason>):\n{}",
+                offenders.join("\n"),
+            );
+        }
+
+        // -- Meta tests: verify the lint has teeth.
+
+        #[test]
+        fn test_line_mask_marks_cfg_test_module() {
+            let src = r"fn a() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {}
+}
+
+fn b() {}
+";
+            let lines: Vec<&str> = src.lines().collect();
+            let mask = test_line_mask(&lines);
+            // Non-test code outside the module.
+            assert!(!mask[0]); // fn a() {}
+            assert!(!mask[1]); // blank
+            assert!(!mask[2]); // #[cfg(test)]
+            // Lines inside the test module.
+            assert!(mask[3]); // mod tests {
+            assert!(mask[4]); //     #[test]
+            assert!(mask[5]); //     fn t() {}
+            assert!(mask[6]); // }
+            // Non-test code after the module.
+            assert!(!mask[7]); // blank
+            assert!(!mask[8]); // fn b() {}
+        }
+
+        #[test]
+        fn test_line_mask_handles_no_test_module() {
+            let src = "fn a() {}\nfn b() {}\n";
+            let lines: Vec<&str> = src.lines().collect();
+            let mask = test_line_mask(&lines);
+            assert!(mask.iter().all(|m| !m));
+        }
+
+        #[test]
+        fn test_line_mask_ignores_non_test_cfg() {
+            // Sanity: #[cfg(feature = "x")] must NOT be treated as a test module.
+            let src = r#"#[cfg(feature = "x")]
+fn gated() {}
+"#;
+            let lines: Vec<&str> = src.lines().collect();
+            let mask = test_line_mask(&lines);
+            assert!(mask.iter().all(|m| !m));
+        }
+
+        #[test]
+        fn line_is_exempt_detects_marker() {
+            assert!(line_is_exempt(
+                "let p = \".state/logs/pathflow-events.jsonl\"; // EXEMPT: historical migration"
+            ));
+            assert!(!line_is_exempt(
+                "let p = \".state/logs/pathflow-events.jsonl\";"
+            ));
+        }
+
+        #[test]
+        fn regression_lint_flags_offending_literal_when_unmasked() {
+            // Verify the lint has teeth: when we simulate a non-test, non-exempt
+            // file containing the legacy string, the detection logic triggers.
+            let src = "pub fn bad() -> &'static str { \"pathflow-events.jsonl\" }\n";
+            let lines: Vec<&str> = src.lines().collect();
+            let mask = test_line_mask(&lines);
+            let mut hit = false;
+            for (idx, line) in lines.iter().enumerate() {
+                if mask[idx] {
+                    continue;
+                }
+                if line_is_exempt(line) {
+                    continue;
+                }
+                if line.contains(".state/logs/pathflow-events")
+                    || line.contains("pathflow-events.jsonl")
+                {
+                    hit = true;
+                    break;
+                }
+            }
+            assert!(hit, "lint must flag literal when not masked/exempt");
+        }
     }
 
     mod proptests {

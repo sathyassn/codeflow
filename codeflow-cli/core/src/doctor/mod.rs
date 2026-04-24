@@ -648,7 +648,7 @@ fn check_network(opts: &Options) -> CheckResult {
     }
 }
 
-/// `PathFlow` event from `pathflow-events.jsonl`.
+/// `PathFlow` event from the canonical ledger stream. // EXEMPT: doc comment names the ledger type for humans; no path construction
 #[derive(Debug, Deserialize)]
 struct PathflowEvent {
     #[serde(rename = "event")]
@@ -677,9 +677,9 @@ fn pathflow_active(state_dir: &str, session_id: &str) -> bool {
 }
 
 fn read_pathflow_events(state_dir: &str) -> Result<Vec<PathflowEvent>, String> {
-    let path = Path::new(state_dir)
-        .join("logs")
-        .join("pathflow-events.jsonl");
+    let path =
+        crate::ledger::resolve_path_in(Path::new(state_dir), crate::ledger::files::PATHFLOW_EVENTS)
+            .map_err(|e| e.to_string())?;
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut events = Vec::new();
     for line in content.lines() {
@@ -1710,11 +1710,14 @@ mod tests {
     #[test]
     fn test_read_pathflow_events_valid() {
         let dir = tempfile::tempdir().unwrap();
-        let logs_dir = dir.path().join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = dir
+            .path()
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let content = r#"{"event": "phase_transition", "phase": "PF1-INIT", "timestamp": "2026-03-10T10:00:00Z"}
 {"event": "stage_transition", "phase": "", "timestamp": "2026-03-10T10:01:00Z"}"#;
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         let events = read_pathflow_events(&dir.path().to_string_lossy()).unwrap();
         assert_eq!(events.len(), 2);
@@ -1744,13 +1747,15 @@ mod tests {
         .unwrap();
 
         // Create recent event
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let ts = chrono::Utc::now().to_rfc3339();
         let content = format!(
             r#"{{"event": "phase_transition", "phase": "PF3-CLASSIFY", "timestamp": "{ts}"}}"#
         );
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         let mut opts = test_opts();
         opts.state_dir = state_dir.to_string_lossy().to_string();
@@ -1775,13 +1780,15 @@ mod tests {
         .unwrap();
 
         // Create old event (2 hours ago)
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let old_ts = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
         let content = format!(
             r#"{{"event": "phase_transition", "phase": "PF2-CONTEXT", "timestamp": "{old_ts}"}}"#
         );
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         let mut opts = test_opts();
         opts.state_dir = state_dir.to_string_lossy().to_string();
@@ -1806,11 +1813,13 @@ mod tests {
         .unwrap();
 
         // Create events file with no phase_transition events
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let content =
             r#"{"event": "stage_transition", "phase": "", "timestamp": "2026-03-10T10:00:00Z"}"#;
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         let mut opts = test_opts();
         opts.state_dir = state_dir.to_string_lossy().to_string();
@@ -1835,13 +1844,15 @@ mod tests {
         .unwrap();
 
         // Create recent event at PF2-CONTEXT
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let ts = chrono::Utc::now().to_rfc3339();
         let content = format!(
             r#"{{"event": "phase_transition", "phase": "PF2-CONTEXT", "timestamp": "{ts}"}}"#
         );
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         // Create expected sentinels
         let sentinel_dir = state_dir.join("sentinels").join("pathflow").join("ses-1");
@@ -1872,13 +1883,15 @@ mod tests {
         .unwrap();
 
         // Create event at PF2-CONTEXT
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let ts = chrono::Utc::now().to_rfc3339();
         let content = format!(
             r#"{{"event": "phase_transition", "phase": "PF2-CONTEXT", "timestamp": "{ts}"}}"#
         );
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         // Create only pf-1, missing pf-2
         let sentinel_dir = state_dir.join("sentinels").join("pathflow").join("ses-1");
@@ -2125,13 +2138,15 @@ mod tests {
         .unwrap();
 
         // Create event with unknown phase
-        let logs_dir = state_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
+        let events_dir = state_dir
+            .join("ledger")
+            .join(crate::ledger::files::PATHFLOW_EVENTS);
+        std::fs::create_dir_all(&events_dir).unwrap();
         let ts = chrono::Utc::now().to_rfc3339();
         let content = format!(
             r#"{{"event": "phase_transition", "phase": "PF99-UNKNOWN", "timestamp": "{ts}"}}"#
         );
-        std::fs::write(logs_dir.join("pathflow-events.jsonl"), content).unwrap();
+        std::fs::write(events_dir.join("pathflow-events.jsonl"), content).unwrap();
 
         let mut opts = test_opts();
         opts.state_dir = state_dir.to_string_lossy().to_string();
