@@ -246,6 +246,42 @@ pub async fn cleanup_stale_session<S: DataStore>(
             continue;
         }
 
+        // F2 (WS-REV iteration 2): five-veto liveness check FIRST, before
+        // ANY destructive action. Previously the worker tmux kill,
+        // claim release, registry deregister, and `git worktree remove`
+        // ran first, then the liveness check gated only the physical
+        // removal — leaving a registry entry orphaned without a backing
+        // directory if the session was still alive. Now: if any veto
+        // fires, we skip every destructive step for this worker and let
+        // the next sweep cycle re-evaluate.
+        if let Some(ref wt_path) = worker.worktree_path {
+            let wt = Path::new(wt_path);
+            // Only veto when there is a worktree to protect AND it
+            // physically exists. A non-existent worktree means there's
+            // nothing left to reap — the cleanup path is the only way
+            // to deregister the dangling registry entry.
+            if wt.exists() {
+                let worker_sid = worker
+                    .worker_session_id
+                    .clone()
+                    .unwrap_or_else(|| worker.session_id.clone());
+                let alive_inputs = crate::session::liveness::SessionAliveInputs {
+                    session_id: worker_sid,
+                    project_dir: project_dir.to_path_buf(),
+                    worktree_path: Some(wt.to_path_buf()),
+                    registry_created_at: None,
+                };
+                if crate::session::liveness::is_session_alive(&alive_inputs) {
+                    eprintln!(
+                        "warn: skipping cleanup of live session for worker {}: session still alive",
+                        worker.id
+                    );
+                    report.workers_already_dead += 1;
+                    continue;
+                }
+            }
+        }
+
         // Kill tmux session if alive.
         if let Some(ref tmux_name) = worker.tmux_session {
             if check_tmux_alive(tmux_name) {
@@ -310,18 +346,21 @@ pub async fn cleanup_stale_session<S: DataStore>(
         }
 
         // Deregister worktree unconditionally (even if dir was manually removed).
+        // The liveness veto above already skipped this branch if the
+        // session was alive — by this point the worker is confirmed dead
+        // and it's safe to remove both the registry entry and the disk
+        // directory together.
         if let Some(ref wt_path) = worker.worktree_path {
             let registry_path = project_dir.join(".state/worktrees");
             let _ = crate::worktree::locked_deregister_worktree(&registry_path, wt_path);
-            // Remove the worktree directory if it still exists.
             let wt = Path::new(wt_path);
             if wt.exists() {
                 let _ = std::process::Command::new("git")
                     .args(["worktree", "remove", "--force", wt_path])
                     .current_dir(project_dir)
                     .output();
+                report.worktrees_removed += 1;
             }
-            report.worktrees_removed += 1;
         }
 
         // Close PR if open.
@@ -1113,5 +1152,128 @@ mod tests {
             .unwrap();
         assert_eq!(report.workers_killed, 0);
         assert_eq!(report.task_runs_failed, 0);
+    }
+
+    /// F2 (WS-REV iteration 2 rework): when the five-veto liveness
+    /// predicate reports the worker's session is still alive,
+    /// `cleanup_stale_session` MUST skip the entire per-worker
+    /// cleanup block — including registry deregistration, tmux kill,
+    /// CRDT claim release, `git worktree remove`, gh PR close, and
+    /// the DB worker-status update. Previously the deregister ran
+    /// unconditionally and only the physical removal was vetoed,
+    /// orphaning the registry/disk pair.
+    #[tokio::test]
+    async fn test_cleanup_skips_destructive_actions_when_session_alive() {
+        use crate::store::DataStore;
+        let store = crate::store::mock::MockStore::new();
+
+        let session_sid = "ses-stale-alive";
+        let worker_sid = "ses-01jq2alivetest1234567890"; // valid 30-char ULID-ish
+        let session = make_session(
+            session_sid,
+            AutorunSessionStatus::Running,
+            Some(999_999_999),
+        );
+        store.create_autorun_session(&session).await.unwrap();
+
+        // Build a project dir + worktree dir + registry + pathflow-team.json
+        // with a LIVE lead_pid so V4 of `is_session_alive` votes ALIVE.
+        let project = tempfile::tempdir().unwrap();
+        let project_dir = project.path();
+        let wt_dir = project_dir.join(".git-worktrees").join("worktree-alive");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+
+        // Registry with one Active entry pointing at wt_dir.
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        let mut reg = crate::worktree::WorktreeRegistry::new(&chrono::Utc::now().to_rfc3339());
+        reg.worktrees.push(crate::worktree::WorktreeEntry {
+            name: "worktree-alive".into(),
+            path: wt_dir.to_string_lossy().into(),
+            branch: Some("feat/alive".into()),
+            created_at: (chrono::Utc::now() - chrono::Duration::seconds(3600)).to_rfc3339(),
+            status: crate::worktree::WorktreeStatus::Active,
+            session_id: Some(worker_sid.into()),
+            task_id: None,
+            source: None,
+            lead_pid: None,
+        });
+        crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // pathflow-team.json with a LIVE PID drives V4 ALIVE.
+        let team_dir = project_dir
+            .join(".state/session")
+            .join(worker_sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&team_dir).unwrap();
+        std::fs::write(
+            team_dir.join("pathflow-team.json"),
+            serde_json::json!({
+                "team_name": "live-team",
+                "lead_pid": std::process::id(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Build a worker pointing at this worktree so cleanup_stale_session
+        // exercises the per-worker veto path.
+        let mut worker = make_worker(
+            "w-alive",
+            session_sid,
+            "task-alive",
+            AutorunWorkerStatus::Running,
+        );
+        worker.worktree_path = Some(wt_dir.to_string_lossy().into());
+        worker.worker_session_id = Some(worker_sid.into());
+        store.create_autorun_worker(&worker).await.unwrap();
+
+        let report = cleanup_stale_session(&store, project_dir, session_sid, "pid dead")
+            .await
+            .unwrap();
+
+        // 1. Registry entry MUST still be present.
+        let reg_after = crate::worktree::read_registry(&registry_path).unwrap();
+        assert_eq!(
+            reg_after.worktrees.len(),
+            1,
+            "live session: registry entry must NOT be deregistered (was: {:?})",
+            reg_after
+                .worktrees
+                .iter()
+                .map(|e| (&e.name, &e.status))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            reg_after.worktrees[0].name, "worktree-alive",
+            "the live worktree entry must be the one preserved"
+        );
+
+        // 2. Worktree directory MUST still exist.
+        assert!(
+            wt_dir.exists(),
+            "live session: worktree directory must NOT be removed"
+        );
+
+        // 3. Report MUST classify the worker as already-dead-or-alive
+        //    (skipped path), NOT as workers_killed. With no tmux session
+        //    set up, the kill block was skipped entirely, so killed=0
+        //    is expected on both old and new code; the load-bearing
+        //    invariant is `workers_removed == 0`.
+        assert_eq!(
+            report.worktrees_removed, 0,
+            "live session: report.worktrees_removed must be 0 (got {})",
+            report.worktrees_removed
+        );
+
+        // 4. The worker's DB status SHOULD remain Running (no DB write
+        //    happens before the destructive block). Confirm we didn't
+        //    accidentally mark the live worker Failed.
+        let updated_worker = store.list_autorun_workers(session_sid).await.unwrap();
+        assert_eq!(updated_worker.len(), 1);
+        assert_eq!(
+            updated_worker[0].status,
+            AutorunWorkerStatus::Running,
+            "live session: worker DB status must NOT be flipped to Failed"
+        );
     }
 }

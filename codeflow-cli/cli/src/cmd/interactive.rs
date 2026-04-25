@@ -1511,102 +1511,72 @@ fn render_session_detail(
     session: Option<&codeflow_core::tui::data::SessionView>,
 ) {
     use codeflow_core::tui::data::format_task_id_for_display;
-    use codeflow_core::tui::theme;
-    use codeflow_core::tui::widgets::{DurationCell, PhaseBadge};
-    use ratatui::style::Style;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Paragraph};
+    use codeflow_core::tui::widgets::{SessionDetail, render_session_detail as render};
 
-    let lines = if let Some(s) = session {
-        let pid_liveness = if is_session_stale(s.pid) {
-            "DEAD"
-        } else {
-            "alive"
+    let Some(s) = session else {
+        let empty = SessionDetail {
+            session_id: "--",
+            pid: None,
+            pid_alive: None,
+            worktree_path: "--",
+            team_name: None,
+            branch: None,
+            work_type: None,
+            task_id: None,
+            task_id_formatted: None,
+            phase: None,
+            status: "--",
+            duration_secs: None,
+            autorun_extras: None,
         };
-
-        // Task display: formatted ID first, ULID-truncated fallback, plus
-        // the raw ULID in parentheses when it is known AND distinct from
-        // the formatted ID (so operators can copy it verbatim).
-        let task_primary =
-            format_task_id_for_display(s.task_format_id.as_deref(), s.task_id.as_deref());
-        let task_secondary = s
-            .task_id
-            .as_deref()
-            .filter(|id| {
-                // Only show the ULID suffix when we displayed a format_id
-                // (otherwise the primary IS the ULID, so no need to repeat).
-                s.task_format_id.as_deref().is_some_and(|f| !f.is_empty())
-                    && !id.is_empty()
-                    && *id != task_primary
-            })
-            .map(|id| format!(" ({id})"))
-            .unwrap_or_default();
-
-        let status_span = session_status_badge(&s.status);
-        let phase_span = PhaseBadge::new(s.phase.as_deref()).to_span();
-        let duration_span = DurationCell::new(Some(s.duration_secs)).to_span();
-
-        vec![
-            Line::from(vec![
-                Span::styled("Session: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(s.session_id.clone()),
-                Span::raw("  "),
-                Span::styled("PID: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(format!("{}", s.pid)),
-                Span::styled(
-                    format!(" ({pid_liveness})"),
-                    if pid_liveness == "alive" {
-                        Style::new().fg(theme::GREEN_SUCCESS)
-                    } else {
-                        Style::new().fg(theme::RED_FAILURE)
-                    },
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Worktree: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::styled(
-                    s.worktree_path.as_deref().unwrap_or("--").to_string(),
-                    theme::dim(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Team: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(s.team_name.as_deref().unwrap_or("--").to_string()),
-                Span::raw("  "),
-                Span::styled("Branch: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(s.branch.as_deref().unwrap_or("--").to_string()),
-                Span::raw("  "),
-                Span::styled("Type: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(s.work_type.as_deref().unwrap_or("--").to_string()),
-            ]),
-            Line::from(vec![
-                Span::styled("Task: ", Style::new().fg(theme::BLUE_ACCENT)),
-                Span::raw(task_primary),
-                Span::styled(task_secondary, theme::dim()),
-            ]),
-            Line::from(vec![
-                Span::styled("Status: ", Style::new().fg(theme::BLUE_ACCENT)),
-                status_span,
-                Span::raw("  "),
-                Span::styled("Phase: ", Style::new().fg(theme::BLUE_ACCENT)),
-                phase_span,
-                Span::raw("  "),
-                Span::styled("Duration: ", Style::new().fg(theme::BLUE_ACCENT)),
-                duration_span,
-            ]),
-        ]
-    } else {
-        vec![Line::styled("No session selected", theme::dim())]
+        render(frame, area, &empty);
+        return;
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::BORDER_TYPE)
-        .title(" Details ")
-        .style(Style::new().fg(theme::WHITE_TEXT));
+    let pid_alive = !is_session_stale(s.pid);
+    // `pid = 0` in the DB means no recorded PID; surface that as "unknown"
+    // to avoid rendering a misleading "0 (DEAD)".
+    #[allow(clippy::cast_possible_truncation)]
+    let (pid_field, alive_field) = if s.pid == 0 {
+        (None, None)
+    } else {
+        (Some(s.pid as i32), Some(pid_alive))
+    };
 
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    // Mirror the prior adapter: when `format_task_id_for_display` ends up
+    // returning the raw ULID (task_format_id is None/empty), the primary IS
+    // the raw task_id — don't double-render it in parens.
+    let primary = format_task_id_for_display(s.task_format_id.as_deref(), s.task_id.as_deref());
+    let formatted_opt: Option<String> =
+        if s.task_format_id.as_deref().is_some_and(|f| !f.is_empty()) {
+            Some(primary)
+        } else {
+            None
+        };
+
+    #[allow(clippy::cast_sign_loss)]
+    let duration_secs = if s.duration_secs >= 0 {
+        Some(s.duration_secs as u64)
+    } else {
+        None
+    };
+
+    let detail = SessionDetail {
+        session_id: &s.session_id,
+        pid: pid_field,
+        pid_alive: alive_field,
+        worktree_path: s.worktree_path.as_deref().unwrap_or("--"),
+        team_name: s.team_name.as_deref(),
+        branch: s.branch.as_deref(),
+        work_type: s.work_type.as_deref(),
+        task_id: s.task_id.as_deref(),
+        task_id_formatted: formatted_opt.as_deref(),
+        phase: s.phase.as_deref(),
+        status: &s.status,
+        duration_secs,
+        autorun_extras: None,
+    };
+    render(frame, area, &detail);
 }
 
 fn get_selected_session<'a>(

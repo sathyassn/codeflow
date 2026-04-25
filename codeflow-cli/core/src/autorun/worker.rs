@@ -139,6 +139,198 @@ pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(120 * 60);
 /// pressure against liveness resolution in the TUI.
 pub const WORKER_HEARTBEAT_INTERVAL_SECS: u64 = 10;
 
+/// Stage-timeout poll interval. Must be small relative to the timeout
+/// itself so the watcher reacts within ~one window of the configured
+/// threshold; large enough that the filesystem scan is not hot.
+pub(crate) const STAGE_TIMEOUT_POLL_INTERVAL_SECS: u64 = 30;
+
+/// Most-recent ws-* sentinel mtime (Unix seconds) under
+/// `.state/sentinels/pathflow/{session_id}/`. Returns `None` when the
+/// directory does not exist yet (no stage has emitted a sentinel) or
+/// no `ws-*` files are present.
+///
+/// Worktree-aware: when `worktree_path` is `Some`, sentinels live at
+/// `{worktree}/.state/sentinels/pathflow/{session_id}/`; otherwise
+/// they're under `{project_dir}/.state/sentinels/...`. Sentinels are
+/// LOCAL state in the worktree layout (not symlinked), so the worktree
+/// path is the canonical location during autorun.
+pub(crate) fn latest_ws_sentinel_mtime_secs(
+    project_dir: &std::path::Path,
+    session_id: &str,
+    worktree_path: Option<&std::path::Path>,
+) -> Option<i64> {
+    let base = worktree_path.unwrap_or(project_dir);
+    let dir = base
+        .join(".state")
+        .join("sentinels")
+        .join("pathflow")
+        .join(session_id);
+    let entries = std::fs::read_dir(&dir).ok()?;
+    let mut latest: Option<i64> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        // Match the `pathflow-ws-*` (or bare `ws-*`) naming used by
+        // `sentinel-write` PostToolUse hook. Both prefixes have been
+        // observed in the codebase historically.
+        if !(name_str.starts_with("pathflow-ws-") || name_str.starts_with("ws-")) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(epoch) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                    // saturating: any post-2262 mtime maps to i64::MAX,
+                    // which simply means "always alive" — acceptable for
+                    // this watcher's purposes.
+                    let secs = i64::try_from(epoch.as_secs()).unwrap_or(i64::MAX);
+                    if latest.is_none_or(|l| secs > l) {
+                        latest = Some(secs);
+                    }
+                }
+            }
+        }
+    }
+    latest
+}
+
+/// Append a `stage_timeout` event to `pathflow-events.jsonl`.
+///
+/// The ledger lives at `{worktree}/.state/ledger/pathflow-events.jsonl`
+/// in worktree mode (LOCAL since INF-TSK-024-035), or at
+/// `{project_dir}/.state/ledger/pathflow-events.jsonl` otherwise.
+/// Errors are non-fatal — failure to write the event must NOT prevent
+/// the watcher from aborting the worker.
+pub(crate) fn emit_stage_timeout_event(
+    project_dir: &std::path::Path,
+    session_id: &str,
+    task_id: &str,
+    worktree_path: Option<&std::path::Path>,
+    last_sentinel_mtime: Option<i64>,
+    stage_timeout_secs: u64,
+) {
+    use std::io::Write;
+    let base = worktree_path.unwrap_or(project_dir);
+    let path = base
+        .join(".state")
+        .join("ledger")
+        .join("pathflow-events.jsonl");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let event = serde_json::json!({
+        "event": "stage_timeout",
+        "session_id": session_id,
+        "task_id": task_id,
+        "stage_timeout_secs": stage_timeout_secs,
+        "last_sentinel_mtime_secs": last_sentinel_mtime,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    let line = match serde_json::to_string(&event) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Pure decision: given the most recent ws-* sentinel mtime (or `None`
+/// if no sentinel has appeared), the wall-clock baseline used until
+/// the first sentinel, the configured timeout, and the current time
+/// in Unix seconds, return `Some(last_seen_secs)` when the worker has
+/// stalled past the threshold or `None` when it is still within the
+/// window.
+///
+/// Pulled out of the polling loop so unit tests can exercise every
+/// boundary (fresh sentinel within window, sentinel just-expired,
+/// no sentinel + baseline expired, no sentinel + baseline fresh)
+/// without needing the tokio mock clock.
+pub(crate) fn stage_timeout_decision(
+    last_sentinel_mtime: Option<i64>,
+    start_baseline_secs: i64,
+    stage_timeout_secs: u64,
+    now_secs: i64,
+) -> Option<i64> {
+    let timeout_i64 = i64::try_from(stage_timeout_secs).unwrap_or(i64::MAX);
+    let last_seen = last_sentinel_mtime.unwrap_or(start_baseline_secs);
+    let stale_for = now_secs.saturating_sub(last_seen);
+    if stale_for >= timeout_i64 {
+        Some(last_seen)
+    } else {
+        None
+    }
+}
+
+/// Watch for stage-timeout. Resolves when a polling interval observes
+/// no new `ws-*` sentinel for longer than `stage_timeout_secs` since
+/// the most recent sentinel mtime (or session start if no sentinel
+/// exists yet).
+///
+/// `start_baseline_secs` is the wall-clock baseline used until the
+/// first sentinel appears — typically the worker start time as Unix
+/// epoch seconds.
+///
+/// `poll_interval` is the cadence between filesystem scans. Production
+/// callers pass [`STAGE_TIMEOUT_POLL_INTERVAL_SECS`] worth of seconds;
+/// tests can pass a much smaller value so they don't need the tokio
+/// `test-util` mock clock feature.
+///
+/// This is intentionally a polling loop rather than a filesystem
+/// notification watcher (a) because the `.state/sentinels/` directory
+/// is created by the hook pipeline and may not exist at watcher-start
+/// time on some platforms, and (b) because `inotify` / `fsevents`
+/// add a platform-specific dependency for what is in practice a
+/// 30-second poll.
+pub(crate) async fn await_stage_timeout_with_interval(
+    project_dir: std::path::PathBuf,
+    session_id: String,
+    worktree_path: Option<std::path::PathBuf>,
+    stage_timeout_secs: u64,
+    start_baseline_secs: i64,
+    poll_interval: std::time::Duration,
+) -> i64 {
+    loop {
+        tokio::time::sleep(poll_interval).await;
+        let now_secs = chrono::Utc::now().timestamp();
+        let last_sentinel_mtime =
+            latest_ws_sentinel_mtime_secs(&project_dir, &session_id, worktree_path.as_deref());
+        if let Some(last_seen) = stage_timeout_decision(
+            last_sentinel_mtime,
+            start_baseline_secs,
+            stage_timeout_secs,
+            now_secs,
+        ) {
+            return last_seen;
+        }
+    }
+}
+
+/// Convenience wrapper: production callers pass the default poll
+/// interval ([`STAGE_TIMEOUT_POLL_INTERVAL_SECS`] seconds).
+pub(crate) async fn await_stage_timeout(
+    project_dir: std::path::PathBuf,
+    session_id: String,
+    worktree_path: Option<std::path::PathBuf>,
+    stage_timeout_secs: u64,
+    start_baseline_secs: i64,
+) -> i64 {
+    await_stage_timeout_with_interval(
+        project_dir,
+        session_id,
+        worktree_path,
+        stage_timeout_secs,
+        start_baseline_secs,
+        std::time::Duration::from_secs(STAGE_TIMEOUT_POLL_INTERVAL_SECS),
+    )
+    .await
+}
+
 /// Executes commands via tmux. Enables testing without actual tmux sessions.
 pub trait TmuxRunner: Send + Sync {
     /// Create a new tmux session with the given name.
@@ -1164,6 +1356,20 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 }
             };
 
+        // STAGE TIMEOUT: a parallel watcher that observes ws-* sentinel
+        // mtime in `.state/sentinels/pathflow/{worker_session_id}/`. If
+        // the worker makes no stage progress within `stage_timeout_secs`
+        // (default 3600), the watcher resolves and the select! arm wins
+        // over the claude invoke. Distinct from the outer wall-clock
+        // timeout: a worker can be alive but stuck on a single stage
+        // (e.g. cf-development hung), in which case worker_timeout_secs
+        // (typically 5400-7200s) would let it sit idle for 1-2 hours.
+        let stage_timeout_secs = crate::autorun::config::load_config(&self.project_dir)
+            .unwrap_or_default()
+            .autorun
+            .stage_timeout_secs;
+        let stage_timeout_baseline = chrono::Utc::now().timestamp();
+
         // OUTER TIMEOUT: Bounds total worker wall-clock time including worktree
         // setup, Claude invocation, and cleanup. This is the safety net enforced
         // by the orchestrator/worker layer. The INNER timeout lives in the CLI
@@ -1171,27 +1377,62 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         // handling SIGTERM/SIGKILL escalation. Both are needed: the outer catches
         // hangs in non-Claude phases; the inner provides graceful Claude shutdown.
         let result = tokio::time::timeout(timeout, async {
-            self.claude
-                .invoke(InvokeConfig {
-                    work_dir: wt_info.path.to_string_lossy().into_owned(),
-                    prompt,
-                    session_id: cfg.session_id.clone(),
-                    task_id: cfg.task_id.clone(),
-                    task_format_id: cfg.task_format_id.clone(),
-                    integration_auto_merge: cfg.integration_auto_merge,
-                    integration_branch: cfg.integration_branch.clone(),
-                    tmux_session: tmux_name.clone(),
-                    acceptance_criteria,
-                    worker_session_id: worker_sid.as_str().to_owned(),
-                    epic_update: cfg.epic_update.clone(),
-                    worker_timeout_secs: effective_timeout_secs,
-                })
-                .await
+            let invoke_fut = self.claude.invoke(InvokeConfig {
+                work_dir: wt_info.path.to_string_lossy().into_owned(),
+                prompt,
+                session_id: cfg.session_id.clone(),
+                task_id: cfg.task_id.clone(),
+                task_format_id: cfg.task_format_id.clone(),
+                integration_auto_merge: cfg.integration_auto_merge,
+                integration_branch: cfg.integration_branch.clone(),
+                tmux_session: tmux_name.clone(),
+                acceptance_criteria,
+                worker_session_id: worker_sid.as_str().to_owned(),
+                epic_update: cfg.epic_update.clone(),
+                worker_timeout_secs: effective_timeout_secs,
+            });
+            let stage_watcher = await_stage_timeout(
+                self.project_dir.clone(),
+                worker_sid.as_str().to_owned(),
+                Some(wt_info.path.clone()),
+                stage_timeout_secs,
+                stage_timeout_baseline,
+            );
+            tokio::select! {
+                biased;
+                last_seen = stage_watcher => {
+                    // Emit `stage_timeout` event to pathflow-events.jsonl
+                    // (LOCAL per-worktree since INF-TSK-024-035), then
+                    // synthesize an exit-125 result. The worker bus path
+                    // turns this into a `failed` outcome below.
+                    emit_stage_timeout_event(
+                        &self.project_dir,
+                        worker_sid.as_str(),
+                        &cfg.task_id,
+                        Some(&wt_info.path),
+                        Some(last_seen),
+                        stage_timeout_secs,
+                    );
+                    Ok(InvokeResult {
+                        exit_code: 125,
+                        pr_number: 0,
+                        pr_url: String::new(),
+                        branch_name: String::new(),
+                        output: format!(
+                            "stage_timeout: no ws-* sentinel in {stage_timeout_secs}s"
+                        ),
+                    })
+                }
+                invoke_result = invoke_fut => invoke_result,
+            }
         })
         .await;
 
         // Log Claude exit status.
         match &result {
+            Ok(Ok(r)) if r.exit_code == 125 => {
+                worker_log(&log_path, "STAGE_TIMEOUT exit=125");
+            }
             Ok(Ok(r)) => worker_log(&log_path, &format!("CLAUDE_EXIT code={}", r.exit_code)),
             Ok(Err(e)) => worker_log(&log_path, &format!("CLAUDE_ERROR {e}")),
             Err(_) => worker_log(&log_path, "CLAUDE_TIMEOUT"),
@@ -4246,6 +4487,303 @@ Read and implement.
         assert_eq!(
             result, None,
             "expected None (gh missing/empty); got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Stage-timeout watcher tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_returns_none_when_dir_missing() {
+        let td = tempfile::tempdir().unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), "ses-stage-test-001", None);
+        assert_eq!(
+            result, None,
+            "no .state/sentinels dir → None (lets baseline win)"
+        );
+    }
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_returns_none_when_no_ws_files() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-002";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Create a non-ws sentinel — must not match.
+        std::fs::write(dir.join("pathflow-pf-1"), "").unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert_eq!(result, None, "only pf-* present, no ws-* → None");
+    }
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_finds_pathflow_prefixed() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-003";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pathflow-ws-dev"), "").unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert!(result.is_some(), "pathflow-ws-* must be picked up");
+    }
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_finds_bare_ws_prefixed() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-004";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ws-rev"), "").unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert!(result.is_some(), "bare ws-* is also accepted");
+    }
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_returns_max_mtime() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-005";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let dev = dir.join("pathflow-ws-dev");
+        let rev = dir.join("pathflow-ws-rev");
+        std::fs::write(&dev, "").unwrap();
+        std::fs::write(&rev, "").unwrap();
+
+        // Force `dev` to be older than `rev` by 60s.
+        let now = chrono::Utc::now().timestamp();
+        let dev_old = filetime::FileTime::from_unix_time(now - 60, 0);
+        let rev_now = filetime::FileTime::from_unix_time(now, 0);
+        filetime::set_file_mtime(&dev, dev_old).unwrap();
+        filetime::set_file_mtime(&rev, rev_now).unwrap();
+
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None).unwrap();
+        assert!(
+            result >= now - 1,
+            "must return max mtime (rev's), got {result}, expected ~{now}"
+        );
+    }
+
+    #[test]
+    fn test_latest_ws_sentinel_mtime_uses_worktree_path_when_provided() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-006";
+
+        // Sentinel exists ONLY in worktree, not in project_dir.
+        let wt_dir = worktree
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(wt_dir.join("pathflow-ws-dev"), "").unwrap();
+
+        let from_project = latest_ws_sentinel_mtime_secs(project.path(), sid, None);
+        assert_eq!(
+            from_project, None,
+            "without worktree_path, project_dir lookup must miss"
+        );
+
+        let from_worktree =
+            latest_ws_sentinel_mtime_secs(project.path(), sid, Some(worktree.path()));
+        assert!(
+            from_worktree.is_some(),
+            "worktree_path override must find the sentinel"
+        );
+    }
+
+    #[test]
+    fn test_emit_stage_timeout_event_writes_jsonl_line() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-stage-test-007";
+        let task_id = "TSK-stage-7";
+        emit_stage_timeout_event(td.path(), sid, task_id, None, Some(1_700_000_000), 3600);
+
+        let path = td.path().join(".state/ledger/pathflow-events.jsonl");
+        let content = std::fs::read_to_string(&path).expect("ledger file should exist");
+        assert!(content.contains("\"event\":\"stage_timeout\""));
+        assert!(content.contains(sid));
+        assert!(content.contains(task_id));
+        assert!(content.contains("\"stage_timeout_secs\":3600"));
+        assert!(content.ends_with('\n'), "JSONL must end with newline");
+    }
+
+    #[test]
+    fn test_emit_stage_timeout_event_appends_to_existing_file() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join(".state/ledger/pathflow-events.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{\"event\":\"prior\"}\n").unwrap();
+
+        emit_stage_timeout_event(td.path(), "ses-1", "TSK-1", None, None, 3600);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "must append, not overwrite");
+        assert!(lines[0].contains("prior"));
+        assert!(lines[1].contains("stage_timeout"));
+    }
+
+    #[test]
+    fn test_emit_stage_timeout_event_uses_worktree_path() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+
+        emit_stage_timeout_event(
+            project.path(),
+            "ses-wt",
+            "TSK-wt",
+            Some(worktree.path()),
+            None,
+            3600,
+        );
+
+        let project_path = project.path().join(".state/ledger/pathflow-events.jsonl");
+        let worktree_path = worktree.path().join(".state/ledger/pathflow-events.jsonl");
+        assert!(
+            !project_path.exists(),
+            "must NOT write to project_dir when worktree_path is set"
+        );
+        assert!(
+            worktree_path.exists(),
+            "must write to worktree's ledger directory"
+        );
+    }
+
+    // -- stage_timeout_decision (pure decision function) tests --
+
+    #[test]
+    fn test_stage_timeout_decision_within_window_returns_none() {
+        // last_seen = 100, now = 150, timeout = 100 → stale_for = 50 < 100.
+        let result = stage_timeout_decision(Some(100), 0, 100, 150);
+        assert_eq!(
+            result, None,
+            "stale_for < timeout must keep watcher waiting"
+        );
+    }
+
+    #[test]
+    fn test_stage_timeout_decision_past_window_returns_last_seen() {
+        // last_seen = 100, now = 250, timeout = 100 → stale_for = 150 >= 100.
+        let result = stage_timeout_decision(Some(100), 0, 100, 250);
+        assert_eq!(
+            result,
+            Some(100),
+            "stale_for >= timeout must fire and return last_seen"
+        );
+    }
+
+    #[test]
+    fn test_stage_timeout_decision_no_sentinel_uses_baseline() {
+        // No sentinel, baseline = 1000, now = 1200, timeout = 100.
+        let result = stage_timeout_decision(None, 1000, 100, 1200);
+        assert_eq!(
+            result,
+            Some(1000),
+            "without sentinel, baseline plays the same role"
+        );
+    }
+
+    #[test]
+    fn test_stage_timeout_decision_no_sentinel_baseline_fresh() {
+        // No sentinel, baseline = 1000, now = 1050, timeout = 100.
+        let result = stage_timeout_decision(None, 1000, 100, 1050);
+        assert_eq!(result, None, "baseline within window means no fire");
+    }
+
+    #[test]
+    fn test_stage_timeout_decision_exact_boundary_fires() {
+        // stale_for == timeout: must fire (>=).
+        let result = stage_timeout_decision(Some(100), 0, 100, 200);
+        assert_eq!(
+            result,
+            Some(100),
+            "boundary case (stale_for == timeout) must fire"
+        );
+    }
+
+    #[test]
+    fn test_stage_timeout_decision_clock_skew_clamps_to_zero() {
+        // last_seen > now (clock skew): saturating_sub returns 0,
+        // which is < timeout, so no fire.
+        let result = stage_timeout_decision(Some(500), 0, 100, 100);
+        assert_eq!(
+            result, None,
+            "clock-skew negative duration must clamp to 0 and not fire"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_await_stage_timeout_with_interval_fires_when_baseline_stale() {
+        // No sentinel ever appears. Baseline is set far enough in the
+        // past that the FIRST poll sees stale_for >= timeout. The
+        // watcher resolves on the first iteration.
+        let td = tempfile::tempdir().unwrap();
+        let baseline = chrono::Utc::now().timestamp() - 120; // 120s ago
+        let last_seen = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            await_stage_timeout_with_interval(
+                td.path().to_path_buf(),
+                "ses-stale".into(),
+                None,
+                60, // 60s timeout
+                baseline,
+                std::time::Duration::from_millis(10), // tiny poll interval
+            ),
+        )
+        .await
+        .expect("watcher must resolve within 5s");
+        assert_eq!(
+            last_seen, baseline,
+            "no sentinel → returns the baseline, since baseline is what last_seen falls back to"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_await_stage_timeout_with_interval_does_not_fire_when_within_window() {
+        // Baseline is recent enough that even after a few polls the
+        // watcher should stay parked. We bound it with a real-time
+        // timeout — if the watcher resolves we know the decision logic
+        // is broken.
+        let td = tempfile::tempdir().unwrap();
+        let baseline = chrono::Utc::now().timestamp(); // now
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            await_stage_timeout_with_interval(
+                td.path().to_path_buf(),
+                "ses-fresh".into(),
+                None,
+                3600, // huge timeout
+                baseline,
+                std::time::Duration::from_millis(10),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "watcher MUST be still polling (real-time timeout fired); got resolved = {result:?}"
         );
     }
 }

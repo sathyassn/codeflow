@@ -1,126 +1,104 @@
-//! Detail pane widget rendering task details: branch, PR, stages, worktree path.
+//! Autorun task detail pane — thin adapter over the unified session detail
+//! widget.
+//!
+//! Converts a [`TaskView`] into a [`SessionDetail`] with
+//! [`AutorunExtras`] populated (PR, exit code, stage pipeline) and delegates
+//! to [`render_session_detail`]. This is the ONLY renderer for the autorun
+//! TUI's Details pane.
 
-use ratatui::buffer::Buffer;
+use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use crate::tui::data::{StageInfo, TaskView};
-use crate::tui::theme;
+use crate::tui::data::{TaskView, format_task_id_for_display};
+use crate::tui::widgets::session_detail_pane::{
+    AutorunExtras, SessionDetail, render_session_detail,
+};
 
-/// Renders a bordered detail panel for the currently selected task.
-pub struct DetailPane<'a> {
-    task: Option<&'a TaskView>,
-}
-
-impl<'a> DetailPane<'a> {
-    #[must_use]
-    pub fn new(task: Option<&'a TaskView>) -> Self {
-        Self { task }
-    }
-
-    fn build_lines(&self) -> Vec<Line<'static>> {
-        let Some(task) = self.task else {
-            return vec![Line::styled("No task selected".to_string(), theme::dim())];
+/// Render the autorun Details pane for the currently selected task.
+///
+/// `task=None` renders an empty detail pane — matches the "No task selected"
+/// affordance of the previous `DetailPane` widget, but via the unified
+/// builder (all fields dashed).
+pub fn render_task_detail(f: &mut Frame<'_>, area: Rect, task: Option<&TaskView>) {
+    let Some(task) = task else {
+        let empty = SessionDetail {
+            session_id: "--",
+            pid: None,
+            pid_alive: None,
+            worktree_path: "--",
+            team_name: None,
+            branch: None,
+            work_type: None,
+            task_id: None,
+            task_id_formatted: None,
+            phase: None,
+            status: "--",
+            duration_secs: None,
+            autorun_extras: None,
         };
+        render_session_detail(f, area, &empty);
+        return;
+    };
 
-        let branch_str = task.branch.as_deref().unwrap_or("--").to_string();
-        let pr_str = task
-            .pr_number
-            .map_or_else(|| "--".to_string(), |n| format!("#{n}"));
-        let exit_str = task
-            .exit_code
-            .map_or_else(|| "--".to_string(), |c| c.to_string());
+    let formatted = format_task_id_for_display(task.task_format_id.as_deref(), Some(&task.task_id));
+    // If `format_task_id_for_display` ends up returning the raw ULID (no
+    // task_format_id), treat the primary as the raw task_id so the widget
+    // does not double-render it in parens.
+    let task_id_formatted = if formatted == task.task_id {
+        None
+    } else {
+        Some(formatted)
+    };
 
-        let branch_line = Line::from(vec![
-            Span::styled("Branch: ".to_string(), Style::new().fg(theme::BLUE_ACCENT)),
-            Span::raw(branch_str),
-            Span::raw("  "),
-            Span::styled("PR: ".to_string(), Style::new().fg(theme::BLUE_ACCENT)),
-            Span::raw(pr_str),
-            Span::raw("  "),
-            Span::styled("Exit: ".to_string(), Style::new().fg(theme::BLUE_ACCENT)),
-            Span::raw(exit_str),
-        ]);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let duration_secs = task.duration_secs.filter(|&s| s >= 0).map(|s| s as u64);
 
-        let pipeline_line = build_pipeline_line(&task.stages);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pr_number = task.pr_number.filter(|&n| n >= 0).map(|n| n as u32);
 
-        let wt_path = task.worktree_path.as_deref().unwrap_or("--").to_string();
-        let path_line = Line::from(vec![
-            Span::styled(
-                "Worktree: ".to_string(),
-                Style::new().fg(theme::BLUE_ACCENT),
-            ),
-            Span::styled(wt_path, theme::dim()),
-        ]);
+    // Real OS exit codes fit in `i32`; clamp on the (impossible) overflow
+    // path rather than silently truncating. The widget renders this as a
+    // string, so the value-domain matters — no UB risk, just display
+    // correctness if the DB ever stores something out-of-range.
+    let exit_code = task.exit_code.map(|c| i32::try_from(c).unwrap_or(i32::MAX));
 
-        let mut lines = vec![branch_line, pipeline_line, path_line];
+    let stages_slice = task.stages.as_slice();
+    let extras = AutorunExtras {
+        pr_number,
+        exit_code,
+        stages: stages_slice,
+    };
 
-        if let Some(ref err) = task.error_message {
-            lines.push(Line::from(vec![
-                Span::styled("Error: ".to_string(), theme::error()),
-                Span::styled(err.clone(), theme::error()),
-            ]));
-        }
-
-        lines
-    }
-}
-
-impl Widget for DetailPane<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(theme::BORDER_TYPE)
-            .title(" Details ")
-            .style(Style::new().fg(theme::WHITE_TEXT));
-
-        let lines = self.build_lines();
-        let paragraph = Paragraph::new(lines).block(block);
-        paragraph.render(area, buf);
-    }
-}
-
-/// Build the stage pipeline display line with status indicators.
-fn build_pipeline_line(stages: &[StageInfo]) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        "Stages: ",
-        Style::new().fg(theme::BLUE_ACCENT),
-    )];
-
-    if stages.is_empty() {
-        spans.push(Span::styled("(none)".to_string(), theme::dim()));
-        return Line::from(spans);
-    }
-
-    for (i, stage) in stages.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(format!(" {} ", theme::ARROW), theme::dim()));
-        }
-
-        let (symbol, style) = if stage.completed {
-            (theme::CHECKMARK, Style::new().fg(theme::GREEN_SUCCESS))
-        } else {
-            (theme::CIRCLE, theme::dim())
-        };
-
-        spans.push(Span::styled(stage.name.clone(), style));
-        spans.push(Span::styled(format!(" {symbol}"), style));
-    }
-
-    Line::from(spans)
+    let detail = SessionDetail {
+        session_id: task.worker_session_id.as_deref().unwrap_or("--"),
+        pid: task.pid,
+        pid_alive: task.pid_alive,
+        worktree_path: task.worktree_path.as_deref().unwrap_or("--"),
+        team_name: None, // autorun workers do not carry a team name
+        branch: task.branch.as_deref(),
+        work_type: task.work_type.as_deref(),
+        task_id: Some(task.task_id.as_str()),
+        task_id_formatted: task_id_formatted.as_deref(),
+        phase: task.phase.as_deref(),
+        status: &task.display_status,
+        duration_secs,
+        autorun_extras: Some(extras),
+    };
+    render_session_detail(f, area, &detail);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::data::StageInfo;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn sample_task() -> TaskView {
         TaskView {
-            task_id: "task-a".to_string(),
+            task_id: "01KQ09PV56V6CPVMKK4FSW9ZDA".to_string(),
             status: crate::types::AutorunTaskRunStatus::Running,
-            display_status: "running".to_string(),
+            display_status: "Running".to_string(),
             phase: Some("PF4".to_string()),
             branch: Some("feat/tui".to_string()),
             pr_number: Some(42),
@@ -141,148 +119,123 @@ mod tests {
             ],
             worker_session_id: Some("ses-worker-1".to_string()),
             work_type: Some("FEAT".to_string()),
+            pid: Some(12345),
+            pid_alive: Some(true),
+            task_format_id: Some("INF-TSK-024-046".to_string()),
         }
     }
 
-    #[test]
-    fn test_no_task_selected() {
-        let pane = DetailPane::new(None);
-        let lines = pane.build_lines();
-        assert_eq!(lines.len(), 1);
-        let content = lines[0].to_string();
-        assert!(content.contains("No task selected"));
+    fn render_to_string(task: Option<&TaskView>, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_task_detail(f, Rect::new(0, 0, width, height), task);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
     }
 
     #[test]
-    fn test_branch_and_pr_displayed() {
+    fn renders_task_delegates_to_unified_pane() {
         let task = sample_task();
-        let pane = DetailPane::new(Some(&task));
-        let lines = pane.build_lines();
-        let branch_line = lines[0].to_string();
+        let out = render_to_string(Some(&task), 120, 10);
+        // Core fields unified pane shows.
+        assert!(out.contains("Session:"), "Session label missing: {out}");
+        assert!(out.contains("ses-worker-1"), "session id missing: {out}");
+        assert!(out.contains("PID:"), "PID label missing: {out}");
+        assert!(out.contains("12345"), "pid missing: {out}");
+        assert!(out.contains("(alive)"), "liveness missing: {out}");
+        assert!(out.contains("Worktree:"), "worktree label missing: {out}");
+        assert!(out.contains("/tmp/wt"), "worktree path missing: {out}");
+        assert!(out.contains("Branch:"), "branch label missing: {out}");
+        assert!(out.contains("feat/tui"), "branch missing: {out}");
         assert!(
-            branch_line.contains("feat/tui"),
-            "branch missing: {branch_line}"
+            out.contains("INF-TSK-024-046"),
+            "formatted task missing: {out}"
         );
-        assert!(branch_line.contains("#42"), "PR missing: {branch_line}");
+        assert!(out.contains("PR:"), "PR label missing: {out}");
+        assert!(out.contains("#42"), "PR missing: {out}");
+        assert!(out.contains("Stages:"), "Stages label missing: {out}");
+        assert!(out.contains("WS-DEV"), "WS-DEV missing: {out}");
+        assert!(out.contains("WS-REV"), "WS-REV missing: {out}");
     }
 
     #[test]
-    fn test_pipeline_shows_stages() {
-        let task = sample_task();
-        let pane = DetailPane::new(Some(&task));
-        let lines = pane.build_lines();
-        let pipeline = lines[1].to_string();
-        assert!(pipeline.contains("WS-DEV"), "dev stage missing: {pipeline}");
-        assert!(pipeline.contains("WS-REV"), "rev stage missing: {pipeline}");
+    fn renders_no_task_with_dashes() {
+        let out = render_to_string(None, 80, 8);
+        assert!(out.contains("Session: --"), "missing session dash: {out}");
+        assert!(out.contains("PID: --"), "missing pid dash: {out}");
+        assert!(out.contains("Task: --"), "missing task dash: {out}");
     }
 
     #[test]
-    fn test_worktree_path_displayed() {
-        let task = sample_task();
-        let pane = DetailPane::new(Some(&task));
-        let lines = pane.build_lines();
-        let path_line = lines[2].to_string();
-        assert!(path_line.contains("/tmp/wt"), "path missing: {path_line}");
-    }
-
-    #[test]
-    fn test_error_message_shown() {
-        let mut task = sample_task();
-        task.error_message = Some("something broke".to_string());
-        let pane = DetailPane::new(Some(&task));
-        let lines = pane.build_lines();
-        assert_eq!(lines.len(), 4);
-        let err_line = lines[3].to_string();
-        assert!(err_line.contains("something broke"));
-    }
-
-    #[test]
-    fn test_missing_branch_shows_dashes() {
+    fn renders_missing_branch_pr_as_dashes() {
         let mut task = sample_task();
         task.branch = None;
         task.pr_number = None;
-        let pane = DetailPane::new(Some(&task));
-        let lines = pane.build_lines();
-        let line = lines[0].to_string();
-        // Both branch and PR should show "--"
-        assert!(line.matches("--").count() >= 2, "missing dashes: {line}");
+        let out = render_to_string(Some(&task), 120, 10);
+        assert!(out.contains("Branch: --"), "branch dash missing: {out}");
+        assert!(out.contains("PR: --"), "pr dash missing: {out}");
     }
 
     #[test]
-    fn test_pipeline_line_with_no_stages() {
-        let line = build_pipeline_line(&[]);
-        let content = line.to_string();
-        assert!(content.contains("Stages:"));
+    fn renders_dead_pid_marker() {
+        let mut task = sample_task();
+        task.pid_alive = Some(false);
+        let out = render_to_string(Some(&task), 80, 10);
+        assert!(out.contains("(DEAD)"), "DEAD marker missing: {out}");
+    }
+
+    #[test]
+    fn raw_task_id_shown_when_no_format_id() {
+        let mut task = sample_task();
+        task.task_format_id = None;
+        let out = render_to_string(Some(&task), 120, 10);
+        // Primary should be the truncated ULID; raw is not duplicated in
+        // parens since primary == raw after the adapter's normalization.
+        assert!(out.contains("Task:"), "Task label missing: {out}");
+    }
+
+    #[test]
+    fn exit_code_in_range_renders_verbatim() {
+        let mut task = sample_task();
+        task.exit_code = Some(125);
+        let out = render_to_string(Some(&task), 120, 10);
+        assert!(out.contains("Exit: 125"), "exit code missing: {out}");
+    }
+
+    #[test]
+    fn exit_code_negative_renders_verbatim() {
+        let mut task = sample_task();
+        task.exit_code = Some(-1);
+        let out = render_to_string(Some(&task), 120, 10);
         assert!(
-            content.contains("(none)"),
-            "empty stages should show '(none)': {content}"
+            out.contains("Exit: -1"),
+            "negative exit code missing: {out}"
         );
     }
 
     #[test]
-    fn test_pipeline_line_completed_stage_has_checkmark() {
-        let stages = vec![StageInfo {
-            name: "WS-DEV".to_string(),
-            completed: true,
-        }];
-        let line = build_pipeline_line(&stages);
-        let content = line.to_string();
-        assert!(content.contains(theme::CHECKMARK));
-    }
-
-    #[test]
-    fn test_pipeline_line_incomplete_stage_has_circle() {
-        let stages = vec![StageInfo {
-            name: "WS-REV".to_string(),
-            completed: false,
-        }];
-        let line = build_pipeline_line(&stages);
-        let content = line.to_string();
-        assert!(content.contains(theme::CIRCLE));
-    }
-
-    #[test]
-    fn test_widget_renders_to_buffer() {
-        let task = sample_task();
-        let pane = DetailPane::new(Some(&task));
-        let area = Rect::new(0, 0, 80, 7);
-        let mut buf = Buffer::empty(area);
-        pane.render(area, &mut buf);
-
-        // Collect rendered text from each row (inside the border).
-        let row_text =
-            |y: u16| -> String { (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect() };
-
-        // Row 1 (inside top border): should contain branch and PR info.
-        let r1 = row_text(1);
-        assert!(r1.contains("feat/tui"), "row 1 should contain branch: {r1}");
-        assert!(r1.contains("#42"), "row 1 should contain PR number: {r1}");
-
-        // Row 2: should contain stage pipeline info.
-        let r2 = row_text(2);
+    fn exit_code_above_i32_max_clamps_to_i32_max() {
+        // Any i64 outside the i32 domain should clamp to i32::MAX rather
+        // than silently truncate. F4 fix: replaced unchecked `as i32` with
+        // `i32::try_from(c).unwrap_or(i32::MAX)`.
+        let mut task = sample_task();
+        task.exit_code = Some(i64::from(i32::MAX) + 1);
+        let out = render_to_string(Some(&task), 120, 10);
+        let expected = format!("Exit: {}", i32::MAX);
         assert!(
-            r2.contains("WS-DEV"),
-            "row 2 should contain stage name: {r2}"
-        );
-
-        // Row 3: should contain worktree path.
-        let r3 = row_text(3);
-        assert!(
-            r3.contains("/tmp/wt"),
-            "row 3 should contain worktree path: {r3}"
-        );
-    }
-
-    #[test]
-    fn test_widget_renders_no_task_to_buffer() {
-        let pane = DetailPane::new(None);
-        let area = Rect::new(0, 0, 40, 4);
-        let mut buf = Buffer::empty(area);
-        pane.render(area, &mut buf);
-        let r1: String = (0..40).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-        assert!(
-            r1.contains("No task selected"),
-            "should show placeholder: {r1}"
+            out.contains(&expected),
+            "out-of-range exit_code should clamp to i32::MAX: {out}"
         );
     }
 }

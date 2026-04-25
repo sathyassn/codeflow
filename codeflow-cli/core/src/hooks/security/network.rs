@@ -25,6 +25,14 @@ impl SecurityModule for NetworkModule {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Option<Verdict> {
+        // Autorun sessions have no human to respond to prompts; the
+        // orchestrator pre-bypasses the sandbox for this worker, so force
+        // allow before any network pattern check so a blocked decision never
+        // surfaces as a permission prompt.
+        if crate::session::is_autorun_session() {
+            return None;
+        }
+
         // If sandbox bypass is enabled, network operations are allowed.
         if ctx.sandbox_bypass {
             return None;
@@ -212,5 +220,51 @@ mod tests {
         };
         let v = NetworkModule.check(&ctx).unwrap();
         assert!(v.reason.contains("cf-git-operations"));
+    }
+
+    /// Autorun workers have no human available to approve network operations,
+    /// and the orchestrator pre-bypasses the sandbox for them. The hook must
+    /// short-circuit with `None` (allow) before any pattern check so an
+    /// otherwise-blocking command cannot surface as a permission prompt.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_git_push_autorun_allowed() {
+        // SAFETY: serialized via #[serial(env_vars)].
+        // Hardened helper requires BOTH env vars + a valid ULID-format
+        // session ID; matches the orchestrator's worker invocation contract.
+        unsafe {
+            std::env::set_var("AUTORUN_SESSION_ID", "ses-01jq7abcdef0123456789abcde");
+            std::env::set_var("AUTORUN_BATCH_ID", "batch-test-network-bypass");
+        }
+        let result = NetworkModule.check(&ctx("git push origin main"));
+        // SAFETY: serialized via #[serial(env_vars)]. Clean up BEFORE
+        // asserting so a panic cannot leak state into other tests.
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        assert!(
+            result.is_none(),
+            "autorun sessions must bypass network check"
+        );
+    }
+
+    /// Without the autorun env vars, the original blocking behavior must still
+    /// fire. Guards against a regression where the autorun early-return leaks
+    /// into interactive mode and silently disables network protection.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_git_push_interactive_still_blocked() {
+        // SAFETY: serialized via #[serial(env_vars)]. Strip both vars so the
+        // hardened predicate definitely returns false (any one missing → false).
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        let result = NetworkModule.check(&ctx("git push origin main"));
+        assert!(
+            result.is_some(),
+            "interactive session must still block git push without sandbox bypass"
+        );
     }
 }

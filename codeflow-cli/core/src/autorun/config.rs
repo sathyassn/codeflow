@@ -107,6 +107,12 @@ impl Default for RetentionConfig {
 pub struct AutorunConfig {
     /// Worker timeout in seconds (default: 7200 = 120 minutes).
     pub worker_timeout_secs: u64,
+    /// Stage timeout in seconds (default: 3600 = 60 minutes). If a worker
+    /// makes no stage progress (no new `ws-*` sentinel appears under
+    /// `.state/sentinels/pathflow/{session_id}/`) within this window, the
+    /// worker is aborted with exit code 125. Distinct from
+    /// `worker_timeout_secs`, which bounds total wall-clock time.
+    pub stage_timeout_secs: u64,
     /// Behavior when a task is blocked: "skip_and_continue" or "fail".
     pub blocked_behavior: String,
     /// Directory for autorun reports (relative to project root).
@@ -126,6 +132,7 @@ impl Default for AutorunConfig {
     fn default() -> Self {
         Self {
             worker_timeout_secs: 7200,
+            stage_timeout_secs: 3600,
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
             max_concurrent_batches: 5,
@@ -401,6 +408,12 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
         return Err(AutorunError::InvalidBatch(format!(
             "autorun.worker_timeout_secs must be >= 60, got {}",
             config.autorun.worker_timeout_secs
+        )));
+    }
+    if config.autorun.stage_timeout_secs < 60 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.stage_timeout_secs must be >= 60, got {}",
+            config.autorun.stage_timeout_secs
         )));
     }
     let valid_behaviors = ["skip_and_continue", "fail"];
@@ -759,9 +772,46 @@ mod tests {
     fn autorun_config_default() {
         let cfg = AutorunConfig::default();
         assert_eq!(cfg.worker_timeout_secs, 7200);
+        assert_eq!(
+            cfg.stage_timeout_secs, 3600,
+            "stage_timeout_secs default must be 3600s (60 minutes)"
+        );
         assert_eq!(cfg.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.report_dir, ".state/autorun/reports");
         assert_eq!(cfg.max_concurrent_batches, 5);
+    }
+
+    #[test]
+    fn autorun_stage_timeout_secs_parses_from_json() {
+        let json = r#"{ "autorun": { "stage_timeout_secs": 1800 } }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.stage_timeout_secs, 1800);
+    }
+
+    #[test]
+    fn autorun_stage_timeout_secs_absent_uses_default() {
+        let json = r#"{ "autorun": { "worker_timeout_secs": 5400 } }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.worker_timeout_secs, 5400);
+        assert_eq!(
+            cfg.autorun.stage_timeout_secs, 3600,
+            "stage_timeout_secs must default when absent"
+        );
+    }
+
+    #[test]
+    fn validate_stage_timeout_too_low_rejected() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.stage_timeout_secs = 59;
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("stage_timeout_secs"));
+    }
+
+    #[test]
+    fn validate_stage_timeout_boundary_accepted() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.stage_timeout_secs = 60;
+        assert!(validate_config(&cfg).is_ok());
     }
 
     #[test]

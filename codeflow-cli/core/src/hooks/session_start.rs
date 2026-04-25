@@ -1048,6 +1048,28 @@ impl SessionStartInit {
                 continue;
             }
 
+            // Five-veto safety net before physically destroying a worktree.
+            // `session_alive` above is status-file-driven, which can miss live
+            // sessions whose team.json was written moments after the status
+            // snapshot we just read (race) or whose lead_pid we failed to
+            // parse. Bug history: a live session (with tmux running, fresh
+            // heartbeat, working lead) was reaped mid-run because the
+            // status file lagged. Any single alive signal here protects
+            // the worktree.
+            let alive_inputs = crate::session::liveness::SessionAliveInputs {
+                session_id: sid.clone(),
+                project_dir: project_dir.to_path_buf(),
+                worktree_path: Some(std::path::PathBuf::from(&entry.path)),
+                registry_created_at: Some(entry.created_at.clone()),
+            };
+            if crate::session::liveness::is_session_alive(&alive_inputs) {
+                result.messages.push(format!(
+                    "PROTECTED WORKTREE: skipping '{}' for session {sid} (alive signal detected)",
+                    entry.name,
+                ));
+                continue;
+            }
+
             // Session is dead — clean up this worktree.
             let status_label = if entry.status == crate::worktree::WorktreeStatus::PendingCleanup {
                 "PENDING_CLEANUP"
@@ -1091,7 +1113,7 @@ impl SessionStartInit {
     /// - AND the worktree is older than 5 minutes (grace period for init)
     fn clean_orphaned_worktrees(
         &self,
-        _project_dir: &Path,
+        project_dir: &Path,
         registry: &crate::worktree::WorktreeRegistry,
         mgr: &crate::worktree::WorktreeManager,
         result: &mut InitResult,
@@ -1150,6 +1172,23 @@ impl SessionStartInit {
             let session_alive = if status_path.exists() {
                 if let Ok(session_dirs) = fs::read_dir(&status_path) {
                     session_dirs.flatten().any(|sd| {
+                        // Run the five-veto check first. Its fail-safe-true
+                        // semantics (missing team.json abstains, grace window
+                        // protects fresh entries) are the right default for
+                        // orphan cleanup, which already operates outside the
+                        // registry's control.
+                        let sid_str = sd.file_name().to_string_lossy().into_owned();
+                        if !sid_str.is_empty() {
+                            let alive_inputs = crate::session::liveness::SessionAliveInputs {
+                                session_id: sid_str.clone(),
+                                project_dir: project_dir.to_path_buf(),
+                                worktree_path: Some(wt_path.clone()),
+                                registry_created_at: None,
+                            };
+                            if crate::session::liveness::is_session_alive(&alive_inputs) {
+                                return true;
+                            }
+                        }
                         let pf_status = sd
                             .path()
                             .join("pathflow")
@@ -5094,6 +5133,13 @@ mod tests {
             serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
+        // Write pathflow-team.json with dead lead_pid so V4 of the five-veto
+        // `is_session_alive` check votes DEAD instead of abstaining alive.
+        fs::write(
+            status_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "dead-team", "lead_pid": 999_999_999_u64}).to_string(),
+        )
+        .unwrap();
 
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-test"),
@@ -5163,6 +5209,13 @@ mod tests {
         fs::write(
             status_dir.join("pathflow-session-status.json"),
             serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+        // Write pathflow-team.json with dead lead_pid so V4 of the five-veto
+        // `is_session_alive` check votes DEAD instead of abstaining alive.
+        fs::write(
+            status_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "dead-team", "lead_pid": 999_999_999_u64}).to_string(),
         )
         .unwrap();
 
@@ -5312,6 +5365,7 @@ mod tests {
         let init = make_init(home.path().to_path_buf());
 
         // Registry entry with status "pending_cleanup" — directory missing (stale).
+        let dead_sid = "ses-01jq7deadbeef000000000ab";
         let mut reg = crate::worktree::WorktreeRegistry::new("2026-03-18T00:00:00Z");
         reg.worktrees.push(crate::worktree::WorktreeEntry {
             name: "old-wt".to_string(),
@@ -5324,7 +5378,7 @@ mod tests {
             branch: Some("feat/old".to_string()),
             created_at: "2026-03-18T00:00:00Z".to_string(),
             status: crate::worktree::WorktreeStatus::PendingCleanup,
-            session_id: Some("ses-01jq7deadbeef000000000ab".to_string()),
+            session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
             lead_pid: None,
@@ -5332,6 +5386,22 @@ mod tests {
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
+
+        // Write pathflow-team.json with dead lead_pid so V4 votes DEAD
+        // (without this the five-veto check abstains ALIVE for the
+        // unknown session and cleanup is skipped).
+        let status_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(dead_sid)
+            .join("pathflow");
+        fs::create_dir_all(&status_dir).unwrap();
+        fs::write(
+            status_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "dead-team", "lead_pid": 999_999_999_u64}).to_string(),
+        )
+        .unwrap();
 
         let mut result = InitResult {
             session_id: SessionId::new_unchecked("ses-test"),

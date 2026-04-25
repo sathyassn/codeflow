@@ -158,6 +158,8 @@ Audit deliverables already complete (no scheduling needed — consume their outp
 | 43 | INF-TSK-024-043 | Cross-worktree ledger aggregator | todo | M | normal |
 | 44 | INF-TSK-024-044 | Automated compaction lifecycle triggers | todo | M | normal |
 | 45 | INF-TSK-024-045 | Backfill delivery evidence + orphan task reconciliation | todo | S | normal |
+| 46 | INF-TSK-024-046 | Autorun reliability: network bypass + permission matcher + reaper guard + timeouts + UI parity + PR rescue | complete | L | high |
+| 49 | INF-TSK-024-049 | Bump surrealdb transitives to resolve pre-existing CVEs | todo | S | normal |
 
 **Task 013 cancelled:** Superseded by Epic 0 restructuring. The work-graph.jsonl details migration is now handled differently -- the workgraph module at `codeflow-cli/core/src/workgraph/` already defines typed events with structured fields, making the flat-to-details migration unnecessary for work-graph events.
 

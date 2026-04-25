@@ -11,6 +11,7 @@
 //! - Current session resolution (worktree-aware, env file only)
 
 pub mod active_task;
+pub mod autorun_detect;
 pub mod env;
 pub mod heartbeat;
 pub mod liveness;
@@ -29,6 +30,7 @@ pub use active_task::{
     get_active_task, get_active_task_worktree_aware, set_active_task,
     set_active_task_worktree_aware,
 };
+pub use autorun_detect::is_autorun_session;
 pub use env::{
     EnvFile, SessionPointer, migrate_runtime_layout, read_env_file, read_pid_env_file,
     read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,

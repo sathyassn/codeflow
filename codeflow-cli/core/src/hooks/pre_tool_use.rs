@@ -1321,6 +1321,13 @@ impl HookHandler for EditWriteGuard {
             return Ok(HookOutput::Allow);
         }
 
+        // Autorun sessions have no human to respond to scope prompts. The
+        // orchestrator pre-validates file_scope via claim acquisition before
+        // the worker starts, so skip the interactive scope check here.
+        if crate::session::is_autorun_session() {
+            return Ok(HookOutput::Allow);
+        }
+
         let file_path = input
             .tool_input
             .as_ref()
@@ -1830,6 +1837,13 @@ impl HookHandler for ProtectionGuard {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
         let tool_name = input.tool_name.as_deref().unwrap_or("");
 
+        // Autorun sessions have no human to respond to protected-path prompts.
+        // The orchestrator validates paths against file_scope before launching
+        // the worker, so skip the interactive tier check here.
+        if crate::session::is_autorun_session() {
+            return Ok(HookOutput::Allow);
+        }
+
         // Check Bash cp/mv commands targeting protected paths.
         if tool_name == "Bash" {
             return Ok(self.check_bash_file_ops(&input));
@@ -2084,6 +2098,13 @@ fn load_trusted_domains(path: &Path) -> Vec<String> {
 impl HookHandler for WebFetchGuard {
     fn handle(&self, input: HookInput) -> Result<HookOutput, HookError> {
         let tool_name = input.tool_name.as_deref().unwrap_or("");
+
+        // Autorun sessions have no human to respond to domain-validation
+        // prompts. The orchestrator pre-bypasses the sandbox for outgoing
+        // network, so skip interactive domain enforcement here.
+        if crate::session::is_autorun_session() {
+            return Ok(HookOutput::Allow);
+        }
 
         match tool_name {
             "WebFetch" | "WebSearch" => {
@@ -3025,6 +3046,7 @@ mod tests {
     // -- EditWriteGuard tests --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_bash_cp_to_protected() {
         let dir = tempfile::tempdir().unwrap();
         // Create enforcement policy with .claude/CLAUDE.md as critical.
@@ -3128,6 +3150,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_redirect_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".codeflow/config/enforcement");
@@ -3157,6 +3180,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_redirect_append() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".codeflow/config/enforcement");
@@ -3185,6 +3209,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_tee_to_protected() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".codeflow/config/enforcement");
@@ -3243,6 +3268,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_tee_append() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".codeflow/config/enforcement");
@@ -3332,6 +3358,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_worktree_state_path() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".codeflow/config/enforcement");
@@ -3429,6 +3456,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_blocks_protected_branch() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -3447,7 +3475,81 @@ mod tests {
         assert_eq!(result.exit_code(), 2);
     }
 
+    /// An autorun worker attempting an Edit that would normally be blocked
+    /// must be allowed — the orchestrator validates file_scope before launch
+    /// and there is no human to approve any prompt. Uses the protected-branch
+    /// block path as a representative "would normally block" case.
     #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_edit_write_guard_autorun_bypasses_protected_branch() {
+        // SAFETY: serialized via #[serial(env_vars)]. Hardened helper
+        // requires BOTH env vars + a valid ULID — matches the orchestrator's
+        // worker invocation contract.
+        unsafe {
+            std::env::set_var("AUTORUN_SESSION_ID", "ses-01jq7abcdef0123456789abcde");
+            std::env::set_var("AUTORUN_BATCH_ID", "batch-test-edit-write-bypass");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "main".into());
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/lib.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        // SAFETY: serialized via #[serial(env_vars)]. Clean up BEFORE assert.
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "autorun session must bypass scope enforcement"
+        );
+    }
+
+    /// Regression guard: with the autorun env vars unset, the original
+    /// branch-protection block must still fire, ensuring the autorun early
+    /// return does not leak into interactive mode.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_edit_write_guard_interactive_still_blocks_protected_branch() {
+        // SAFETY: serialized via #[serial(env_vars)]. Strip both vars so the
+        // hardened predicate definitely returns false.
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let policy = EnforcementPolicy::defaults();
+        let handler = EditWriteGuard::new(dir.path().to_path_buf(), policy, "main".into());
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/lib.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "interactive session must still block edits on protected branch"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_blocks_blocked_directory() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -3467,6 +3569,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_warns_dangerous_ext() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4021,6 +4124,7 @@ mod tests {
     // -- ProtectionGuard tests --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_critical() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4040,6 +4144,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_high_glob() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4122,6 +4227,7 @@ mod tests {
     // -- WebFetchGuard tests --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_webfetch_blocks_file_url() {
         let handler = WebFetchGuard::new(vec![], vec![], vec![]);
         let input = HookInput {
@@ -4138,7 +4244,75 @@ mod tests {
         assert_eq!(result.exit_code(), 2);
     }
 
+    /// Autorun workers that issue a normally-blocked WebFetch URL must pass
+    /// through with `Allow` rather than emit a permission prompt, because no
+    /// human is available to answer.
     #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_webfetch_autorun_bypasses_file_url() {
+        // SAFETY: serialized via #[serial(env_vars)]. Hardened helper
+        // requires BOTH env vars + a valid ULID — matches the orchestrator's
+        // worker invocation contract.
+        unsafe {
+            std::env::set_var("AUTORUN_SESSION_ID", "ses-01jq7abcdef0123456789abcde");
+            std::env::set_var("AUTORUN_BATCH_ID", "batch-test-webfetch-bypass");
+        }
+        let handler = WebFetchGuard::new(vec![], vec![], vec![]);
+        let input = HookInput {
+            tool_name: Some("WebFetch".into()),
+            tool_input: Some(serde_json::json!({"url": "file:///etc/passwd"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        // SAFETY: serialized via #[serial(env_vars)]. Clean up BEFORE assert.
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "autorun session must bypass WebFetch domain check"
+        );
+    }
+
+    /// Regression guard: interactive mode (env vars unset) must still block
+    /// file:// URLs after the autorun bypass is added.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn test_webfetch_interactive_still_blocks_file_url() {
+        // SAFETY: serialized via #[serial(env_vars)]. Strip both vars so the
+        // hardened predicate definitely returns false.
+        unsafe {
+            std::env::remove_var("AUTORUN_SESSION_ID");
+            std::env::remove_var("AUTORUN_BATCH_ID");
+        }
+        let handler = WebFetchGuard::new(vec![], vec![], vec![]);
+        let input = HookInput {
+            tool_name: Some("WebFetch".into()),
+            tool_input: Some(serde_json::json!({"url": "file:///etc/passwd"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-test".into()),
+            project_dir: None,
+            source: None,
+            transcript_path: None,
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert_eq!(
+            result.exit_code(),
+            2,
+            "interactive session must still block file:// URLs"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(env_vars)]
     fn test_webfetch_blocks_data_url() {
         let handler = WebFetchGuard::new(vec![], vec![], vec![]);
         let input = HookInput {
@@ -4174,6 +4348,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_webfetch_blocks_localhost() {
         let handler = WebFetchGuard::new(vec![], vec!["localhost".into()], vec![]);
         let input = HookInput {
@@ -4191,6 +4366,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_webfetch_blocks_private_ip() {
         let handler = WebFetchGuard::new(vec![], vec![], vec!["192.168.*".into()]);
         let input = HookInput {
@@ -4473,6 +4649,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_warns_binary_ext() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4492,6 +4669,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_warns_archive_ext() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4511,6 +4689,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_blocks_outside_project() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -4671,6 +4850,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_rm_rf_worktree_dir() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4692,6 +4872,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_rm_rf_worktrees_root() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4713,6 +4894,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_git_worktree_remove() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4734,6 +4916,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_git_worktree_remove_force() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4755,6 +4938,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_git_worktree_move() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4776,6 +4960,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_find_delete_worktrees() {
         let dir = tempfile::tempdir().unwrap();
         let handler = make_protection_guard_with_worktrees(dir.path());
@@ -4902,6 +5087,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_cp_mv_tee_to_hooks_still_blocked() {
         // Verify existing behavior is preserved.
         let dir = tempfile::tempdir().unwrap();
@@ -5099,6 +5285,7 @@ mod tests {
     // -- Private IP detection --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_webfetch_blocks_loopback_ip() {
         let handler = WebFetchGuard::new(vec![], vec![], vec![]);
         let input = HookInput {
@@ -6025,6 +6212,7 @@ mod tests {
     // -- Deliverable 1: EditWriteGuard blocks .state/ paths --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_blocks_state_dir() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -6045,6 +6233,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_edit_write_guard_blocks_state_db() {
         let dir = tempfile::tempdir().unwrap();
         let policy = EnforcementPolicy::defaults();
@@ -6087,6 +6276,7 @@ mod tests {
     // -- Deliverable 2: ProtectionGuard blocks echo/tee/redirects to .state/ --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_echo_append_to_state_ledger() {
         let dir = tempfile::tempdir().unwrap();
         let mut policy = EnforcementPolicy::defaults();
@@ -6162,6 +6352,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_tee_to_state_logs() {
         let dir = tempfile::tempdir().unwrap();
         let mut policy = EnforcementPolicy::defaults();
@@ -6211,6 +6402,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_redirect_to_state_coordination() {
         let dir = tempfile::tempdir().unwrap();
         let mut policy = EnforcementPolicy::defaults();
@@ -6239,6 +6431,7 @@ mod tests {
     // -- Deliverable 1 (INF-TSK-044-009): ProtectionGuard ./ prefix bypass fix --
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_dot_slash_redirect() {
         let dir = tempfile::tempdir().unwrap();
         let mut policy = EnforcementPolicy::defaults();
@@ -6263,6 +6456,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env_vars)]
     fn test_protection_guard_blocks_dot_slash_tee() {
         let dir = tempfile::tempdir().unwrap();
         let mut policy = EnforcementPolicy::defaults();

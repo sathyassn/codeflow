@@ -59,6 +59,18 @@ pub struct TaskView {
     pub worker_session_id: Option<String>,
     /// Work type derived from branch prefix (e.g., "FEAT", "FIX").
     pub work_type: Option<String>,
+    /// Lead PID of the worker session, resolved from
+    /// `pathflow-session-status.json` under the worker's worktree.
+    /// `None` when the status file is unreadable or the worker has not yet
+    /// written a PID (e.g., pending tasks).
+    pub pid: Option<i32>,
+    /// PID liveness — `Some(true)` when `kill(pid, 0)` succeeds, `Some(false)`
+    /// when the process is dead, `None` when `pid` is `None`.
+    pub pid_alive: Option<bool>,
+    /// Formatted task identifier (e.g. `INF-TSK-046-008`). Preferred for
+    /// display; falls back to a truncated ULID via
+    /// [`format_task_id_for_display`].
+    pub task_format_id: Option<String>,
 }
 
 /// Stage pipeline entry for the detail pane.
@@ -430,6 +442,18 @@ async fn build_batch_view<S: DataStore>(
             .map(crate::hooks::pipeline::infer_work_type_from_branch)
             .map(String::from);
 
+        // Resolve the worker's lead PID from pathflow-session-status.json
+        // under its worktree. `None` for pending tasks (no worktree/session
+        // yet) or for rows whose status file is missing. INF-TSK-024-046
+        // AC: surface PID + liveness in the autorun detail pane.
+        let (pid, pid_alive) = resolve_worker_pid_liveness(
+            project_dir,
+            run.worktree_path.as_deref(),
+            worker_session_id.as_deref(),
+        );
+
+        let task_format_id = crate::autorun::batch::read_task_format_id(&run.task_id, project_dir);
+
         tasks.push(TaskView {
             task_id: run.task_id.clone(),
             status: run.status,
@@ -451,6 +475,9 @@ async fn build_batch_view<S: DataStore>(
             stages,
             worker_session_id,
             work_type,
+            pid,
+            pid_alive,
+            task_format_id,
         });
     }
 
@@ -787,6 +814,70 @@ pub fn should_fetch_now(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Resolve the worker's lead PID and its liveness.
+///
+/// Reads `pathflow-session-status.json` from the worker's worktree first,
+/// falling back to the main-repo session directory. Returns the stored PID
+/// and a `kill(pid, 0)` liveness check. A missing status file, missing PID
+/// field, or PID of 0 returns `(None, None)`.
+///
+/// Pending tasks typically have `worktree_path=None` and no worker
+/// registration yet — this function returns `(None, None)` for them so the
+/// detail pane renders a dash instead of a misleading zero.
+#[must_use]
+pub fn resolve_worker_pid_liveness(
+    project_dir: &Path,
+    worktree_path: Option<&str>,
+    worker_session_id: Option<&str>,
+) -> (Option<i32>, Option<bool>) {
+    let sid = worker_session_id.filter(|s| !s.is_empty());
+    let Some(sid) = sid else {
+        return (None, None);
+    };
+
+    // Try the worker's own worktree first, then fall back to main repo.
+    let worktree_root = worktree_path
+        .filter(|p| !p.is_empty())
+        .map_or(project_dir, Path::new);
+    let candidates: [std::path::PathBuf; 2] = [
+        worktree_root
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow/pathflow-session-status.json"),
+        project_dir
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow/pathflow-session-status.json"),
+    ];
+
+    for path in &candidates {
+        let Ok(data) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) else {
+            continue;
+        };
+        let Some(pid_u64) = parsed.get("lead_pid").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        if pid_u64 == 0 {
+            continue;
+        }
+        let pid_u32 = u32::try_from(pid_u64).unwrap_or(0);
+        if pid_u32 == 0 {
+            continue;
+        }
+        let alive = crate::session::process::is_process_alive(pid_u32);
+        // Real OS PIDs fit inside `i32::MAX` on every platform we support;
+        // if the stored value somehow exceeds it, cap at `i32::MAX` so the
+        // conversion remains lossless for practical purposes.
+        let pid_i32 = i32::try_from(pid_u32).unwrap_or(i32::MAX);
+        return (Some(pid_i32), Some(alive));
+    }
+
+    (None, None)
+}
+
 /// Abbreviate a session ID for display.
 ///
 /// Session IDs longer than 20 characters are shown as `{first 10}...{last 5}`.
@@ -1122,6 +1213,9 @@ mod tests {
                 ],
                 worker_session_id: Some("ses-worker-1".to_string()),
                 work_type: Some("FEAT".to_string()),
+                pid: None,
+                pid_alive: None,
+                task_format_id: None,
             }],
         };
 
@@ -1188,6 +1282,9 @@ mod tests {
             stages: vec![],
             worker_session_id: None,
             work_type: None,
+            pid: None,
+            pid_alive: None,
+            task_format_id: None,
         };
         assert!(view.phase.is_none());
         assert!(view.branch.is_none());
@@ -1195,6 +1292,9 @@ mod tests {
         assert!(view.stages.is_empty());
         assert!(view.worker_session_id.is_none());
         assert!(view.work_type.is_none());
+        assert!(view.pid.is_none());
+        assert!(view.pid_alive.is_none());
+        assert!(view.task_format_id.is_none());
     }
 
     #[test]

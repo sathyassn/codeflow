@@ -90,13 +90,6 @@ impl SessionEndCleanup {
         let session_id = sid.as_str().to_string();
         result.session_id.clone_from(&session_id);
 
-        // Mark worktree for cleanup UNCONDITIONALLY when session ends.
-        // This is the primary PendingCleanup trigger (moved from PF7 PostToolUse).
-        // Runs before should_skip_cleanup so the worktree is marked even for
-        // sessions that are still technically active (crash recovery path).
-        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
-        let _ = crate::worktree::mark_pending_cleanup(&registry_path, &session_id);
-
         let session_state_dir = project_dir.join(".state").join("session").join(&session_id);
 
         // Resolve the main repo root for cleanup logs. In worktree mode,
@@ -115,7 +108,17 @@ impl SessionEndCleanup {
         );
 
         // --- Section 3: PathFlow guard ---
-        if self.should_skip_cleanup(&session_state_dir, &mut result) {
+        // The guard runs BEFORE any side effect (including mark_pending_cleanup).
+        // Previously mark_pending_cleanup ran first so a crashing session's
+        // worktree would still be queued for removal. That created a race:
+        // a live session whose status file momentarily read stale (e.g. team
+        // config gone but process alive) had its worktree marked PendingCleanup,
+        // which then let the NEXT session's clean_stale_worktrees physically
+        // reap it mid-run. With is_session_alive integrated into
+        // should_skip_cleanup as a five-veto safety net, live sessions skip
+        // both the marker and the cleanup, so the marker is only applied when
+        // we actually proceed.
+        if self.should_skip_cleanup(&session_state_dir, &session_id, project_dir, &mut result) {
             write_cleanup_log(
                 &log_root,
                 &serde_json::json!({
@@ -127,6 +130,11 @@ impl SessionEndCleanup {
             write_messages(writer, &result.messages)?;
             return Ok(result);
         }
+
+        // Mark worktree for cleanup now that we've decided to proceed.
+        // This is the primary PendingCleanup trigger.
+        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
+        let _ = crate::worktree::mark_pending_cleanup(&registry_path, &session_id);
 
         // --- Section 4: PF7 diagnostic ---
         result.pf7_valid = self.validate_pf7(project_dir, &session_id, &mut result);
@@ -188,32 +196,76 @@ impl SessionEndCleanup {
     /// Check the `PathFlow` guard using multi-signal approach. Returns `true`
     /// if cleanup should be skipped (session still active).
     ///
-    /// Uses `pathflow-session-status.json` as the sole authority, with
-    /// team config existence as a secondary check.
-    fn should_skip_cleanup(&self, session_state_dir: &Path, result: &mut CleanupResult) -> bool {
+    /// Uses `pathflow-session-status.json` as the primary authority, with
+    /// team config existence as a secondary check, and the five-veto
+    /// `is_session_alive` predicate as a final safety net so a spurious
+    /// SessionEnd (misrouted teammate stop, etc.) cannot reap a live session.
+    fn should_skip_cleanup(
+        &self,
+        session_state_dir: &Path,
+        session_id: &str,
+        project_dir: &Path,
+        result: &mut CleanupResult,
+    ) -> bool {
         let pathflow_dir = session_state_dir.join("pathflow");
         let status_path = pathflow_dir.join("pathflow-session-status.json");
 
         // Read under critical retry -- cleanup is destructive; avoid false-negative on transient read.
-        let status: serde_json::Value =
-            match crate::pathflow::file_lock::locked_read_critical(&status_path, 2) {
-                Ok(v) => v,
-                Err(e) => {
-                    if e.contains("read:") {
-                        // No status file -- no active PathFlow session, allow cleanup.
-                        return false;
+        let status_result: Result<serde_json::Value, String> =
+            crate::pathflow::file_lock::locked_read_critical(&status_path, 2);
+
+        // Five-veto safety net: if ANY live signal fires for this session
+        // (tmux pane alive, fresh heartbeat, lead_pid still running, grace
+        // window active, self-match), skip cleanup regardless of what the
+        // status file says. This stops spurious SessionEnd invocations from
+        // reaping live sessions.
+        let worktree_path = std::env::var("CODEFLOW_WORKTREE_PATH")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+        let alive_inputs = crate::session::liveness::SessionAliveInputs {
+            session_id: session_id.to_string(),
+            project_dir: project_dir.to_path_buf(),
+            worktree_path,
+            registry_created_at: None,
+        };
+        let aggregate_alive = crate::session::liveness::is_session_alive(&alive_inputs);
+
+        let status = match status_result {
+            Ok(v) => v,
+            Err(e) => {
+                if e.contains("read:") {
+                    // No status file. Normally this means "no active
+                    // PathFlow session", BUT a session that just spawned
+                    // can race here -- the status file is written milliseconds
+                    // after SessionStart. Defer to is_session_alive.
+                    if aggregate_alive {
+                        result.messages.push(
+                            "SessionEnd: status file missing but session still alive (five-veto) -- skipping cleanup".into(),
+                        );
+                        return true;
                     }
-                    result.messages.push(format!(
-                        "SessionEnd: pathflow-session-status.json unreadable ({e}) -- proceeding"
-                    ));
                     return false;
                 }
-            };
+                result.messages.push(format!(
+                    "SessionEnd: pathflow-session-status.json unreadable ({e}) -- proceeding"
+                ));
+                return false;
+            }
+        };
 
         let session_status = status.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Status "created" means no team was ever created -- safe to clean up.
+        // Status "created" means no team was ever created -- safe to clean up,
+        // unless is_session_alive says otherwise (race window).
         if session_status == "created" {
+            if aggregate_alive {
+                result.messages.push(
+                    "SessionEnd: status='created' but five-veto says alive -- skipping cleanup"
+                        .into(),
+                );
+                return true;
+            }
             result
                 .messages
                 .push("SessionEnd: Session status is 'created' (no team) -- proceeding".into());
@@ -221,6 +273,9 @@ impl SessionEndCleanup {
         }
 
         // Status "pf-complete" means session finished normally -- clean up.
+        // Do NOT defer to aggregate_alive here: the status file is the
+        // authoritative signal that PF7 completed, and the five-veto tmux
+        // veto may still see the lead's tmux pane during teardown.
         if session_status == "pf-complete" {
             result.messages.push(
                 "SessionEnd: Session status is 'pf-complete' -- proceeding with cleanup".into(),
@@ -235,6 +290,12 @@ impl SessionEndCleanup {
             .unwrap_or("");
 
         if team_name.is_empty() {
+            if aggregate_alive {
+                result.messages.push(
+                    "SessionEnd: no team_name but five-veto says alive -- skipping cleanup".into(),
+                );
+                return true;
+            }
             result
                 .messages
                 .push("SessionEnd: Session active but no team name -- proceeding".into());
@@ -251,10 +312,17 @@ impl SessionEndCleanup {
 
         if !config_path.exists() {
             // Config is gone and session status is pf-started/pf-in-progress.
-            // This session is dead -- the team was already dissolved or never
-            // fully created. The status file handles the TeamDelete race
-            // (handle_team_delete sets pf-complete BEFORE removing sentinels).
-            // Allow cleanup to proceed.
+            // Under the legacy semantics this was "dead -- proceed", but a
+            // legitimately live session whose TeamDelete just ran (and whose
+            // pf-complete status write is imminent) matches this exact
+            // pattern. Gate on aggregate_alive so tmux / lead_pid / heartbeat
+            // still protect live sessions.
+            if aggregate_alive {
+                result.messages.push(format!(
+                    "SessionEnd: team config gone for '{team_name}' but five-veto says alive -- skipping cleanup"
+                ));
+                return true;
+            }
             result.messages.push(format!(
                 "SessionEnd: Session active but team config gone for '{team_name}' -- proceeding"
             ));
@@ -273,9 +341,12 @@ impl SessionEndCleanup {
             return false;
         }
 
-        // All signals indicate active session -- skip cleanup.
+        // All status-file signals indicate active session -- skip cleanup.
+        // This is the pre-existing behaviour; we add the five-veto decision
+        // to the log so post-hoc debugging can tell whether the veto or the
+        // status file caused the skip.
         result.messages.push(format!(
-            "SessionEnd: Session active (status={session_status}, team={team_name}, phase={last_phase}) -- skipping cleanup"
+            "SessionEnd: Session active (status={session_status}, team={team_name}, phase={last_phase}, five_veto_alive={aggregate_alive}) -- skipping cleanup"
         ));
         true
     }
@@ -924,6 +995,18 @@ mod tests {
             .join("pathflow");
         fs::create_dir_all(&session_dir).unwrap();
 
+        // Write pathflow-team.json with a dead lead_pid so V4 of
+        // is_session_alive votes DEAD (not abstain). Tests that need to
+        // exercise the cleanup-proceeds path depend on aggregate_alive =
+        // false; without this file V4 abstains alive and every cleanup
+        // would skip. Tests that want to simulate a live session override
+        // this file with a live lead_pid.
+        fs::write(
+            session_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
+        )
+        .unwrap();
+
         // Create sentinel directory with some sentinels.
         let sentinel_dir = dir
             .join(".state")
@@ -1214,6 +1297,12 @@ mod tests {
             serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
+        // V4 needs a team.json with dead lead_pid to vote DEAD (not abstain).
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "missing-team", "lead_pid": 4_000_000_u32}).to_string(),
+        )
+        .unwrap();
 
         let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
@@ -1258,6 +1347,12 @@ mod tests {
             serde_json::to_string_pretty(&status).unwrap(),
         )
         .unwrap();
+        // V4 needs a team.json with dead lead_pid to vote DEAD (not abstain).
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
+        )
+        .unwrap();
 
         let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
@@ -1295,6 +1390,12 @@ mod tests {
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
             serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+        // V4 needs a team.json with dead lead_pid to vote DEAD (not abstain).
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
         )
         .unwrap();
 
@@ -1459,6 +1560,13 @@ mod tests {
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
             serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+        // Write pathflow-team.json with dead lead_pid so V4 votes DEAD
+        // (without this file, V4 abstains ALIVE and cleanup would skip).
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "dead-team", "lead_pid": 4_000_000_u32}).to_string(),
         )
         .unwrap();
 
@@ -2015,16 +2123,17 @@ mod tests {
     }
 
     #[test]
-    fn test_session_end_marks_pending_cleanup_after_crash() {
-        // Crash path: status is pf-in-progress with no team config.
+    fn test_session_end_marks_pending_cleanup_after_confirmed_crash() {
+        // Confirmed-crash path: status is pf-in-progress, pathflow-team.json
+        // exists with a dead lead_pid, no interactive heartbeat. Every
+        // five-veto signal votes dead, so cleanup proceeds and the entry is
+        // marked PendingCleanup.
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
 
         let registry_path = create_active_registry(dir.path(), &session_id);
 
-        // Set status to pf-in-progress (simulating a crash mid-session).
-        // No team config, so should_skip_cleanup returns false.
         let pathflow_dir = dir
             .path()
             .join(".state/session")
@@ -2035,24 +2144,35 @@ mod tests {
             serde_json::json!({"status": "pf-in-progress", "session_id": session_id}).to_string(),
         )
         .unwrap();
+        // Write pathflow-team.json with a dead lead_pid so V4 votes DEAD,
+        // not abstain. Without this file V4 abstains alive (protecting
+        // initializing sessions) which would (correctly) skip cleanup.
+        fs::write(
+            pathflow_dir.join("pathflow-team.json"),
+            serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
+        )
+        .unwrap();
 
         let cleaner = make_cleaner(home.path().to_path_buf());
         let input = make_input(dir.path().to_str().unwrap());
         let mut buf = Vec::new();
         let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Verify PendingCleanup was marked (runs before should_skip_cleanup).
+        // Verify PendingCleanup was marked — now that the guard runs BEFORE
+        // mark_pending_cleanup and the five-veto check is DEAD, cleanup proceeds.
         let data = fs::read_to_string(&registry_path).unwrap();
         assert!(
             data.contains("pending_cleanup"),
-            "worktree should be marked PendingCleanup even after crash: {data}"
+            "worktree should be marked PendingCleanup after confirmed crash: {data}"
         );
     }
 
     #[test]
-    fn test_session_end_marks_pending_cleanup_unconditionally() {
-        // Even when should_skip_cleanup returns true, mark_pending_cleanup
-        // should still run because it executes BEFORE the skip check.
+    fn test_session_end_skips_pending_cleanup_when_session_active() {
+        // When should_skip_cleanup returns true (live session), the worktree
+        // MUST NOT be marked PendingCleanup — mark_pending_cleanup now runs
+        // AFTER the guard. Previously it ran first, which let a later session
+        // reap this live session's worktree via clean_stale_worktrees.
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let session_id = setup_session(dir.path());
@@ -2081,11 +2201,11 @@ mod tests {
         let mut buf = Vec::new();
         let _result = cleaner.run(&input, dir.path(), &mut buf).unwrap();
 
-        // Verify PendingCleanup was still marked even though cleanup was skipped.
+        // Verify PendingCleanup was NOT marked — live session must be protected.
         let data = fs::read_to_string(&registry_path).unwrap();
         assert!(
-            data.contains("pending_cleanup"),
-            "worktree should be marked PendingCleanup even when cleanup skipped: {data}"
+            !data.contains("pending_cleanup"),
+            "worktree must NOT be marked PendingCleanup when session is alive: {data}"
         );
     }
 

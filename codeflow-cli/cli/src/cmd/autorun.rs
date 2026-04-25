@@ -1980,7 +1980,7 @@ async fn run_status_watch(
         BatchListSnapshot, BatchView, fetch_batch_list_bulk, fetch_batch_view,
     };
     use codeflow_core::tui::theme;
-    use codeflow_core::tui::widgets::{DetailPane, DurationCell};
+    use codeflow_core::tui::widgets::{DurationCell, render_task_detail};
     use ratatui::crossterm::event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
     };
@@ -2345,8 +2345,7 @@ async fn run_status_watch(
                     let sel_task = last_view
                         .as_ref()
                         .and_then(|v| table_state.selected().and_then(|i| v.tasks.get(i)));
-                    let detail = DetailPane::new(sel_task);
-                    frame.render_widget(detail, chunks[2]);
+                    render_task_detail(frame, chunks[2], sel_task);
 
                     let mut bar_line = if let Some((ref msg, at)) = status_message {
                         if at.elapsed() < Duration::from_secs(3) {
