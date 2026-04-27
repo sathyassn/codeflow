@@ -122,9 +122,10 @@ impl HasLifecycleTimestamps for crate::models::AutorunSession {
     fn is_terminal(&self) -> bool {
         self.status.is_terminal()
     }
-    fn is_not_started(&self) -> bool {
-        matches!(self.status, crate::types::AutorunSessionStatus::Pending)
-    }
+    // INF-TSK-050-001 AC #20: `is_not_started` falls back to the trait
+    // default (`false`) now that `Pending` is removed. No autorun status
+    // produces a "not yet started" state — the orchestrator writes
+    // `Running` at row creation, so ELAPSED ticks from `created_at`.
 }
 
 impl HasLifecycleTimestamps for crate::models::InteractiveSession {
@@ -379,6 +380,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: created.into(),
             completed_at: completed.map(String::from),
+            abort_started_at: None,
         }
     }
 
@@ -468,18 +470,6 @@ mod tests {
             Some(&rfc(now - Duration::seconds(60))),
         );
         assert_eq!(freeze_on_terminal_secs(&s, now, false), 840);
-    }
-
-    #[test]
-    fn autorun_pending_is_zero() {
-        let now = Utc::now();
-        let s = make_autorun_session(
-            AutorunSessionStatus::Pending,
-            &rfc(now - Duration::seconds(60)),
-            None,
-            None,
-        );
-        assert_eq!(freeze_on_terminal_secs(&s, now, false), 0);
     }
 
     #[test]

@@ -60,6 +60,12 @@ pub struct AutorunSession {
     pub last_heartbeat_at: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
+    /// Timestamp (RFC 3339) recorded when the orchestrator first observes an
+    /// abort signal for this session. Drives the abort-timeout watchdog
+    /// (`AutorunConfig::abort_timeout_secs`). `None` for sessions that have
+    /// never entered an Aborting transition.
+    #[serde(default)]
+    pub abort_started_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +162,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
         assert_eq!(session.pid, Some(12345));
         assert_eq!(session.skipped_tasks, 2);
@@ -167,7 +174,7 @@ mod tests {
             id: "ar-002".into(),
             batch_file: "b.yaml".into(),
             batch_name: None,
-            status: AutorunSessionStatus::Pending,
+            status: AutorunSessionStatus::Cancelled,
             max_session_workers: 1,
             total_tasks: 0,
             completed_tasks: 0,
@@ -184,6 +191,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
         assert!(session.pid.is_none());
         assert_eq!(session.skipped_tasks, 0);
@@ -212,6 +220,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: Some("2026-03-21T01:00:00Z".into()),
+            abort_started_at: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"pid\":999"));
@@ -245,6 +254,7 @@ mod tests {
             last_heartbeat_at: Some("2026-04-20T10:00:05Z".into()),
             created_at: "2026-04-20T09:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(
@@ -271,7 +281,7 @@ mod tests {
             id: "ar-none".into(),
             batch_file: "b.yaml".into(),
             batch_name: None,
-            status: AutorunSessionStatus::Pending,
+            status: AutorunSessionStatus::Cancelled,
             max_session_workers: 1,
             total_tasks: 0,
             completed_tasks: 0,
@@ -288,6 +298,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-04-01T00:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"current_task_id\":null"));
@@ -302,7 +313,7 @@ mod tests {
             id: "ar-def".into(),
             batch_file: "b.yaml".into(),
             batch_name: None,
-            status: AutorunSessionStatus::Pending,
+            status: AutorunSessionStatus::Cancelled,
             max_session_workers: 1,
             total_tasks: 0,
             completed_tasks: 0,
@@ -319,9 +330,74 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-03-21T00:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
         assert!(session.pid.is_none());
         assert_eq!(session.skipped_tasks, 0);
+        assert!(session.abort_started_at.is_none());
+    }
+
+    #[test]
+    fn test_autorun_session_abort_started_at_some_serializes() {
+        // INF-TSK-050-001 AC #1: Some(timestamp) serializes as the RFC 3339
+        // string. The DB write path needs explicit values for legacy rows.
+        let session = AutorunSession {
+            id: "ar-abort".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Aborting,
+            max_session_workers: 1,
+            total_tasks: 0,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: "2026-04-25T00:00:00Z".into(),
+            completed_at: None,
+            abort_started_at: Some("2026-04-25T00:01:00Z".into()),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(
+            json.contains("\"abort_started_at\":\"2026-04-25T00:01:00Z\""),
+            "expected abort_started_at in JSON, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_autorun_session_abort_started_at_none_serializes_null() {
+        let session = AutorunSession {
+            id: "ar-noabort".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Running,
+            max_session_workers: 1,
+            total_tasks: 0,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: "2026-04-25T00:00:00Z".into(),
+            completed_at: None,
+            abort_started_at: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"abort_started_at\":null"));
     }
 
     #[test]

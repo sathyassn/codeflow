@@ -283,11 +283,16 @@ impl FromStr for ActiveWorkStatus {
 /// Autorun session status values.
 ///
 /// Aligned with schema CHECK constraint:
-/// `CHECK(status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled', 'timeout', 'aborting'))`
+/// `CHECK(status IN ('running', 'paused', 'completed', 'failed', 'cancelled', 'timeout', 'aborting'))`
+///
+/// INF-TSK-050-001 AC #20: `Pending` was removed because no autorun code path
+/// observes a session in `pending` state — the orchestrator writes `Running`
+/// at row creation. The variant only existed in tests and TUI special-cases,
+/// which created a misleading "session is queued" semantic that never
+/// occurred in production.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutorunSessionStatus {
-    Pending,
     Running,
     /// Reserved -- no callers; not yet implemented.
     Paused,
@@ -303,7 +308,7 @@ impl AutorunSessionStatus {
     /// Returns `true` if the status represents a terminal (final) state.
     ///
     /// Terminal statuses: `Completed`, `Failed`, `Cancelled`, `Timeout`.
-    /// Non-terminal statuses: `Pending`, `Running`, `Paused`, `Aborting`.
+    /// Non-terminal statuses: `Running`, `Paused`, `Aborting`.
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(
@@ -316,7 +321,6 @@ impl AutorunSessionStatus {
 impl fmt::Display for AutorunSessionStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pending => f.write_str("pending"),
             Self::Running => f.write_str("running"),
             Self::Paused => f.write_str("paused"),
             Self::Completed => f.write_str("completed"),
@@ -333,7 +337,6 @@ impl FromStr for AutorunSessionStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "pending" => Ok(Self::Pending),
             "running" => Ok(Self::Running),
             "paused" => Ok(Self::Paused),
             "completed" => Ok(Self::Completed),
@@ -820,21 +823,17 @@ mod tests {
 
     #[test]
     fn test_autorun_session_status_display() {
-        assert_eq!(AutorunSessionStatus::Pending.to_string(), "pending");
         assert_eq!(AutorunSessionStatus::Running.to_string(), "running");
         assert_eq!(AutorunSessionStatus::Paused.to_string(), "paused");
         assert_eq!(AutorunSessionStatus::Completed.to_string(), "completed");
         assert_eq!(AutorunSessionStatus::Failed.to_string(), "failed");
         assert_eq!(AutorunSessionStatus::Cancelled.to_string(), "cancelled");
         assert_eq!(AutorunSessionStatus::Timeout.to_string(), "timeout");
+        assert_eq!(AutorunSessionStatus::Aborting.to_string(), "aborting");
     }
 
     #[test]
     fn test_autorun_session_status_from_str() {
-        assert_eq!(
-            "pending".parse::<AutorunSessionStatus>().unwrap(),
-            AutorunSessionStatus::Pending
-        );
         assert_eq!(
             "running".parse::<AutorunSessionStatus>().unwrap(),
             AutorunSessionStatus::Running
@@ -859,11 +858,18 @@ mod tests {
             "timeout".parse::<AutorunSessionStatus>().unwrap(),
             AutorunSessionStatus::Timeout
         );
+        assert_eq!(
+            "aborting".parse::<AutorunSessionStatus>().unwrap(),
+            AutorunSessionStatus::Aborting
+        );
     }
 
     #[test]
     fn test_autorun_session_status_from_str_invalid() {
+        // INF-TSK-050-001 AC #20: `Pending` was removed; the parser must now
+        // reject the legacy string.
         assert!("active".parse::<AutorunSessionStatus>().is_err());
+        assert!("pending".parse::<AutorunSessionStatus>().is_err());
     }
 
     #[test]
@@ -878,13 +884,13 @@ mod tests {
     #[test]
     fn test_autorun_session_status_display_fromstr_roundtrip() {
         for status in [
-            AutorunSessionStatus::Pending,
             AutorunSessionStatus::Running,
             AutorunSessionStatus::Paused,
             AutorunSessionStatus::Completed,
             AutorunSessionStatus::Failed,
             AutorunSessionStatus::Cancelled,
             AutorunSessionStatus::Timeout,
+            AutorunSessionStatus::Aborting,
         ] {
             let s = status.to_string();
             let parsed: AutorunSessionStatus = s.parse().unwrap();
@@ -1062,7 +1068,6 @@ mod tests {
 
     #[test]
     fn test_autorun_session_status_non_terminal() {
-        assert!(!AutorunSessionStatus::Pending.is_terminal());
         assert!(!AutorunSessionStatus::Running.is_terminal());
         assert!(!AutorunSessionStatus::Paused.is_terminal());
         assert!(!AutorunSessionStatus::Aborting.is_terminal());

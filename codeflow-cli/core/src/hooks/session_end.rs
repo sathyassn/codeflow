@@ -845,8 +845,15 @@ impl SessionEndCleanup {
             return;
         }
         let sid = session_id.to_string();
+        // INF-TSK-050-001 AC #16: surface DB write failures to stderr
+        // instead of silently swallowing them via `.ok()?`. Errors stay
+        // non-fatal (we don't break session-end on a DB hiccup) but
+        // become visible to operators so a degraded DB state can be
+        // diagnosed instead of treated as success.
         let update = async move {
-            let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+            let store = crate::store::SurrealStore::open(&db_dir)
+                .await
+                .map_err(|e| format!("opening store: {e}"))?;
             let now = chrono::Utc::now().to_rfc3339();
             let _: Option<serde_json::Value> = store
                 .db()
@@ -858,17 +865,21 @@ impl SessionEndCleanup {
                 .bind(("now", now))
                 .bind(("sid", sid))
                 .await
-                .ok()?
+                .map_err(|e| format!("UPDATE interactive_session: {e}"))?
                 .take(0)
-                .ok()?;
-            Some(())
+                .map_err(|e| format!("take UPDATE result: {e}"))?;
+            Ok::<(), String>(())
         };
         // Hooks run as #[tokio::main] processes; use block_in_place to avoid
         // creating a nested runtime.
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _ = tokio::task::block_in_place(|| handle.block_on(update));
+            if let Err(e) = tokio::task::block_in_place(|| handle.block_on(update)) {
+                eprintln!("warn: session_end interactive_session complete failed: {e}");
+            }
         } else if let Ok(rt) = tokio::runtime::Runtime::new() {
-            let _ = rt.block_on(update);
+            if let Err(e) = rt.block_on(update) {
+                eprintln!("warn: session_end interactive_session complete failed: {e}");
+            }
         }
     }
 }

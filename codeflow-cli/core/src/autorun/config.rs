@@ -113,6 +113,11 @@ pub struct AutorunConfig {
     /// worker is aborted with exit code 125. Distinct from
     /// `worker_timeout_secs`, which bounds total wall-clock time.
     pub stage_timeout_secs: u64,
+    /// INF-TSK-050-001 AC #21: maximum seconds an autorun session may
+    /// remain in `Aborting` status before the orchestrator promotes it to
+    /// `Cancelled` and reaps remaining workers. Measured from
+    /// `abort_started_at`. Default: 300 (5 minutes). Minimum: 60.
+    pub abort_timeout_secs: u64,
     /// Behavior when a task is blocked: "skip_and_continue" or "fail".
     pub blocked_behavior: String,
     /// Directory for autorun reports (relative to project root).
@@ -133,6 +138,7 @@ impl Default for AutorunConfig {
         Self {
             worker_timeout_secs: 7200,
             stage_timeout_secs: 3600,
+            abort_timeout_secs: 300,
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
             max_concurrent_batches: 5,
@@ -414,6 +420,12 @@ fn validate_config(config: &ParallelWorkConfig) -> Result<(), AutorunError> {
         return Err(AutorunError::InvalidBatch(format!(
             "autorun.stage_timeout_secs must be >= 60, got {}",
             config.autorun.stage_timeout_secs
+        )));
+    }
+    if config.autorun.abort_timeout_secs < 60 {
+        return Err(AutorunError::InvalidBatch(format!(
+            "autorun.abort_timeout_secs must be >= 60, got {}",
+            config.autorun.abort_timeout_secs
         )));
     }
     let valid_behaviors = ["skip_and_continue", "fail"];
@@ -776,9 +788,59 @@ mod tests {
             cfg.stage_timeout_secs, 3600,
             "stage_timeout_secs default must be 3600s (60 minutes)"
         );
+        assert_eq!(
+            cfg.abort_timeout_secs, 300,
+            "abort_timeout_secs default must be 300s (5 minutes)"
+        );
         assert_eq!(cfg.blocked_behavior, "skip_and_continue");
         assert_eq!(cfg.report_dir, ".state/autorun/reports");
         assert_eq!(cfg.max_concurrent_batches, 5);
+    }
+
+    #[test]
+    fn autorun_abort_timeout_secs_parses_from_json() {
+        // INF-TSK-050-001 AC #21: abort_timeout_secs deserializes correctly.
+        let json = r#"{ "autorun": { "abort_timeout_secs": 600 } }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.autorun.abort_timeout_secs, 600);
+    }
+
+    #[test]
+    fn autorun_abort_timeout_secs_absent_uses_default() {
+        let json = r#"{ "autorun": { "worker_timeout_secs": 5400 } }"#;
+        let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            cfg.autorun.abort_timeout_secs, 300,
+            "abort_timeout_secs must default when absent"
+        );
+    }
+
+    #[test]
+    fn validate_abort_timeout_too_low_rejected() {
+        // Below 60s the validator must reject so a misconfigured value
+        // can't accidentally race the orchestrator's normal abort flow.
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.abort_timeout_secs = 59;
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(
+            err.to_string().contains("abort_timeout_secs"),
+            "expected abort_timeout_secs error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_abort_timeout_zero_rejected() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.abort_timeout_secs = 0;
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("abort_timeout_secs"));
+    }
+
+    #[test]
+    fn validate_abort_timeout_boundary_accepted() {
+        let mut cfg = ParallelWorkConfig::default();
+        cfg.autorun.abort_timeout_secs = 60;
+        assert!(validate_config(&cfg).is_ok());
     }
 
     #[test]

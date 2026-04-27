@@ -55,6 +55,11 @@ pub struct AutorunSessionUpdate {
     pub updated_at: Option<String>,
     /// Worker heartbeat timestamp (RFC 3339). Written every 10 s by the worker.
     pub last_heartbeat_at: Option<String>,
+    /// Timestamp (RFC 3339) recorded when an abort signal is first observed.
+    /// Outer `Option` = touch-or-not; inner = new value (Some(ts) sets the
+    /// anchor; Some(None) clears it for re-armed sessions). INF-TSK-050-001
+    /// AC #1: drives the Wave 1A `compute_abort_age_secs` watchdog.
+    pub abort_started_at: Option<Option<String>>,
 }
 
 #[derive(Debug, Default)]

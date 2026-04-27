@@ -36,6 +36,12 @@ pub struct BatchView {
     /// INF-TSK-049-001 AC #2.
     pub elapsed_frozen: bool,
     pub target_branch: Option<String>,
+    /// URL of the final PR for this batch (typically the integration
+    /// branch → main PR). Populated by the orchestrator when the merge
+    /// queue successfully creates the consolidating PR; `None` for live
+    /// batches and for terminal batches that did not produce a final PR.
+    /// INF-TSK-050-001 AC #19.
+    pub final_pr_url: Option<String>,
     pub tasks: Vec<TaskView>,
 }
 
@@ -144,6 +150,12 @@ pub struct BatchListEntry {
     /// Seconds since the last worker heartbeat. `None` for terminal statuses
     /// or sessions that never wrote a heartbeat. INF-TSK-048-001 AC #9.
     pub idle_secs: Option<i64>,
+    /// URL of the final PR for this batch (integration branch → main).
+    /// Mirrored from `AutorunSession.final_pr_url` so the batch list view
+    /// can render a "PR" column without a second DB lookup. `None` when
+    /// the orchestrator has not yet recorded the final PR.
+    /// INF-TSK-050-001 AC #19.
+    pub final_pr_url: Option<String>,
 }
 
 /// Threshold (seconds) beyond which an IDLE value is rendered red. Worker
@@ -160,16 +172,42 @@ pub const HEARTBEAT_TTL_SECS: i64 = 120;
 /// Returns one `BatchListEntry` per autorun session, sorted with
 /// running/aborting first, then by created_at DESC.
 ///
+/// Convenience wrapper around [`fetch_batch_list_filtered`] using the
+/// "show everything" filter (`all: true`). Callers that need to narrow
+/// the result set (the TUI's `since`+`ids` union, for example) should
+/// call [`fetch_batch_list_filtered`] directly.
+///
 /// # Errors
 ///
 /// Returns an error if the store cannot be queried.
 pub async fn fetch_batch_list<S: DataStore>(store: &S) -> Result<Vec<BatchListEntry>, DbError> {
-    let sessions = store
-        .list_autorun_sessions(crate::models::AutorunSessionFilter {
+    fetch_batch_list_filtered(
+        store,
+        crate::models::AutorunSessionFilter {
             all: true,
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await
+}
+
+/// Fetch a list of autorun batch sessions narrowed by `filter`.
+///
+/// INF-TSK-050-001 AC #9: the TUI builds a filter combining `since`
+/// (recent rows) with `ids` (rows currently on screen) so the same
+/// fetch services both "what's new" and "what's still visible" in
+/// one round trip. The mock and SurrealDB stores both implement
+/// the OR-semantic (`since OR ids`) so callers do not have to issue
+/// two queries.
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried.
+pub async fn fetch_batch_list_filtered<S: DataStore>(
+    store: &S,
+    filter: crate::models::AutorunSessionFilter,
+) -> Result<Vec<BatchListEntry>, DbError> {
+    let sessions = store.list_autorun_sessions(filter).await?;
 
     let mut entries = Vec::with_capacity(sessions.len());
     for s in &sessions {
@@ -191,18 +229,42 @@ pub async fn fetch_batch_list<S: DataStore>(store: &S) -> Result<Vec<BatchListEn
 /// The store handle is caller-owned so the TUI background task can open a
 /// fresh connection per fetch cycle for cross-process visibility.
 ///
+/// Convenience wrapper around [`fetch_batch_list_bulk_filtered`] using
+/// the "show everything" filter (`all: true`).
+///
 /// # Errors
 ///
 /// Returns an error if either underlying query fails.
 pub async fn fetch_batch_list_bulk<S: DataStore>(
     store: &S,
 ) -> Result<Vec<BatchListEntry>, DbError> {
-    let sessions = store
-        .list_autorun_sessions(crate::models::AutorunSessionFilter {
+    fetch_batch_list_bulk_filtered(
+        store,
+        crate::models::AutorunSessionFilter {
             all: true,
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await
+}
+
+/// Filter-aware bulk variant of [`fetch_batch_list_bulk`].
+///
+/// INF-TSK-050-001 AC #9: when the TUI is in the default filtered view
+/// (the `[a]` toggle is off) the caller passes a filter combining
+/// `since: Some(t0)` with `ids: Some(initial_active_ids)` so the SQL
+/// engine returns the union "rows newer than t0 OR rows currently on
+/// screen". When `[a]` is on the caller passes `all: true` and the
+/// behavior matches [`fetch_batch_list_bulk`] exactly.
+///
+/// # Errors
+///
+/// Returns an error if either underlying query fails.
+pub async fn fetch_batch_list_bulk_filtered<S: DataStore>(
+    store: &S,
+    filter: crate::models::AutorunSessionFilter,
+) -> Result<Vec<BatchListEntry>, DbError> {
+    let sessions = store.list_autorun_sessions(filter).await?;
 
     if sessions.is_empty() {
         return Ok(Vec::new());
@@ -249,6 +311,12 @@ fn build_list_entry(s: &AutorunSession, running_count: usize) -> BatchListEntry 
         current_task_id: s.current_task_id.clone(),
         current_task_format_id: s.current_task_format_id.clone(),
         idle_secs: compute_idle_secs(s, chrono::Utc::now()),
+        // INF-TSK-050-001 AC #19: surface final PR URL on the list row so
+        // the BatchList view can render a "PR" column without a second
+        // round trip. Populated by the orchestrator after the final PR
+        // is created; `None` for batches that have not yet reached that
+        // state.
+        final_pr_url: s.final_pr_url.clone(),
     }
 }
 
@@ -358,6 +426,9 @@ pub enum FetchCycleOutcome {
 /// When no running/aborting session exists, falls back to the most recent
 /// completed/failed batch so the TUI always has something to display.
 ///
+/// Convenience wrapper around [`fetch_batch_view_filtered`] using the
+/// default filter for the no-id fallback path.
+///
 /// # Errors
 ///
 /// Returns an error if the store cannot be queried or no matching session is found.
@@ -366,12 +437,36 @@ pub async fn fetch_batch_view<S: DataStore>(
     project_dir: &Path,
     session_id: Option<&str>,
 ) -> Result<Option<BatchView>, DbError> {
+    fetch_batch_view_filtered(
+        store,
+        project_dir,
+        session_id,
+        crate::models::AutorunSessionFilter::default(),
+    )
+    .await
+}
+
+/// Filter-aware variant of [`fetch_batch_view`].
+///
+/// INF-TSK-050-001 AC #9: parallels [`fetch_batch_list_filtered`] so the
+/// detail-view fallback (when no `session_id` is supplied) honors the
+/// same `since`/`ids` filter the list view uses. When `session_id` is
+/// supplied, the filter is ignored — the explicit lookup goes straight
+/// to `get_autorun_session`.
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried or no matching session is found.
+pub async fn fetch_batch_view_filtered<S: DataStore>(
+    store: &S,
+    project_dir: &Path,
+    session_id: Option<&str>,
+    filter: crate::models::AutorunSessionFilter,
+) -> Result<Option<BatchView>, DbError> {
     let session = match session_id {
         Some(sid) => store.get_autorun_session(sid).await?,
         None => {
-            let sessions = store
-                .list_autorun_sessions(crate::models::AutorunSessionFilter::default())
-                .await?;
+            let sessions = store.list_autorun_sessions(filter).await?;
             // Prefer running/aborting; fall back to most recent by created_at.
             let active = sessions.iter().find(|s| {
                 matches!(
@@ -413,9 +508,10 @@ async fn build_batch_view<S: DataStore>(
     // INF-TSK-049-001 AC #2: freeze the detail-header ELAPSED for terminal
     // batches so the value matches the list row. Previously used
     // `compute_elapsed_secs(&session.created_at)` which ticks forever.
+    // INF-TSK-050-001 AC #20: `Pending` removed; only terminal sessions
+    // need a frozen ELAPSED. Live (Running/Aborting/Paused) sessions tick.
     let elapsed_secs = status_driven_elapsed_secs(session, chrono::Utc::now());
-    let elapsed_frozen =
-        session.status.is_terminal() || matches!(session.status, AutorunSessionStatus::Pending);
+    let elapsed_frozen = session.status.is_terminal();
 
     let mut tasks = Vec::with_capacity(task_runs.len());
     for run in &task_runs {
@@ -496,6 +592,10 @@ async fn build_batch_view<S: DataStore>(
         elapsed_secs,
         elapsed_frozen,
         target_branch: session.target_branch.clone(),
+        // INF-TSK-050-001 AC #19: propagate final_pr_url to the detail
+        // view header so the orchestrator's recorded PR URL is visible
+        // without another DB lookup.
+        final_pr_url: session.final_pr_url.clone(),
         tasks,
     })
 }
@@ -515,6 +615,17 @@ pub async fn fetch_session_views(
     fetch_session_views_with_keep_last(store, project_dir, 10).await
 }
 
+/// Default PID validator for `fetch_session_views_*`.
+///
+/// INF-TSK-050-001 AC #4: matches the `validate_claude_pid > 0` semantic
+/// — the PID must be alive AND its process name must contain "claude".
+/// Tests use [`fetch_session_views_with_keep_last_and_validator`] to
+/// inject a synthetic predicate so they don't depend on the test runner
+/// being a Claude Code child process.
+fn default_session_pid_validator(pid: u32) -> bool {
+    crate::session::process::validate_claude_pid(pid) > 0
+}
+
 /// Fetch interactive session views with a configurable `keep_last` threshold.
 ///
 /// `keep_last` controls how many terminal sessions are shown in the default
@@ -527,6 +638,35 @@ pub async fn fetch_session_views_with_keep_last(
     store: &crate::store::SurrealStore,
     project_dir: &Path,
     keep_last: usize,
+) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
+    fetch_session_views_with_keep_last_and_validator(
+        store,
+        project_dir,
+        keep_last,
+        default_session_pid_validator,
+    )
+    .await
+}
+
+/// Internal hook for [`fetch_session_views_with_keep_last`] that accepts a
+/// custom PID validator. Production code uses [`default_session_pid_validator`];
+/// unit tests pass a closure that returns `true` for known test PIDs so they
+/// can exercise the active-session phase fallback chain without spawning a
+/// real `claude` child process.
+///
+/// The validator is called with a non-zero `u32` PID and returns whether the
+/// process should count as "live owner of an interactive session". Returning
+/// `false` triggers the synchronous stale-promotion path (matching the
+/// production behavior when `validate_claude_pid` returns 0).
+///
+/// # Errors
+///
+/// Returns an error if the store cannot be queried.
+pub async fn fetch_session_views_with_keep_last_and_validator(
+    store: &crate::store::SurrealStore,
+    project_dir: &Path,
+    keep_last: usize,
+    pid_validator: fn(u32) -> bool,
 ) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
     // INF-TSK-049-001 AC #9: filter out autorun worker sessions. Workers
     // register as `interactive_session` rows with `source_cli='codeflow'`,
@@ -556,9 +696,17 @@ pub async fn fetch_session_views_with_keep_last(
 
     for s in &sessions {
         // PID liveness override: detect dead sessions still marked "active".
+        // INF-TSK-050-001 AC #4: use the injectable `pid_validator` instead
+        // of a bare `is_process_alive`. The stored `pid` for an interactive
+        // session is the lead Claude Code process; if a different process
+        // has since recycled the PID (rare but possible), treating it as
+        // alive would suppress the stale-promotion that the user expects.
+        // The default validator wraps `validate_claude_pid` so the PID
+        // must be BOTH alive AND its process name must contain "claude" —
+        // exactly the semantic we want. Tests pass a synthetic predicate.
         let effective_status = if s.status.to_string() == "active" {
             let pid_u32 = u32::try_from(s.pid).unwrap_or(0);
-            if pid_u32 > 0 && !crate::session::process::is_process_alive(pid_u32) {
+            if pid_u32 > 0 && !pid_validator(pid_u32) {
                 stale_promotions.push(s.session_id.clone());
                 "stale".to_string()
             } else {
@@ -867,7 +1015,12 @@ pub fn resolve_worker_pid_liveness(
         if pid_u32 == 0 {
             continue;
         }
-        let alive = crate::session::process::is_process_alive(pid_u32);
+        // INF-TSK-050-001 AC #4: stored `lead_pid` is the worker's Claude
+        // Code lead process; use `validate_claude_pid` so a recycled PID
+        // owned by an unrelated process is treated as dead. Returns the
+        // input PID when alive and named "claude", 0 otherwise — convert
+        // to a bool for the existing `pid_alive` field semantics.
+        let alive = crate::session::process::validate_claude_pid(pid_u32) > 0;
         // Real OS PIDs fit inside `i32::MAX` on every platform we support;
         // if the stored value somehow exceeds it, cap at `i32::MAX` so the
         // conversion remains lossless for practical purposes.
@@ -937,6 +1090,107 @@ pub fn format_task_id_for_display(task_format_id: Option<&str>, task_id: Option<
     }
 }
 
+/// Render the TUI BatchList TASK column with `+N` overflow notation.
+///
+/// INF-TSK-050-001 AC #8: the BatchList row needs to communicate three
+/// things in one column — what task is currently dispatched, that there
+/// are more tasks in the batch, and that the column is empty when the
+/// batch has not dispatched anything yet. The TASKS column carries the
+/// raw count; this column adds context.
+///
+/// Rendering matrix:
+///
+/// | total_tasks | id present | rendered                    |
+/// |-------------|------------|-----------------------------|
+/// | <= 0        | any        | `—` (em-dash)               |
+/// | any         | both None  | `—` (em-dash)               |
+/// | == 1        | yes        | id (truncated to width)     |
+/// | > 1         | None       | `—` (batch not dispatched)  |
+/// | > 1         | yes        | `id +N` (`N = total - 1`)   |
+///
+/// Truncation: when `id + suffix` exceeds `width`, the id is truncated
+/// with a trailing `…` while the `+N` suffix is preserved verbatim. If
+/// `width` is too small to fit even `…+N`, the full result is returned
+/// as-is so the caller's column constraint can decide how to clip — we
+/// never silently drop the count. `width == 0` disables truncation.
+///
+/// Precedence between `current_task_format_id` and `current_task_id`
+/// matches `format_task_id_for_display`: the format id wins when present
+/// and non-empty. The raw ULID is used only as a last-resort fallback.
+#[must_use]
+pub fn format_task_cell(
+    current_task_format_id: Option<&str>,
+    current_task_id: Option<&str>,
+    total_tasks: i32,
+    width: usize,
+) -> String {
+    // EM-DASH: zero/negative total means "no tasks tracked yet" — the
+    // TASKS column will show 0 / N/A so this column should not pretend
+    // to have data.
+    if total_tasks <= 0 {
+        return "—".to_string();
+    }
+
+    // Pick the best id: format id first, raw ULID second, blank third.
+    let id_owned: Option<String> =
+        if let Some(fmt) = current_task_format_id.filter(|s| !s.is_empty()) {
+            Some(fmt.to_string())
+        } else {
+            current_task_id
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+
+    let Some(id) = id_owned else {
+        // EM-DASH: no id. Two cases collapse here — total==1 with a
+        // pending dispatch, and total>1 batch waiting to start. Both
+        // mean "nothing to show in this column right now".
+        return "—".to_string();
+    };
+
+    if total_tasks == 1 {
+        return truncate_for_cell(&id, width);
+    }
+
+    // total_tasks > 1 and id present → "id +N"
+    let suffix = format!(" +{}", total_tasks - 1);
+    let suffix_chars = suffix.chars().count();
+    let id_chars = id.chars().count();
+
+    // No truncation needed (or width disabled).
+    if width == 0 || id_chars + suffix_chars <= width {
+        return format!("{id}{suffix}");
+    }
+
+    // Truncate id with `…`, preserve suffix verbatim. Reserve one char
+    // for the ellipsis. If the suffix alone is wider than width-1, we
+    // give up on truncation and return the full string — the column
+    // constraint will clip visually but the count is preserved.
+    if suffix_chars + 1 >= width {
+        return format!("{id}{suffix}");
+    }
+    let id_keep = width - suffix_chars - 1;
+    let head: String = id.chars().take(id_keep).collect();
+    format!("{head}…{suffix}")
+}
+
+/// Truncate `s` to `width` characters with a trailing `…` when oversized.
+///
+/// Helper for the TASK column rendering. `width == 0` disables truncation
+/// (caller will let the column constraint clip). `width == 1` returns
+/// `…` alone.
+fn truncate_for_cell(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    if width == 0 || len <= width {
+        return s.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let kept: String = s.chars().take(width - 1).collect();
+    format!("{kept}…")
+}
+
 fn compute_elapsed_secs(started_at: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(started_at)
         .map(|start| {
@@ -948,17 +1202,40 @@ fn compute_elapsed_secs(started_at: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// Compute the display string for a task row given its run status and the
+/// owning session's status.
+///
+/// INF-TSK-050-001 AC #7: a `Pending` task row (the worker has not yet
+/// claimed the task) needs context-dependent rendering once the session
+/// itself transitions out of `Running` — otherwise the column says
+/// "pending" forever even though the row will never be picked up.
+///
+/// | task_run | session     | displayed   | rationale                              |
+/// |----------|-------------|-------------|----------------------------------------|
+/// | Pending  | Running     | "Waiting"   | actively queued, will be picked up     |
+/// | Pending  | Aborting    | "Aborting"  | abort signal in flight, row will skip  |
+/// | Pending  | Cancelled   | "Cancelled" | run cancelled before this row started  |
+/// | Pending  | Failed      | "Skipped"   | batch failed before this row started   |
+/// | Pending  | Timeout     | "Skipped"   | batch timed out before this row started|
+/// | Pending  | Completed   | "Skipped"   | defensive — should not happen in prod  |
+/// | Pending  | Paused      | "pending"   | pass-through; reserved variant         |
+/// | other    | any         | task.to_string() | pass-through (e.g. running, failed)|
 fn compute_display_status(
     status: AutorunTaskRunStatus,
     session_status: AutorunSessionStatus,
 ) -> String {
-    if matches!(status, AutorunTaskRunStatus::Pending)
-        && matches!(session_status, AutorunSessionStatus::Running)
-    {
-        "Waiting".to_string()
-    } else {
-        status.to_string()
+    if matches!(status, AutorunTaskRunStatus::Pending) {
+        match session_status {
+            AutorunSessionStatus::Running => return "Waiting".to_string(),
+            AutorunSessionStatus::Aborting => return "Aborting".to_string(),
+            AutorunSessionStatus::Cancelled => return "Cancelled".to_string(),
+            AutorunSessionStatus::Failed
+            | AutorunSessionStatus::Timeout
+            | AutorunSessionStatus::Completed => return "Skipped".to_string(),
+            AutorunSessionStatus::Paused => {} // fall through to default
+        }
     }
+    status.to_string()
 }
 
 // `read_latest_phase` now lives in `crate::session::sentinel` so the
@@ -1104,6 +1381,17 @@ mod tests {
         assert_eq!(compute_elapsed_secs("not-a-date"), 0);
     }
 
+    // ---- compute_display_status matrix (INF-TSK-050-001 AC #7) ----------
+    //
+    // Pending × Running  → "Waiting"
+    // Pending × Aborting → "Aborting"
+    // Pending × Cancelled → "Cancelled"
+    // Pending × Failed   → "Skipped"
+    // Pending × Timeout  → "Skipped"
+    // Pending × Completed → "Skipped" (defensive)
+    // Pending × Paused   → "pending"  (pass-through; Paused is a reserved variant)
+    // Other  × any       → task.to_string()
+
     #[test]
     fn test_compute_display_status_pending_running() {
         let status =
@@ -1112,11 +1400,58 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_display_status_pending_aborting() {
+        let status = compute_display_status(
+            AutorunTaskRunStatus::Pending,
+            AutorunSessionStatus::Aborting,
+        );
+        assert_eq!(status, "Aborting");
+    }
+
+    #[test]
+    fn test_compute_display_status_pending_cancelled() {
+        let status = compute_display_status(
+            AutorunTaskRunStatus::Pending,
+            AutorunSessionStatus::Cancelled,
+        );
+        assert_eq!(status, "Cancelled");
+    }
+
+    #[test]
+    fn test_compute_display_status_pending_failed() {
+        // Batch failed before this row was picked up -> Skipped, not "pending".
+        let status =
+            compute_display_status(AutorunTaskRunStatus::Pending, AutorunSessionStatus::Failed);
+        assert_eq!(status, "Skipped");
+    }
+
+    #[test]
+    fn test_compute_display_status_pending_timeout() {
+        let status =
+            compute_display_status(AutorunTaskRunStatus::Pending, AutorunSessionStatus::Timeout);
+        assert_eq!(status, "Skipped");
+    }
+
+    #[test]
     fn test_compute_display_status_pending_completed() {
+        // Defensive: a Pending task on a Completed session should never occur
+        // in production (the orchestrator marks all rows before completion),
+        // but if it does we render "Skipped" so the row is not misleadingly
+        // shown as still-queued.
         let status = compute_display_status(
             AutorunTaskRunStatus::Pending,
             AutorunSessionStatus::Completed,
         );
+        assert_eq!(status, "Skipped");
+    }
+
+    #[test]
+    fn test_compute_display_status_pending_paused() {
+        // Paused is a reserved/unused variant; fall through to the task's
+        // own status string so behavior is predictable if the variant ever
+        // ships.
+        let status =
+            compute_display_status(AutorunTaskRunStatus::Pending, AutorunSessionStatus::Paused);
         assert_eq!(status, "pending");
     }
 
@@ -1141,6 +1476,42 @@ mod tests {
         let status =
             compute_display_status(AutorunTaskRunStatus::Failed, AutorunSessionStatus::Running);
         assert_eq!(status, "failed");
+    }
+
+    #[test]
+    fn test_compute_display_status_running_task_terminal_session() {
+        // A task in Running state on a terminal session passes through (the
+        // override only applies when the task is Pending); the orchestrator
+        // updates the task row before transitioning the session in practice.
+        let status = compute_display_status(
+            AutorunTaskRunStatus::Running,
+            AutorunSessionStatus::Completed,
+        );
+        assert_eq!(status, "running");
+    }
+
+    #[test]
+    fn test_compute_display_status_skipped_passes_through() {
+        // Already-terminal task statuses are returned verbatim.
+        let status =
+            compute_display_status(AutorunTaskRunStatus::Skipped, AutorunSessionStatus::Failed);
+        assert_eq!(status, "skipped");
+    }
+
+    #[test]
+    fn test_compute_display_status_cancelled_task_passes_through() {
+        let status = compute_display_status(
+            AutorunTaskRunStatus::Cancelled,
+            AutorunSessionStatus::Cancelled,
+        );
+        assert_eq!(status, "cancelled");
+    }
+
+    #[test]
+    fn test_compute_display_status_timeout_task_passes_through() {
+        let status =
+            compute_display_status(AutorunTaskRunStatus::Timeout, AutorunSessionStatus::Timeout);
+        assert_eq!(status, "timeout");
     }
 
     // `test_read_latest_phase_*` tests moved to
@@ -1189,6 +1560,7 @@ mod tests {
             elapsed_secs: 120,
             elapsed_frozen: false,
             target_branch: Some("main".to_string()),
+            final_pr_url: None,
             tasks: vec![TaskView {
                 task_id: "task-a".to_string(),
                 status: AutorunTaskRunStatus::Running,
@@ -1311,6 +1683,7 @@ mod tests {
             current_task_id: None,
             current_task_format_id: None,
             idle_secs: None,
+            final_pr_url: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"session_id\":\"ses-batch-1\""));
@@ -1336,8 +1709,105 @@ mod tests {
             current_task_id: None,
             current_task_format_id: None,
             idle_secs: None,
+            final_pr_url: None,
         };
         assert_eq!(entry.batch_name.len(), 20);
+    }
+
+    /// INF-TSK-050-001 AC #19: BatchListEntry preserves `final_pr_url` from
+    /// the AutorunSession so the BatchList view can render a "PR" column
+    /// without a second DB lookup. Verifies the field round-trips through
+    /// `build_list_entry` end-to-end.
+    #[tokio::test]
+    async fn test_batch_list_entry_preserves_final_pr_url() {
+        let store = crate::store::mock::MockStore::new();
+        let pr_url = "https://github.com/example/repo/pull/123";
+        let session = crate::models::AutorunSession {
+            id: "ses-with-pr".into(),
+            batch_file: "batch.yaml".into(),
+            batch_name: Some("with-final-pr".into()),
+            status: AutorunSessionStatus::Completed,
+            max_session_workers: 2,
+            total_tasks: 3,
+            completed_tasks: 3,
+            failed_tasks: 0,
+            skipped_tasks: 0,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            completed_at: Some("2026-04-01T01:00:00Z".into()),
+            pid: None,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: Some("autorun/batch-x".into()),
+            final_pr_url: Some(pr_url.to_string()),
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            abort_started_at: None,
+        };
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ses-with-pr".to_string(), session);
+
+        let entries = fetch_batch_list(&store).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].final_pr_url.as_deref(),
+            Some(pr_url),
+            "final_pr_url should propagate from AutorunSession to BatchListEntry"
+        );
+    }
+
+    /// INF-TSK-050-001 AC #19: BatchView mirrors `final_pr_url` from the
+    /// underlying AutorunSession. The detail header in the autorun TUI
+    /// reads this field directly.
+    #[tokio::test]
+    async fn test_batch_view_preserves_final_pr_url() {
+        let store = crate::store::mock::MockStore::new();
+        let pr_url = "https://github.com/example/repo/pull/456";
+        let mut session = make_mock_session("ses-view-pr", AutorunSessionStatus::Completed);
+        session.final_pr_url = Some(pr_url.to_string());
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ses-view-pr".to_string(), session);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ses-view-pr"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(view.final_pr_url.as_deref(), Some(pr_url));
+    }
+
+    /// INF-TSK-050-001 AC #19: when the AutorunSession has not yet recorded
+    /// a final PR, both the list entry and the view show `None` — never an
+    /// empty string or stale value.
+    #[tokio::test]
+    async fn test_batch_views_none_final_pr_url_when_unset() {
+        let store = crate::store::mock::MockStore::new();
+        let session = make_mock_session("ses-no-pr", AutorunSessionStatus::Running);
+        // make_mock_session leaves final_pr_url = None (verified below).
+        assert!(session.final_pr_url.is_none());
+        store
+            .autorun_sessions
+            .lock()
+            .unwrap()
+            .insert("ses-no-pr".to_string(), session);
+
+        let entries = fetch_batch_list(&store).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].final_pr_url.is_none());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let view = fetch_batch_view(&store, tmp.path(), Some("ses-no-pr"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(view.final_pr_url.is_none());
     }
 
     #[tokio::test]
@@ -1373,6 +1843,7 @@ mod tests {
             current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
+            abort_started_at: None,
         };
         let running = crate::models::AutorunSession {
             id: "ses-running".into(),
@@ -1395,6 +1866,7 @@ mod tests {
             current_task_format_id: None,
             updated_at: None,
             last_heartbeat_at: None,
+            abort_started_at: None,
         };
         store.create_autorun_session(&completed).await.unwrap();
         store.create_autorun_session(&running).await.unwrap();
@@ -1453,10 +1925,22 @@ mod tests {
         assert_eq!(summary.hidden_count, 0);
     }
 
+    /// Synthetic PID validator for tests: always returns `true` so the
+    /// stale-promotion path is skipped and the test exercises the
+    /// "session is alive" branch. Production code uses
+    /// [`default_session_pid_validator`] which delegates to
+    /// `validate_claude_pid` (alive AND named "claude").
+    fn always_alive_validator(_pid: u32) -> bool {
+        true
+    }
+
     #[tokio::test]
     async fn test_fetch_session_views_with_sessions() {
         let store = crate::store::SurrealStore::in_memory().await.unwrap();
-        // Use current process PID so PID liveness check considers it alive.
+        // Use current process PID; pair with `always_alive_validator` so the
+        // PID-liveness override does not fire (the test runner is named
+        // `cargo`, not `claude`, so the production validator would
+        // promote this row to stale and break the assertions below).
         let current_pid = i64::from(std::process::id());
         let now = chrono::Utc::now().to_rfc3339();
         let _ = store
@@ -1482,7 +1966,14 @@ mod tests {
             .await;
 
         let tmp = tempfile::tempdir().unwrap();
-        let (views, summary) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        let (views, summary) = fetch_session_views_with_keep_last_and_validator(
+            &store,
+            tmp.path(),
+            10,
+            always_alive_validator,
+        )
+        .await
+        .unwrap();
         assert_eq!(views.len(), 1);
         assert_eq!(summary.active, 1);
         assert_eq!(summary.stale, 0);
@@ -1646,6 +2137,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
+            abort_started_at: None,
         }
     }
 
@@ -2062,6 +2554,127 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // format_task_cell — INF-TSK-050-001 AC #8
+    //
+    // Width = 18 in production (matches the BatchList TASK column constraint).
+    // Tests pin every matrix cell explicitly so a regression flips a value.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_task_cell_zero_total_returns_emdash() {
+        // total_tasks == 0 → em-dash regardless of id presence.
+        assert_eq!(format_task_cell(Some("INF-TSK-001"), None, 0, 18), "—");
+        assert_eq!(format_task_cell(None, None, 0, 18), "—");
+    }
+
+    #[test]
+    fn test_format_task_cell_negative_total_returns_emdash() {
+        // Defensive: a negative total is treated the same as zero. The DB
+        // type is i32 but well-formed rows never have negative values.
+        assert_eq!(format_task_cell(Some("INF-TSK-001"), None, -1, 18), "—");
+    }
+
+    #[test]
+    fn test_format_task_cell_no_id_returns_emdash() {
+        // total > 0 but no id → em-dash. The TASKS column carries the count.
+        assert_eq!(format_task_cell(None, None, 1, 18), "—");
+        assert_eq!(format_task_cell(None, None, 5, 18), "—");
+        // Empty strings count as None.
+        assert_eq!(format_task_cell(Some(""), Some(""), 3, 18), "—");
+    }
+
+    #[test]
+    fn test_format_task_cell_single_task_renders_id_only() {
+        // total_tasks == 1 → no `+N` suffix.
+        assert_eq!(
+            format_task_cell(Some("INF-TSK-050-001"), None, 1, 18),
+            "INF-TSK-050-001"
+        );
+    }
+
+    #[test]
+    fn test_format_task_cell_single_task_falls_back_to_ulid() {
+        let out = format_task_cell(None, Some("task-01KABCDE"), 1, 18);
+        assert_eq!(out, "task-01KABCDE");
+    }
+
+    #[test]
+    fn test_format_task_cell_multi_task_appends_count() {
+        // total_tasks > 1 → `id +N` where N = total - 1.
+        let out = format_task_cell(Some("INF-TSK-050-001"), None, 5, 18);
+        assert_eq!(out, "INF-TSK-050-001 +4");
+    }
+
+    #[test]
+    fn test_format_task_cell_multi_task_two_tasks() {
+        // Boundary: total == 2 → `+1` suffix.
+        let out = format_task_cell(Some("INF-TSK-001"), None, 2, 18);
+        assert_eq!(out, "INF-TSK-001 +1");
+    }
+
+    #[test]
+    fn test_format_task_cell_prefers_format_id_over_raw() {
+        // Same precedence rule as format_task_id_for_display.
+        let out = format_task_cell(Some("INF-TSK-050-001"), Some("task-01KABC"), 3, 32);
+        assert_eq!(out, "INF-TSK-050-001 +2");
+    }
+
+    #[test]
+    fn test_format_task_cell_truncates_id_preserves_suffix() {
+        // id + suffix > width → id is truncated with `…`, suffix preserved.
+        // Width 12: "INF-TSK-050-001 +4" = 18 chars, must shrink to 12.
+        // Suffix " +4" = 3 chars; ellipsis 1 char; id keeps width-3-1 = 8.
+        let out = format_task_cell(Some("INF-TSK-050-001"), None, 5, 12);
+        assert_eq!(out, "INF-TSK-… +4");
+        assert_eq!(out.chars().count(), 12);
+    }
+
+    #[test]
+    fn test_format_task_cell_truncates_long_ulid_preserves_suffix() {
+        // Falls back to ulid; long ulid gets truncated; +N preserved.
+        // Width 16: ulid "task-01KPHCP81KGS3PKG06TZRAKMHH" (31 chars) +
+        // " +9" suffix (3 chars) = needs truncation.
+        // id_keep = 16 - 3 - 1 = 12.
+        let out = format_task_cell(None, Some("task-01KPHCP81KGS3PKG06TZRAKMHH"), 10, 16);
+        assert_eq!(out, "task-01KPHCP… +9");
+        assert_eq!(out.chars().count(), 16);
+    }
+
+    #[test]
+    fn test_format_task_cell_no_truncation_when_fits_exactly() {
+        // id + suffix == width → no ellipsis; full id printed.
+        // "INF-TSK-001 +1" = 14 chars, width 14.
+        let out = format_task_cell(Some("INF-TSK-001"), None, 2, 14);
+        assert_eq!(out, "INF-TSK-001 +1");
+    }
+
+    #[test]
+    fn test_format_task_cell_width_zero_disables_truncation() {
+        // width == 0 → caller will let the column constraint clip; we
+        // emit the full string so the count is preserved.
+        let out = format_task_cell(Some("INF-TSK-050-001-extra-long"), None, 9, 0);
+        assert_eq!(out, "INF-TSK-050-001-extra-long +8");
+    }
+
+    #[test]
+    fn test_format_task_cell_suffix_too_wide_returns_full() {
+        // When width is too small to fit even `…+N`, return full string
+        // verbatim. The column constraint at the render layer will clip
+        // visually, but we never silently drop the count.
+        // suffix " +99" = 4 chars; width 4 means suffix_chars + 1 == width;
+        // truncation gives up.
+        let out = format_task_cell(Some("INF-TSK-001"), None, 100, 4);
+        assert_eq!(out, "INF-TSK-001 +99");
+    }
+
+    #[test]
+    fn test_format_task_cell_em_dash_is_single_char() {
+        // The brief mandates a single Unicode char (em-dash).
+        let out = format_task_cell(None, None, 0, 18);
+        assert_eq!(out.chars().count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
     // Stale-row phase resolution — INF-TSK-047-001 AC #3
     //
     // These tests exercise fetch_session_views_with_keep_last end-to-end
@@ -2151,7 +2764,16 @@ mod tests {
         .await;
 
         let tmp = tempfile::tempdir().unwrap();
-        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        // INF-TSK-050-001 AC #4: use the validator hook so the test runner's
+        // PID (named `cargo`/`rust`, not `claude`) is treated as alive.
+        let (views, _) = fetch_session_views_with_keep_last_and_validator(
+            &store,
+            tmp.path(),
+            10,
+            always_alive_validator,
+        )
+        .await
+        .unwrap();
         let v = views
             .iter()
             .find(|v| v.session_id == "ses-active-starting")
@@ -2166,7 +2788,16 @@ mod tests {
         insert_session(&store, "ses-active-na", current_pid, "active", None, None).await;
 
         let tmp = tempfile::tempdir().unwrap();
-        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        // INF-TSK-050-001 AC #4: use the validator hook (see
+        // `test_fetch_session_views_with_sessions` for context).
+        let (views, _) = fetch_session_views_with_keep_last_and_validator(
+            &store,
+            tmp.path(),
+            10,
+            always_alive_validator,
+        )
+        .await
+        .unwrap();
         let v = views
             .iter()
             .find(|v| v.session_id == "ses-active-na")
@@ -2189,7 +2820,16 @@ mod tests {
         .await;
 
         let tmp = tempfile::tempdir().unwrap();
-        let (views, _) = fetch_session_views(&store, tmp.path()).await.unwrap();
+        // INF-TSK-050-001 AC #4: use the validator hook (see
+        // `test_fetch_session_views_with_sessions` for context).
+        let (views, _) = fetch_session_views_with_keep_last_and_validator(
+            &store,
+            tmp.path(),
+            10,
+            always_alive_validator,
+        )
+        .await
+        .unwrap();
         let v = views
             .iter()
             .find(|v| v.session_id == "ses-active-db-phase")
@@ -2848,6 +3488,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: now,
             completed_at: None,
+            abort_started_at: None,
         };
         store.create_autorun_session(&ar).await.unwrap();
 

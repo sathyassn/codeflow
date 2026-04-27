@@ -79,6 +79,14 @@ mod tests {
             SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE skipped_tasks"),
             "autorun_session missing skipped_tasks field"
         );
+        // INF-TSK-050-001 AC #1: abort_started_at field for the abort
+        // timeout watchdog. Wave 2 fix: typed as option<string> (not
+        // option<datetime>) so MERGE writes can pass RFC 3339 strings
+        // without a SCHEMAFULL TYPE mismatch.
+        assert!(
+            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE abort_started_at   ON TABLE autorun_session TYPE option<string>"),
+            "abort_started_at should be option<string> on autorun_session"
+        );
         // autorun_worker new fields
         assert!(
             SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE file_scope    ON TABLE autorun_worker"),

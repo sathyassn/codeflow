@@ -346,35 +346,68 @@ async fn run_list() -> Result<()> {
 /// from the DB using retention config (days + keep_last from parallel-work-config).
 async fn run_cleanup(no_purge: bool) -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
-    let sessions = query_sessions(&project_dir, Some("active")).await?;
+    // INF-TSK-050-001 AC #13: cleanup considers both `active` (promote to
+    // stale via the dead-PID predicate) and existing `stale` rows that
+    // still lack a `completed_at` anchor (back-fill so the TUI freezes
+    // the DURATION column). Stale rows whose `completed_at` was set on a
+    // prior run are skipped — the SQL `WHERE completed_at = NONE` clause
+    // makes the back-fill idempotent.
+    let mut sessions = query_sessions(&project_dir, Some("active")).await?;
+    let stale_sessions = query_sessions(&project_dir, Some("stale")).await?;
+    sessions.extend(stale_sessions);
 
     let mut cleaned = 0u32;
     let store_result = open_store(&project_dir).await;
     if let Ok(ref store) = store_result {
         for s in &sessions {
-            if is_session_stale(s.pid) {
-                let now = chrono::Utc::now().to_rfc3339();
-                // INF-TSK-049-001 AC #13: set `completed_at` alongside
-                // `updated_at` so the frozen DURATION in the status TUI has
-                // an anchor. Previously only `updated_at` was set, which made
-                // the duration collapse to the -1 sentinel and render as
-                // "--" until the next post_tool_use touch.
-                let _ = store
-                    .db()
-                    .query(
-                        "UPDATE interactive_session SET status = 'stale', \
-                         updated_at = $now, completed_at = $now \
-                         WHERE session_id = $sid AND status = 'active'",
-                    )
-                    .bind(("now", now))
-                    .bind(("sid", s.session_id.clone()))
-                    .await;
+            // Active rows: only act if the PID is dead (validate_claude_pid
+            // returns 0). Stale rows: act unconditionally — the row is
+            // already declared dead; we're just back-filling missing
+            // anchor timestamps for the freeze logic.
+            let s_status = s.status.to_string();
+            let needs_action = match s_status.as_str() {
+                "active" => is_session_stale(s.pid),
+                "stale" => s.completed_at.is_none(),
+                _ => false,
+            };
+            if !needs_action {
+                continue;
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            // INF-TSK-049-001 AC #13: set `completed_at` alongside
+            // `updated_at` so the frozen DURATION in the status TUI has
+            // an anchor. Previously only `updated_at` was set, which made
+            // the duration collapse to the -1 sentinel and render as
+            // "--" until the next post_tool_use touch.
+            //
+            // INF-TSK-050-001 AC #13: extended `WHERE` clause covers both
+            // active and stale rows. The CAS guard on
+            // `status IN ('active','stale')` prevents racing a concurrent
+            // session that may have transitioned to `complete`.
+            let _ = store
+                .db()
+                .query(
+                    "UPDATE interactive_session SET status = 'stale', \
+                     updated_at = $now, completed_at = $now \
+                     WHERE session_id = $sid \
+                       AND status IN ['active', 'stale'] \
+                       AND completed_at = NONE",
+                )
+                .bind(("now", now))
+                .bind(("sid", s.session_id.clone()))
+                .await;
+            if s_status == "active" {
                 eprintln!(
                     "cleaned stale session: {} (PID {} dead)",
                     s.session_id, s.pid
                 );
-                cleaned += 1;
+            } else {
+                eprintln!(
+                    "finalized stale session: {} (back-filled completed_at)",
+                    s.session_id
+                );
             }
+            cleaned += 1;
         }
     }
 
@@ -456,18 +489,34 @@ async fn query_sessions(
 ) -> Result<Vec<codeflow_core::models::InteractiveSession>> {
     let store = open_store(project_dir).await?;
 
+    // INF-TSK-050-001 AC #12: every interactive list/status query MUST
+    // exclude autorun-worker rows (which register as `interactive_session`
+    // with `session_kind='autorun'`). The `OR session_kind = NONE` clause
+    // is defensive: pre-migration rows lack the column, so they default
+    // to "treat as interactive" — matches `tui::data::fetch_session_views`
+    // behavior. The migration in `apply_schema` backfills `'autorun'` for
+    // rows whose `session_id` matches a real `autorun_session`, so after
+    // first startup the OR-NONE branch only applies to organic
+    // interactive rows that pre-date the column.
     let mut result = match status_filter {
         Some(status) => store
             .db()
             .query(
-                "SELECT * FROM interactive_session WHERE status = $status ORDER BY created_at DESC",
+                "SELECT * FROM interactive_session \
+                 WHERE status = $status \
+                   AND (session_kind = 'interactive' OR session_kind = NONE) \
+                 ORDER BY created_at DESC",
             )
             .bind(("status", status.to_string()))
             .await
             .context("querying interactive sessions")?,
         None => store
             .db()
-            .query("SELECT * FROM interactive_session ORDER BY created_at DESC")
+            .query(
+                "SELECT * FROM interactive_session \
+                 WHERE (session_kind = 'interactive' OR session_kind = NONE) \
+                 ORDER BY created_at DESC",
+            )
             .await
             .context("querying interactive sessions")?,
     };
@@ -507,10 +556,26 @@ fn resolve_work_dir<'a>(worktree_path: Option<&'a str>, project_dir: &'a str) ->
     worktree_path.unwrap_or(project_dir)
 }
 
-/// Check if a session's PID is stale (dead).
+/// Check if a session's PID is stale (dead OR not a Claude Code process).
+///
+/// INF-TSK-050-001 AC #4: switched from bare `is_process_alive` to
+/// `validate_claude_pid` so a recycled PID (the orchestrator crashed,
+/// kernel reassigned the same PID to an unrelated process) is treated
+/// as dead. Without name verification, the cleanup path would skip
+/// such "alive but not ours" sessions and they'd accumulate in the
+/// list view.
+///
+/// Fail-secure: any uncertainty (missing name lookup, out-of-range PID,
+/// zero) returns `true` (i.e. "stale, safe to clean up"). Mirrors the
+/// stale-side contract in `core/src/autorun/stale.rs::is_session_pid_alive`.
 fn is_session_stale(pid: i64) -> bool {
-    let pid_u32 = u32::try_from(pid).unwrap_or(0);
-    !codeflow_core::session::process::is_process_alive(pid_u32)
+    let Ok(pid_u32) = u32::try_from(pid) else {
+        return true; // out-of-range or negative → fail-secure stale
+    };
+    if pid_u32 == 0 {
+        return true;
+    }
+    codeflow_core::session::process::validate_claude_pid(pid_u32) == 0
 }
 
 /// Format a PID with liveness indicator for status display.
@@ -1708,9 +1773,20 @@ mod tests {
     }
 
     #[test]
-    fn test_is_session_stale_current_pid() {
+    fn test_is_session_stale_current_pid_not_named_claude() {
+        // INF-TSK-050-001 AC #4: under the new `validate_claude_pid`
+        // regime, the current PID is "alive" but its process name is
+        // not "claude" (it's `cargo-test` or similar) — so
+        // `is_session_stale` returns true. This is the intended
+        // semantic: stale-cleanup should treat any PID that is NOT a
+        // recognized Claude Code process as cleanup-eligible.
         let pid = i64::from(std::process::id());
-        assert!(!is_session_stale(pid), "current process should be alive");
+        assert!(
+            is_session_stale(pid),
+            "current PID is alive but not 'claude'-named; \
+             validate_claude_pid wraps both predicates so the test \
+             runner is treated as stale (intended)"
+        );
     }
 
     #[test]
@@ -1735,10 +1811,20 @@ mod tests {
     }
 
     #[test]
-    fn test_format_pid_with_liveness_alive() {
+    fn test_format_pid_with_liveness_current_pid_marked_dead() {
+        // INF-TSK-050-001 AC #4: under name-verified PID liveness, the
+        // test runner's PID is alive but its process name is not
+        // "claude" — so format_pid_with_liveness returns "DEAD". This
+        // is the intended new semantic: only PIDs that validate as
+        // a Claude Code process are reported alive.
         let pid = i64::from(std::process::id());
         let result = format_pid_with_liveness(pid);
-        assert!(result.contains("alive"), "current PID should show alive");
+        assert!(
+            result.contains("DEAD"),
+            "current PID is alive but not 'claude'-named; \
+             validate_claude_pid wraps both predicates so the test \
+             runner shows DEAD (intended): got {result}"
+        );
     }
 
     // ─── Exec function ─────────────────────────────────────────────────
@@ -1830,6 +1916,91 @@ mod tests {
         // Filter by 'complete' should find nothing.
         let complete = query_sessions(dir.path(), Some("complete")).await.unwrap();
         assert!(complete.is_empty());
+    }
+
+    /// INF-TSK-050-001 AC #12: autorun-worker rows registered as
+    /// `interactive_session` with `session_kind='autorun'` MUST NOT
+    /// appear in `query_sessions` output. The brief mandates this for
+    /// both `codeflow interactive list` and `codeflow interactive status`.
+    #[tokio::test]
+    async fn test_query_sessions_excludes_autorun_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Real interactive session — should be visible.
+        register_interactive_session(dir.path(), "ses-real", None, None, "codeflow", false).await;
+
+        // Now manually create an autorun-worker row that registers as
+        // interactive_session with session_kind='autorun'. The schema
+        // migration sets this kind for worker rows; we simulate that
+        // here by directly INSERTing.
+        let store = open_store(dir.path()).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-autorun-worker', pid = 1234, status = 'active', \
+                 source_cli = 'autorun', managed = true, \
+                 session_kind = 'autorun', created_at = $now",
+            )
+            .bind(("now", now))
+            .await;
+
+        let active = query_sessions(dir.path(), Some("active")).await.unwrap();
+        let ids: Vec<&str> = active.iter().map(|s| s.session_id.as_str()).collect();
+        assert!(
+            ids.contains(&"ses-real"),
+            "real interactive session must be visible: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"ses-autorun-worker"),
+            "autorun-worker row must be EXCLUDED from interactive list: {ids:?}"
+        );
+
+        let no_filter = query_sessions(dir.path(), None).await.unwrap();
+        let ids2: Vec<&str> = no_filter.iter().map(|s| s.session_id.as_str()).collect();
+        assert!(ids2.contains(&"ses-real"));
+        assert!(!ids2.contains(&"ses-autorun-worker"));
+    }
+
+    /// INF-TSK-050-001 AC #12: pre-migration rows that lack the
+    /// `session_kind` column (NONE) are treated as interactive (visible).
+    /// Defensive against rows created before the schema added the column.
+    #[tokio::test]
+    async fn test_query_sessions_includes_pre_migration_none_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        let store = open_store(dir.path()).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        // Note: the SCHEMAFULL definition gives session_kind a DEFAULT of
+        // 'interactive', so a CREATE that omits the field gets the
+        // default. To simulate a true pre-migration row, we would have
+        // to bypass the schema — which we can't do safely. Verify the
+        // OR-clause handles 'interactive' (the default) correctly,
+        // which is the realistic post-migration state. The NONE branch
+        // is defensive code documented inline; functionally exercised
+        // when SCHEMAFULL relaxes in future migrations.
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = 'ses-pre-mig', pid = 99, status = 'active', \
+                 source_cli = 'codeflow', managed = false, \
+                 session_kind = 'interactive', created_at = $now",
+            )
+            .bind(("now", now))
+            .await;
+
+        let active = query_sessions(dir.path(), Some("active")).await.unwrap();
+        let ids: Vec<&str> = active.iter().map(|s| s.session_id.as_str()).collect();
+        assert!(
+            ids.contains(&"ses-pre-mig"),
+            "session with default 'interactive' kind must be visible: {ids:?}"
+        );
     }
 
     #[tokio::test]

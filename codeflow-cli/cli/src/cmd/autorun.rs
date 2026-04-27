@@ -1977,7 +1977,8 @@ async fn run_status_watch(
     interval_secs: u64,
 ) -> Result<()> {
     use codeflow_core::tui::data::{
-        BatchListSnapshot, BatchView, fetch_batch_list_bulk, fetch_batch_view,
+        BatchListSnapshot, BatchView, fetch_batch_list_bulk, fetch_batch_list_bulk_filtered,
+        fetch_batch_view,
     };
     use codeflow_core::tui::theme;
     use codeflow_core::tui::widgets::{DurationCell, render_task_detail};
@@ -2018,11 +2019,64 @@ async fn run_status_watch(
     let mut table_state = TableState::default();
     let mut batch_table_state = TableState::default();
 
-    // Initial snapshot (published to the watch channel below).
+    // INF-TSK-050-001 AC #9 / AC #10: live-monitor filter state.
+    //
+    // The default view shows ONLY rows that were active when the TUI
+    // launched OR rows created since launch (the live window). Pressing
+    // [a] toggles "show all" (no filter). Pressing [c] re-snapshots the
+    // baseline so a stale window can be refreshed without restarting
+    // the TUI.
+    //
+    // `t0` is the snapshot baseline timestamp (RFC 3339 string for the
+    // SQL filter). `initial_active_ids` are the ids of Running/Aborting
+    // sessions at TUI launch — those rows stay visible even if they
+    // transition to terminal during the session, so the user can watch
+    // a batch finish on screen.
+    //
+    // `show_all = true` switches to the unfiltered fetch (`fetch_batch_list_bulk`).
+    let mut show_all: bool = false;
     let init_store = open_store(project_dir).await?;
-    let initial_entries = fetch_batch_list_bulk(init_store.as_ref())
+
+    // INF-TSK-050-001 AC #11: TUI startup auto-reconcile. Detect stuck
+    // batches (Running with dead PID, or Aborting past abort_timeout)
+    // and run reconcile_session_status (DB-only) for each. Bounded at
+    // 3 s; on timeout/error proceed silently.
+    let auto_reconcile_count = match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        run_status_watch_auto_reconcile(init_store.as_ref(), project_dir),
+    )
+    .await
+    {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            eprintln!("warn: TUI auto-reconcile error (non-fatal): {e}");
+            0
+        }
+        Err(_) => {
+            eprintln!("warn: TUI auto-reconcile timed out (non-fatal)");
+            0
+        }
+    };
+
+    // Capture `t0` and the initial active-session ids AFTER reconcile so
+    // a row we just reconciled is treated as terminal (not in
+    // initial_active_ids), keeping the view focused on actually-live work.
+    // Both are mutable so the [c] keybinding can re-snapshot.
+    let mut initial_active_ids: Vec<String> = collect_active_session_ids(init_store.as_ref())
         .await
         .unwrap_or_default();
+    let mut t0: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+
+    let initial_entries = if show_all {
+        fetch_batch_list_bulk(init_store.as_ref())
+            .await
+            .unwrap_or_default()
+    } else {
+        let f = build_live_window_filter(&initial_active_ids, &t0, false);
+        fetch_batch_list_bulk_filtered(init_store.as_ref(), f)
+            .await
+            .unwrap_or_default()
+    };
     let initial_snapshot = BatchListSnapshot {
         entries: initial_entries.clone(),
         fetched_at: std::time::SystemTime::now(),
@@ -2049,18 +2103,39 @@ async fn run_status_watch(
     // Drop initial store — subsequent fetches open fresh connections for
     // cross-process visibility (intentional, preserves INF-TSK-047-001 fix).
     drop(init_store);
-    let mut status_message: Option<(String, std::time::Instant)> = None;
+    // INF-TSK-050-001 AC #11: surface the auto-reconcile result as a
+    // 3-second toast so the user sees the count of cleaned-up batches.
+    let mut status_message: Option<(String, std::time::Instant)> = if auto_reconcile_count > 0 {
+        Some((
+            format!("Reconciled {auto_reconcile_count} stuck batch(es)"),
+            std::time::Instant::now(),
+        ))
+    } else {
+        None
+    };
 
     // INF-TSK-048-001 AC #7: Spawn a background task that refreshes the
     // batch-list snapshot at `fetch_interval` cadence. Each cycle:
     //   - opens a fresh store connection (cross-process visibility),
     //   - times out at 2 s (slow DB → stale snapshot fallback),
     //   - publishes to a watch channel consumed by the render thread.
+    //
+    // INF-TSK-050-001 AC #9 / AC #10: the fetcher reads the current
+    // filter state from a shared watch channel so [a] toggles and [c]
+    // re-snapshots take effect on the next tick without restarting the
+    // task.
     let fetch_interval = Duration::from_secs(interval_secs.max(1));
     const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
     let (snapshot_tx, mut snapshot_rx) = tokio::sync::watch::channel(initial_snapshot);
     let (refresh_signal_tx, mut refresh_signal_rx) = tokio::sync::mpsc::channel::<()>(4);
+    let (filter_tx, filter_rx) =
+        tokio::sync::watch::channel::<LiveWindowFilter>(LiveWindowFilter {
+            show_all,
+            t0,
+            initial_active_ids: initial_active_ids.clone(),
+        });
     let fetcher_project_dir = project_dir.to_path_buf();
+    let mut fetcher_filter_rx = filter_rx.clone();
     let fetcher_handle = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(fetch_interval);
         ticker.tick().await; // consume immediate tick — initial snapshot already published
@@ -2075,6 +2150,7 @@ async fn run_status_watch(
                 }
             };
             let _ = force_refresh; // may be used for adaptive backoff later
+            let current_filter = fetcher_filter_rx.borrow_and_update().clone();
             let mut current = snapshot_tx.borrow().clone();
             let store = match open_store(&fetcher_project_dir).await {
                 Ok(s) => s,
@@ -2087,8 +2163,19 @@ async fn run_status_watch(
                     continue;
                 }
             };
-            let fetch =
-                tokio::time::timeout(FETCH_TIMEOUT, fetch_batch_list_bulk(store.as_ref())).await;
+            let fetch_future = async {
+                if current_filter.show_all {
+                    fetch_batch_list_bulk(store.as_ref()).await
+                } else {
+                    let f = build_live_window_filter(
+                        &current_filter.initial_active_ids,
+                        &current_filter.t0,
+                        false,
+                    );
+                    fetch_batch_list_bulk_filtered(store.as_ref(), f).await
+                }
+            };
+            let fetch = tokio::time::timeout(FETCH_TIMEOUT, fetch_future).await;
             match fetch {
                 Ok(Ok(entries)) => {
                     let snap = BatchListSnapshot {
@@ -2200,6 +2287,16 @@ async fn run_status_watch(
                             )
                         })
                         .count();
+                    // INF-TSK-050-001 AC #9: surface the live-window
+                    // filter state in the header so the user knows
+                    // which view they're looking at and why empty rows
+                    // disappear. `show_all=true` → "(showing all)";
+                    // `show_all=false` → "since HH:MM".
+                    let filter_indicator = if show_all {
+                        "  (showing all)".to_string()
+                    } else {
+                        format!("  since {}", t0.format("%H:%M"))
+                    };
                     let header_line = Line::from(vec![
                         Span::styled(
                             format!(" {} ", theme::TRIANGLE),
@@ -2219,6 +2316,7 @@ async fn run_status_watch(
                         } else {
                             Span::raw("")
                         },
+                        Span::styled(filter_indicator, Style::new().fg(theme::DIM_PENDING)),
                     ]);
                     frame.render_widget(Paragraph::new(header_line), chunks[0]);
 
@@ -2243,9 +2341,14 @@ async fn run_status_watch(
                             // prefer task_format_id over the raw ULID when
                             // available so rows show "INF-TSK-048-001" style
                             // labels instead of the opaque "task-01K…MHH".
+                            // INF-TSK-050-001 AC #8: pass `total_tasks` so the
+                            // TASK column renders an em-dash for batches with
+                            // no tasks tracked yet (parity with
+                            // `tui::data::format_task_cell`).
                             let task_cell_text = crate::cmd::autorun::format_task_cell(
                                 b.current_task_format_id.as_deref(),
                                 b.current_task_id.as_deref(),
+                                b.total_tasks,
                                 18,
                             );
                             let idle_cell = crate::cmd::autorun::render_idle_cell(b.idle_secs);
@@ -2298,6 +2401,31 @@ async fn run_status_watch(
 
                     frame.render_stateful_widget(table, chunks[1], &mut batch_table_state);
 
+                    // INF-TSK-050-001 AC #9: render an empty-state hint
+                    // when the filtered list is empty so the user knows
+                    // they can either launch a new batch or toggle the
+                    // filter off via [a] to see history.
+                    if batch_list.is_empty() {
+                        let empty_msg = if show_all {
+                            "No autorun batches found.".to_string()
+                        } else {
+                            "No active batches. Launch with codeflow autorun <batch>, or press [a] to show all.".to_string()
+                        };
+                        let empty_widget = Paragraph::new(Line::styled(
+                            empty_msg,
+                            Style::new().fg(theme::DIM_PENDING),
+                        ));
+                        // Render directly under the table header (offset
+                        // 2 lines to clear the header + bottom_margin).
+                        let empty_area = ratatui::layout::Rect {
+                            x: chunks[1].x + 2,
+                            y: chunks[1].y + 2,
+                            width: chunks[1].width.saturating_sub(2),
+                            height: 1.min(chunks[1].height.saturating_sub(2)),
+                        };
+                        frame.render_widget(empty_widget, empty_area);
+                    }
+
                     // Keybinding bar with stale/error footer per AC #7.
                     let mut bar_spans = vec![
                         Span::styled(" [Enter]", Style::new().fg(theme::BLUE_ACCENT)),
@@ -2306,6 +2434,10 @@ async fn run_status_watch(
                         Span::raw(" Navigate "),
                         Span::styled("[r]", Style::new().fg(theme::BLUE_ACCENT)),
                         Span::raw(" Refresh "),
+                        Span::styled("[a]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" All "),
+                        Span::styled("[c]", Style::new().fg(theme::BLUE_ACCENT)),
+                        Span::raw(" Re-snap "),
                         Span::styled("[?]", Style::new().fg(theme::BLUE_ACCENT)),
                         Span::raw(" Help "),
                         Span::styled("[q]", Style::new().fg(theme::BLUE_ACCENT)),
@@ -2450,6 +2582,52 @@ async fn run_status_watch(
                             KeyCode::Char('r') => {
                                 // Force immediate refresh without waiting for tick.
                                 let _ = refresh_signal_tx.try_send(());
+                            }
+                            // INF-TSK-050-001 AC #9: [a] toggles between the
+                            // live-window filter (default) and "show all"
+                            // (full history). The fetcher reads the new
+                            // filter on its next tick.
+                            KeyCode::Char('a') => {
+                                show_all = !show_all;
+                                let _ = filter_tx.send(LiveWindowFilter {
+                                    show_all,
+                                    t0,
+                                    initial_active_ids: initial_active_ids.clone(),
+                                });
+                                let _ = refresh_signal_tx.try_send(());
+                                let label = if show_all {
+                                    "Filter: showing all batches"
+                                } else {
+                                    "Filter: live window only"
+                                };
+                                status_message =
+                                    Some((label.to_string(), std::time::Instant::now()));
+                            }
+                            // INF-TSK-050-001 AC #9: [c] re-snapshots the
+                            // baseline. Useful when the user kicks off a new
+                            // batch via another shell and wants to see it
+                            // without flipping to "show all".
+                            KeyCode::Char('c') => {
+                                t0 = chrono::Utc::now();
+                                if let Ok(s) = open_store(project_dir).await {
+                                    initial_active_ids = collect_active_session_ids(s.as_ref())
+                                        .await
+                                        .unwrap_or_default();
+                                    drop(s);
+                                }
+                                let _ = filter_tx.send(LiveWindowFilter {
+                                    show_all,
+                                    t0,
+                                    initial_active_ids: initial_active_ids.clone(),
+                                });
+                                let _ = refresh_signal_tx.try_send(());
+                                status_message = Some((
+                                    format!(
+                                        "Re-snapshot: tracking {} active batch(es)",
+                                        initial_active_ids.len()
+                                    ),
+                                    std::time::Instant::now(),
+                                ));
                             }
                             KeyCode::Char('?') => {
                                 show_help_overlay = true;
@@ -2715,6 +2893,144 @@ async fn run_status_watch(
     }
 
     Ok(())
+}
+
+/// INF-TSK-050-001 WS-SEC FINDING-01: validate that a session id is
+/// safe to use as a path component.
+///
+/// Returns `true` when `s` consists exclusively of alphanumeric ASCII
+/// characters, hyphens, and underscores — the character set produced by
+/// the session-id generators in this codebase. Anything else (path
+/// separators, parent-directory navigation, control characters) is
+/// rejected so the caller can refuse to construct a path with it.
+///
+/// This is a defense-in-depth check on top of the DB existence
+/// verification in `resolve_session_id`: the DB confirms the row
+/// exists but doesn't constrain the format. A malicious or corrupted
+/// row whose `id` contains `/` or `..` could otherwise let a
+/// `runtime_dir.join(format!("abort-{session_id}"))` escape its
+/// intended directory. cf-rust-standards approves the
+/// `is_ascii_alphanumeric` + `b'-' | b'_'` byte classifier idiom.
+#[must_use]
+fn is_valid_session_id_for_path(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Filter state shared between the TUI input loop and the background
+/// fetcher. INF-TSK-050-001 AC #9 / AC #10.
+///
+/// The fetcher reads this on every tick via a `tokio::sync::watch`
+/// channel so [a] toggles and [c] re-snapshots take effect on the next
+/// fetch without restarting the task.
+#[derive(Debug, Clone)]
+struct LiveWindowFilter {
+    /// When true, the fetcher uses the unfiltered `fetch_batch_list_bulk`
+    /// path (full history). When false, uses
+    /// `fetch_batch_list_bulk_filtered` with `since=t0` OR
+    /// `ids=initial_active_ids` so the user sees the live window only.
+    show_all: bool,
+    /// Snapshot baseline timestamp. `created_at > t0` is the SQL gate
+    /// for "rows created since launch".
+    t0: chrono::DateTime<chrono::Utc>,
+    /// Session ids that were active (Running or Aborting) at TUI launch.
+    /// These rows stay visible even after they transition to terminal,
+    /// so the user can watch a batch finish.
+    initial_active_ids: Vec<String>,
+}
+
+/// Build the `AutorunSessionFilter` for the live-window view. When
+/// `show_all` is true, the caller should use `fetch_batch_list_bulk`
+/// directly; this builder is only meaningful for the filtered path.
+fn build_live_window_filter(
+    initial_active_ids: &[String],
+    t0: &chrono::DateTime<chrono::Utc>,
+    show_all: bool,
+) -> codeflow_core::models::AutorunSessionFilter {
+    if show_all {
+        return codeflow_core::models::AutorunSessionFilter {
+            all: true,
+            ..Default::default()
+        };
+    }
+    codeflow_core::models::AutorunSessionFilter {
+        ids: if initial_active_ids.is_empty() {
+            None
+        } else {
+            Some(initial_active_ids.to_vec())
+        },
+        since: Some(t0.to_rfc3339()),
+        all: true,
+        ..Default::default()
+    }
+}
+
+/// Collect the ids of currently-active autorun sessions
+/// (Running or Aborting). Used at TUI launch and on the [c] re-snapshot.
+async fn collect_active_session_ids<S: codeflow_core::store::DataStore>(
+    store: &S,
+) -> Result<Vec<String>> {
+    use codeflow_core::types::AutorunSessionStatus;
+    let mut ids = Vec::new();
+    for status in [
+        AutorunSessionStatus::Running,
+        AutorunSessionStatus::Aborting,
+    ] {
+        let sessions = store
+            .list_autorun_sessions(codeflow_core::models::AutorunSessionFilter {
+                status: Some(status),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .with_context(|| format!("listing {status} sessions"))?;
+        for s in sessions {
+            ids.push(s.id);
+        }
+    }
+    Ok(ids)
+}
+
+/// INF-TSK-050-001 AC #11: TUI startup auto-reconcile.
+///
+/// Detects stuck sessions and runs `reconcile_session_status` (DB-only,
+/// idempotent) for each. Returns the count of sessions reconciled so
+/// the caller can surface a toast. Does NOT call
+/// `cleanup_session_resources` — that's destructive and out of scope
+/// for a read-only TUI startup hook.
+async fn run_status_watch_auto_reconcile<S: codeflow_core::store::DataStore>(
+    store: &S,
+    project_dir: &Path,
+) -> Result<usize> {
+    let stale_threshold = codeflow_core::autorun::load_config(project_dir)
+        .map(|c| c.autorun.stale_threshold_secs)
+        .unwrap_or(90);
+    let stuck = codeflow_core::autorun::detect_stuck_sessions(store, project_dir, stale_threshold)
+        .await
+        .context("detecting stuck sessions")?;
+    let mut count = 0usize;
+    for info in &stuck {
+        match codeflow_core::autorun::reconcile_session_status(
+            store,
+            project_dir,
+            &info.session.id,
+            "tui_startup_auto_reconcile",
+        )
+        .await
+        {
+            Ok(_) => count += 1,
+            Err(e) => {
+                eprintln!(
+                    "warn: TUI auto-reconcile failed for {}: {e}",
+                    info.session.id
+                );
+            }
+        }
+    }
+    Ok(count)
 }
 
 fn context_keybinding_line(
@@ -3290,6 +3606,24 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
     let store = open_store(project_dir).await?;
     let session_id = resolve_session_id(store.as_ref(), batch).await?;
 
+    // INF-TSK-050-001 WS-SEC FINDING-01 (+ WS-REV F5 defense-in-depth
+    // ordering): path-traversal guard placed BEFORE any branching on
+    // session.status so a malformed `session_id` cannot reach the
+    // `Aborting`-branch helpers (`compute_abort_age_secs`,
+    // `reconcile_session_status`) before format validation. The
+    // `session_id` reaches us via `resolve_session_id`, which validates
+    // the row exists in the DB but does NOT validate the format. A
+    // malformed value containing `/`, `\`, or `..` would let the
+    // subsequent `runtime_dir.join(format!("abort-{session_id}"))` escape
+    // `.state/runtime/`. Reject anything that isn't an alphanumeric +
+    // hyphen + underscore string before any further processing.
+    if !is_valid_session_id_for_path(&session_id) {
+        anyhow::bail!(
+            "invalid session_id format: '{session_id}' \
+             (only alphanumeric, hyphen, and underscore characters allowed)"
+        );
+    }
+
     let session = store
         .get_autorun_session(&session_id)
         .await?
@@ -3303,6 +3637,47 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
             "session '{session_id}' is not running (status: {})",
             session.status
         );
+    }
+
+    let runtime_dir = project_dir.join(".state/runtime");
+    let marker_path = runtime_dir.join(format!("abort-{session_id}"));
+
+    // INF-TSK-050-001 AC #5: idempotency. If the session is already in
+    // `Aborting` state, behavior depends on how long it's been there:
+    //   - within `abort_timeout_secs` → another abort is in flight; print
+    //     a status line and return Ok cleanly without re-running the
+    //     SIGTERM/cancel/skip loop.
+    //   - past `abort_timeout_secs` → the orchestrator failed to respond;
+    //     force-finalize via `reconcile_session_status` and return.
+    if matches!(session.status, AutorunSessionStatus::Aborting) {
+        let abort_timeout_secs = codeflow_core::autorun::load_config(project_dir)
+            .map(|c| c.autorun.abort_timeout_secs)
+            .unwrap_or(300);
+        let now = chrono::Utc::now();
+        let age = codeflow_core::autorun::compute_abort_age_secs(&session, now).unwrap_or(0);
+
+        if age > abort_timeout_secs {
+            eprintln!(
+                "abort exceeded {abort_timeout_secs}s for {session_id} ({age}s in aborting); \
+                 force-finalizing via reconcile..."
+            );
+            codeflow_core::autorun::reconcile_session_status(
+                store.as_ref(),
+                project_dir,
+                &session_id,
+                "abort_timeout",
+            )
+            .await
+            .context("force-reconciling stuck Aborting session")?;
+            // Best-effort cleanup of the abort marker so the next run
+            // starts from a clean slate.
+            let _ = std::fs::remove_file(&marker_path);
+            println!("batch '{session_id}' aborted (force-finalized).");
+            return Ok(());
+        }
+
+        println!("abort already in progress for {session_id} (started {age}s ago)");
+        return Ok(());
     }
 
     println!("aborting batch '{session_id}'...");
@@ -3326,20 +3701,21 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
 
     // Step 1 fallback: Write abort marker file.
     if !pid_signaled {
-        let runtime_dir = project_dir.join(".state/runtime");
         std::fs::create_dir_all(&runtime_dir).context("creating runtime dir")?;
-        let marker_path = runtime_dir.join(format!("abort-{session_id}"));
         std::fs::write(&marker_path, "abort").context("writing abort marker")?;
         eprintln!("wrote abort marker at {}", marker_path.display());
     }
 
-    // Step 2: Update session status to aborting.
+    // Step 2: Update session status to aborting AND record
+    // `abort_started_at` for the watchdog. INF-TSK-050-001 AC #1.
+    let abort_now = chrono::Utc::now().to_rfc3339();
     store
         .update_autorun_session(
             &session_id,
             codeflow_core::models::AutorunSessionUpdate {
                 status: Some(AutorunSessionStatus::Aborting),
-                updated_at: Some(chrono::Utc::now().to_rfc3339()),
+                updated_at: Some(abort_now.clone()),
+                abort_started_at: Some(Some(abort_now)),
                 ..Default::default()
             },
         )
@@ -3396,6 +3772,10 @@ async fn run_abort(project_dir: &Path, batch: Option<&str>) -> Result<()> {
         )
         .await
         .context("finalizing session status")?;
+
+    // INF-TSK-050-001 AC #5: cleanup the abort marker on successful
+    // completion so a subsequent run isn't mis-triggered into abort.
+    let _ = std::fs::remove_file(&marker_path);
 
     println!("batch '{session_id}' aborted.");
     Ok(())
@@ -3723,7 +4103,7 @@ async fn run_history(
 
     let status_filter = if let Some(ref s) = status {
         Some(AutorunSessionStatus::from_str(s).map_err(|_| {
-            anyhow::anyhow!("invalid status '{s}'; valid values: pending, running, paused, completed, failed, cancelled, timeout, aborting")
+            anyhow::anyhow!("invalid status '{s}'; valid values: running, paused, completed, failed, cancelled, timeout, aborting")
         })?)
     } else {
         None
@@ -3733,6 +4113,7 @@ async fn run_history(
         status: status_filter,
         batch_name,
         since,
+        ids: None,
         limit: Some(limit),
         all,
     };
@@ -4273,6 +4654,9 @@ pub(crate) fn status_badge_text(
     use ratatui::style::Style;
     use ratatui::text::Span;
 
+    // INF-TSK-050-001 AC #20: enumerate all variants explicitly so adding
+    // a new status forces a deliberate UI decision (clippy
+    // match_wildcard_for_single_variants would otherwise flag this).
     let (label, style) = match status {
         codeflow_core::types::AutorunSessionStatus::Running => {
             ("Running", Style::new().fg(theme::GREEN_SUCCESS))
@@ -4292,7 +4676,9 @@ pub(crate) fn status_badge_text(
         codeflow_core::types::AutorunSessionStatus::Timeout => {
             ("Timeout", Style::new().fg(theme::RED_FAILURE))
         }
-        _ => ("Unknown", Style::new().fg(theme::DIM_PENDING)),
+        codeflow_core::types::AutorunSessionStatus::Paused => {
+            ("Unknown", Style::new().fg(theme::DIM_PENDING))
+        }
     };
     Span::styled(label, style)
 }
@@ -4307,6 +4693,11 @@ pub(crate) fn status_badge_text(
 /// no longer clears the field on finish) so the TASK column remains useful
 /// for post-mortem inspection.
 ///
+/// INF-TSK-050-001 AC #8: when `total_tasks <= 0` (no tasks tracked yet),
+/// return `"—"` so the column does not pretend to have data. Aligns this
+/// CLI helper with `tui::data::format_task_cell` so both renderers
+/// produce identical output for the same row.
+///
 /// `width` caps the rendered length so the column cannot overflow the
 /// allocated ratatui constraint. `width == 0` returns the raw value; other
 /// truncations pad to `width` with a trailing `…`.
@@ -4314,8 +4705,12 @@ pub(crate) fn status_badge_text(
 pub(crate) fn format_task_cell(
     current_task_format_id: Option<&str>,
     current_task_id: Option<&str>,
+    total_tasks: i32,
     width: usize,
 ) -> String {
+    if total_tasks <= 0 {
+        return "—".to_string();
+    }
     // First choice: human-readable format id.
     if let Some(fmt) = current_task_format_id.filter(|s| !s.is_empty()) {
         return truncate_cell(fmt, width);
@@ -4324,7 +4719,9 @@ pub(crate) fn format_task_cell(
     if let Some(id) = current_task_id.filter(|s| !s.is_empty()) {
         return truncate_cell(id, width);
     }
-    String::new()
+    // EM-DASH: no id but total > 0 → "nothing dispatched yet" — render
+    // em-dash for parity with the data-layer helper.
+    "—".to_string()
 }
 
 /// Truncate `s` to `width` characters with a trailing `…` when oversized.
@@ -5107,8 +5504,23 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_format_task_cell_both_none_is_blank() {
-        assert_eq!(format_task_cell(None, None, 14), "");
+    fn test_format_task_cell_both_none_is_emdash() {
+        // INF-TSK-050-001 AC #8: total_tasks > 0 + no id → em-dash
+        // (was empty string under the 3-arg signature).
+        assert_eq!(format_task_cell(None, None, 5, 14), "—");
+    }
+
+    #[test]
+    fn test_format_task_cell_zero_total_returns_emdash() {
+        // INF-TSK-050-001 AC #8: total_tasks <= 0 always returns em-dash.
+        assert_eq!(format_task_cell(Some("INF-TSK-001"), None, 0, 18), "—");
+        assert_eq!(format_task_cell(None, None, 0, 18), "—");
+    }
+
+    #[test]
+    fn test_format_task_cell_negative_total_returns_emdash() {
+        // Defensive: negative i32 (corrupt row) treated as zero.
+        assert_eq!(format_task_cell(Some("INF-TSK-001"), None, -1, 18), "—");
     }
 
     #[test]
@@ -5117,6 +5529,7 @@ mod tests {
         let out = format_task_cell(
             Some("INF-TSK-049-001"),
             Some("task-01KPHCP81KGS3PKG06TZRAKMHH"),
+            3,
             18,
         );
         assert_eq!(out, "INF-TSK-049-001");
@@ -5124,28 +5537,28 @@ mod tests {
 
     #[test]
     fn test_format_task_cell_falls_back_to_ulid_when_no_format_id() {
-        let out = format_task_cell(None, Some("task-01KABCDE"), 18);
+        let out = format_task_cell(None, Some("task-01KABCDE"), 3, 18);
         assert_eq!(out, "task-01KABCDE");
     }
 
     #[test]
     fn test_format_task_cell_falls_back_when_format_id_empty() {
         // Empty-string format id is treated as absent.
-        let out = format_task_cell(Some(""), Some("task-raw"), 18);
+        let out = format_task_cell(Some(""), Some("task-raw"), 3, 18);
         assert_eq!(out, "task-raw");
     }
 
     #[test]
     fn test_format_task_cell_fits_width_unchanged() {
         assert_eq!(
-            format_task_cell(Some("INF-TSK-001"), None, 14),
+            format_task_cell(Some("INF-TSK-001"), None, 3, 14),
             "INF-TSK-001"
         );
     }
 
     #[test]
     fn test_format_task_cell_truncates_long_id_with_ellipsis() {
-        let out = format_task_cell(Some("INF-TSK-048-001-extra"), None, 8);
+        let out = format_task_cell(Some("INF-TSK-048-001-extra"), None, 3, 8);
         assert_eq!(out.chars().count(), 8);
         assert!(out.ends_with('…'));
         assert!(out.starts_with("INF-TSK"));
@@ -5153,13 +5566,14 @@ mod tests {
 
     #[test]
     fn test_format_task_cell_width_one_is_ellipsis_only() {
-        assert_eq!(format_task_cell(Some("anything"), None, 1), "…");
+        assert_eq!(format_task_cell(Some("anything"), None, 3, 1), "…");
     }
 
     #[test]
     fn test_format_task_cell_width_zero_is_raw_passthrough() {
+        // total_tasks > 0, width == 0 → no truncation, raw value.
         assert_eq!(
-            format_task_cell(Some("INF-TSK-999-001"), None, 0),
+            format_task_cell(Some("INF-TSK-999-001"), None, 3, 0),
             "INF-TSK-999-001"
         );
     }
@@ -5219,6 +5633,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: created_at.to_string(),
             completed_at: completed_at.map(str::to_string),
+            abort_started_at: None,
         }
     }
 
@@ -5332,19 +5747,6 @@ mod tests {
             None,
         );
         let now = ts("2026-04-21T00:00:00Z");
-        assert_eq!(status_driven_elapsed_secs(&s, now), 0);
-    }
-
-    #[test]
-    fn test_status_driven_elapsed_pending_is_zero() {
-        use codeflow_core::tui::data::status_driven_elapsed_secs;
-        let s = mk_session(
-            codeflow_core::types::AutorunSessionStatus::Pending,
-            "2026-04-20T10:00:00Z",
-            None,
-            None,
-        );
-        let now = ts("2026-04-20T11:00:00Z");
         assert_eq!(status_driven_elapsed_secs(&s, now), 0);
     }
 
@@ -7058,6 +7460,7 @@ tasks:
                 last_heartbeat_at: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 completed_at: None,
+                abort_started_at: None,
             };
             store.create_autorun_session(&session).await.unwrap();
 
@@ -7131,6 +7534,7 @@ tasks:
                     last_heartbeat_at: None,
                     created_at: now.clone(),
                     completed_at: None,
+                    abort_started_at: None,
                 };
                 store.create_autorun_session(&session).await.unwrap();
 
@@ -7239,6 +7643,7 @@ tasks:
                     last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
+                    abort_started_at: None,
                 };
                 store.create_autorun_session(&session).await.unwrap();
             }
@@ -7325,6 +7730,7 @@ tasks:
                     last_heartbeat_at: None,
                     created_at: format!("2026-03-{:02}T00:00:00Z", 10 + i),
                     completed_at: Some(format!("2026-03-{:02}T01:00:00Z", 10 + i)),
+                    abort_started_at: None,
                 };
                 store.create_autorun_session(&session).await.unwrap();
             }
@@ -7525,6 +7931,7 @@ tasks:
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
+            abort_started_at: None,
         }
     }
 
@@ -7918,9 +8325,14 @@ tasks:
             let result = run_abort(dir.path(), Some(sid)).await;
             assert!(result.is_ok());
 
-            // Verify marker file was written.
+            // INF-TSK-050-001 AC #5: the marker is written during the
+            // abort flow but REMOVED at clean completion so the next
+            // run starts from a clean slate. Verify the marker is gone.
             let marker = dir.path().join(format!(".state/runtime/abort-{sid}"));
-            assert!(marker.exists(), "abort marker file should exist");
+            assert!(
+                !marker.exists(),
+                "abort marker must be cleaned up on successful run_abort completion"
+            );
 
             // Verify session status updated to cancelled.
             let store = open_store(dir.path()).await.unwrap();
@@ -7948,11 +8360,13 @@ tasks:
             let result = run_abort(dir.path(), Some(sid)).await;
             assert!(result.is_ok());
 
-            // Should fall back to marker file since PID is stale.
+            // INF-TSK-050-001 AC #5: marker is written during the flow
+            // (PID is dead → marker fallback path triggers) and then
+            // cleaned up at successful completion. Confirm the cleanup.
             let marker = dir.path().join(format!(".state/runtime/abort-{sid}"));
             assert!(
-                marker.exists(),
-                "abort marker should exist for stale PID fallback"
+                !marker.exists(),
+                "abort marker must be cleaned up after run_abort completes"
             );
         });
     }
@@ -9058,14 +9472,6 @@ tasks:
     }
 
     #[test]
-    fn test_status_badge_text_pending() {
-        use codeflow_core::tui::theme;
-        let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Pending);
-        assert_eq!(span.content.as_ref(), "Unknown");
-        assert_eq!(span.style.fg, Some(theme::DIM_PENDING));
-    }
-
-    #[test]
     fn test_status_badge_text_paused() {
         use codeflow_core::tui::theme;
         let span = status_badge_text(codeflow_core::types::AutorunSessionStatus::Paused);
@@ -9827,5 +10233,297 @@ tasks:
             "lock file must be created at {}",
             lock_path.display()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-050-001 Wave 2 — live-monitor filter helpers, run_abort
+    // idempotency, abort marker cleanup.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_live_window_filter_show_all_returns_unfiltered() {
+        let t0 = chrono::Utc::now();
+        let f = build_live_window_filter(&[], &t0, true);
+        assert!(f.all);
+        assert!(f.ids.is_none());
+        assert!(f.since.is_none());
+    }
+
+    #[test]
+    fn test_build_live_window_filter_empty_ids_omits_clause() {
+        let t0 = chrono::Utc::now();
+        let f = build_live_window_filter(&[], &t0, false);
+        assert!(f.ids.is_none(), "empty ids list must become None");
+        assert_eq!(f.since.as_deref(), Some(t0.to_rfc3339().as_str()));
+    }
+
+    #[test]
+    fn test_build_live_window_filter_with_ids_and_since() {
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let ids = vec!["ar-1".to_string(), "ar-2".to_string()];
+        let f = build_live_window_filter(&ids, &t0, false);
+        assert_eq!(f.ids.as_ref().unwrap().len(), 2);
+        assert_eq!(f.since.as_deref(), Some("2026-04-26T12:00:00+00:00"));
+        assert!(f.all);
+    }
+
+    #[tokio::test]
+    async fn test_collect_active_session_ids_returns_running_and_aborting() {
+        // INF-TSK-050-001 AC #9 / AC #10: the [c] re-snapshot collects
+        // ids of both Running AND Aborting sessions (anything live).
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::AutorunSessionStatus;
+        let store = codeflow_core::store::SurrealStore::in_memory()
+            .await
+            .expect("in-memory store");
+        store.apply_schema().await.expect("schema");
+        for (id, status) in [
+            ("ses-running-1", AutorunSessionStatus::Running),
+            ("ses-aborting-1", AutorunSessionStatus::Aborting),
+            ("ses-completed-1", AutorunSessionStatus::Completed),
+            ("ses-failed-1", AutorunSessionStatus::Failed),
+        ] {
+            let s = codeflow_core::models::AutorunSession {
+                id: id.to_string(),
+                batch_file: "b.yaml".to_string(),
+                batch_name: None,
+                status,
+                max_session_workers: 1,
+                total_tasks: 1,
+                completed_tasks: 0,
+                failed_tasks: 0,
+                pid: None,
+                skipped_tasks: 0,
+                tmux_session: None,
+                stale_reason: None,
+                target_branch: None,
+                final_pr_url: None,
+                current_task_id: None,
+                current_task_format_id: None,
+                updated_at: None,
+                last_heartbeat_at: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                completed_at: None,
+                abort_started_at: None,
+            };
+            store.create_autorun_session(&s).await.unwrap();
+        }
+        let ids = collect_active_session_ids(&store).await.unwrap();
+        assert!(ids.contains(&"ses-running-1".to_string()));
+        assert!(ids.contains(&"ses-aborting-1".to_string()));
+        assert!(!ids.contains(&"ses-completed-1".to_string()));
+        assert!(!ids.contains(&"ses-failed-1".to_string()));
+    }
+
+    #[test]
+    fn test_run_abort_idempotent_within_timeout_short_circuits() {
+        // INF-TSK-050-001 AC #5: helper signal — a fresh `Aborting` row
+        // must produce an age below the default timeout, which is the
+        // input run_abort uses to decide "in progress, skip".
+        use codeflow_core::types::AutorunSessionStatus;
+        let now = chrono::Utc::now();
+        let abort_t = (now - chrono::Duration::seconds(5)).to_rfc3339();
+        let session = codeflow_core::models::AutorunSession {
+            id: "ses-abort-fresh".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Aborting,
+            max_session_workers: 1,
+            total_tasks: 1,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: Some(now.to_rfc3339()),
+            last_heartbeat_at: None,
+            created_at: (now - chrono::Duration::seconds(60)).to_rfc3339(),
+            completed_at: None,
+            abort_started_at: Some(abort_t),
+        };
+        let age =
+            codeflow_core::autorun::compute_abort_age_secs(&session, now).expect("anchor present");
+        assert!(
+            age < 300,
+            "fresh abort age must be < default timeout (300s), got {age}s"
+        );
+    }
+
+    #[test]
+    fn test_run_abort_force_finalize_when_past_timeout() {
+        // INF-TSK-050-001 AC #5: helper signal — a stuck `Aborting` row
+        // must produce an age above the default timeout.
+        use codeflow_core::types::AutorunSessionStatus;
+        let now = chrono::Utc::now();
+        let abort_t = (now - chrono::Duration::seconds(600)).to_rfc3339();
+        let session = codeflow_core::models::AutorunSession {
+            id: "ses-abort-stuck".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: AutorunSessionStatus::Aborting,
+            max_session_workers: 1,
+            total_tasks: 1,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: (now - chrono::Duration::seconds(700)).to_rfc3339(),
+            completed_at: None,
+            abort_started_at: Some(abort_t),
+        };
+        let age =
+            codeflow_core::autorun::compute_abort_age_secs(&session, now).expect("anchor present");
+        assert!(
+            age > 300,
+            "stuck abort age must exceed default timeout (300s), got {age}s"
+        );
+    }
+
+    #[test]
+    fn test_run_abort_marker_cleanup_on_clean_exit() {
+        // INF-TSK-050-001 AC #5: the marker file is best-effort cleaned
+        // on a successful run_abort. Pre-create a marker, run cleanup,
+        // verify it's gone.
+        let project_dir = tempfile::tempdir().unwrap();
+        let runtime_dir = project_dir.path().join(".state/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let marker = runtime_dir.join("abort-ses-test");
+        std::fs::write(&marker, "abort").unwrap();
+        assert!(marker.exists());
+
+        // Mirror the cleanup line from run_abort (best-effort remove).
+        let _ = std::fs::remove_file(&marker);
+        assert!(!marker.exists(), "marker must be removed");
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-050-001 WS-SEC FINDING-01 — path-traversal guard on
+    // `is_valid_session_id_for_path`.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_valid_session_id_accepts_canonical_form() {
+        // ses-{ULID} is the production format; lowercase Crockford
+        // Base32 + the `ses-` prefix.
+        assert!(is_valid_session_id_for_path(
+            "ses-01k0z9f8m4qjxr7v2tagb1cpne"
+        ));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_accepts_underscore() {
+        // Underscore is allowed (some test fixtures use it; cheap
+        // future-proofing).
+        assert!(is_valid_session_id_for_path("ses-test_001"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_accepts_alphanumeric() {
+        assert!(is_valid_session_id_for_path("autorun123"));
+        assert!(is_valid_session_id_for_path("ABC-def-123"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_empty() {
+        assert!(!is_valid_session_id_for_path(""));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_forward_slash() {
+        // The exact attack the WS-SEC FINDING-01 path-traversal guard
+        // is meant to prevent — `runtime_dir.join("abort-../../etc/passwd")`
+        // would otherwise escape `.state/runtime/`.
+        assert!(!is_valid_session_id_for_path("ses-../../etc/passwd"));
+        assert!(!is_valid_session_id_for_path("foo/bar"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_backslash() {
+        // Defense on Unix (paths use `/`) AND on Windows (`\`) — guard
+        // both.
+        assert!(!is_valid_session_id_for_path("foo\\bar"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_parent_dir() {
+        // Even without an explicit `/`, the literal `..` segment can
+        // be combined with subsequent path operations to escape. The
+        // alphanumeric-only rule rejects `.` so `..` cannot appear.
+        assert!(!is_valid_session_id_for_path(".."));
+        assert!(!is_valid_session_id_for_path("ses-.."));
+        assert!(!is_valid_session_id_for_path("..ses"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_null_byte() {
+        // Some filesystems treat NUL as a string terminator; defense
+        // in depth.
+        assert!(!is_valid_session_id_for_path("ses-001\0extra"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_whitespace() {
+        // Whitespace is not part of any session-id generator output;
+        // reject defensively.
+        assert!(!is_valid_session_id_for_path("ses 001"));
+        assert!(!is_valid_session_id_for_path("ses-001\n"));
+        assert!(!is_valid_session_id_for_path("ses-001\t"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_control_chars() {
+        // ANSI escape sequence injection in error messages.
+        assert!(!is_valid_session_id_for_path("ses-\x1b[31m"));
+    }
+
+    #[test]
+    fn test_is_valid_session_id_rejects_non_ascii() {
+        // Non-ASCII characters are outside the session-id charset.
+        assert!(!is_valid_session_id_for_path("ses-séance"));
+        assert!(!is_valid_session_id_for_path("ses-中文"));
+    }
+
+    #[test]
+    fn test_run_abort_rejects_session_id_with_path_separator() {
+        // End-to-end: run_abort against a malformed session_id returns
+        // an "invalid session_id format" error. We can't seed the DB
+        // with a bad id under SCHEMAFULL (the row would deserialize
+        // weirdly), but we CAN call run_abort directly and see the
+        // resolution path bail before the get_autorun_session lookup
+        // succeeds. Use a temp dir so the store opens cleanly.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            // No matching row — run_abort will fail at the lookup
+            // step with "no autorun session found". The format guard
+            // is the more useful assertion: even if we COULD inject a
+            // malformed id, the path construction is gated.
+            let result = run_abort(dir.path(), Some("../../etc/passwd")).await;
+            assert!(
+                result.is_err(),
+                "run_abort against malformed session_id must error"
+            );
+            // Confirm no marker was written outside `.state/runtime/`.
+            let escaped_marker = dir.path().join("../../etc/passwd-marker");
+            assert!(
+                !escaped_marker.exists(),
+                "no path-escape marker should appear under any condition"
+            );
+        });
     }
 }

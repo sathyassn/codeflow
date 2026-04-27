@@ -1782,8 +1782,20 @@ impl SessionStartInit {
             "interactive".to_string()
         };
 
+        // INF-TSK-050-001 AC #15: set `updated_at = $created_at` on
+        // creation so the freeze-on-terminal duration helper has an
+        // anchor from the very first row write. Previously NONE, which
+        // forced the TUI to fall back to the `-1` sentinel ("--") until
+        // the next post_tool_use touch.
+        //
+        // INF-TSK-050-001 AC #16: surface DB write failures to stderr
+        // instead of silently swallowing them via `.ok()?`. Errors stay
+        // non-fatal (we don't break session-start on a DB hiccup) but
+        // become visible to operators.
         let update = async move {
-            let store = crate::store::SurrealStore::open(&db_dir).await.ok()?;
+            let store = crate::store::SurrealStore::open(&db_dir)
+                .await
+                .map_err(|e| format!("opening store: {e}"))?;
             let _: Option<serde_json::Value> = store
                 .db()
                 .query(
@@ -1800,7 +1812,7 @@ impl SessionStartInit {
                      managed = false, \
                      session_kind = $session_kind, \
                      created_at = $created_at, \
-                     updated_at = NONE, \
+                     updated_at = $created_at, \
                      completed_at = NONE;",
                 )
                 .bind(("session_id", sid))
@@ -1809,15 +1821,19 @@ impl SessionStartInit {
                 .bind(("session_kind", session_kind))
                 .bind(("created_at", now))
                 .await
-                .ok()?
+                .map_err(|e| format!("CREATE interactive_session: {e}"))?
                 .take(0)
-                .ok()?;
-            Some(())
+                .map_err(|e| format!("take CREATE result: {e}"))?;
+            Ok::<(), String>(())
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _ = tokio::task::block_in_place(|| handle.block_on(update));
+            if let Err(e) = tokio::task::block_in_place(|| handle.block_on(update)) {
+                eprintln!("warn: session_start interactive_session register failed: {e}");
+            }
         } else if let Ok(rt) = tokio::runtime::Runtime::new() {
-            let _ = rt.block_on(update);
+            if let Err(e) = rt.block_on(update) {
+                eprintln!("warn: session_start interactive_session register failed: {e}");
+            }
         }
     }
 
@@ -6663,5 +6679,69 @@ mod tests {
             .join("pathflow-events.jsonl");
         assert_eq!(fs::read_to_string(&dst).unwrap(), body);
         assert!(!src.exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-050-001 Wave 3 — AC #15: updated_at = $created_at on creation.
+    // -----------------------------------------------------------------------
+
+    /// AC #15: an unmanaged interactive_session row is created with
+    /// `updated_at` equal to `created_at`, NOT NULL. This ensures the
+    /// freeze-on-terminal duration helper has an anchor from the very
+    /// first row write.
+    #[test]
+    fn test_register_unmanaged_session_sets_updated_at_to_created_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Pre-create an empty store so the function's `db_dir.exists()`
+        // gate passes. Mirrors the pattern used by other hook tests in
+        // this crate (no `apply_schema` needed — SurrealDB accepts the
+        // CREATE statement against a schema-less table at this stage).
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+        });
+
+        // Call the function under test from sync context (it spawns
+        // its own block_in_place runtime).
+        SessionStartInit::register_unmanaged_interactive_session(
+            dir.path(),
+            "ses-ac15-test",
+            Some("/tmp/wt-ac15"),
+        );
+
+        // Verify updated_at == created_at on the resulting row.
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            let mut res = store
+                .db()
+                .query(
+                    "SELECT created_at, updated_at FROM interactive_session \
+                     WHERE session_id = 'ses-ac15-test'",
+                )
+                .await
+                .unwrap();
+            #[derive(serde::Deserialize)]
+            struct Row {
+                created_at: String,
+                updated_at: Option<String>,
+            }
+            let rows: Vec<Row> = res.take(0).unwrap_or_default();
+            assert_eq!(rows.len(), 1, "exactly one row should be created");
+            let r = &rows[0];
+            assert!(
+                r.updated_at.is_some(),
+                "AC #15: updated_at must NOT be NULL on creation"
+            );
+            assert_eq!(
+                r.updated_at.as_deref(),
+                Some(r.created_at.as_str()),
+                "AC #15: updated_at must equal created_at on the initial \
+                 row write so the freeze-on-terminal duration helper has \
+                 an anchor"
+            );
+        });
     }
 }

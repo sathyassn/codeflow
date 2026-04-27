@@ -22,8 +22,10 @@ pub use config::{AutorunConfig, ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
 pub use stale::{
     CleanupReport, StaleSessionInfo, SweepSummary, check_heartbeat_alive, check_pid_alive,
-    check_tmux_alive, cleanup_stale_session, detect_stale_sessions, is_session_stale,
-    sweep_stale_sessions,
+    check_tmux_alive, cleanup_session_resources, cleanup_stale_session, compute_abort_age_secs,
+    detect_stale_sessions, detect_stuck_sessions, detect_stuck_sessions_with, is_session_pid_alive,
+    is_session_pid_alive_with, is_session_stale, reconcile_session_status, sweep_stale_sessions,
+    sweep_stale_sessions_with,
 };
 pub use worker::{
     ClaudeInvoker, InvokeConfig, InvokeResult, RealWorktreeProvider, TaskMetadata, TmuxRunner,

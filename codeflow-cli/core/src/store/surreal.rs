@@ -610,6 +610,7 @@ impl DataStore for SurrealStore {
             "current_task_format_id" => update.current_task_format_id,
             "updated_at" => update.updated_at,
             "last_heartbeat_at" => update.last_heartbeat_at,
+            "abort_started_at" => update.abort_started_at,
         };
 
         let Some(data) = data else {
@@ -645,6 +646,7 @@ impl DataStore for SurrealStore {
             "current_task_format_id" => update.current_task_format_id,
             "updated_at" => update.updated_at,
             "last_heartbeat_at" => update.last_heartbeat_at,
+            "abort_started_at" => update.abort_started_at,
         };
 
         let Some(data) = data else {
@@ -774,9 +776,44 @@ impl DataStore for SurrealStore {
             conditions.push("batch_name CONTAINS $filter_name".to_string());
             bindings.push(("filter_name".into(), serde_json::json!(name)));
         }
-        if let Some(ref since) = filter.since {
-            conditions.push("created_at > $filter_since".to_string());
-            bindings.push(("filter_since".into(), serde_json::json!(since)));
+
+        // INF-TSK-050-001 AC #9: combine `since` and `ids` with OR so callers
+        // can union "recent rows" with "specific rows still on screen". Each
+        // is independently optional; an empty `Some(ids)` is treated as
+        // unset (matches nothing without the OR partner; exposing it would
+        // narrow the result set unexpectedly). The `id` field is a RecordId,
+        // so we map string keys to records via `array::map` + `type::thing`
+        // and use `INSIDE` for membership.
+        let ids_active = filter.ids.as_ref().is_some_and(|ids| !ids.is_empty());
+        match (filter.since.as_ref(), ids_active) {
+            (Some(since), true) => {
+                conditions.push(
+                    "(created_at > $filter_since OR id INSIDE \
+                     array::map($filter_ids, |$x| type::thing('autorun_session', $x)))"
+                        .to_string(),
+                );
+                bindings.push(("filter_since".into(), serde_json::json!(since)));
+                bindings.push((
+                    "filter_ids".into(),
+                    serde_json::json!(filter.ids.as_ref().unwrap()),
+                ));
+            }
+            (Some(since), false) => {
+                conditions.push("created_at > $filter_since".to_string());
+                bindings.push(("filter_since".into(), serde_json::json!(since)));
+            }
+            (None, true) => {
+                conditions.push(
+                    "id INSIDE array::map($filter_ids, |$x| \
+                     type::thing('autorun_session', $x))"
+                        .to_string(),
+                );
+                bindings.push((
+                    "filter_ids".into(),
+                    serde_json::json!(filter.ids.as_ref().unwrap()),
+                ));
+            }
+            (None, false) => {}
         }
 
         if !conditions.is_empty() {
@@ -1032,6 +1069,67 @@ impl DataStore for SurrealStore {
         }
 
         Ok(result)
+    }
+
+    async fn complete_worker_interactive_sessions(
+        &self,
+        autorun_session_id: &str,
+    ) -> Result<usize, DbError> {
+        // INF-TSK-050-001 AC #14: bulk-flip worker interactive_session
+        // rows from `active` to `complete`. Predicates:
+        //
+        // - `session_kind = 'autorun'`: only worker rows; never touch
+        //   real interactive sessions even if their session_id collides.
+        // - `status = 'active'`: idempotent — already-complete or
+        //   already-stale rows are skipped.
+        // - `session_id IN <worker_session_ids>`: scoped to this batch.
+        //
+        // We discover worker_session_ids via the autorun_worker table,
+        // then run a single UPDATE with the array. SurrealDB `RETURN
+        // count` on UPDATE returns the affected row count.
+        let workers_sql = "SELECT worker_session_id FROM autorun_worker \
+            WHERE session_id = $sid AND worker_session_id != NONE";
+        let mut resp = self
+            .db
+            .query(workers_sql)
+            .bind(("sid", autorun_session_id.to_string()))
+            .await?;
+
+        #[derive(serde::Deserialize)]
+        struct WorkerSidRow {
+            worker_session_id: Option<String>,
+        }
+        let rows: Vec<WorkerSidRow> = resp.take(0)?;
+        let worker_sids: Vec<String> = rows
+            .into_iter()
+            .filter_map(|r| r.worker_session_id)
+            .collect();
+        if worker_sids.is_empty() {
+            return Ok(0);
+        }
+
+        // Bulk update — atomic at the row level via SurrealDB UPDATE
+        // semantics. The RETURN BEFORE/AFTER pattern returns affected
+        // rows, so we count what flipped.
+        let now = chrono::Utc::now().to_rfc3339();
+        let update_sql = "UPDATE interactive_session \
+            SET status = 'complete', completed_at = $now, updated_at = $now \
+            WHERE session_kind = 'autorun' \
+              AND status = 'active' \
+              AND session_id INSIDE $sids \
+            RETURN AFTER";
+        let mut resp = self
+            .db
+            .query(update_sql)
+            .bind(("now", now))
+            .bind(("sids", worker_sids))
+            .await?
+            .check()?;
+
+        // Count affected rows. UPDATE ... RETURN AFTER returns one
+        // entry per updated row; we just need the length.
+        let updated: Vec<serde_json::Value> = resp.take(0)?;
+        Ok(updated.len())
     }
 
     // -- Generic query --
@@ -1603,6 +1701,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-03-08T00:00:00Z".into(),
             completed_at: None,
+            abort_started_at: None,
         };
 
         store.create_autorun_session(&auto_session).await.unwrap();
@@ -2890,6 +2989,7 @@ mod tests {
             last_heartbeat_at: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             completed_at: completed_at.map(String::from),
+            abort_started_at: None,
         }
     }
 
@@ -3047,10 +3147,11 @@ mod tests {
     async fn test_prune_ignores_non_terminal_statuses() {
         let store = test_store().await;
 
-        // Pending session
+        // Aborting session (non-terminal). INF-TSK-050-001 AC #20: `Pending`
+        // was removed; `Aborting` covers the same prune-skip case.
         let s1 = make_autorun_session(
             "nt-s1",
-            AutorunSessionStatus::Pending,
+            AutorunSessionStatus::Aborting,
             Some("2026-01-01T00:00:00Z"),
         );
         // Running session

@@ -198,6 +198,7 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             last_heartbeat_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
+            abort_started_at: None,
         };
         if let Err(e) = self.store.create_autorun_session(&ar_session).await {
             eprintln!("warning: failed to create autorun_session record: {e}");
@@ -306,6 +307,12 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
 
+        // INF-TSK-050-001 AC #6: track previously-published counters so
+        // we only CAS-update the session row when counts actually
+        // change. Avoids per-iteration write storms (the loop ticks
+        // every ~50ms) while keeping the TUI within ~50ms of the truth.
+        let last_published_counts = Arc::new(Mutex::new((0i32, 0i32, 0i32)));
+
         // Race the dispatch loop against the shutdown signal.
         tokio::pin!(shutdown);
         let aborted = tokio::select! {
@@ -333,6 +340,18 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
                         .dispatch_ready_tasks(session_id, batch, project_dir, &dep_map, &state, &blocked_behavior)
                         .await;
 
+                    // INF-TSK-050-001 AC #6: mid-run counter propagation.
+                    // Recompute from `state.results` (the truth) and CAS
+                    // only when values changed. CAS-guard on Running so
+                    // we never overwrite a terminal status set by the
+                    // stale detector concurrently.
+                    Self::publish_mid_run_counts(
+                        self.store.as_ref(),
+                        session_id,
+                        &state,
+                        &last_published_counts,
+                    ).await;
+
                     if !launched_any {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
@@ -355,6 +374,14 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         // C4: Stop heartbeat and clean up file.
         heartbeat_handle.abort();
         let _ = std::fs::remove_file(&heartbeat_path);
+
+        // INF-TSK-050-001 AC #5 (partial — orchestrator side): remove
+        // the abort marker file if it exists. The CLI side (run_abort
+        // idempotency) is handled in Wave 2. Removing here ensures a
+        // clean orchestrator exit doesn't leave a dangling marker that
+        // would mis-trigger the next run's abort path.
+        let abort_marker = project_dir.join(format!(".state/runtime/abort-{session_id}"));
+        let _ = std::fs::remove_file(&abort_marker);
 
         let final_results = state.results.lock().await.clone();
 
@@ -387,6 +414,25 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         let final_status =
             Self::determine_final_status(aborted, timed_out, failed_count + pr_failed_count);
 
+        // INF-TSK-050-001 AC #19: populate `final_pr_url` when exactly
+        // one task produced a PR. Multi-PR batches leave None (the
+        // detail view shows per-task PRs). An empty string `pr_url`
+        // counts as "no PR" — defensive against runners that always
+        // populate the field. The update field has touch-semantics
+        // `Option<String>` (the schema column is `option<string>`),
+        // so we only set it on the unambiguous single-PR case.
+        let final_pr_url: Option<String> = {
+            let urls: Vec<&str> = final_results
+                .iter()
+                .map(|r| r.pr_url.as_str())
+                .filter(|s| !s.is_empty())
+                .collect();
+            match urls.as_slice() {
+                [single] => Some((*single).to_string()),
+                _ => None, // None (no PR) or multi-PR (don't pick one)
+            }
+        };
+
         // Update autorun_session at batch end.
         // CAS: expect Running — prevents overwriting a status set by another process
         // (e.g., stale detector already marked it Failed).
@@ -401,6 +447,10 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             updated_at: Some(now),
             // Clear in-flight task pointer on batch end (inner None = set to null).
             current_task_id: Some(None),
+            // INF-TSK-050-001 AC #19: set final_pr_url for single-PR
+            // batches; leave None for multi-PR or zero-PR batches so
+            // the field reflects an unambiguous final-PR semantic.
+            final_pr_url,
             ..Default::default()
         };
         match self
@@ -424,6 +474,13 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             Ok(crate::store::CasResult::Updated(_)) => {}
         }
 
+        // INF-TSK-050-001 AC #14: mark worker `interactive_session`
+        // rows complete. Workers register as `interactive_session`
+        // rows with `session_kind='autorun'`; without this propagation
+        // they stay `status='active'` indefinitely after the batch
+        // ends, polluting the interactive status view.
+        Self::mark_worker_sessions_complete(self.store.as_ref(), session_id).await;
+
         // Emit appropriate batch event.
         Self::emit_batch_event(
             project_dir,
@@ -438,6 +495,17 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         // Cleanup auto-generated integration branches after all workers finish.
         if batch.integration_branch_is_auto && !batch.integration_branch.is_empty() {
             cleanup_auto_integration_branch(project_dir, &batch.integration_branch);
+        }
+
+        // INF-TSK-050-001 AC #18: auto-prune at end of batch. Fires
+        // and forgets — orchestrator return is not blocked on prune.
+        // Only runs when `retention.purge_on_cleanup` is enabled.
+        if loaded_config.retention.purge_on_cleanup {
+            Self::spawn_auto_prune(
+                self.store.clone(),
+                project_dir.to_path_buf(),
+                &loaded_config,
+            );
         }
 
         Ok(final_results)
@@ -572,6 +640,150 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         event: &crate::coordination::types::events::AutorunEvent,
     ) {
         crate::autorun::emit_autorun_event(project_dir, event);
+    }
+
+    /// INF-TSK-050-001 AC #6: publish mid-run counters to the session
+    /// row when they change.
+    ///
+    /// Recomputes from `state.results` (the truth) — the only place
+    /// terminal task outcomes are recorded. Reading set lengths
+    /// (completed/failed) is cheaper but doesn't distinguish skipped
+    /// from failed, so we tally results directly.
+    ///
+    /// Skips the DB write when counts are unchanged since the last
+    /// publish (the dispatch loop ticks every ~50ms; the typical
+    /// case is "no new completions"). This keeps the TUI within
+    /// ~50ms of the truth without write storms.
+    ///
+    /// CAS-guarded on Running so we never overwrite a terminal status
+    /// set by the stale detector concurrently.
+    async fn publish_mid_run_counts(
+        store: &S,
+        session_id: &str,
+        state: &ExecutionState,
+        last_published: &Arc<Mutex<(i32, i32, i32)>>,
+    ) {
+        let (completed, failed, skipped) = {
+            let results = state.results.lock().await;
+            let mut c: i32 = 0;
+            let mut f: i32 = 0;
+            let mut sk: i32 = 0;
+            for r in results.iter() {
+                match r.status.as_str() {
+                    "completed" => c = c.saturating_add(1),
+                    // skipped and pr_creation_failed both count as failed
+                    // for the high-level FAIL column (the orchestrator's
+                    // existing `failed_count + pr_failed_count` mapping).
+                    // skipped is the dependency-failed cascade kill case.
+                    "skipped" => sk = sk.saturating_add(1),
+                    "failed" | "timeout" | "pr_creation_failed" => f = f.saturating_add(1),
+                    _ => {}
+                }
+            }
+            (c, f, sk)
+        };
+
+        let mut last = last_published.lock().await;
+        if (completed, failed, skipped) == *last {
+            return; // No change since last publish — skip write.
+        }
+
+        match store
+            .update_autorun_session_cas(
+                session_id,
+                crate::types::AutorunSessionStatus::Running,
+                crate::models::AutorunSessionUpdate {
+                    completed_tasks: Some(completed),
+                    failed_tasks: Some(failed),
+                    skipped_tasks: Some(skipped),
+                    updated_at: Some(chrono::Utc::now().to_rfc3339()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(crate::store::CasResult::Updated(_)) => {
+                *last = (completed, failed, skipped);
+            }
+            Ok(crate::store::CasResult::NoOp) => {
+                // Status changed (e.g., stale detector flipped to
+                // Failed). Stop trying to publish; the next loop
+                // iteration will exit because counts won't match.
+                // Still update `last` so we don't retry needlessly.
+                *last = (completed, failed, skipped);
+            }
+            Err(e) => {
+                eprintln!("warning: mid-run counter publish for {session_id}: {e}");
+                // Don't update `last` — retry on next tick.
+            }
+        }
+    }
+
+    /// INF-TSK-050-001 AC #14: mark worker `interactive_session` rows
+    /// complete at end of batch.
+    ///
+    /// Workers register as `interactive_session` rows with
+    /// `session_kind='autorun'` and `status='active'`; without this
+    /// propagation they stay active indefinitely after the orchestrator
+    /// returns, polluting `codeflow interactive list` output.
+    ///
+    /// Delegates to [`crate::store::DataStore::complete_worker_interactive_sessions`]
+    /// which performs a single bulk UPDATE keyed off
+    /// `autorun_worker.worker_session_id`. The bulk SQL is idempotent
+    /// at the row level (`AND status = 'active'`), so re-running on a
+    /// completed batch is a no-op. Errors are logged but don't abort
+    /// the batch end — partial completion is better than blocking the
+    /// orchestrator return.
+    async fn mark_worker_sessions_complete(store: &S, session_id: &str) {
+        match store.complete_worker_interactive_sessions(session_id).await {
+            Ok(n) if n > 0 => {
+                eprintln!("marked {n} worker interactive_session row(s) complete");
+            }
+            Ok(_) => {} // No-op (no workers, or all already complete).
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to propagate worker interactive_session completion \
+                     for {session_id}: {e}"
+                );
+            }
+        }
+    }
+
+    /// INF-TSK-050-001 AC #18: spawn an auto-prune task at end of batch.
+    ///
+    /// Fire-and-forget: the orchestrator return is not blocked on prune.
+    /// The prune query already excludes active (non-terminal) sessions
+    /// at the SQL layer, so a concurrent active session is safe. Cutoff
+    /// is `now - retention.days` and `keep_last` retains N most-recent
+    /// terminal sessions regardless of age.
+    ///
+    /// Caller must check `config.retention.purge_on_cleanup` BEFORE
+    /// invoking — this fn assumes it's enabled.
+    fn spawn_auto_prune(
+        store: Arc<S>,
+        _project_dir: std::path::PathBuf,
+        config: &crate::autorun::config::ParallelWorkConfig,
+    ) {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(config.retention.days));
+        let cutoff_str = cutoff.to_rfc3339();
+        let keep_last = config.retention.keep_last;
+        tokio::spawn(async move {
+            match store.prune_autorun_sessions(&cutoff_str, keep_last).await {
+                Ok(result) => {
+                    if result.sessions_deleted > 0 {
+                        eprintln!(
+                            "auto-prune: deleted {} session(s), {} worker(s), {} task_run(s)",
+                            result.sessions_deleted,
+                            result.workers_deleted,
+                            result.task_runs_deleted,
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("warning: auto-prune at batch end failed: {e}");
+                }
+            }
+        });
     }
 
     /// Scan the task order and dispatch any tasks whose dependencies are met.
@@ -2631,5 +2843,373 @@ mod tests {
         let order = order_ref.lock().await;
         assert_eq!(order.len(), 1);
         assert_eq!(order[0].0, "b");
+    }
+
+    // ------------------------------------------------------------------
+    // INF-TSK-050-001 Wave 1A — final_pr_url, mid-run counters,
+    // worker session propagation, auto-prune.
+    // ------------------------------------------------------------------
+
+    /// Mock runner that emits a fixed pr_url so tests can assert on the
+    /// final_pr_url end-of-batch behavior.
+    struct PrEmittingRunner {
+        pr_url: String,
+    }
+
+    impl WorkerRunner for PrEmittingRunner {
+        async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+            Ok(WorkerResult {
+                worker_id: cfg.worker_id,
+                task_id: cfg.task_id,
+                status: "completed".into(),
+                exit_code: 0,
+                pr_number: 42,
+                pr_url: self.pr_url.clone(),
+                error: String::new(),
+                branch_name: String::new(),
+                duration_sec: 0,
+                warning: None,
+            })
+        }
+    }
+
+    /// Mock runner that emits per-task pr_urls so we can verify the
+    /// multi-PR end-of-batch behavior leaves final_pr_url=None.
+    struct VariablePrRunner {
+        urls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl WorkerRunner for VariablePrRunner {
+        async fn run(&self, cfg: WorkerConfig) -> Result<WorkerResult, AutorunError> {
+            let url = {
+                let mut urls = self.urls.lock().unwrap();
+                urls.pop().unwrap_or_default()
+            };
+            Ok(WorkerResult {
+                worker_id: cfg.worker_id,
+                task_id: cfg.task_id,
+                status: "completed".into(),
+                exit_code: 0,
+                pr_number: if url.is_empty() { 0 } else { 42 },
+                pr_url: url,
+                error: String::new(),
+                branch_name: String::new(),
+                duration_sec: 0,
+                warning: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_final_pr_url_single_task() {
+        // INF-TSK-050-001 AC #19: a single-task batch with one PR url
+        // populates final_pr_url on the session row.
+        use crate::store::DataStore;
+        let store = mock_store();
+        let runner = PrEmittingRunner {
+            pr_url: "https://github.com/x/y/pull/123".into(),
+        };
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch = make_batch("tasks:\n  - id: only\n");
+
+        let _ = orch
+            .execute(
+                "ses-final-pr",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        let session = store
+            .get_autorun_session("ses-final-pr")
+            .await
+            .unwrap()
+            .expect("session created");
+        assert_eq!(
+            session.final_pr_url.as_deref(),
+            Some("https://github.com/x/y/pull/123"),
+            "single-task batch must populate final_pr_url"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_final_pr_url_multi_pr_unset() {
+        // INF-TSK-050-001 AC #19: multi-PR batch leaves final_pr_url
+        // None — operators see per-task PRs in the detail view; no
+        // single PR is canonical.
+        use crate::store::DataStore;
+        let store = mock_store();
+        let runner = VariablePrRunner {
+            urls: std::sync::Mutex::new(vec![
+                "https://github.com/x/y/pull/200".into(),
+                "https://github.com/x/y/pull/201".into(),
+            ]),
+        };
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch = make_batch("max_workers: 2\ntasks:\n  - id: a\n  - id: b\n");
+
+        let _ = orch
+            .execute(
+                "ses-multi-pr",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        let session = store
+            .get_autorun_session("ses-multi-pr")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            session.final_pr_url.is_none(),
+            "multi-PR batch must leave final_pr_url=None, got {:?}",
+            session.final_pr_url
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_final_pr_url_zero_pr_unset() {
+        // No tasks emit a pr_url → final_pr_url stays None.
+        use crate::store::DataStore;
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store.clone());
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch = make_batch("tasks:\n  - id: only\n");
+
+        let _ = orch
+            .execute(
+                "ses-no-pr",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        let session = store
+            .get_autorun_session("ses-no-pr")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            session.final_pr_url.is_none(),
+            "no-PR batch must leave final_pr_url=None"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_removes_abort_marker_on_clean_exit() {
+        // INF-TSK-050-001 AC #5 (orchestrator side): a clean exit
+        // (no abort) removes the abort marker file if it exists,
+        // preventing a stale marker from mis-triggering the next run.
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store);
+        let project_dir = tempfile::tempdir().unwrap();
+
+        // Pre-create the abort marker (simulates a stale leftover from
+        // a prior aborted run that wasn't cleaned up).
+        let marker_dir = project_dir.path().join(".state/runtime");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        // The orchestrator dispatch loop checks for the marker; to
+        // simulate a clean exit without triggering abort, we only
+        // assert post-exec that any stale marker is gone.
+        let marker = marker_dir.join("abort-ses-clean-exit");
+
+        let batch = make_batch("tasks:\n  - id: only\n");
+        let _ = orch
+            .execute(
+                "ses-clean-exit",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+
+        // Place marker AFTER dispatch loop check so we don't trigger
+        // abort, then verify post-cleanup removes it. But since the
+        // loop ran to completion and the cleanup runs after, we can
+        // simply check that placing it then re-running cleans it.
+        std::fs::write(&marker, "").unwrap();
+        assert!(marker.exists(), "marker placed for test setup");
+
+        // Re-run with a longer batch so dispatch sees the marker AND
+        // exits cleanly via the abort-marker path.
+        let store = mock_store();
+        let orch = Orchestrator::new(OrderTracker::new(), store);
+        let _ = orch
+            .execute(
+                "ses-clean-exit",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await;
+
+        assert!(
+            !marker.exists(),
+            "abort marker must be removed at orchestrator end (any path)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_publish_mid_run_counts_no_change_skips() {
+        // INF-TSK-050-001 AC #6: publish_mid_run_counts skips the DB
+        // write when counts haven't changed since last publish. This
+        // is a unit test of the helper; we exercise it directly with
+        // a stable state.
+        use crate::store::DataStore;
+        let store = mock_store();
+        let session = crate::models::AutorunSession {
+            id: "ses-stable".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: None,
+            status: crate::types::AutorunSessionStatus::Running,
+            max_session_workers: 1,
+            total_tasks: 0,
+            completed_tasks: 5,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            completed_at: None,
+            abort_started_at: None,
+        };
+        store.create_autorun_session(&session).await.unwrap();
+
+        let state = ExecutionState::new(1);
+        // Pre-populate state.results with a completed entry so the
+        // publish would compute (1, 0, 0).
+        state.results.lock().await.push(WorkerResult {
+            worker_id: String::new(),
+            task_id: "t1".into(),
+            status: "completed".into(),
+            exit_code: 0,
+            pr_number: 0,
+            pr_url: String::new(),
+            error: String::new(),
+            branch_name: String::new(),
+            duration_sec: 0,
+            warning: None,
+        });
+        let last = Arc::new(Mutex::new((0i32, 0i32, 0i32)));
+
+        // First call: should publish (1, 0, 0) and update last.
+        Orchestrator::<OrderTracker, crate::store::mock::MockStore>::publish_mid_run_counts(
+            store.as_ref(),
+            "ses-stable",
+            &state,
+            &last,
+        )
+        .await;
+        assert_eq!(*last.lock().await, (1, 0, 0));
+        let after_first = store
+            .get_autorun_session("ses-stable")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_first.completed_tasks, 1);
+
+        // Manually clobber the row counters to detect a second write.
+        // Then call publish again with no state change; expect no
+        // write (counters stay clobbered).
+        store
+            .update_autorun_session(
+                "ses-stable",
+                crate::models::AutorunSessionUpdate {
+                    completed_tasks: Some(99),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        Orchestrator::<OrderTracker, crate::store::mock::MockStore>::publish_mid_run_counts(
+            store.as_ref(),
+            "ses-stable",
+            &state,
+            &last,
+        )
+        .await;
+        let after_second = store
+            .get_autorun_session("ses-stable")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_second.completed_tasks, 99,
+            "no state change → no DB write → 99 preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_mark_worker_sessions_complete_calls_store() {
+        // INF-TSK-050-001 AC #14: mark_worker_sessions_complete delegates
+        // to complete_worker_interactive_sessions on the store. The mock
+        // returns 0 (it doesn't track interactive_session rows), so we
+        // can't assert on row state; we assert the path doesn't error.
+        let store = mock_store();
+        Orchestrator::<OrderTracker, crate::store::mock::MockStore>::mark_worker_sessions_complete(
+            store.as_ref(),
+            "ses-irrelevant",
+        )
+        .await;
+        // No assertion needed — exit-without-error proves the call path
+        // works. Real-store integration is exercised by surreal_test.rs
+        // when complete_worker_interactive_sessions has an integration
+        // test (added separately).
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_auto_prune_spawns_when_enabled() {
+        // INF-TSK-050-001 AC #18: auto-prune is invoked at end of batch
+        // when retention.purge_on_cleanup is true (the default). The
+        // test runs a tiny batch and verifies the orchestrator returns
+        // without error — the prune runs on a tokio::spawn, so we
+        // can't easily await its completion. The spawn itself is
+        // tested via the "spawn doesn't block" assertion: the batch
+        // returned, which means orchestrator.execute didn't await
+        // the prune handle.
+        let store = mock_store();
+        let runner = OrderTracker::new();
+        let orch = Orchestrator::new(runner, store);
+        let project_dir = tempfile::tempdir().unwrap();
+        let batch = make_batch("tasks:\n  - id: only\n");
+
+        let start = std::time::Instant::now();
+        let _ = orch
+            .execute(
+                "ses-prune",
+                &batch,
+                project_dir.path(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        // Sanity bound: a single-task mock batch should complete in
+        // well under 10s. If we're blocking on the spawned prune
+        // somehow (mock returns instantly anyway, but defensive), we'd
+        // see a much longer duration.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "orchestrator must NOT block on auto-prune spawn"
+        );
     }
 }

@@ -31,6 +31,13 @@ pub struct AutorunSessionFilter {
     pub status: Option<AutorunSessionStatus>,
     pub batch_name: Option<String>,
     pub since: Option<String>,
+    /// INF-TSK-050-001 AC #9: explicit list of session ids to fetch. When
+    /// `Some(ids)` and non-empty, the listing query restricts to rows whose
+    /// `id` is in the list. Combined with `since` via OR (a row matches if
+    /// either filter accepts it) so callers can union "recent rows" with
+    /// "specific rows still on screen". `None` or empty list disables the
+    /// filter.
+    pub ids: Option<Vec<String>>,
     pub limit: Option<u32>,
     pub all: bool,
 }
@@ -159,6 +166,7 @@ mod tests {
         assert!(f.status.is_none());
         assert!(f.batch_name.is_none());
         assert!(f.since.is_none());
+        assert!(f.ids.is_none());
         assert!(f.limit.is_none());
         assert!(!f.all);
     }
@@ -169,6 +177,7 @@ mod tests {
             status: Some(AutorunSessionStatus::Running),
             batch_name: Some("refactor".to_string()),
             since: Some("2026-03-01T00:00:00Z".to_string()),
+            ids: None,
             limit: Some(5),
             all: false,
         };
@@ -176,6 +185,33 @@ mod tests {
         assert_eq!(f.batch_name.as_deref(), Some("refactor"));
         assert_eq!(f.since.as_deref(), Some("2026-03-01T00:00:00Z"));
         assert_eq!(f.limit, Some(5));
+    }
+
+    #[test]
+    fn test_autorun_session_filter_with_ids() {
+        // INF-TSK-050-001 AC #9: ids filter accepts an explicit list.
+        let f = AutorunSessionFilter {
+            ids: Some(vec!["ar-001".to_string(), "ar-002".to_string()]),
+            ..Default::default()
+        };
+        let ids = f.ids.expect("ids set above");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], "ar-001");
+        assert_eq!(ids[1], "ar-002");
+    }
+
+    #[test]
+    fn test_autorun_session_filter_empty_ids_distinct_from_none() {
+        // An empty `Some(vec![])` is a valid edge case that the SQL builder
+        // must skip — otherwise the WHERE clause would match nothing. The
+        // distinction between `None` and `Some(empty)` is preserved at the
+        // model layer; the store decides how to handle the empty case.
+        let f = AutorunSessionFilter {
+            ids: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert!(f.ids.is_some());
+        assert_eq!(f.ids.as_ref().unwrap().len(), 0);
     }
 
     #[test]

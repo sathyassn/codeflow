@@ -200,6 +200,24 @@ pub trait DataStore: Send + Sync {
         keep_last: usize,
     ) -> impl std::future::Future<Output = Result<PruneResult, DbError>> + Send;
 
+    /// INF-TSK-050-001 AC #14: bulk-mark `interactive_session` rows for
+    /// every worker of `autorun_session_id` as complete.
+    ///
+    /// Workers register themselves as `interactive_session` rows with
+    /// `session_kind='autorun'` and `status='active'`. Without this
+    /// propagation they remain `active` indefinitely after the
+    /// orchestrator returns, polluting the interactive status view.
+    ///
+    /// Idempotent at the row level: rows already in a non-active
+    /// status are skipped via the `WHERE status = 'active'` predicate.
+    /// Returns the number of rows updated. Errors should be logged
+    /// but not block batch return — a partially-propagated state is
+    /// recoverable on the next sweep.
+    fn complete_worker_interactive_sessions(
+        &self,
+        autorun_session_id: &str,
+    ) -> impl std::future::Future<Output = Result<usize, DbError>> + Send;
+
     /// Prune old autorun sessions, workers, and task runs in FK-safe cascade order.
     ///
     /// Deletes records for terminal-status sessions (Completed, Failed, Cancelled, Timeout)
@@ -363,6 +381,9 @@ impl DataStore for NoopStore {
     async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> {
         Ok(PruneResult::default())
     }
+    async fn complete_worker_interactive_sessions(&self, _: &str) -> Result<usize, DbError> {
+        Ok(0)
+    }
     async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> {
         Ok(serde_json::json!([]))
     }
@@ -387,6 +408,57 @@ pub mod mock {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    /// Apply an `AutorunSessionUpdate` to an existing `AutorunSession` row.
+    /// Centralizes the touch-semantics for every field so all
+    /// MockStore mutators stay aligned with `AutorunSessionUpdate`.
+    /// Adding a new field on the update struct only needs one site
+    /// here (otherwise the mock silently drops writes — exposed by
+    /// INF-TSK-050-001 final_pr_url tests).
+    fn apply_session_update(s: &mut AutorunSession, update: AutorunSessionUpdate) {
+        if let Some(status) = update.status {
+            s.status = status;
+        }
+        if let Some(v) = update.completed_tasks {
+            s.completed_tasks = v;
+        }
+        if let Some(v) = update.failed_tasks {
+            s.failed_tasks = v;
+        }
+        if let Some(v) = update.skipped_tasks {
+            s.skipped_tasks = v;
+        }
+        if let Some(v) = update.completed_at {
+            s.completed_at = Some(v);
+        }
+        if let Some(v) = update.tmux_session {
+            s.tmux_session = v;
+        }
+        if let Some(v) = update.stale_reason {
+            s.stale_reason = v;
+        }
+        if let Some(v) = update.target_branch {
+            s.target_branch = Some(v);
+        }
+        if let Some(v) = update.final_pr_url {
+            s.final_pr_url = Some(v);
+        }
+        if let Some(v) = update.current_task_id {
+            s.current_task_id = v;
+        }
+        if let Some(v) = update.current_task_format_id {
+            s.current_task_format_id = v;
+        }
+        if let Some(v) = update.updated_at {
+            s.updated_at = Some(v);
+        }
+        if let Some(v) = update.last_heartbeat_at {
+            s.last_heartbeat_at = Some(v);
+        }
+        if let Some(v) = update.abort_started_at {
+            s.abort_started_at = v;
+        }
+    }
 
     /// In-memory `DataStore` implementation for testing trait dispatch.
     ///
@@ -574,27 +646,7 @@ pub mod mock {
             update: AutorunSessionUpdate,
         ) -> Result<(), DbError> {
             if let Some(s) = self.autorun_sessions.lock().unwrap().get_mut(id) {
-                if let Some(status) = update.status {
-                    s.status = status;
-                }
-                if let Some(v) = update.completed_tasks {
-                    s.completed_tasks = v;
-                }
-                if let Some(v) = update.failed_tasks {
-                    s.failed_tasks = v;
-                }
-                if let Some(v) = update.skipped_tasks {
-                    s.skipped_tasks = v;
-                }
-                if let Some(v) = update.completed_at {
-                    s.completed_at = Some(v);
-                }
-                if let Some(v) = update.tmux_session {
-                    s.tmux_session = v;
-                }
-                if let Some(v) = update.stale_reason {
-                    s.stale_reason = v;
-                }
+                apply_session_update(s, update);
             }
             Ok(())
         }
@@ -610,27 +662,7 @@ pub mod mock {
                 if s.status != expected {
                     return Ok(CasResult::NoOp);
                 }
-                if let Some(status) = update.status {
-                    s.status = status;
-                }
-                if let Some(v) = update.completed_tasks {
-                    s.completed_tasks = v;
-                }
-                if let Some(v) = update.failed_tasks {
-                    s.failed_tasks = v;
-                }
-                if let Some(v) = update.skipped_tasks {
-                    s.skipped_tasks = v;
-                }
-                if let Some(v) = update.completed_at {
-                    s.completed_at = Some(v);
-                }
-                if let Some(v) = update.tmux_session {
-                    s.tmux_session = v;
-                }
-                if let Some(v) = update.stale_reason {
-                    s.stale_reason = v;
-                }
+                apply_session_update(s, update);
                 Ok(CasResult::Updated(Box::new(s.clone())))
             } else {
                 Ok(CasResult::NoOp)
@@ -713,6 +745,11 @@ pub mod mock {
             &self,
             filter: AutorunSessionFilter,
         ) -> Result<Vec<AutorunSession>, DbError> {
+            // INF-TSK-050-001 AC #9: mirror the surreal.rs `since` OR `ids`
+            // semantics so tests written against the trait observe identical
+            // behavior. An empty `Some(ids)` is treated as "filter inactive"
+            // (matches the surreal layer's `is_some_and(non_empty)` guard).
+            let ids_active = filter.ids.as_ref().is_some_and(|ids| !ids.is_empty());
             let lock = self.autorun_sessions.lock().unwrap();
             let mut results: Vec<AutorunSession> = lock
                 .values()
@@ -731,10 +768,35 @@ pub mod mock {
                             return false;
                         }
                     }
-                    if let Some(ref since) = filter.since {
-                        if s.created_at.as_str() < since.as_str() {
-                            return false;
+                    // OR-combine `since` and `ids`: a row matches if either
+                    // gate accepts it. When neither is set, this branch is
+                    // a no-op.
+                    let since_match = filter
+                        .since
+                        .as_ref()
+                        .map(|since| s.created_at.as_str() > since.as_str());
+                    let ids_match = if ids_active {
+                        Some(filter.ids.as_ref().unwrap().iter().any(|id| id == &s.id))
+                    } else {
+                        None
+                    };
+                    match (since_match, ids_match) {
+                        (Some(since), Some(ids)) => {
+                            if !(since || ids) {
+                                return false;
+                            }
                         }
+                        (Some(since), None) => {
+                            if !since {
+                                return false;
+                            }
+                        }
+                        (None, Some(ids)) => {
+                            if !ids {
+                                return false;
+                            }
+                        }
+                        (None, None) => {}
                     }
                     true
                 })
@@ -819,6 +881,16 @@ pub mod mock {
         ) -> Result<PruneResult, DbError> {
             // MockStore does not track interactive sessions; return zero counts.
             Ok(PruneResult::default())
+        }
+
+        async fn complete_worker_interactive_sessions(
+            &self,
+            _autorun_session_id: &str,
+        ) -> Result<usize, DbError> {
+            // MockStore does not track interactive sessions; return zero
+            // (no rows to update). Tests that need to assert this method
+            // was called should track invocations separately.
+            Ok(0)
         }
 
         async fn prune_autorun_sessions(
@@ -942,6 +1014,7 @@ pub mod mock {
         async fn get_autorun_worker_by_task_id(&self, _: &str, _: &str) -> Result<Option<AutorunWorker>, DbError> { Ok(None) }
         async fn prune_interactive_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Ok(PruneResult::default()) }
         async fn prune_autorun_sessions(&self, _: &str, _: usize) -> Result<PruneResult, DbError> { Err(DbError::Query("test: forced failure".into())) }
+        async fn complete_worker_interactive_sessions(&self, _: &str) -> Result<usize, DbError> { Err(DbError::Query("test: forced failure".into())) }
         async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, DbError> { Ok(serde_json::json!([])) }
         async fn sync_from_events(&self, e: impl Iterator<Item = crate::ledger::Event> + Send) -> Result<SyncResult, DbError> { Ok(SyncResult { events_processed: e.count() as u64, ..Default::default() }) }
     }
@@ -1343,7 +1416,7 @@ pub mod mock {
                 id: "ar-1".into(),
                 batch_file: "batch.json".into(),
                 batch_name: None,
-                status: crate::types::AutorunSessionStatus::Pending,
+                status: crate::types::AutorunSessionStatus::Running,
                 max_session_workers: 2,
                 total_tasks: 1,
                 completed_tasks: 0,
@@ -1360,6 +1433,7 @@ pub mod mock {
                 last_heartbeat_at: None,
                 created_at: "2026-03-08T00:00:00Z".into(),
                 completed_at: None,
+                abort_started_at: None,
             })
             .await
             .unwrap();
@@ -1480,6 +1554,7 @@ pub mod mock {
             last_heartbeat_at: None,
             created_at: created_at.into(),
             completed_at: None,
+            abort_started_at: None,
         }
     }
 
@@ -1736,6 +1811,154 @@ pub mod mock {
         assert_eq!(results.len(), 5);
     }
 
+    // -- INF-TSK-050-001 AC #9: ids filter --
+
+    #[tokio::test]
+    async fn test_mock_list_autorun_sessions_filter_ids_subset() {
+        use crate::types::AutorunSessionStatus;
+        let store = MockStore::new();
+        for i in 0..5 {
+            store
+                .create_autorun_session(&make_autorun_session(
+                    &format!("s{i}"),
+                    AutorunSessionStatus::Completed,
+                    None,
+                    &format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                ids: Some(vec!["s1".to_string(), "s3".to_string()]),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let ids: Vec<_> = results.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"s1"));
+        assert!(ids.contains(&"s3"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_list_autorun_sessions_filter_ids_empty_disables_filter() {
+        // Empty `Some(vec![])` is treated as "filter inactive" — without
+        // this guard the WHERE clause would match nothing.
+        use crate::types::AutorunSessionStatus;
+        let store = MockStore::new();
+        for i in 0..3 {
+            store
+                .create_autorun_session(&make_autorun_session(
+                    &format!("s{i}"),
+                    AutorunSessionStatus::Completed,
+                    None,
+                    &format!("2026-03-{:02}T00:00:00Z", 10 + i),
+                ))
+                .await
+                .unwrap();
+        }
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                ids: Some(Vec::new()),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 3, "empty ids should return all rows");
+    }
+
+    #[tokio::test]
+    async fn test_mock_list_autorun_sessions_filter_since_or_ids_union() {
+        // INF-TSK-050-001 AC #9: `since` and `ids` are OR-combined so
+        // callers can union "recent rows" with "still-on-screen rows".
+        use crate::types::AutorunSessionStatus;
+        let store = MockStore::new();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "old-1",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-01-01T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "old-2",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-01-02T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "recent",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-04-01T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                since: Some("2026-03-15T00:00:00Z".to_string()),
+                ids: Some(vec!["old-1".to_string()]),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // `recent` matches `since`; `old-1` matches `ids`. `old-2`
+        // matches neither.
+        assert_eq!(results.len(), 2);
+        let ids: Vec<_> = results.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"recent"));
+        assert!(ids.contains(&"old-1"));
+        assert!(!ids.contains(&"old-2"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_list_autorun_sessions_filter_ids_only_no_since() {
+        // ids without `since` returns exactly the listed rows.
+        use crate::types::AutorunSessionStatus;
+        let store = MockStore::new();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "a",
+                AutorunSessionStatus::Completed,
+                None,
+                "2026-01-01T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+        store
+            .create_autorun_session(&make_autorun_session(
+                "b",
+                AutorunSessionStatus::Running,
+                None,
+                "2026-04-01T00:00:00Z",
+            ))
+            .await
+            .unwrap();
+
+        let results = store
+            .list_autorun_sessions(AutorunSessionFilter {
+                ids: Some(vec!["a".to_string()]),
+                all: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "a");
+    }
+
     #[tokio::test]
     async fn test_mock_list_autorun_workers_by_session() {
         let store = MockStore::new();
@@ -1939,6 +2162,7 @@ pub mod mock {
             last_heartbeat_at: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             completed_at: completed_at.map(String::from),
+            abort_started_at: None,
         }
     }
 

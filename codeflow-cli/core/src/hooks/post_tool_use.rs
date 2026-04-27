@@ -578,8 +578,13 @@ fn update_interactive_session_team_name(project_dir: &Path, session_id: &str, te
         let _: Option<serde_json::Value> = store
             .db()
             .query(
+                // INF-TSK-050-001 AC #17: scope writes to real interactive
+                // sessions only — autorun-worker rows (session_kind='autorun')
+                // must not have their team_name overwritten by hooks
+                // running inside the worker's Claude subprocess.
                 "UPDATE interactive_session SET team_name = $team_name, updated_at = $now \
-                 WHERE session_id = $sid AND status = 'active'",
+                 WHERE session_id = $sid AND status = 'active' \
+                   AND (session_kind = 'interactive' OR session_kind = NONE)",
             )
             .bind(("team_name", tn))
             .bind(("now", now))
@@ -680,11 +685,17 @@ fn update_interactive_session_fields(project_dir: &Path, session_dir: &Path, ses
         let _: Option<serde_json::Value> = store
             .db()
             .query(
+                // INF-TSK-050-001 AC #17: scope writes to real interactive
+                // sessions only — autorun-worker rows (session_kind='autorun')
+                // must not have their branch/work_type/task pointers
+                // overwritten by hooks running inside the worker's Claude
+                // subprocess. The worker's autorun_session row owns those.
                 "UPDATE interactive_session SET \
                  branch = $branch, work_type = $work_type, \
                  task_id = $task_id, task_format_id = $task_format_id, \
                  last_phase = $last_phase, updated_at = $now \
-                 WHERE session_id = $sid AND status = 'active'",
+                 WHERE session_id = $sid AND status = 'active' \
+                   AND (session_kind = 'interactive' OR session_kind = NONE)",
             )
             .bind(("branch", branch))
             .bind(("work_type", work_type))
@@ -2699,8 +2710,15 @@ mod tests {
             let mut result = store
                 .db()
                 .query(
+                    // INF-TSK-050-001 AC #17: defensive predicate — even
+                    // in tests, a SELECT against interactive_session
+                    // should reject autorun-worker rows. Test rows are
+                    // created with session_kind='interactive', so this
+                    // is a no-op for happy-path assertions but
+                    // enforces the contract.
                     "SELECT VALUE team_name FROM interactive_session \
-                     WHERE session_id = 'ses-tn-test'",
+                     WHERE session_id = 'ses-tn-test' \
+                       AND (session_kind = 'interactive' OR session_kind = NONE)",
                 )
                 .await
                 .unwrap();
@@ -2789,8 +2807,10 @@ mod tests {
             let mut wt_result = store
                 .db()
                 .query(
+                    // INF-TSK-050-001 AC #17: defensive predicate.
                     "SELECT VALUE work_type FROM interactive_session \
-                     WHERE session_id = 'ses-wt-test'",
+                     WHERE session_id = 'ses-wt-test' \
+                       AND (session_kind = 'interactive' OR session_kind = NONE)",
                 )
                 .await
                 .unwrap();
@@ -2801,8 +2821,10 @@ mod tests {
             let mut br_result = store
                 .db()
                 .query(
+                    // INF-TSK-050-001 AC #17: defensive predicate.
                     "SELECT VALUE branch FROM interactive_session \
-                     WHERE session_id = 'ses-wt-test'",
+                     WHERE session_id = 'ses-wt-test' \
+                       AND (session_kind = 'interactive' OR session_kind = NONE)",
                 )
                 .await
                 .unwrap();
@@ -2875,8 +2897,10 @@ mod tests {
             let mut res = store
                 .db()
                 .query(
+                    // INF-TSK-050-001 AC #17: defensive predicate.
                     "SELECT VALUE task_format_id FROM interactive_session \
-                     WHERE session_id = 'ses-fmtid-test'",
+                     WHERE session_id = 'ses-fmtid-test' \
+                       AND (session_kind = 'interactive' OR session_kind = NONE)",
                 )
                 .await
                 .unwrap();
@@ -2886,8 +2910,10 @@ mod tests {
             let mut res2 = store
                 .db()
                 .query(
+                    // INF-TSK-050-001 AC #17: defensive predicate.
                     "SELECT VALUE last_phase FROM interactive_session \
-                     WHERE session_id = 'ses-fmtid-test'",
+                     WHERE session_id = 'ses-fmtid-test' \
+                       AND (session_kind = 'interactive' OR session_kind = NONE)",
                 )
                 .await
                 .unwrap();
@@ -2994,5 +3020,63 @@ mod tests {
         // is not provable success — don't write pr_pushed=true.
         let r = serde_json::json!({"some_other_field": 42});
         assert!(!bash_command_succeeded(Some(&r)));
+    }
+
+    // -----------------------------------------------------------------------
+    // INF-TSK-050-001 Wave 3 — AC #17: session_kind filter excludes
+    // autorun-worker rows from interactive_session writes.
+    // -----------------------------------------------------------------------
+
+    /// AC #17: a row with `session_kind='autorun'` MUST NOT have its
+    /// team_name overwritten by `update_interactive_session_team_name`.
+    /// The predicate `session_kind = 'interactive' OR session_kind = NONE`
+    /// keeps the worker's team identity opaque to the hook.
+    #[test]
+    fn test_update_interactive_session_team_name_skips_autorun_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // Seed an autorun-worker row (session_kind = 'autorun').
+            // Mirrors the schema-less seeding pattern used by sibling
+            // tests in this file (no `apply_schema` call).
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            store
+                .db()
+                .query(
+                    "CREATE interactive_session SET \
+                     session_id = 'ses-autorun-w1', pid = 1234, \
+                     status = 'active', source_cli = 'autorun', \
+                     managed = true, session_kind = 'autorun', \
+                     team_name = 'autorun-team', \
+                     created_at = '2026-04-26T00:00:00Z' \
+                     RETURN NONE;",
+                )
+                .await
+                .unwrap();
+        });
+
+        // Attempt to overwrite team_name through the hook helper. The
+        // function should be a no-op against the autorun row.
+        update_interactive_session_team_name(dir.path(), "ses-autorun-w1", "evil-overwrite");
+
+        // Confirm the row's team_name is unchanged. Read without the
+        // session_kind predicate so we observe the row regardless of
+        // kind — the assertion is that the hook DIDN'T overwrite.
+        rt.block_on(async {
+            let store = crate::store::SurrealStore::open(&db_dir).await.unwrap();
+            let mut res = store
+                .db()
+                .query(
+                    "SELECT VALUE team_name FROM interactive_session \
+                     WHERE session_id = 'ses-autorun-w1'",
+                )
+                .await
+                .unwrap();
+            let vals: Vec<String> = res.take(0).unwrap_or_default();
+            assert_eq!(vals, vec!["autorun-team".to_string()]);
+        });
     }
 }

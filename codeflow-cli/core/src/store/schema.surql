@@ -187,6 +187,16 @@ DEFINE FIELD OVERWRITE updated_at             ON TABLE autorun_session TYPE opti
 DEFINE FIELD OVERWRITE last_heartbeat_at      ON TABLE autorun_session TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at          ON TABLE autorun_session TYPE string;
 DEFINE FIELD OVERWRITE completed_at        ON TABLE autorun_session TYPE option<string>;
+-- INF-TSK-050-001 AC #1: timestamp recorded when an abort signal is first
+-- observed by the orchestrator. Drives the abort-timeout watchdog
+-- (`AutorunConfig::abort_timeout_secs`); allows distinguishing a graceful
+-- Aborting transition from a stuck-in-aborting row.
+-- Stored as option<string> (RFC 3339) to match the surrounding timestamp
+-- fields (`updated_at`, `last_heartbeat_at`, `completed_at`); SurrealDB
+-- MERGE writes pass strings directly without a TYPE coercion mismatch
+-- (Wave 2 fix — Wave 0 originally typed it as datetime, which caused
+-- run_abort writes to fail silently in SCHEMAFULL).
+DEFINE FIELD OVERWRITE abort_started_at   ON TABLE autorun_session TYPE option<string>;
 
 DEFINE INDEX OVERWRITE idx_session_created ON autorun_session FIELDS created_at;
 
